@@ -174,6 +174,15 @@ async def main() -> None:
         check_price_changes, "interval", minutes=30,
         kwargs={"bot": bot, "db_path": cfg.db_path},
     )
+
+    async def _sync_rental_sheets():
+        try:
+            from bot.core.sheets_sync_rental import sync_rental_to_sheets
+            await sync_rental_to_sheets()
+        except Exception as e:
+            logger.warning("rental sheets sync: %s", e)
+
+    scheduler.add_job(_sync_rental_sheets, "interval", minutes=30)
     scheduler.start()
 
     logger.info("Starting bot polling…")

@@ -15,6 +15,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from bot.core.rental_parser import lookup_rental_estimate
+from bot.core.bargain import get_comparables, analyze_bargain
 
 logger = logging.getLogger(__name__)
 
@@ -164,11 +165,26 @@ async def analyze_apartments(city="astana", max_pages=5):
         same_count = complex_counter.get(cname, 1)
         avg_m2 = district_avg_m2.get(d)
 
+        # Аналоги для анализа торга
+        comps = await get_comparables(
+            district=d or None,
+            rooms=rooms,
+            area=s.get("area"),
+            current_price=s.get("price", 0),
+            exclude_id=s["id"],
+        )
+        bargain = analyze_bargain(s.get("price", 0), comps, s.get("is_owner"))
+        s["bargain_target"] = bargain.get("target_price")
+        s["bargain_discount_pct"] = bargain.get("discount_pct")
+        s["bargain_rec"] = bargain.get("recommendation")
+        s["comparables_cnt"] = bargain.get("comparables_cnt", 0)
+
         score = compute_apartment_score(
             s,
             monthly_rent=rent,
             same_complex_count=same_count,
             district_avg_m2=avg_m2,
+            comparables=comps,
         )
         s["score_data"] = score
         s["score_total"] = score["total_score"]
