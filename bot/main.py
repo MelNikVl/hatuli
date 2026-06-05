@@ -123,10 +123,6 @@ async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler("bot.log", encoding="utf-8"),
-        ],
     )
 
     cfg = load_config()
@@ -193,4 +189,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    import signal
+    def _sigterm(*_):
+        raise SystemExit(0)
+    signal.signal(signal.SIGTERM, _sigterm)
     asyncio.run(main())

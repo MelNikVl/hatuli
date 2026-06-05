@@ -571,3 +571,7 @@ async def investment_loop(bot, db, config):
         delay = random.randint(300, 900)
         logger.info("investment_loop: next scan in %d sec", delay)
         await asyncio.sleep(delay)
+
+
+# Alias for backward compatibility
+check_apartments = check_investment_objects

@@ -106,7 +106,13 @@ async def fetch_complex_name(listing_id: str) -> str | None:
             soup = BeautifulSoup(r.text, "html.parser")
             el = soup.select_one('[data-name="map.complex"] a')
             if el:
-                return el.get_text(strip=True)
+                name = el.get_text(strip=True)
+                # Фильтр мусора: улицы, адреса, числа
+                if name and len(name) > 2 and not any(x in name.lower() for x in [
+                    "улица", "проспект", "бульвар", "переулок",
+                    "на ", "ул.", "пр.", "д.", "кв.",
+                ]) and not name[0].isdigit():
+                    return name
     except Exception as e:
         logger.debug("fetch_complex_name %s: %s", listing_id, e)
     return None
@@ -210,7 +216,7 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
 
     # Обогащаем новые объявления названием ЖК
     complex_map: dict[str, str] = {}
-    for i, listing_id in enumerate(new_ids[:5]):  # не более 5 за цикл
+    for i, listing_id in enumerate(new_ids[:20]):  # не более 5 за цикл
         name = await fetch_complex_name(listing_id)
         if name:
             complex_map[listing_id] = name
