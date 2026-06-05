@@ -42,14 +42,14 @@ async def get_comparables(
     rows = await fetch(
         """
         SELECT id, price, area, floor, floors_total,
-               first_seen, last_seen, complex_name, district
+               first_seen, last_seen, complex_name, district, address
         FROM apartment_listings
         WHERE ($1::text IS NULL OR district ILIKE '%' || $1 || '%')
           AND ($2::int IS NULL OR rooms = $2)
           AND area BETWEEN $3 AND $4
           AND price > 0
+          AND price < 200000000
           AND (is_duplicate IS NULL OR is_duplicate = FALSE)
-          AND (last_seen > NOW() - INTERVAL '60 days' OR last_seen IS NULL)
           AND ($5::text IS NULL OR id != $5)
         ORDER BY last_seen DESC NULLS LAST
         LIMIT 30

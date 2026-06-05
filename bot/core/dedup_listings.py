@@ -57,9 +57,8 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
         area = lst.get("area") or 0
         price = lst.get("price") or 0
         floor = lst.get("floor")
-        photo_url = lst.get("photo_url") or (lst.get("photo_urls") or "")
-        if isinstance(photo_url, list):
-            photo_url = photo_url[0] if photo_url else ""
+        # UUID берём из url объявления (krisha url содержит id)
+        photo_url = lst.get("url") or ""
 
         # Bucket площади: округляем до 5м²
         area_bucket = round(area / 5) * 5
@@ -113,13 +112,18 @@ async def deduplicate_rental_listings() -> int:
         pass
 
     rows = await fetch("""
-        SELECT id, address, rooms, area, price, floor, photo_url
+        SELECT id, url, address, rooms, area, price, floor
         FROM rental_listings
         WHERE is_duplicate IS NOT TRUE
         ORDER BY found_at ASC
     """)
+    # Для rental_listings photo_url — это url объявления (фото не хранятся)
+    for r in [dict(x) for x in rows]:
+        r["photo_url"] = None  # нет фото в rental_listings
     listings = [dict(r) for r in rows]
-    
+    for lst in listings:
+        lst["photo_url"] = None  # rental_listings не хранит фото
+
     duplicates = find_duplicates(listings)
     logger.info("Found %d duplicates in rental_listings", len(duplicates))
 
@@ -143,7 +147,7 @@ async def deduplicate_apartment_listings() -> int:
         pass
 
     rows = await fetch("""
-        SELECT id, address, rooms, area, price, floor, photo_url
+        SELECT id, url, address, rooms, area, price, floor
         FROM apartment_listings
         WHERE is_duplicate IS NOT TRUE
         ORDER BY first_seen ASC NULLS LAST
