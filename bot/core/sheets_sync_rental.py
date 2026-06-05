@@ -9,7 +9,7 @@ import gspread
 logger = logging.getLogger(__name__)
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1KaHKjg70JEfX3kLc7A8ZtNPJwsp108iSA8kIqVfrtdI/edit"
-CREDS_PATH = "google_creds.json"
+CREDS_PATH = "/home/nik/krisha_bot/google_creds.json"
 
 RENTAL_HEADERS = [
     "ID", "Тип", "Комнат", "Район", "ЖК", "Площадь м²",
@@ -18,6 +18,7 @@ RENTAL_HEADERS = [
 
 
 async def sync_rental_to_sheets():
+    logger.info("sync_rental_to_sheets: STARTED")
     """Загружает rental_listings из PostgreSQL в вкладку 'Аренда'."""
     try:
         from bot.db.pg import fetch

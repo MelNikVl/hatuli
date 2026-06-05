@@ -454,13 +454,13 @@ async def check_investment_objects(bot: "Bot", db: "BotDB", config: "Config") ->
 
         complex_counter: Counter = Counter()
         for r in results:
-            cname = _extract_complex_name(r.get("address", ""))
+            cname = r.get("address", "").split(",")[0].strip()[:50]
             complex_counter[cname] += 1
 
         # Pre-score without description to decide which ones to deep-fetch
         candidates = []
         for listing in results:
-            cname = _extract_complex_name(listing.get("address", ""))
+            cname = listing.get("address", "").split(",")[0].strip()[:50]
             same_count = complex_counter.get(cname, 1)
             pre_score = compute_score(listing, same_complex_count=same_count)
             candidates.append((listing, same_count, pre_score))
