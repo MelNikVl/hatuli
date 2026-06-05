@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">Статистика пользователей <small>{{ user_stats|length }} записей</small></div>
+
+<div class="tbl-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Username</th>
+      <th>Город</th>
+      <th>Тип</th>
+      <th>Бюджет макс.</th>
+      <th>Продавец</th>
+      <th>Тип жилья</th>
+      <th>Всего уведомлений</th>
+      <th>За 24ч</th>
+      <th>Последняя активность</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for u in user_stats %}
+  <tr>
+    <td><code>{{ u.user_id }}</code></td>
+    <td>{{ u.username or "—" }}</td>
+    <td>{{ u.city or "—" }}</td>
+    <td>
+      {% if u.deal_type == "rent" %}<span class="badge b">Аренда</span>
+      {% elif u.deal_type == "buy" %}<span class="badge g">Покупка</span>
+      {% else %}<span class="text-muted">—</span>{% endif %}
+    </td>
+    <td class="text-sm">
+      {% if u.budget_max %}{{ "{:,}".format(u.budget_max).replace(",", " ") }} ₸{% else %}—{% endif %}
+    </td>
+    <td class="text-sm">
+      {% if u.owner_only == 1 %}<span class="badge g">🏠 Хозяин</span>
+      {% elif u.owner_only == 0 %}<span class="badge b">🏢 Любой</span>
+      {% else %}<span class="text-muted">—</span>{% endif %}
+    </td>
+    <td class="text-sm">
+      {% if u.property_type == "new" %}<span class="badge y">🏗 Новостройка</span>
+      {% elif u.property_type == "secondary" %}<span class="badge p">🏛 Вторичка</span>
+      {% else %}<span class="text-muted">—</span>{% endif %}
+    </td>
+    <td>
+      <span class="badge {% if u.listings_total > 0 %}g{% else %}y{% endif %}">{{ u.listings_total }}</span>
+    </td>
+    <td>
+      {% if u.listings_24h > 0 %}
+        <span class="badge g">+{{ u.listings_24h }}</span>
+      {% else %}
+        <span class="text-muted">0</span>
+      {% endif %}
+    </td>
+    <td class="text-sm text-muted">{{ u.last_active[:19] if u.last_active else "—" }}</td>
+  </tr>
+  {% endfor %}
+  {% if not user_stats %}
+  <tr><td colspan="10" style="text-align:center;padding:40px;color:var(--muted)">Данных нет</td></tr>
+  {% endif %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

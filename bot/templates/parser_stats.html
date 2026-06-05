@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">Статистика парсера</div>
+
+<!-- Parser cycle info -->
+<div class="sec-head">
+  <h2>🤖 Последний цикл парсера</h2>
+</div>
+<div class="cards" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));">
+  <div class="card b">
+    <div class="card-label">Последний запуск</div>
+    <div class="card-value" style="font-size:18px;">{{ cycle_info.last_run[:19] if cycle_info.last_run else "Нет данных" }}</div>
+  </div>
+  <div class="card g">
+    <div class="card-label">Найдено объявлений</div>
+    <div class="card-value">{{ cycle_info.listings_found if cycle_info.listings_found is not none else "—" }}</div>
+  </div>
+  {% if cycle_info.description %}
+  <div class="card p">
+    <div class="card-label">Описание</div>
+    <div class="card-value" style="font-size:13px; word-break:break-all;">{{ cycle_info.description }}</div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Last listings -->
+<div class="sec-head mt">
+  <h2>📋 Последние объявления <span class="text-muted text-sm">(20 шт.)</span></h2>
+</div>
+<div class="tbl-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Заголовок</th>
+      <th>Цена</th>
+      <th>Адрес</th>
+      <th>Город</th>
+      <th>Тип</th>
+      <th>Найдено</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for lst in last_listings %}
+  <tr>
+    <td><code>{{ lst[0] }}</code></td>
+    <td class="text-sm" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ lst[1] or "—" }}</td>
+    <td class="text-sm">
+      {% if lst[2] %}{{ "{:,}".format(lst[2]).replace(",", " ") }} ₸{% else %}—{% endif %}
+    </td>
+    <td class="text-sm text-muted" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ lst[3] or "—" }}</td>
+    <td>{{ lst[4] or "—" }}</td>
+    <td>
+      {% if lst[5] == "rent" %}<span class="badge b">Аренда</span>
+      {% elif lst[5] == "buy" %}<span class="badge g">Покупка</span>
+      {% else %}<span class="text-muted">—</span>{% endif %}
+    </td>
+    <td class="text-sm text-muted">{{ lst[6][:19] if lst[6] else "—" }}</td>
+  </tr>
+  {% endfor %}
+  {% if not last_listings %}
+  <tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted)">Объявлений нет</td></tr>
+  {% endif %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

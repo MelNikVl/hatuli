@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">
+  Дашборд
+  <small id="last-refresh">обновлено только что</small>
+</div>
+
+<!-- Parser status banner -->
+<div id="parser-banner" style="
+  display:flex; align-items:center; gap:14px;
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:16px 22px; margin-bottom:16px;
+">
+  <div id="parser-dot" class="dot {% if stats.parser_ok and parser_enabled %}g{% else %}r{% endif %}" style="width:12px;height:12px;flex-shrink:0"></div>
+  <div>
+    <div style="font-size:14px;font-weight:600" id="parser-status-text">
+      {% if not parser_enabled %}Парсер остановлен (вручную)
+      {% elif stats.parser_ok %}Парсер работает нормально
+      {% else %}Парсер не отвечает{% endif %}
+    </div>
+    <div class="text-sm text-muted" id="parser-last">
+      Последний запуск: <strong>{{ stats.last_parser[:19] if stats.last_parser else "никогда" }}</strong>
+      &nbsp;·&nbsp; Интервал: <span id="interval-display">{{ parse_interval_min }}–{{ parse_interval_max }} сек</span>
+    </div>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
+    {% if stats.errors_24h > 0 %}
+    <a href="/admin/issues" class="badge r">⚠ {{ stats.errors_24h }} ошиб. за 24ч</a>
+    {% else %}
+    <span class="badge g">✓ Ошибок нет</span>
+    {% endif %}
+    <!-- Parser start/stop toggle -->
+    <form method="post" action="/admin/parser/toggle" style="margin:0">
+      <button type="submit" class="btn {% if parser_enabled %}btn-danger{% else %}btn-success{% endif %}" style="min-width:130px">
+        {% if parser_enabled %}⏹ Остановить{% else %}▶ Запустить{% endif %}
+      </button>
+    </form>
+  </div>
+</div>
+
+<!-- Parser interval setting -->
+<form method="post" action="/admin/parser/interval" style="
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  background:var(--surface); border:1px solid var(--border); border-radius:12px;
+  padding:14px 22px; margin-bottom:24px;
+">
+  <span class="text-sm" style="font-weight:600">⏱ Интервал парсера:</span>
+  <label class="text-sm">от
+    <input type="number" name="interval_min" value="{{ parse_interval_min }}"
+           min="60" max="1200" style="width:70px;padding:4px 6px;border-radius:6px;font-size:13px">
+    сек
+  </label>
+  <label class="text-sm">до
+    <input type="number" name="interval_max" value="{{ parse_interval_max }}"
+           min="60" max="1200" style="width:70px;padding:4px 6px;border-radius:6px;font-size:13px">
+    сек
+  </label>
+  <button type="submit" class="btn btn-ghost btn-sm">Применить</button>
+  <span class="text-sm text-muted">(60–1200 сек, применяется со следующего цикла)</span>
+</form>
+
+<!-- Stat cards -->
+<div class="cards">
+  <div class="card p">
+    <div class="card-label">Пользователей</div>
+    <div class="card-value" id="v-total-users">{{ stats.total_users }}</div>
+    <div class="card-sub">активных: <strong id="v-active-users">{{ stats.active_users }}</strong></div>
+  </div>
+  <div class="card g">
+    <div class="card-label">Объявлений в БД</div>
+    <div class="card-value" id="v-total-listings">{{ stats.total_listings }}</div>
+    <div class="card-sub">за сутки: <strong id="v-parsed-today">{{ stats.parsed_today }}</strong></div>
+  </div>
+  <div class="card b">
+    <div class="card-label">Запросов боту</div>
+    <div class="card-value" id="v-req-10min">{{ stats.req_10min }}</div>
+    <div class="card-sub">за 10 мин &nbsp;·&nbsp; всего: <strong id="v-req-total">{{ stats.req_total }}</strong></div>
+  </div>
+  <div class="card y">
+    <div class="card-label">Размер БД</div>
+    <div class="card-value" id="v-db-size">{{ stats.db_size_mb }}</div>
+    <div class="card-sub">МБ на диске</div>
+  </div>
+  <div class="card r">
+    <div class="card-label">Новых пользов.</div>
+    <div class="card-value" id="v-new-users">{{ stats.new_users_day }}</div>
+    <div class="card-sub">за последние 24ч</div>
+  </div>
+</div>
+
+<!-- DB info + quick links -->
+<div class="sec-head mt">
+  <h2>🔗 Быстрые ссылки</h2>
+</div>
+<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:20px;">
+  <a href="/admin/users/stats" class="btn btn-ghost">📈 Статистика пользователей</a>
+  <a href="/admin/parser/stats" class="btn btn-ghost">🤖 Статистика парсера</a>
+  <a href="/admin/issues" class="btn btn-ghost">⚠️ Ошибки парсера</a>
+</div>
+{% if stats.db_path %}
+<div class="text-sm text-muted" style="margin-bottom:20px;">
+  💾 <b>БД:</b> <code>{{ stats.db_path }}</code>
+</div>
+{% endif %}
+
+<!-- Mini log tail -->
+<div class="sec-head mt">
+  <h2>📋 Последние логи <span class="text-muted text-sm">(5 мин)</span></h2>
+  <a href="/admin/logs" class="btn btn-ghost btn-sm">Открыть полностью →</a>
+</div>
+<div class="terminal" id="mini-log" style="height:180px">загрузка…</div>
+
+<script>
+async function refreshStats() {
+  try {
+    const r = await fetch('/admin/stats/data');
+    if (!r.ok) return;
+    const s = await r.json();
+
+    // cards
+    document.getElementById('v-total-users').textContent    = s.total_users;
+    document.getElementById('v-active-users').textContent   = s.active_users;
+    document.getElementById('v-total-listings').textContent = s.total_listings;
+    document.getElementById('v-parsed-today').textContent   = s.parsed_today;
+    document.getElementById('v-req-10min').textContent      = s.req_10min;
+    document.getElementById('v-req-total').textContent      = s.req_total;
+    document.getElementById('v-db-size').textContent        = s.db_size_mb;
+    document.getElementById('v-new-users').textContent      = s.new_users_day;
+
+    // parser status
+    const dot    = document.getElementById('parser-dot');
+    const stText = document.getElementById('parser-status-text');
+    dot.style.width = dot.style.height = '12px';
+    dot.style.flexShrink = '0';
+
+    if (!s.parser_enabled) {
+      dot.className = 'dot r';
+      stText.textContent = 'Парсер остановлен (вручную)';
+    } else if (s.parser_ok) {
+      dot.className = 'dot g';
+      stText.textContent = 'Парсер работает нормально';
+    } else {
+      dot.className = 'dot r';
+      stText.textContent = 'Парсер не отвечает';
+    }
+
+    const lp = document.getElementById('parser-last');
+    const last = s.last_parser ? s.last_parser.substring(0,19) : 'никогда';
+    const intv = (s.parse_interval_min || 60) + '–' + (s.parse_interval_max || 300) + ' сек';
+    lp.innerHTML = 'Последний запуск: <strong>' + last + '</strong> &nbsp;·&nbsp; Интервал: ' + intv;
+
+    document.getElementById('last-refresh').textContent = 'обновлено ' + new Date().toLocaleTimeString();
+  } catch(e) {}
+}
+
+async function refreshMiniLog() {
+  try {
+    const r = await fetch('/admin/logs/data');
+    if (!r.ok) return;
+    const d = await r.json();
+    const box = document.getElementById('mini-log');
+    box.innerHTML = '';
+    (d.lines || []).slice(-12).forEach(ln => {
+      const span = document.createElement('span');
+      let cls = 'log-DEFAULT';
+      if (ln.includes(' ERROR '))   cls = 'log-ERROR';
+      else if (ln.includes(' WARNING ')) cls = 'log-WARNING';
+      else if (ln.includes(' INFO '))    cls = 'log-INFO';
+      span.className = cls;
+      span.textContent = ln + '\n';
+      box.appendChild(span);
+    });
+    box.scrollTop = box.scrollHeight;
+  } catch(e) {}
+}
+
+refreshStats();
+refreshMiniLog();
+setInterval(refreshStats,   15000);
+setInterval(refreshMiniLog, 5000);
+</script>
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">Логи бота</div>
+
+<div class="flex gap items-c" style="margin-bottom:14px">
+  <span class="badge g" id="log-status"><span class="dot g"></span> Подключено</span>
+  <span class="text-sm text-muted">Последние 5 минут · обновляется каждые 3 сек</span>
+  <label class="text-sm" style="margin-left:auto;display:flex;gap:6px;align-items:center;color:var(--muted);cursor:pointer">
+    <input type="checkbox" id="autoscroll" checked> Авто-прокрутка
+  </label>
+  <button class="btn btn-ghost btn-sm" onclick="clearLog()">🗑 Очистить экран</button>
+</div>
+
+<div class="flex gap" style="margin-bottom:12px">
+  <button class="btn btn-ghost btn-sm active-f" data-l="ALL"     onclick="setFilter('ALL',this)">Все</button>
+  <button class="btn btn-ghost btn-sm"          data-l="ERROR"   onclick="setFilter('ERROR',this)"   style="color:var(--red)">ERROR</button>
+  <button class="btn btn-ghost btn-sm"          data-l="WARNING" onclick="setFilter('WARNING',this)" style="color:var(--yellow)">WARNING</button>
+  <button class="btn btn-ghost btn-sm"          data-l="INFO"    onclick="setFilter('INFO',this)"    style="color:var(--green)">INFO</button>
+</div>
+
+<div class="terminal" id="log-box" style="height:calc(100vh - 270px);min-height:400px">
+  <span class="log-DEFAULT">загрузка…</span>
+</div>
+
+<style>.active-f{border-color:var(--accent)!important;color:var(--accent2)!important}</style>
+<script>
+let currentFilter='ALL', allLines=[];
+function setFilter(l,btn){
+  currentFilter=l;
+  document.querySelectorAll('[data-l]').forEach(b=>b.classList.remove('active-f'));
+  btn.classList.add('active-f');
+  render();
+}
+function clearLog(){ allLines=[]; document.getElementById('log-box').innerHTML=''; }
+function levelOf(ln){
+  if(ln.includes(' ERROR '))   return 'ERROR';
+  if(ln.includes(' WARNING ')) return 'WARNING';
+  if(ln.includes(' INFO '))    return 'INFO';
+  if(ln.includes(' DEBUG '))   return 'DEBUG';
+  return 'DEFAULT';
+}
+function render(){
+  const box=document.getElementById('log-box');
+  const scroll=document.getElementById('autoscroll').checked;
+  box.innerHTML='';
+  const list=currentFilter==='ALL'?allLines:allLines.filter(l=>levelOf(l)===currentFilter);
+  if(!list.length){box.innerHTML='<span class="log-DEFAULT text-muted">Нет записей</span>';return;}
+  list.forEach(ln=>{
+    const s=document.createElement('span');
+    s.className='log-'+levelOf(ln);
+    s.textContent=ln+'\n';
+    box.appendChild(s);
+  });
+  if(scroll) box.scrollTop=box.scrollHeight;
+}
+async function fetchLogs(){
+  const st=document.getElementById('log-status');
+  try{
+    const r=await fetch('/admin/logs/data');
+    if(!r.ok) throw new Error(r.status);
+    const d=await r.json();
+    allLines=d.lines||[];
+    render();
+    st.innerHTML='<span class="dot g"></span> '+new Date().toLocaleTimeString();
+    st.className='badge g';
+  }catch(e){
+    st.innerHTML='<span class="dot r"></span> Нет соединения';
+    st.className='badge r';
+  }
+}
+fetchLogs();
+setInterval(fetchLogs,3000);
+</script>
+{% endblock %}

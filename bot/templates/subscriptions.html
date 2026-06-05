@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">Выдача подписки</div>
+
+<div class="card" style="max-width:420px">
+  <form method="post" action="/admin/subscriptions">
+    <div style="margin-bottom:16px">
+      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.6px">Telegram User ID</label>
+      <input type="number" name="user_id" required placeholder="123456789" style="width:100%">
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:.6px">Тариф</label>
+      <select name="role" style="width:100%">
+        <option value="1">Роль 1 — 1 день</option>
+        <option value="2">Роль 2 — 7 дней</option>
+        <option value="3">Роль 3 — 30 дней</option>
+      </select>
+    </div>
+    <input type="hidden" name="days" value="0">
+    <button type="submit" class="btn btn-primary" style="width:100%">Выдать подписку</button>
+  </form>
+</div>
+{% endblock %}

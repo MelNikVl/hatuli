@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">
+  Ошибки парсера
+  <small id="refresh-cnt">автообновление каждые 30 сек</small>
+</div>
+
+<div class="flex gap items-c" style="margin-bottom:20px">
+  {% if errors %}
+  <span class="badge r">⚠ {{ errors|length }} записей</span>
+  {% else %}
+  <span class="badge g">✓ Ошибок нет</span>
+  {% endif %}
+  <form method="post" action="/admin/issues/clear" style="margin-left:auto"
+        onsubmit="return confirm('Очистить всю историю ошибок?')">
+    <button type="submit" class="btn btn-danger btn-sm">🗑 Очистить историю</button>
+  </form>
+</div>
+
+{% if errors %}
+<div class="tbl-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Время (UTC)</th>
+      <th>Тип</th>
+      <th>Сообщение</th>
+      <th>URL</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for e in errors %}
+  <tr>
+    <td class="text-muted text-sm">{{ e[0] }}</td>
+    <td style="white-space:nowrap;font-size:12px;color:var(--muted)">{{ e[1][:19] if e[1] else "—" }}</td>
+    <td>
+      {% set t = e[2] or "" %}
+      {% if "Blocked" in t or "429" in t %}
+        <span class="badge y">{{ t }}</span>
+      {% elif "Error" in t or "error" in t %}
+        <span class="badge r">{{ t }}</span>
+      {% else %}
+        <span class="badge b">{{ t }}</span>
+      {% endif %}
+    </td>
+    <td style="font-size:12px;max-width:420px;word-break:break-word;color:var(--muted)">{{ e[3] }}</td>
+    <td style="font-size:11px">
+      {% if e[4] %}
+        <a href="{{ e[4] }}" target="_blank" style="color:var(--accent2);word-break:break-all">
+          {{ e[4][:55] }}{% if e[4]|length > 55 %}…{% endif %}
+        </a>
+      {% else %}—{% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div style="text-align:center;padding:60px 20px;color:var(--muted)">
+  <div style="font-size:48px;margin-bottom:12px">✅</div>
+  <div style="font-size:16px;font-weight:600;color:var(--green)">Ошибок парсинга не обнаружено</div>
+  <div class="text-sm" style="margin-top:6px">Парсер работает без проблем</div>
+</div>
+{% endif %}
+
+<script>
+let t=30;
+const cnt=document.getElementById('refresh-cnt');
+setInterval(()=>{
+  t--;
+  cnt.textContent='обновление через '+t+' сек';
+  if(t<=0){ location.reload(); }
+},1000);
+</script>
+{% endblock %}
