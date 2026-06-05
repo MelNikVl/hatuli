@@ -97,6 +97,21 @@ def _extract_complex(text: str) -> str:
     return m.group(1).strip()[:80] if m else ""
 
 
+async def fetch_complex_name(listing_id: str) -> str | None:
+    """Парсит страницу объявления и возвращает название ЖК."""
+    url = f"{BASE_URL}/a/show/{listing_id}"
+    try:
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, follow_redirects=True, timeout=15) as c:
+            r = await c.get(url)
+            soup = BeautifulSoup(r.text, "html.parser")
+            el = soup.select_one('[data-name="map.complex"] a')
+            if el:
+                return el.get_text(strip=True)
+    except Exception as e:
+        logger.debug("fetch_complex_name %s: %s", listing_id, e)
+    return None
+
+
 def _parse_card(card, prop_type: str) -> RentalListing | None:
     try:
         # ID из data-id атрибута div карточки
@@ -183,10 +198,27 @@ async def parse_rental_path(path: str, prop_type: str, max_pages: int = MAX_PAGE
 
 
 async def save_rental_listings(listings: list[RentalListing]) -> int:
-    from bot.db.pg import execute
+    from bot.db.pg import execute, fetchval
 
     saved = 0
+    # Для новых объявлений — запрашиваем ЖК (не более 5 за раз, с паузой)
+    new_ids = []
     for l in listings:
+        exists = await fetchval("SELECT 1 FROM rental_listings WHERE id=$1", l.id)
+        if not exists:
+            new_ids.append(l.id)
+
+    # Обогащаем новые объявления названием ЖК
+    complex_map: dict[str, str] = {}
+    for i, listing_id in enumerate(new_ids[:5]):  # не более 5 за цикл
+        name = await fetch_complex_name(listing_id)
+        if name:
+            complex_map[listing_id] = name
+            logger.info("  complex: %s → %s", listing_id, name)
+        await asyncio.sleep(2)
+
+    for l in listings:
+        complex_name = complex_map.get(l.id) or l.complex_name
         try:
             await execute(
                 """
@@ -195,11 +227,12 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                      address, district, complex_name, city, prop_type, published_at, found_at)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
                 ON CONFLICT (id) DO UPDATE SET
-                    price    = EXCLUDED.price,
-                    found_at = EXCLUDED.found_at
+                    price        = EXCLUDED.price,
+                    found_at     = EXCLUDED.found_at,
+                    complex_name = COALESCE(rental_listings.complex_name, EXCLUDED.complex_name)
                 """,
                 l.id, l.url, l.title, l.price, l.area, l.rooms, l.floor, l.floors_total,
-                l.address, l.district, l.complex_name, l.city, l.prop_type,
+                l.address, l.district, complex_name, l.city, l.prop_type,
                 l.published_at, datetime.now(timezone.utc),
             )
             saved += 1

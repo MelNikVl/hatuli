@@ -13,6 +13,9 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
+ALERTS_ENABLED = False  # Set True to enable Telegram alerts
+
+
 if TYPE_CHECKING:
     from aiogram import Bot
     from bot.config import Config
@@ -93,7 +96,7 @@ async def _send_new_listing(bot: "Bot", user_id: int, listing: Any, deal_type: s
 
 async def _send_subscription_expired(bot: "Bot", user_id: int) -> None:
     try:
-        await bot.send_message(
+        if ALERTS_ENABLED: await bot.send_message(
             chat_id=user_id,
             text="⛔️ Ваша подписка истекла. Напишите администратору для продления.",
         )
@@ -104,7 +107,7 @@ async def _send_subscription_expired(bot: "Bot", user_id: int) -> None:
 async def _send_daily_report(bot: "Bot", user_id: int, rows: list[tuple]) -> None:
     if not rows:
         try:
-            await bot.send_message(
+            if ALERTS_ENABLED: await bot.send_message(
                 chat_id=user_id,
                 text="Сегодня новых объектов по вашим фильтрам не найдено",
             )
@@ -122,7 +125,7 @@ async def _send_daily_report(bot: "Bot", user_id: int, rows: list[tuple]) -> Non
         lines.append(f"• {address or '-'} | {price_fmt} | {area_text} | {price_m2} | <a href='{url}'>link</a>")
 
     try:
-        await bot.send_message(
+        if ALERTS_ENABLED: await bot.send_message(
             chat_id=user_id,
             text="\n".join(lines),
             parse_mode="HTML",
@@ -335,7 +338,7 @@ async def check_price_changes(bot: "Bot", db_path: str) -> None:
                 old_fmt = f"{old_price:,}".replace(",", "\u2009")
                 new_fmt = f"{new_price:,}".replace(",", "\u2009")
                 try:
-                    await bot.send_message(
+                    if ALERTS_ENABLED: await bot.send_message(
                         chat_id=user_id,
                         text=(
                             f"📉 <b>Цена снизилась!</b>\n\n"
@@ -535,7 +538,7 @@ async def check_investment_objects(bot: "Bot", db: "BotDB", config: "Config") ->
                 f"🔗 <a href='{row['url']}'>Открыть на Krisha</a>"
             )
             try:
-                await bot.send_message(chat_id=config.admin_telegram_id, text=text,
+                if ALERTS_ENABLED: await bot.send_message(chat_id=config.admin_telegram_id, text=text,
                                        parse_mode="HTML", disable_web_page_preview=True)
                 await pg_execute("UPDATE apartment_listings SET notified=TRUE WHERE id=$1", row["id"])
                 await asyncio.sleep(1)
