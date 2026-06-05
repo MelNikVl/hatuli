@@ -576,7 +576,7 @@ async def check_apartments(bot, db, config):
     import aiosqlite
     from datetime import datetime, timezone
     from bot.core.apartment_parser import analyze_apartments
-    from bot.core.sheets_sync import sync_apartments_to_sheets
+    from bot.core.sheets_sync import sync_apartments_to_sheets, sync_apartments_to_sheets_pg
 
     try:
         results = await analyze_apartments("astana", max_pages=5)
@@ -649,7 +649,9 @@ async def check_apartments(bot, db, config):
         await db.log_event("apartments", f"parsed={len(results)} new={new_count}")
 
         # Sync to sheets
-        await sync_apartments_to_sheets(config.db_path)
+        await sync_apartments_to_sheets_pg()
+        from bot.core.sheets_sync_rental import sync_rental_to_sheets
+        await sync_rental_to_sheets()
 
         # Alert top unnotified
         async with aiosqlite.connect(config.db_path) as adb:
