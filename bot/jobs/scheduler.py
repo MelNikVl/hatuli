@@ -511,170 +511,33 @@ async def check_investment_objects(bot: "Bot", db: "BotDB", config: "Config") ->
         await db.log_event("investment",
             f"parsed={len(results)} new={new_count} updated={updated_count}")
 
-        # Alert top unnotified
-        top = await get_top_unnotified(config.db_path, min_score=65, limit=MAX_ALERTS_PER_CYCLE)
-
+        # Alert top unnotified — PostgreSQL
+        from bot.db.pg import fetch as pg_fetch, execute as pg_execute
+        top = await pg_fetch(
+            """SELECT id, score_total, rooms, district, area, price,
+                      est_rent, yield_pct, payback_years, url,
+                      floor, floors_total, complex_name, bargain_rec, bargain_discount_pct
+               FROM apartment_listings
+               WHERE notified=FALSE AND score_total>=70
+               ORDER BY score_total DESC LIMIT 3"""
+        )
         for row in top:
-            score_data = {
-                "total_score": row["score_total"],
-                "breakdown": {
-                    "yield": row["score_yield"],
-                    "location": row["score_location"],
-                    "supply_demand": row["score_supply_demand"],
-                    "liquidity": row["score_liquidity"],
-                    "quality": row["score_quality"],
-                },
-                "reasons": __import__("json").loads(row.get("reasons") or "[]"),
-            }
-            text = _build_investment_alert(row, score_data)
-            try:
-                await bot.send_message(
-                    chat_id=config.admin_telegram_id,
-                    text=text,
-                    parse_mode="HTML",
-                    disable_web_page_preview=True,
-                )
-                await mark_notified(config.db_path, row["id"])
-                await asyncio.sleep(1)
-            except Exception:
-                logger.exception("alert failed id=%s", row["id"])
-
-        # Sync to Google Sheets
-        from bot.core.sheets_sync import sync_to_sheets
-        await sync_to_sheets(config.db_path)
-
-    except Exception:
-        logger.exception("check_investment_objects failed")
-
-
-def _extract_complex_name(address: str) -> str:
-    """Extract residential complex name from address for grouping."""
-    if not address:
-        return "unknown"
-    parts = address.split(",")
-    return parts[0].strip().lower() if parts else "unknown"
-
-
-async def investment_loop(bot: "Bot", db: "BotDB", config: "Config") -> None:
-    """Запускает скан инвест-объектов с рандомным интервалом 1-15 мин."""
-    # Первый скан через 30 сек после старта
-    await asyncio.sleep(30)
-    await check_investment_objects(bot, db, config)
-
-    while True:
-        delay = random.randint(300, 900)  # 1-15 мин
-        logger.info("investment_loop: next scan in %d sec", delay)
-        await asyncio.sleep(delay)
-        await check_investment_objects(bot, db, config)
-
-
-# ── Apartment investment scanner ──────────────────────────────────────────────
-
-async def check_apartments(bot, db, config):
-    """Parse apartments, score, save to DB, sync sheets, alert top."""
-    import json
-    import aiosqlite
-    from datetime import datetime, timezone
-    from bot.core.apartment_parser import analyze_apartments
-    from bot.core.sheets_sync import sync_apartments_to_sheets, sync_apartments_to_sheets_pg
-
-    try:
-        results = await analyze_apartments("astana", max_pages=5)
-        now = datetime.now(timezone.utc).isoformat()
-        new_count = 0
-
-        async with aiosqlite.connect(config.db_path) as adb:
-            for r in results:
-                sd = r.get("score_data", {})
-                bd = sd.get("breakdown", {})
-                reasons = json.dumps(sd.get("reasons", []), ensure_ascii=False)
-                row = await (await adb.execute(
-                    "SELECT id, price FROM apartment_listings WHERE id=?", (r["id"],)
-                )).fetchone()
-
-                if row is None:
-                    await adb.execute("""
-                        INSERT INTO apartment_listings
-                        (id, url, title, price, area, rooms, address, district,
-                         est_rent, yield_pct, payback_years,
-                         score_total, score_yield, score_price_market,
-                         score_location, score_apt_type, score_building,
-                         score_supply, score_growth, reasons,
-                         floor, floors_total, floor_position, floor_note,
-                         year_built, building_type, building_age_class,
-                         is_new_build, developer_name, complex_name,
-                         renovation, views, has_premium_view,
-                         seller_type, is_price_from, published_since,
-                         details_fetched, first_seen, last_seen, notified)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
-                    """, (r["id"], r["url"], r["title"], r["price"], r.get("area"),
-                          r.get("rooms"), r["address"], r["district"],
-                          r.get("est_rent",0), r.get("yield_pct",0), r.get("payback_years"),
-                          sd["total_score"], bd.get("yield",0), bd.get("price_market",0),
-                          bd.get("location",0), bd.get("apt_type",0), bd.get("building",0),
-                          bd.get("supply",0), bd.get("growth",0), reasons,
-                          r.get("floor"), r.get("floors_total"), r.get("floor_position"), r.get("floor_note",""),
-                          r.get("year_built"), r.get("building_type"), r.get("building_age_class"),
-                          int(r.get("is_new_build",False)), r.get("developer_name",""), r.get("complex_name",""),
-                          r.get("renovation",""), str(r.get("views",[])), int(r.get("has_premium_view",False)),
-                          r.get("seller_type",""), int(r.get("is_price_from",False)), r.get("published_since",""),
-                          int(r.get("details_fetched",False)), now, now))
-                    new_count += 1
-                else:
-                    await adb.execute("""
-                        UPDATE apartment_listings SET
-                            price=?, yield_pct=?, est_rent=?, score_total=?,
-                            score_yield=?, score_price_market=?, score_location=?,
-                            score_apt_type=?, score_building=?, score_supply=?,
-                            score_growth=?, reasons=?,
-                            floor=?, floors_total=?, floor_position=?, floor_note=?,
-                            year_built=?, building_type=?, building_age_class=?,
-                            is_new_build=?, developer_name=?, complex_name=?,
-                            renovation=?, views=?, has_premium_view=?,
-                            seller_type=?, is_price_from=?, published_since=?,
-                            details_fetched=?, last_seen=?
-                        WHERE id=?
-                    """, (r["price"], r.get("yield_pct",0), r.get("est_rent",0),
-                          sd["total_score"], bd.get("yield",0), bd.get("price_market",0),
-                          bd.get("location",0), bd.get("apt_type",0), bd.get("building",0),
-                          bd.get("supply",0), bd.get("growth",0), reasons,
-                          r.get("floor"), r.get("floors_total"), r.get("floor_position"), r.get("floor_note",""),
-                          r.get("year_built"), r.get("building_type"), r.get("building_age_class"),
-                          int(r.get("is_new_build",False)), r.get("developer_name",""), r.get("complex_name",""),
-                          r.get("renovation",""), str(r.get("views",[])), int(r.get("has_premium_view",False)),
-                          r.get("seller_type",""), int(r.get("is_price_from",False)), r.get("published_since",""),
-                          int(r.get("details_fetched",False)), now, r["id"]))
-            await adb.commit()
-
-        await db.log_event("apartments", f"parsed={len(results)} new={new_count}")
-
-        # Sync to sheets
-        await sync_apartments_to_sheets_pg()
-        from bot.core.sheets_sync_rental import sync_rental_to_sheets
-        await sync_rental_to_sheets()
-
-        # Alert top unnotified
-        async with aiosqlite.connect(config.db_path) as adb:
-            adb.row_factory = aiosqlite.Row
-            top = [dict(x) for x in await (await adb.execute(
-                "SELECT * FROM apartment_listings WHERE notified=0 AND score_total>=70 ORDER BY score_total DESC LIMIT 3"
-            )).fetchall()]
-
-        for row in top:
+            floor_info = f" | {row['floor']}/{row['floors_total']} эт" if row["floor"] and row["floors_total"] else ""
+            bargain_info = f"\n🤝 Торг: ~{row['bargain_discount_pct']}%" if row["bargain_discount_pct"] else ""
             text = (
-                f"\U0001f3e0 <b>КВАРТИРА SCORE: {row['score_total']}/100</b>\n"
-                f"{row.get('rooms','?')}-комн | {row.get('district','')} | {row.get('area','')} м\u00b2\n"
-                f"\U0001f4b0 Цена: <b>{row['price']:,} \u20b8</b>\n"
-                f"\U0001f4c8 Аренда: {row.get('est_rent',0):,} \u20b8/мес\n"
-                f"\u26a1 Yield: <b>{row.get('yield_pct',0)}%</b> | Окупаемость: {row.get('payback_years','?')} лет\n"
-                f"\U0001f517 <a href=\'{row['url']}\'>Открыть на Krisha</a>"
-            ).replace(",", "\u2009")
+                f"🏠 <b>КВАРТИРА SCORE: {row['score_total']}/100</b>\n"
+                f"{row.get('rooms','?')}-комн | {row.get('district','')} | {row.get('area','')} м²{floor_info}\n"
+                f"🏢 {row.get('complex_name','') or ''}\n"
+                f"💰 Цена: <b>{row['price']:,} ₸</b>\n"
+                f"📈 Аренда: {row.get('est_rent',0):,} ₸/мес\n"
+                f"⚡ Yield: <b>{row.get('yield_pct',0)}%</b> | Окупаемость: {row.get('payback_years','?')} лет"
+                f"{bargain_info}\n"
+                f"🔗 <a href='{row['url']}'>Открыть на Krisha</a>"
+            )
             try:
                 await bot.send_message(chat_id=config.admin_telegram_id, text=text,
                                        parse_mode="HTML", disable_web_page_preview=True)
-                async with aiosqlite.connect(config.db_path) as adb:
-                    await adb.execute("UPDATE apartment_listings SET notified=1 WHERE id=?", (row["id"],))
-                    await adb.commit()
+                await pg_execute("UPDATE apartment_listings SET notified=TRUE WHERE id=$1", row["id"])
                 await asyncio.sleep(1)
             except Exception:
                 logger.exception("apt alert failed id=%s", row["id"])
