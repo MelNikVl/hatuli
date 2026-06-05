@@ -555,3 +555,16 @@ async def apartment_loop(bot, db, config):
         logger.info("apartment_loop: next scan in %d sec", delay)
         await asyncio.sleep(delay)
         await check_apartments(bot, db, config)
+
+
+async def investment_loop(bot, db, config):
+    """Investment objects scanner (parking, storage)."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await check_investment_objects(bot, db, config)
+        except Exception as e:
+            logger.error("investment_loop error: %s", e, exc_info=True)
+        delay = random.randint(300, 900)
+        logger.info("investment_loop: next scan in %d sec", delay)
+        await asyncio.sleep(delay)
