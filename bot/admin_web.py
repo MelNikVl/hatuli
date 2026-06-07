@@ -350,3 +350,51 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         )
 
     return app
+
+    @app.get("/admin/complex_scores", response_class=HTMLResponse)
+    async def complex_scores_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        
+        from bot.db.pg import fetch
+        
+        rows = await fetch("""
+            SELECT complex_name, rooms, 
+                   round(avg_score, 1) as avg_score,
+                   round(median_price/1000000, 1) as price_m,
+                   round(yield_pct, 1) as yield_pct,
+                   listings_count
+            FROM complex_scores
+            WHERE yield_pct IS NOT NULL
+            ORDER BY yield_pct DESC
+            LIMIT 50
+        """)
+        
+        return templates.TemplateResponse(
+            "complex_scores.html",
+            {"request": request, "complexes": [dict(r) for r in rows]}
+        )
+
+    @app.get("/admin/complex_scores", response_class=HTMLResponse)
+    async def complex_scores_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        
+        from bot.db.pg import fetch
+        
+        rows = await fetch("""
+            SELECT complex_name, rooms, 
+                   round(avg_score, 1) as avg_score,
+                   round(median_price/1000000, 1) as price_m,
+                   round(yield_pct, 1) as yield_pct,
+                   listings_count
+            FROM complex_scores
+            WHERE yield_pct IS NOT NULL
+            ORDER BY yield_pct DESC
+            LIMIT 50
+        """)
+        
+        return templates.TemplateResponse(
+            "complex_scores.html",
+            {"request": request, "complexes": [dict(r) for r in rows]}
+        )

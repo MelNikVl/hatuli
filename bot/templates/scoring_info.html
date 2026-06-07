@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">
+  📊 Как работает скоринг квартир
+  <small>Методика оценки инвестиционной привлекательности</small>
+</div>
+
+<div class="cards" style="margin-bottom: 24px;">
+  <div class="card p">
+    <div class="card-label">Максимальный скор</div>
+    <div class="card-value">100</div>
+    <div class="card-sub">Идеальная инвестиция</div>
+  </div>
+  <div class="card g">
+    <div class="card-label">Хорошо</div>
+    <div class="card-value">65+</div>
+    <div class="card-sub">Стоит рассматривать</div>
+  </div>
+  <div class="card y">
+    <div class="card-label">Средне</div>
+    <div class="card-value">50-64</div>
+    <div class="card-sub">Требуется анализ</div>
+  </div>
+  <div class="card r">
+    <div class="card-label">Плохо</div>
+    <div class="card-value">&lt;50</div>
+    <div class="card-sub">Пропустить</div>
+  </div>
+</div>
+
+<h2>🎯 Веса факторов</h2>
+<table class="tbl-wrap">
+  <thead><tr><th>Фактор</th><th>Вес</th><th>Что оценивается</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Доходность (Yield)</strong></td><td>20</td><td>Годовая аренда / цена покупки. Учитывается комиссия риелтора.</td></tr>
+    <tr><td><strong>Локация</strong></td><td>20</td><td>Район (Есиль, Алматы, Сарыарка...) + близость к ТРЦ, БЦ, метро</td></tr>
+    <tr><td><strong>Цена vs рынок</strong></td><td>15</td><td>Сравнение цены за м² с медианой по району</td></tr>
+    <tr><td><strong>Тип квартиры</strong></td><td>15</td><td>1к — макс спрос, 2к — стабильно, 3к+ — медленнее. Штраф за площадь >70м²</td></tr>
+    <tr><td><strong>Жилой комплекс</strong></td><td>15</td><td>Год постройки (новый = лучше), бонус за высокую доходность ЖК</td></tr>
+    <tr><td><strong>Этаж</strong></td><td>8</td><td>Штраф за 1й и последний этаж</td></tr>
+    <tr><td><strong>Дефицит</strong></td><td>7</td><td>Мало объявлений в ЖК = дефицит = выше скор</td></tr>
+  </tbody>
+</table>
+
+<h2>💰 Анализ торга (Bargain)</h2>
+<p>Сравнивает цену квартиры с реальными аналогами в БД (тот же район, комнатность, ±20% по площади).</p>
+<ul>
+  <li><strong>hot</strong> — цена ниже рынка, торговаться сложно</li>
+  <li><strong>good</strong> — цена на уровне, можно торговаться 3-5%</li>
+  <li><strong>overpriced</strong> — цена выше рынка, нужно торговаться 10%+</li>
+</ul>
+
+<h2>📈 Доходность ЖК</h2>
+<p>Рассчитывается как: <code>(медианная аренда × 12) / медианная цена продажи × 100%</code></p>
+<ul>
+  <li><strong>≥13%</strong> — отлично 🟢</li>
+  <li><strong>10-13%</strong> — хорошо 🟡</li>
+  <li><strong>&lt;10%</strong> — низкая 🔴</li>
+</ul>
+
+<h2>🔗 Источники данных</h2>
+<ul>
+  <li><strong>Apartment listings</strong> — парсинг продаж с krisha.kz (каждые 30-120 мин)</li>
+  <li><strong>Rental listings</strong> — парсинг аренды (каждые 5-30 мин)</li>
+  <li><strong>Rental index</strong> — медианная аренда по району и комнатности</li>
+  <li><strong>Complex scores</strong> — агрегированная доходность по ЖК</li>
+</ul>
+
+<p class="text-muted" style="margin-top: 24px;">📅 Обновлено автоматически. Данные актуальны на момент последнего парсинга.</p>
+{% endblock %}

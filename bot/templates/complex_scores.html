@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">
+  🏢 Доходность по ЖК
+  <small>Аренда vs продажа</small>
+</div>
+
+<div class="cards" style="margin-bottom: 20px;">
+  <div class="card g">
+    <div class="card-label">Средняя доходность</div>
+    <div class="card-value">{{ "%.1f"|format(complexes|map(attribute='yield_pct')|sum / complexes|length if complexes else 0) }}%</div>
+    <div class="card-sub">по {{ complexes|length }} ЖК</div>
+  </div>
+  <div class="card b">
+    <div class="card-label">Максимальная</div>
+    <div class="card-value">{{ "%.1f"|format(complexes|map(attribute='yield_pct')|max if complexes else 0) }}%</div>
+    <div class="card-sub">лучшее предложение</div>
+  </div>
+</div>
+
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Жилой комплекс</th>
+        <th>Комнат</th>
+        <th>Средний скор</th>
+        <th>Цена (млн ₸)</th>
+        <th>Доходность</th>
+        <th>Объявлений</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in complexes %}
+      <tr>
+        <td><strong>{{ c.complex_name }}</strong></td>
+        <td>{{ c.rooms }}к</td>
+        <td>{{ c.avg_score }}</td>
+        <td>{{ c.price_m }}</td>
+        <td>
+          <span class="badge {% if c.yield_pct >= 13 %}g{% elif c.yield_pct >= 10 %}y{% else %}r{% endif %}">
+            {{ c.yield_pct }}%
+          </span>
+        </td>
+        <td>{{ c.listings_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="text-muted text-sm" style="margin-top: 16px;">
+  📊 Доходность = (аренда в месяц × 12) / цена продажи × 100%<br>
+  🟢 ≥13% отлично &nbsp; 🟡 10-13% хорошо &nbsp; 🔴 &lt;10% низкая
+</div>
+{% endblock %}
