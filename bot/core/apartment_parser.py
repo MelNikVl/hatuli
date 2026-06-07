@@ -17,6 +17,17 @@ from bs4 import BeautifulSoup
 from bot.core.rental_parser import lookup_rental_estimate
 from bot.core.bargain import get_comparables, analyze_bargain
 
+def _norm_district(district: str) -> str:
+    """Normalize district name for lookup."""
+    d = district.lower().strip()
+    if "есил" in d: return "есиль"
+    if "алматы" in d or "алматинский" in d: return "алматы"
+    if "сарыарка" in d or "сарыаркинский" in d: return "сарыарка"
+    if "нура" in d: return "нура"
+    if "байконур" in d: return "байконур"
+    return d
+
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://krisha.kz"

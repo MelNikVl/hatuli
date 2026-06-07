@@ -12,3 +12,4 @@ google_creds.json
 __pycache__/
 *.pyc
 venv/
+google_creds.json
