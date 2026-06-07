@@ -1,0 +1,18 @@
+[Unit]
+Description=Krisha Rental Parser
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python service_rental.py
+Restart=always
+RestartSec=30
+TimeoutStopSec=15
+KillSignal=SIGKILL
+StandardOutput=append:/home/nik/krisha_bot/rental.log
+StandardError=append:/home/nik/krisha_bot/rental.log
+
+[Install]
+WantedBy=multi-user.target

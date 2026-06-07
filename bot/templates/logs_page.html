@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">
+  Логи
+  <small style="font-size:13px;color:#888;font-weight:400;" id="log-time">обновляется...</small>
+</div>
+
+<style>
+.log-filters { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:16px; align-items:center; }
+.log-filters select, .log-filters input { padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface); color:var(--text); font-size:13px; }
+.log-toggle { display:flex; gap:6px; }
+.log-toggle label { display:flex; align-items:center; gap:4px; font-size:12px; padding:5px 10px; border:1px solid var(--border); border-radius:20px; cursor:pointer; background:var(--surface); }
+.log-toggle input[type=checkbox] { display:none; }
+.log-toggle input:checked + span { font-weight:700; }
+.log-toggle label.active-error { background:#fee2e2; border-color:#ef4444; color:#991b1b; }
+.log-toggle label.active-warn { background:#fef3c7; border-color:#f59e0b; color:#92400e; }
+.log-toggle label.active-info { background:#dbeafe; border-color:#2196f3; color:#1e40af; }
+.terminal { font-family: 'Courier New', monospace; font-size: 12px; background: #0d1117; color: #c9d1d9; border-radius: 8px; padding: 16px; overflow-y: auto; height: 600px; white-space: pre-wrap; word-break: break-all; }
+.log-ERROR   { color: #ff7b72; }
+.log-WARNING { color: #d29922; }
+.log-INFO    { color: #7ee787; }
+.log-DEFAULT { color: #c9d1d9; }
+.log-stats { display:flex; gap:16px; margin-bottom:12px; font-size:13px; }
+.log-stat { padding:6px 12px; border-radius:20px; }
+</style>
+
+<div class="log-filters">
+  <select id="log-source" onchange="loadLogs()">
+    <option value="main">Основной (bot.log)</option>
+    <option value="rental">Парсер аренды (rental.log)</option>
+    <option value="apartments">Парсер продаж (apartments.log)</option>
+    <option value="web">Веб сервис (web.log)</option>
+  </select>
+
+  <select id="log-level" onchange="loadLogs()">
+    <option value="all">Все уровни</option>
+    <option value="error">Только ошибки</option>
+    <option value="warning">Ошибки + предупреждения</option>
+    <option value="info">INFO и выше</option>
+  </select>
+
+  <input type="text" id="log-search" placeholder="Фильтр по тексту..." oninput="loadLogs()" style="min-width:200px">
+
+  <select id="log-lines" onchange="loadLogs()">
+    <option value="100">100 строк</option>
+    <option value="200" selected>200 строк</option>
+    <option value="500">500 строк</option>
+  </select>
+
+  <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;">
+    <input type="checkbox" id="log-auto" checked onchange="toggleAuto()"> Автообновление
+  </label>
+</div>
+
+<div class="log-stats" id="log-stats"></div>
+
+<div class="terminal" id="log-box">загрузка...</div>
+
+<script>
+let autoInterval = null;
+
+const LOG_FILES = {
+  main: '/admin/logs/file?f=bot.log',
+  rental: '/admin/logs/file?f=rental.log',
+  apartments: '/admin/logs/file?f=apartments.log',
+  web: '/admin/logs/file?f=web.log',
+};
+
+async function loadLogs() {
+  const source = document.getElementById('log-source').value;
+  const level = document.getElementById('log-level').value;
+  const search = document.getElementById('log-search').value.toLowerCase();
+  const lines = parseInt(document.getElementById('log-lines').value);
+
+  try {
+    const r = await fetch(LOG_FILES[source] + '&n=' + lines);
+    const d = await r.json();
+    let allLines = d.lines || [];
+
+    // Filter by level
+    if (level === 'error') allLines = allLines.filter(l => l.includes(' ERROR '));
+    else if (level === 'warning') allLines = allLines.filter(l => l.includes(' ERROR ') || l.includes(' WARNING '));
+    else if (level === 'info') allLines = allLines.filter(l => l.includes(' ERROR ') || l.includes(' WARNING ') || l.includes(' INFO '));
+
+    // Filter by search
+    if (search) allLines = allLines.filter(l => l.toLowerCase().includes(search));
+
+    // Stats
+    const errors = allLines.filter(l => l.includes(' ERROR ')).length;
+    const warnings = allLines.filter(l => l.includes(' WARNING ')).length;
+    const infos = allLines.filter(l => l.includes(' INFO ')).length;
+    document.getElementById('log-stats').innerHTML =
+      `<span class="log-stat" style="background:#fee2e2;color:#991b1b">❌ ${errors} ошибок</span>` +
+      `<span class="log-stat" style="background:#fef3c7;color:#92400e">⚠ ${warnings} предупреждений</span>` +
+      `<span class="log-stat" style="background:#dbeafe;color:#1e40af">ℹ ${infos} info</span>` +
+      `<span class="log-stat" style="background:var(--surface);">📄 ${allLines.length} строк показано</span>`;
+
+    // Render
+    const box = document.getElementById('log-box');
+    box.innerHTML = '';
+    allLines.forEach(ln => {
+      const span = document.createElement('span');
+      let cls = 'log-DEFAULT';
+      if (ln.includes(' ERROR ')) cls = 'log-ERROR';
+      else if (ln.includes(' WARNING ')) cls = 'log-WARNING';
+      else if (ln.includes(' INFO ')) cls = 'log-INFO';
+      span.className = cls;
+      span.textContent = ln + '\n';
+      box.appendChild(span);
+    });
+    box.scrollTop = box.scrollHeight;
+    document.getElementById('log-time').textContent = 'обновлено ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    document.getElementById('log-box').textContent = 'Ошибка загрузки: ' + e;
+  }
+}
+
+function toggleAuto() {
+  const checked = document.getElementById('log-auto').checked;
+  if (checked) {
+    autoInterval = setInterval(loadLogs, 10000);
+  } else {
+    clearInterval(autoInterval);
+  }
+}
+
+loadLogs();
+autoInterval = setInterval(loadLogs, 10000);
+</script>
+{% endblock %}

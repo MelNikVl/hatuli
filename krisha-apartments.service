@@ -1,0 +1,18 @@
+[Unit]
+Description=Krisha Apartment Parser
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python service_apartments.py
+Restart=always
+RestartSec=30
+TimeoutStopSec=15
+KillSignal=SIGKILL
+StandardOutput=append:/home/nik/krisha_bot/apartments.log
+StandardError=append:/home/nik/krisha_bot/apartments.log
+
+[Install]
+WantedBy=multi-user.target

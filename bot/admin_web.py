@@ -349,6 +349,155 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             },
         )
 
+
+    @app.get("/admin/dashboard/data")
+    async def dashboard_data(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow, fetchval as pg_fetchval
+        from datetime import datetime, timezone, timedelta
+
+        now = datetime.now(timezone.utc)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        hour_ago = now - timedelta(hours=1)
+
+        result = {}
+
+        # ── Rental ──────────────────────────────────────────────────────────
+        try:
+            rental_total = await pg_fetchval("SELECT COUNT(*) FROM rental_listings") or 0
+            rental_today = await pg_fetchval(
+                "SELECT COUNT(*) FROM rental_listings WHERE found_at >= $1", today_start) or 0
+            rental_hour = await pg_fetchval(
+                "SELECT COUNT(*) FROM rental_listings WHERE found_at >= $1", hour_ago) or 0
+            rental_with_complex = await pg_fetchval(
+                "SELECT COUNT(*) FROM rental_listings WHERE complex_name IS NOT NULL AND complex_name != ''") or 0
+            last_rental = await pg_fetchval(
+                "SELECT MAX(found_at) FROM rental_listings")
+            last_rental_str = last_rental.strftime("%d.%m %H:%M") if last_rental else None
+
+            # Статус: ок если последняя запись < 2 часов назад
+            rental_ok = last_rental and (now - last_rental).total_seconds() < 7200 if last_rental else False
+
+            result["rental"] = {
+                "ok": bool(rental_ok),
+                "total": rental_total,
+                "today": rental_today,
+                "hour": rental_hour,
+                "with_complex": rental_with_complex,
+                "last_parsed": last_rental_str,
+                "sheets_ok": None,
+                "sheets_updated": None,
+            }
+        except Exception as e:
+            result["rental"] = {"ok": False, "error": str(e), "total": 0, "today": 0, "hour": 0,
+                                 "with_complex": 0, "last_parsed": None, "sheets_ok": False}
+
+        # ── Apartments ──────────────────────────────────────────────────────
+        try:
+            apt_total = await pg_fetchval("SELECT COUNT(*) FROM apartment_listings") or 0
+            apt_today = await pg_fetchval(
+                "SELECT COUNT(*) FROM apartment_listings WHERE last_seen >= $1", today_start) or 0
+            apt_hour = await pg_fetchval(
+                "SELECT COUNT(*) FROM apartment_listings WHERE last_seen >= $1", hour_ago) or 0
+            apt_high = await pg_fetchval(
+                "SELECT COUNT(*) FROM apartment_listings WHERE score_total >= 70") or 0
+            last_apt = await pg_fetchval("SELECT MAX(last_seen) FROM apartment_listings")
+            last_apt_str = last_apt.strftime("%d.%m %H:%M") if last_apt else None
+            apt_ok = last_apt and (now - last_apt).total_seconds() < 7200 if last_apt else False
+
+            result["apartments"] = {
+                "ok": bool(apt_ok),
+                "total": apt_total,
+                "today": apt_today,
+                "hour": apt_hour,
+                "high_score_count": apt_high,
+                "last_parsed": last_apt_str,
+                "sheets_ok": None,
+                "sheets_updated": None,
+            }
+        except Exception as e:
+            result["apartments"] = {"ok": False, "error": str(e), "total": 0, "today": 0,
+                                     "hour": 0, "high_score_count": 0, "last_parsed": None}
+
+        # ── Investment ──────────────────────────────────────────────────────
+        try:
+            inv_total = await pg_fetchval("SELECT COUNT(*) FROM investment_listings") or 0
+            inv_today = await pg_fetchval(
+                "SELECT COUNT(*) FROM investment_listings WHERE found_at >= $1", today_start) or 0
+            inv_top_score = await pg_fetchval(
+                "SELECT MAX(score_total) FROM investment_listings") or 0
+            last_inv = await pg_fetchval("SELECT MAX(found_at) FROM investment_listings")
+            inv_ok = last_inv and (now - last_inv).total_seconds() < 7200 if last_inv else False
+
+            result["investment"] = {
+                "ok": bool(inv_ok),
+                "total": inv_total,
+                "today": inv_today,
+                "top_score": inv_top_score,
+                "sheets_ok": None,
+                "sheets_updated": None,
+            }
+        except Exception as e:
+            result["investment"] = {"ok": False, "total": 0, "today": 0, "top_score": 0}
+
+        # ── Database ────────────────────────────────────────────────────────
+        try:
+            rental_idx_count = await pg_fetchval("SELECT COUNT(*) FROM rental_index") or 0
+            apt_count = await pg_fetchval("SELECT COUNT(*) FROM apartment_listings") or 0
+            inv_count = await pg_fetchval("SELECT COUNT(*) FROM investment_listings") or 0
+            dupes = await pg_fetchval(
+                "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE") or 0
+
+            result["db"] = {
+                "ok": True,
+                "rental_index_count": rental_idx_count,
+                "apartments_count": apt_count,
+                "investment_count": inv_count,
+                "dupes_count": dupes,
+            }
+        except Exception as e:
+            result["db"] = {"ok": False, "error": str(e),
+                            "rental_index_count": 0, "apartments_count": 0,
+                            "investment_count": 0, "dupes_count": 0}
+
+        return JSONResponse(result)
+
+
+    @app.get("/admin/scoring", response_class=HTMLResponse)
+    async def scoring_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("scoring.html", {"request": request})
+
+    @app.get("/admin/logs/page", response_class=HTMLResponse)
+    async def logs_full_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("logs_page.html", {"request": request})
+
+    @app.get("/admin/logs/file")
+    async def logs_file_data(request: Request, f: str = "bot.log", n: int = 200):
+        if not is_authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        # Разрешённые файлы
+        allowed = {"bot.log", "rental.log", "apartments.log", "web.log"}
+        if f not in allowed:
+            return JSONResponse({"lines": [], "error": "not allowed"})
+        log_path = os.path.join(os.path.dirname(__file__), "..", f)
+        log_path = os.path.normpath(log_path)
+        try:
+            if os.path.exists(log_path):
+                with open(log_path, encoding="utf-8", errors="replace") as fh:
+                    all_lines = fh.readlines()
+                lines = [l.rstrip("\n") for l in all_lines[-n:]]
+            else:
+                lines = [f"[Файл {f} не найден]"]
+        except Exception as e:
+            lines = [f"[Ошибка чтения: {e}]"]
+        return JSONResponse({"lines": lines})
+
     return app
 
     @app.get("/admin/complex_scores", response_class=HTMLResponse)
