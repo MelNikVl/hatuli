@@ -123,10 +123,10 @@
     <a href="/admin/logs"        class="{% if 'logs' in request.url.path %}active{% endif %}"><span class="ico">📋</span> Логи</a>
     <a href="/admin/issues"      class="{% if 'issues' in request.url.path %}active{% endif %}"><span class="ico">⚠️</span> Ошибки парсера</a>
     <div class="nav-section">Управление</div>
-    <a href="/admin/users"       class="{% if request.url.path == '/admin/users' %}active{% endif %}"><span class="ico">👥</span> Пользователи</a>
-    <a href="/admin/users/stats" class="{% if 'users/stats' in request.url.path %}active{% endif %}"><span class="ico">📈</span> Стат. пользователей</a>
-    <a href="/admin/subscriptions" class="{% if 'subscriptions' in request.url.path %}active{% endif %}"><span class="ico">🔑</span> Подписки</a>
-    <a href="/admin/parser/stats" class="{% if 'parser/stats' in request.url.path %}active{% endif %}"><span class="ico">🤖</span> Стат. парсера</a>
+    {# <a href="/admin/users" class="{% if request.url.path == '/admin/users' %}active{% endif %}"><span class="ico">👥</span> Пользователи</a> #}
+    {# <a href="/admin/users/stats" class="{% if 'users/stats' in request.url.path %}active{% endif %}"><span class="ico">📈</span> Стат. пользователей</a> #}
+    {# <a href="/admin/subscriptions" class="{% if 'subscriptions' in request.url.path %}active{% endif %}"><span class="ico">🔑</span> Подписки</a> #}
+    {# <a href="/admin/parser/stats" class="{% if 'parser/stats' in request.url.path %}active{% endif %}"><span class="ico">🤖</span> Стат. парсера</a> #}
   </nav>
   <div class="sidebar-footer">
     <a href="/admin/logout">⬅ Выйти</a>

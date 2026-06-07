@@ -205,11 +205,12 @@ async def analyze_apartments(city="astana", max_pages=5):
     results.sort(key=lambda x: x["score_total"], reverse=True)
 
     from bot.core.apartment_details import fetch_apartment_details
-    for r in results[:20]:  # only top-20
+    for r in results[:5]:  # max 5 details per cycle
         if r.get("score_total", 0) >= 55 and not r.get("details_fetched"):
             url = r.get("url", "")
             if url:
                 logger.info("fetching details for %s (score=%d)", r["id"], r["score_total"])
+                await asyncio.sleep(random.uniform(8.0, 15.0))  # пауза чтобы не блокировали
                 details = await fetch_apartment_details(url)
                 if details:
                     r.update(details)
