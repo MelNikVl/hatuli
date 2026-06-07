@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">
+  Рейтинг ЖК
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} жилых комплексов</small>
+</div>
+<style>
+.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center}
+.filters select,.filters input{padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px}
+.filters button{padding:6px 14px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px}
+table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);font-size:13px}
+th{background:#1a1a2e;color:#fff;padding:10px 8px;text-align:left;font-weight:500;font-size:12px;white-space:nowrap}
+td{padding:9px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:hover td{background:rgba(255,255,255,0.03)}
+tr:last-child td{border-bottom:none}
+.yield-tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.yield-hi{background:#dcfce7;color:#166534}
+.yield-md{background:#fef3c7;color:#92400e}
+.yield-lo{background:#fee2e2;color:#991b1b}
+.yield-na{background:#f1f5f9;color:#94a3b8}
+.flag{display:inline-block;font-size:14px}
+.flag.off{opacity:0.2}
+.dev-badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;background:#dbeafe;color:#1e40af}
+.data-bar{height:4px;background:#e2e8f0;border-radius:2px;margin-top:3px}
+.data-bar-fill{height:100%;border-radius:2px;background:#2196f3}
+.edit-btn{padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer;font-size:11px}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:var(--surface);border-radius:12px;padding:24px;width:500px;max-height:80vh;overflow-y:auto}
+.form-row{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.form-row label{font-size:12px;color:#888}
+.form-row input,.form-row select,.form-row textarea{padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px}
+.form-row-inline{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.checkbox-row{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:8px}
+.save-btn{padding:8px 20px;background:#22c55e;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
+.cancel-btn{padding:8px 16px;background:transparent;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text)}
+</style>
+
+<form method="get" action="/admin/complexes">
+<div class="filters">
+  <select name="district" onchange="this.form.submit()">
+    <option value="">Все районы</option>
+    <option value="Есильский" {% if filters.district == 'Есильский' %}selected{% endif %}>Есиль</option>
+    <option value="Алматы" {% if filters.district == 'Алматы' %}selected{% endif %}>Алматы р-н</option>
+    <option value="Сарыарка" {% if filters.district == 'Сарыарка' %}selected{% endif %}>Сарыарка</option>
+    <option value="Нура" {% if filters.district == 'Нура' %}selected{% endif %}>Нура</option>
+  </select>
+  <select name="sort" onchange="this.form.submit()">
+    <option value="listings" {% if filters.sort == 'listings' %}selected{% endif %}>По объявлениям</option>
+    <option value="yield" {% if filters.sort == 'yield' %}selected{% endif %}>По yield</option>
+    <option value="price" {% if filters.sort == 'price' %}selected{% endif %}>По цене/м²</option>
+    <option value="year" {% if filters.sort == 'year' %}selected{% endif %}>По году</option>
+  </select>
+  <input type="text" name="search" value="{{ filters.search }}" placeholder="Поиск по названию...">
+  <button type="submit">Найти</button>
+</div>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>ЖК</th><th>Район</th><th>Год</th><th>Застройщик</th>
+      <th>Цена/м²</th><th>Yield</th><th>Продажи</th><th>Аренда</th><th>Флаги</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for c in complexes %}
+  {% set yld = c.avg_yield %}
+  {% set yield_cls = 'yield-hi' if yld and yld >= 10 else ('yield-md' if yld and yld >= 7 else ('yield-lo' if yld else 'yield-na')) %}
+  <tr>
+    <td><strong>{{ c.name | title }}</strong>{% if c.notes %}<br><span style="font-size:11px;color:#888">{{ c.notes[:50] }}</span>{% endif %}</td>
+    <td>{{ c.district or '—' }}</td>
+    <td>{% if c.year_built %}{{ c.year_built }}{% if c.year_built >= 2022 %} <span style="color:#22c55e;font-size:10px">новый</span>{% elif c.year_built < 2015 %} <span style="color:#f97316;font-size:10px">старый</span>{% endif %}{% else %}—{% endif %}</td>
+    <td>{% if c.developer_name %}<span class="dev-badge">{{ c.developer_name }}</span>{% else %}<span style="color:#94a3b8;font-size:12px">—</span>{% endif %}</td>
+    <td>{% if c.avg_price_m2 %}{{ (c.avg_price_m2 / 1000) | round(0) | int }}к ₸{% else %}—{% endif %}</td>
+    <td><span class="yield-tag {{ yield_cls }}">{% if yld %}{{ yld }}%{% else %}—{% endif %}</span></td>
+    <td><strong>{{ c.listings_count or 0 }}</strong><div class="data-bar"><div class="data-bar-fill" style="width:{{ [[((c.listings_count or 0) / 20 * 100), 100] | min, 0] | max }}%"></div></div></td>
+    <td>{% if c.rental_listings_count %}{{ c.rental_listings_count }}{% else %}<span style="color:#94a3b8">—</span>{% endif %}</td>
+    <td>
+      <span class="flag {% if not c.has_parking %}off{% endif %}" title="Паркинг">🅿️</span>
+      <span class="flag {% if not c.has_security %}off{% endif %}" title="Охрана">💂</span>
+      <span class="flag {% if not c.has_closed_territory %}off{% endif %}" title="Закрытая территория">🔒</span>
+      <span class="flag {% if not c.has_playground %}off{% endif %}" title="Детская площадка">🛝</span>
+    </td>
+    <td><button class="edit-btn" onclick='openEdit({{ c | tojson }})'>✏️</button></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modal-title">Редактировать ЖК</h3>
+    <form method="post" action="/admin/complexes/update">
+      <input type="hidden" name="id" id="edit-id">
+      <div class="form-row"><label>Застройщик</label><input type="text" name="developer_name" id="edit-developer"></div>
+      <div class="form-row-inline">
+        <div class="form-row"><label>Год постройки</label><input type="number" name="year_built" id="edit-year"></div>
+        <div class="form-row"><label>Адрес</label><input type="text" name="address" id="edit-address"></div>
+      </div>
+      <div style="margin-bottom:12px">
+        <div class="checkbox-row"><input type="checkbox" name="has_parking" id="ep"><label for="ep">Паркинг</label></div>
+        <div class="checkbox-row"><input type="checkbox" name="has_security" id="es"><label for="es">Охрана 24/7</label></div>
+        <div class="checkbox-row"><input type="checkbox" name="has_closed_territory" id="ec"><label for="ec">Закрытая территория</label></div>
+        <div class="checkbox-row"><input type="checkbox" name="has_playground" id="epl"><label for="epl">Детская площадка</label></div>
+      </div>
+      <div class="form-row-inline">
+        <div class="form-row"><label>До школы (м)</label><input type="number" name="school_distance_m" id="edit-school"></div>
+        <div class="form-row"><label>До LRT (м)</label><input type="number" name="lrt_distance_m" id="edit-lrt"></div>
+      </div>
+      <div class="form-row"><label>Заметки</label><textarea name="notes" id="edit-notes"></textarea></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button type="button" class="cancel-btn" onclick="closeEdit()">Отмена</button>
+        <button type="submit" class="save-btn">Сохранить</button>
+      </div>
+    </form>
+  </div>
+</div>
+<script>
+function openEdit(c){
+  document.getElementById('modal-title').textContent='ЖК: '+c.name;
+  document.getElementById('edit-id').value=c.id;
+  document.getElementById('edit-developer').value=c.developer_name||'';
+  document.getElementById('edit-year').value=c.year_built||'';
+  document.getElementById('edit-address').value=c.address||'';
+  document.getElementById('ep').checked=!!c.has_parking;
+  document.getElementById('es').checked=!!c.has_security;
+  document.getElementById('ec').checked=!!c.has_closed_territory;
+  document.getElementById('epl').checked=!!c.has_playground;
+  document.getElementById('edit-school').value=c.school_distance_m||'';
+  document.getElementById('edit-lrt').value=c.lrt_distance_m||'';
+  document.getElementById('edit-notes').value=c.notes||'';
+  document.getElementById('modal').classList.add('open');
+}
+function closeEdit(){document.getElementById('modal').classList.remove('open')}
+document.getElementById('modal').addEventListener('click',function(e){if(e.target===this)closeEdit()});
+</script>
+{% endblock %}
