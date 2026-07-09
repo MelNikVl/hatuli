@@ -50,7 +50,7 @@ async def run_cycle():
         bargain = sd.get("bargain", {})
         reasons_json = json.dumps(sd.get("reasons", []), ensure_ascii=False)
 
-        exists = await pg_get("SELECT id FROM apartment_listings WHERE id=$1", r["id"])
+        exists = await pg_get("SELECT id, price FROM apartment_listings WHERE id=$1", r["id"])
 
         try:
             if not exists:
@@ -90,6 +90,19 @@ async def run_cycle():
                 )
                 new_cnt += 1
             else:
+                # История цен: фиксируем изменение — сигнал для алертов о торге
+                old_price = exists["price"]
+                new_price = r.get("price")
+                if new_price and old_price and new_price != old_price:
+                    try:
+                        await pg_exec(
+                            "INSERT INTO price_history (listing_id, old_price, new_price) "
+                            "VALUES ($1, $2, $3)",
+                            r["id"], old_price, new_price,
+                        )
+                        log.info("price change %s: %s -> %s", r["id"], old_price, new_price)
+                    except Exception as e:
+                        log.warning("price_history insert failed %s: %s", r["id"], e)
                 await pg_exec("""
                     UPDATE apartment_listings SET
                         price=$2, est_rent=$3, yield_pct=$4, payback_years=$5,

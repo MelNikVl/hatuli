@@ -1,0 +1,14 @@
+[Unit]
+Description=Hatuli Paid Alerts (Telegram Stars)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python service_alerts.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
