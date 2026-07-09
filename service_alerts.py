@@ -156,7 +156,8 @@ async def alerts_cycle(bot: Bot) -> None:
         """
         SELECT id, url, title, price, area, district, complex_name,
                score_total, yield_pct, est_rent, bargain_target, bargain_rec,
-               is_owner, seller_type, renovation, description
+               is_owner, seller_type, renovation, description,
+               first_seen, details_fetched, year_built, rent_source
         FROM apartment_listings
         WHERE notified = FALSE
           AND score_total >= $1
@@ -379,7 +380,7 @@ async def cmd_score(message: Message) -> None:
                score_apt_type, score_floor, score_complex, score_supply,
                yield_pct, est_rent, bargain_target, bargain_discount_pct, bargain_rec,
                is_owner, seller_type, renovation, description, floor, floors_total,
-               first_seen, last_seen
+               first_seen, last_seen, details_fetched, year_built, rent_source
         FROM apartment_listings WHERE id=$1
         """,
         listing_id,
@@ -408,16 +409,10 @@ async def cmd_score(message: Message) -> None:
     ]
     if r.get("score_floor") is None or r.get("score_complex") is None:
         bd_lines.append("  ⚠️ часть скора не пересчитана (устаревшая запись) — данные ниже могут быть неполными")
-    days_in_db = ""
-    if r.get("first_seen"):
-        import datetime as dt
-        days = (dt.datetime.now(dt.timezone.utc) - r["first_seen"]).days
-        days_in_db = f"\n⏱ В базе {days} дн."
-
     header = _listing_card(r)
     insights = build_insights_block(r, changes)
     await message.answer(
-        header + "\n" + "\n".join(bd_lines) + "\n" + insights + days_in_db,
+        header + "\n" + "\n".join(bd_lines) + "\n" + insights,
         parse_mode="HTML", disable_web_page_preview=True,
     )
 

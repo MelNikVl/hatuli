@@ -134,6 +134,70 @@ def price_history_note(changes: list[dict]) -> str | None:
     return None
 
 
+# ── Достоверность оценки (принцип Zestimate: показываем, чему верить) ────────
+
+def confidence_note(row: dict) -> str:
+    """
+    Уровень достоверности скора по полноте данных:
+      - аренда из rental_index: сколько реальных ставок легло в оценку (rent_source "n=12")
+      - подтянута ли детальная страница (этаж, год, ремонт, описание)
+    Zillow при нехватке данных вообще не публикует оценку — мы публикуем,
+    но честно показываем степень уверенности. Это доверие = продукт.
+    """
+    points = 0
+    parts = []
+
+    rent_source = row.get("rent_source") or ""
+    m = re.search(r"n=(\d+)", rent_source)
+    rent_n = int(m.group(1)) if m else 0
+    if rent_n >= 10:
+        points += 2
+        parts.append(f"аренда: {rent_n} ставок")
+    elif rent_n >= 3:
+        points += 1
+        parts.append(f"аренда: {rent_n} ставок (мало)")
+    else:
+        parts.append("аренда: оценочно")
+
+    if row.get("details_fetched"):
+        points += 1
+        parts.append("детали проверены")
+    if row.get("year_built"):
+        points += 1
+
+    if points >= 3:
+        level = "🟢 Высокая достоверность"
+    elif points >= 2:
+        level = "🟡 Средняя достоверность"
+    else:
+        level = "🔴 Предварительная оценка"
+    return f"{level} ({', '.join(parts)})"
+
+
+def dom_note(first_seen, price_changes: list[dict] | None = None) -> str | None:
+    """
+    Дни на рынке + связка с историей цен — сильный сигнал для торга.
+    Zillow учитывает days on market как один из ключевых факторов.
+    """
+    if not first_seen:
+        return None
+    import datetime as dt
+    days = (dt.datetime.now(dt.timezone.utc) - first_seen).days
+    n_drops = sum(
+        1 for c in (price_changes or [])
+        if c.get("old_price") and c.get("new_price") and c["new_price"] < c["old_price"]
+    )
+    if days <= 3:
+        return f"⚡ Свежее объявление ({days} дн.) — хорошие варианты уходят за часы, решай быстро"
+    if days >= 30 and n_drops == 0:
+        return f"🐢 {days} дн. на рынке без снижения цены — продавец упёрся или объект переоценён"
+    if days >= 30:
+        return f"⏱ {days} дн. на рынке — залежался, торг с сильной позиции"
+    if days >= 14:
+        return f"⏱ {days} дн. на рынке — интерес рынка умеренный, торг уместен"
+    return f"⏱ {days} дн. на рынке"
+
+
 # ── Сборка блока инсайтов для карточки ────────────────────────────────────────
 
 def build_insights_block(row: dict, price_changes: list[dict] | None = None) -> str:
@@ -188,9 +252,17 @@ def build_insights_block(row: dict, price_changes: list[dict] | None = None) -> 
     if renovation:
         lines.append(f"🔨 Ремонт: {renovation}")
 
+    # Дни на рынке
+    dn = dom_note(row.get("first_seen"), price_changes)
+    if dn:
+        lines.append(dn)
+
     # Флаги из описания
     red, green = text_flags(row.get("description"), row.get("title"))
     lines.extend(red)
     lines.extend(green)
+
+    # Достоверность оценки — всегда последней строкой
+    lines.append(confidence_note(row))
 
     return "\n".join(lines)

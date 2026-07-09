@@ -143,18 +143,33 @@ def yield_score(
 def price_vs_market_score(
     price_per_m2: float,
     district_avg_m2: float | None,
+    comps_median_m2: float | None = None,
+    comps_cnt: int = 0,
 ) -> tuple[int, str]:
-    """(0-15) Насколько цена ниже/выше медианы по району."""
-    if not district_avg_m2:
+    """
+    (0-15) Насколько цена ниже/выше рынка.
+
+    v3: сравниваем с медианой ЦЕНЫ/м² РЕАЛЬНЫХ аналогов из всей БД
+    (тот же район + комнаты + площадь ±15%) — как делает Zillow.
+    Медиана по району — только fallback: однушки и трёшки в одном районе
+    стоят за м² совершенно по-разному, district-медиана это смазывает.
+    Аналогам доверяем от 5 штук — меньше слишком шумно.
+    """
+    if comps_median_m2 and comps_cnt >= 5:
+        benchmark, src = comps_median_m2, f"{comps_cnt} аналогов"
+    elif district_avg_m2:
+        benchmark, src = district_avg_m2, "медиана района"
+    else:
         return 5, "нет данных по рынку"
-    diff = (price_per_m2 - district_avg_m2) / district_avg_m2
+
+    diff = (price_per_m2 - benchmark) / benchmark
     if diff < -0.15:
-        return 15, f"на {abs(diff)*100:.0f}% ниже рынка 🔥"
+        return 15, f"на {abs(diff)*100:.0f}% ниже рынка ({src}) 🔥"
     if diff < -0.05:
-        return 10, f"на {abs(diff)*100:.0f}% ниже рынка"
+        return 10, f"на {abs(diff)*100:.0f}% ниже рынка ({src})"
     if diff < 0.05:
-        return 5, "на уровне рынка"
-    return 2, f"на {diff*100:.0f}% выше рынка"
+        return 5, f"на уровне рынка ({src})"
+    return 2, f"на {diff*100:.0f}% выше рынка ({src})"
 
 
 # ── Анализ торга ──────────────────────────────────────────────────────────────
@@ -272,7 +287,17 @@ def compute_apartment_score_v2(
     price_m2 = price / area if (area and area > 0) else 0
 
     s_yield, r_yield, yield_pct = yield_score(price, monthly_rent, is_owner)
-    s_pm, r_pm = price_vs_market_score(price_m2, district_avg_m2)
+    # Медиана цены/м² по реальным аналогам (район+комнаты+площадь ±15%)
+    comps_m2 = [
+        c["price"] / c["area"]
+        for c in (comparables or [])
+        if c.get("price") and c.get("area") and c["area"] > 0
+    ]
+    comps_median_m2 = None
+    if comps_m2:
+        import statistics
+        comps_median_m2 = statistics.median(comps_m2)
+    s_pm, r_pm = price_vs_market_score(price_m2, district_avg_m2, comps_median_m2, len(comps_m2))
     s_loc, r_loc = location_score(district, address, title)
     s_apt, r_apt = apt_type_score(rooms, area)
     s_floor, r_floor = floor_score(floor, floors_total)
