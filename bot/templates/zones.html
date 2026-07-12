@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🗺 Зоны приоритета</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+
+<style>
+.zones-layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
+#map { height: 620px; border-radius: 12px; border: 1px solid var(--border); }
+.zone-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+.zone-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
+.zone-item .del { cursor: pointer; color: #ef4444; font-weight: 700; border: none; background: none; font-size: 15px; }
+.zone-form input, .zone-form select { width: 100%; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); box-sizing: border-box; }
+.hint { font-size: 12px; color: #888; margin-bottom: 12px; line-height: 1.5; }
+.btn-zone-save { width: 100%; padding: 10px; border: none; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 700; cursor: pointer; }
+.btn-zone-save:disabled { opacity: .4; cursor: default; }
+.zbadge { padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; color: #fff; }
+</style>
+
+<div class="hint">
+  Нарисуй область мышкой (кнопка ⬠ на карте слева), дай ей имя и бонус к скору —
+  все объявления с координатами внутри зоны получат прибавку к скору.
+  Пересчёт происходит в следующем цикле парсера. Примеры зон: Ботанический парк,
+  первая линия пр. Туран, пр. Мангилик Ел, Центральный парк.
+</div>
+
+<div class="zones-layout">
+  <div id="map"></div>
+  <div class="zone-panel">
+    <h3 style="margin-top:0;">Новая зона</h3>
+    <div class="zone-form">
+      <input id="z-name" placeholder="Название (напр. Ботанический парк)">
+      <select id="z-bonus">
+        <option value="5">+5 баллов</option>
+        <option value="10" selected>+10 баллов</option>
+        <option value="15">+15 баллов</option>
+        <option value="20">+20 баллов</option>
+      </select>
+      <button class="btn-zone-save" id="z-save" disabled onclick="saveZone()">Сначала нарисуй полигон</button>
+    </div>
+    <h3>Существующие зоны</h3>
+    <div id="zone-list"><em style="color:#888;font-size:13px;">загрузка…</em></div>
+  </div>
+</div>
+
+<script>
+const map = L.map('map').setView([51.128, 71.43], 12);  // Астана
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap', maxZoom: 19,
+}).addTo(map);
+
+const drawnItems = new L.FeatureGroup().addTo(map);
+const zonesLayer = new L.FeatureGroup().addTo(map);
+
+map.addControl(new L.Control.Draw({
+  draw: { polygon: { shapeOptions: { color: '#2563eb' } },
+          polyline: false, rectangle: true, circle: false, marker: false, circlemarker: false },
+  edit: { featureGroup: drawnItems }
+}));
+
+let pendingPolygon = null;
+
+map.on(L.Draw.Event.CREATED, e => {
+  drawnItems.clearLayers();
+  drawnItems.addLayer(e.layer);
+  // GeoJSON ring: [[lon,lat],...]
+  const gj = e.layer.toGeoJSON();
+  pendingPolygon = gj.geometry.coordinates[0];
+  const btn = document.getElementById('z-save');
+  btn.disabled = false;
+  btn.textContent = '💾 Сохранить зону';
+});
+
+async function saveZone() {
+  const name = document.getElementById('z-name').value.trim() || 'Зона';
+  const bonus = parseInt(document.getElementById('z-bonus').value);
+  if (!pendingPolygon) return;
+  const r = await fetch('/admin/zones/save', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name, bonus, color: '#2563eb', polygon: pendingPolygon}),
+  });
+  if (r.ok) {
+    pendingPolygon = null;
+    drawnItems.clearLayers();
+    document.getElementById('z-name').value = '';
+    const btn = document.getElementById('z-save');
+    btn.disabled = true; btn.textContent = 'Сначала нарисуй полигон';
+    loadZones();
+  } else {
+    alert('Ошибка сохранения: ' + await r.text());
+  }
+}
+
+async function deleteZone(id) {
+  if (!confirm('Удалить зону?')) return;
+  await fetch('/admin/zones/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id}),
+  });
+  loadZones();
+}
+
+async function loadZones() {
+  zonesLayer.clearLayers();
+  const r = await fetch('/admin/zones/list');
+  const d = await r.json();
+  const list = document.getElementById('zone-list');
+  if (!d.zones.length) {
+    list.innerHTML = '<em style="color:#888;font-size:13px;">пока нет зон</em>';
+    return;
+  }
+  list.innerHTML = d.zones.map(z =>
+    `<div class="zone-item">
+       <span>${z.name} <span class="zbadge" style="background:#2563eb">+${z.bonus}</span></span>
+       <button class="del" onclick="deleteZone(${z.id})">✕</button>
+     </div>`).join('');
+  d.zones.forEach(z => {
+    let ring = z.polygon;
+    if (ring.length && Array.isArray(ring[0][0])) ring = ring[0];
+    const latlngs = ring.map(p => [p[1], p[0]]);  // [lon,lat] -> [lat,lon]
+    L.polygon(latlngs, {color: z.color || '#2563eb', fillOpacity: 0.15})
+      .bindTooltip(`${z.name} (+${z.bonus})`).addTo(zonesLayer);
+  });
+}
+
+loadZones();
+</script>
+{% endblock %}

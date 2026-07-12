@@ -68,12 +68,12 @@ tr:last-child td{border-bottom:none}
   {% set yld = c.avg_yield %}
   {% set yield_cls = 'yield-hi' if yld and yld >= 10 else ('yield-md' if yld and yld >= 7 else ('yield-lo' if yld else 'yield-na')) %}
   <tr>
-    <td><strong>{{ c.name | title }}</strong>{% if c.notes %}<br><span style="font-size:11px;color:#888">{{ c.notes[:50] }}</span>{% endif %}</td>
+    <td><strong><a href="/admin/complex/{{ c.id }}" style="color:inherit;text-decoration:none;">{{ c.name | title }}</a></strong>{% if c.notes %}<br><span style="font-size:11px;color:#888">{{ c.notes[:50] }}</span>{% endif %}</td>
     <td>{{ c.district or '—' }}</td>
     <td>{% if c.year_built %}{{ c.year_built }}{% if c.year_built >= 2022 %} <span style="color:#22c55e;font-size:10px">новый</span>{% elif c.year_built < 2015 %} <span style="color:#f97316;font-size:10px">старый</span>{% endif %}{% else %}—{% endif %}</td>
     <td>{% if c.developer_name %}<span class="dev-badge">{{ c.developer_name }}</span>{% else %}<span style="color:#94a3b8;font-size:12px">—</span>{% endif %}</td>
     <td>{% if c.avg_price_m2 %}{{ (c.avg_price_m2 / 1000) | round(0) | int }}к ₸{% else %}—{% endif %}</td>
-    <td><span class="yield-tag {{ yield_cls }}">{% if yld %}{{ yld }}%{% else %}—{% endif %}</span></td>
+    <td><span class="yield-tag {{ yield_cls }}">{% if yld %}{{ yld | round(1) }}%{% else %}—{% endif %}</span></td>
     <td><strong>{{ c.listings_count or 0 }}</strong><div class="data-bar"><div class="data-bar-fill" style="width:{{ [[((c.listings_count or 0) / 20 * 100), 100] | min, 0] | max }}%"></div></div></td>
     <td>{% if c.rental_listings_count %}{{ c.rental_listings_count }}{% else %}<span style="color:#94a3b8">—</span>{% endif %}</td>
     <td>

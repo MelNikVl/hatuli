@@ -78,6 +78,10 @@ async def main():
                         try:
                             await sync_rental_to_sheets()
                             log.info("Google Sheets: Аренда synced")
+                            from bot.db import settings as app_settings
+                            from datetime import datetime, timezone
+                            await app_settings.set("SHEETS_RENTAL_SYNCED_AT",
+                                                   datetime.now(timezone.utc).isoformat())
                         except Exception as e:
                             log.warning("Sheets sync failed: %s", e)
 

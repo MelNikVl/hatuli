@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">❤️ Скор: из чего он состоит</div>
+
+<style>
+.sc-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; max-width: 940px; }
+.sc-card h3 { margin-top: 0; }
+.sc-card p, .sc-card li, .sc-card td { font-size: 14px; line-height: 1.6; }
+.sc-table { width: 100%; border-collapse: collapse; }
+.sc-table th { text-align: left; color: #888; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 12px; text-transform: uppercase; }
+.sc-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.w { font-weight: 800; font-size: 16px; }
+.formula { background: rgba(37,99,235,.08); border: 1px solid rgba(37,99,235,.25); border-radius: 10px; padding: 14px 18px; font-size: 15px; font-weight: 600; text-align: center; margin-bottom: 16px; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; margin-right: 4px; }
+.pill-b { background: #dbeafe; color: #1e40af; }
+.pill-g { background: #dcfce7; color: #166534; }
+.pill-r { background: #fee2e2; color: #991b1b; }
+</style>
+
+<div class="formula">
+  ИТОГ = Базовый скор (0–100) + Отделка (−5…+6, внутри базы) + Зоны (0…+20) + Слои (−6…+7)
+</div>
+
+<div class="sc-card">
+  <h3>1. Базовый скор — 100 баллов, 7 компонентов</h3>
+  <table class="sc-table">
+    <tr><th>Компонент</th><th>Вес</th><th>Как считается</th></tr>
+    <tr><td><b>Yield</b></td><td class="w">20</td><td>Аренда из rental_index (уровень: ЖК+комнаты → район+комнаты → город+комнаты) × 12 / цена. Если продаёт риелтор — к цене прибавляется его комиссия (1%, мин 400к). ≥13% → 20 баллов, ≥10% → 15, ≥8% → 10, ≥5% → 5, меньше → 2.</td></tr>
+    <tr><td><b>Цена vs рынок</b></td><td class="w">15</td><td>Цена/м² против медианы <b>реальных аналогов</b> (район + комнаты + площадь ±15%, доверяем от 5 шт). Fallback — медиана района. Ниже рынка на 15%+ → 15 🔥, на 5–15% → 10, в рынке → 5, дороже → 2.</td></tr>
+    <tr><td><b>Локация</b></td><td class="w">20</td><td>Район: Есиль 20, Алматинский 16, Сарыарка 12, Байконур 10, Нура 8, не определён 5. Плюс до +3 за POI в тексте (ТРЦ, БЦ, университет, EXPO, Хан Шатыр, LRT...).</td></tr>
+    <tr><td><b>Тип квартиры</b></td><td class="w">15</td><td>1к → 15 (макс спрос), 2к → 13, 3к → 8, 4к+ → 4. Штрафы за метраж: 70м²+ → −2, 100м²+ → до −6. Оптимум 35–55 м².</td></tr>
+    <tr><td><b>ЖК (год)</b></td><td class="w">15</td><td>2022+ → 15, 2018+ → 11, 2012+ → 7, старше → 4, год неизвестен → 5. TODO: сюда просится застройщик, УК, отзывы, ликвидность ЖК.</td></tr>
+    <tr><td><b>Этаж</b></td><td class="w">8</td><td>2–7 этаж → 8 (оптимум), предпоследний → 5, последний → 1, первый → 0, не указан → 4.</td></tr>
+    <tr><td><b>Supply</b></td><td class="w">7</td><td>Конкуренция в том же ЖК: 1–2 объявления → 7 (дефицит), 3–5 → 4, больше → 1.</td></tr>
+  </table>
+</div>
+
+<div class="sc-card">
+  <h3>2. Отделка <span class="pill pill-r">−5</span>…<span class="pill pill-g">+6</span> (правит базовый скор)</h3>
+  <p>Определяется по ключевым словам заголовка и описания: черновая −5, требует ремонта −4, предчистовая −2, чистовая +3, свежий ремонт +4, с мебелью +5, дизайнерский ремонт +6. При включённом AI-анализе (DeepSeek) отделка уточняется по смыслу текста.</p>
+</div>
+
+<div class="sc-card">
+  <h3>3. Зоны приоритета <span class="pill pill-b">0…+20</span></h3>
+  <p>Полигоны, которые ты рисуешь мышкой на <a href="/admin/zones">карте зон</a> (Ботсад, Туран, Мангилик...). Объявление с координатами внутри зоны получает назначенный бонус. Максимальный из пересекающихся зон.</p>
+</div>
+
+<div class="sc-card">
+  <h3>4. Слои <span class="pill pill-r">−6</span>…<span class="pill pill-g">+7</span></h3>
+  <p>Независимые модули-поправки (bot/score_layers/), каждый можно включать/выключать и развивать отдельно. Считаются для объявлений с координатами, данные из OSM кешируются на 60 дней.</p>
+  <table class="sc-table">
+    <tr><th>Слой</th><th>Диапазон</th><th>Логика</th></tr>
+    <tr><td><b>🔊 Шум</b></td><td>−6…0</td><td>Магистраль (motorway/trunk/primary) в &lt;100м → −6, в &lt;250м → −4; оживлённая улица (secondary) в &lt;100м → −3, в &lt;250м → −1. Тишина — норма, не бонус. Внутренний шум (звукоизоляция) — в вопросах продавцу.</td></tr>
+    <tr><td><b>🏫 Школы</b></td><td>0…+5</td><td>Школа + садик в 700м → +5 (семейная локация), одно из двух → +3, только вуз → +2 (аренда студентам). Рейтинг заведений — следующий шаг.</td></tr>
+    <tr><td><b>🏦 Банки</b></td><td>0 (заглушка)</td><td>Задел: попадание под госпрограммы (7-20-25, Отбасы, Наурыз), залогопригодность, дельта льготной ставки. Ждёт парсер ставок.</td></tr>
+  </table>
+  <p style="font-size:12px;color:#888;">Планируемые слои: планировка (распашонка/линейка — из AI-анализа), стороны света и вид (по ориентации дома в OSM), квартир на этаже / лифты, паркинг, ликвидность ЖК (из архив-статистики), новости по ЖК.</p>
+</div>
+
+<div class="sc-card">
+  <h3>5. Первичка vs вторичка</h3>
+  <p>Объявления делятся на <span class="pill pill-b">primary</span> (дом 2026+, «от застройщика», «сдача в...») и <span class="pill pill-g">secondary</span>. Пока обе ветки скорятся одной моделью, но у первички yield фиктивный (аренды ещё нет) — её скор надо читать как «потенциал». Отдельная модель первички (застройщик + стадия + дельта к готовым домам класса) — в работе, наполнится данными с korter.kz.</p>
+</div>
+
+<div class="sc-card">
+  <h3>Куда смотреть в интерфейсе</h3>
+  <p>В <a href="/admin/analytics">Аналитике</a> — breakdown базового скора по компонентам. В <a href="/admin/top10">Топ-10</a> — бейджи зон, слоёв и первички. В карточке объекта — причины скора, торг и вопросы продавцу. Ставки и параметры модели крутятся ползунками в <a href="/admin/settings">Настройках</a>.</p>
+</div>
+{% endblock %}

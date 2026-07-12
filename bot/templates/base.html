@@ -109,6 +109,7 @@
     }
     select:focus, input:focus { outline: 1px solid var(--accent); }
   </style>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
 </head>
 <body>
 
@@ -123,7 +124,12 @@
     <a href="/admin/logs"        class="{% if 'logs' in request.url.path %}active{% endif %}"><span class="ico">📋</span> Логи</a>
     <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}"><span class="ico">🏢</span> Рейтинг ЖК</a>
     <a href="/admin/issues"      class="{% if 'issues' in request.url.path %}active{% endif %}"><span class="ico">⚠️</span> Ошибки парсера</a>
+    <a href="/admin/top10"       class="{% if 'top10' in request.url.path %}active{% endif %}"><span class="ico">🏆</span> Топ-10</a>
+    <a href="/admin/zones"       class="{% if 'zones' in request.url.path %}active{% endif %}"><span class="ico">🗺</span> Зоны</a>
+    <a href="/admin/score-explained" class="{% if 'score-explained' in request.url.path %}active{% endif %}"><span class="ico">❤️</span> Скор</a>
+    <a href="/admin/info"        class="{% if request.url.path == '/admin/info' %}active{% endif %}"><span class="ico">ℹ️</span> Инфо</a>
     <div class="nav-section">Управление</div>
+    <a href="/admin/settings"    class="{% if 'settings' in request.url.path %}active{% endif %}"><span class="ico">⚙️</span> Настройки</a>
     {# <a href="/admin/users" class="{% if request.url.path == '/admin/users' %}active{% endif %}"><span class="ico">👥</span> Пользователи</a> #}
     {# <a href="/admin/users/stats" class="{% if 'users/stats' in request.url.path %}active{% endif %}"><span class="ico">📈</span> Стат. пользователей</a> #}
     {# <a href="/admin/subscriptions" class="{% if 'subscriptions' in request.url.path %}active{% endif %}"><span class="ico">🔑</span> Подписки</a> #}

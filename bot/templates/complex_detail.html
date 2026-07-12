@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🏢 {{ cx.name }} <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.developer_name %} · {{ cx.developer_name }}{% endif %}</small></div>
+
+<style>
+.cx-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
+.cx-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+.cx-card h3 { margin-top: 0; font-size: 15px; }
+.cx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cx-table th { text-align: left; color: #888; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.cx-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+.dead { opacity: .45; }
+.badge-arch { font-size: 10px; background: #ef4444; color: #fff; border-radius: 10px; padding: 1px 7px; }
+.badge-live { font-size: 10px; background: #22c55e; color: #fff; border-radius: 10px; padding: 1px 7px; }
+.contact-form textarea { width: 100%; min-height: 54px; padding: 8px 10px; margin: 4px 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); box-sizing: border-box; font-family: inherit; font-size: 13px; }
+.contact-form input { width: 100%; padding: 8px 10px; margin: 4px 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); box-sizing: border-box; font-size: 13px; }
+.contact-form label { font-size: 12px; font-weight: 700; color: #888; text-transform: uppercase; }
+.btn-save-c { padding: 10px 18px; border: none; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 700; cursor: pointer; }
+</style>
+
+<div class="cx-grid">
+<div>
+
+  <div class="cx-card">
+    <h3>📊 Продажи: статистика по комнатности
+      {% if obs.since %}<small style="font-weight:400;color:#888;font-size:11px;">наблюдаем с {{ obs.since.strftime('%d.%m.%Y') }} по {{ obs.until.strftime('%d.%m.%Y') if obs.until else '—' }}</small>{% endif %}
+    </h3>
+    <table class="cx-table">
+      <tr><th>Комнат</th><th>Объявл.</th><th>Медиана цены</th><th>₸/м²</th><th>Ушло в архив</th><th>Ср. дней до архива</th><th>Архивации (период)</th></tr>
+      {% for s in stats %}
+      <tr>
+        <td><b>{{ s.rooms or '?' }}к</b></td>
+        <td>{{ s.cnt }}</td>
+        <td>{{ '{:,.0f}'.format(s.median_price or 0).replace(',', ' ') }} ₸</td>
+        <td>{{ '{:,.0f}'.format(s.median_m2 or 0).replace(',', ' ') }}</td>
+        <td>{{ s.sold_cnt }}</td>
+        <td>{{ '%.0f'|format(s.avg_days_to_sell) if s.avg_days_to_sell else '—' }}</td>
+        <td style="font-size:11px;color:#888;">{% if s.first_archived %}{{ s.first_archived.strftime('%d.%m') }} — {{ s.last_archived.strftime('%d.%m') }}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p style="font-size:12px;color:#888;">«Ушло в архив» ≈ продано или снято с продажи (проверка запущена 12.07.2026 — данные копятся с этой даты). «Ср. дней до архива» — время от первого появления объявления в базе до архивации: чем меньше, тем быстрее «уходят» квартиры в этом ЖК. Эта метрика ликвидности будет добавлена в скор ЖК, когда накопится статистика.</p>
+  </div>
+
+  <div class="cx-card">
+    <h3>🔑 Аренда: скорость ухода</h3>
+    <table class="cx-table">
+      <tr><th>Комнат</th><th>Объявл.</th><th>Медиана ₸/мес</th><th>Ушло</th><th>Ср. дней в экспозиции</th></tr>
+      {% for r in rental_stats %}
+      <tr>
+        <td><b>{{ r.rooms or '?' }}к</b></td>
+        <td>{{ r.cnt }}</td>
+        <td>{{ '{:,.0f}'.format(r.median_rent or 0).replace(',', ' ') }}</td>
+        <td>{{ r.gone_cnt }}</td>
+        <td>{{ '%.0f'|format(r.avg_days_listed) if r.avg_days_listed else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p style="font-size:12px;color:#888;">«Ушло» = объявление не появлялось в выдаче парсера больше 3 дней (сдано или снято). Малое «дней в экспозиции» = высокий арендный спрос в этом ЖК. Метрика начнёт наполняться с 12.07.2026.</p>
+  </div>
+
+  <div class="cx-card">
+    <h3>🏠 Объявления о продаже ({{ sales|length }})</h3>
+    <table class="cx-table">
+      <tr><th></th><th>Объект</th><th>Цена</th><th>Yield</th><th>Скор</th><th></th></tr>
+      {% for l in sales %}
+      <tr class="{{ 'dead' if l.is_active == False else '' }}">
+        <td>{% if l.is_active == False %}<span class="badge-arch">архив</span>{% else %}<span class="badge-live">live</span>{% endif %}</td>
+        <td><a href="/admin/analytics/{{ l.id }}" style="color:inherit;">{{ l.rooms or '?' }}к · {{ l.area or '?' }}м² · {{ l.floor or '?' }}/{{ l.floors_total or '?' }}эт</a></td>
+        <td><b>{{ '{:,.0f}'.format(l.price or 0).replace(',', ' ') }}</b></td>
+        <td>{{ '%.1f'|format(l.yield_pct or 0) }}%</td>
+        <td><b>{{ l.score_total or '—' }}</b></td>
+        <td><a href="{{ l.url }}" target="_blank">↗</a></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="cx-card">
+    <h3>🔑 Аренда рядом ({{ rentals|length }})</h3>
+    <table class="cx-table">
+      <tr><th>Комнат</th><th>Цена/мес</th><th>Площадь</th></tr>
+      {% for r in rentals[:15] %}
+      <tr>
+        <td>{{ r.rooms or '?' }}к</td>
+        <td><b>{{ '{:,.0f}'.format(r.price or 0).replace(',', ' ') }} ₸</b></td>
+        <td>{{ r.area or '—' }} м²</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+</div>
+<div>
+
+  <div class="cx-card contact-form">
+    <h3>👥 Люди и контакты</h3>
+    <label>ОСИ (контакты)</label>
+    <textarea id="c-osi" placeholder="Председатель ОСИ, телефон, как связаться...">{{ cx.osi_contacts or '' }}</textarea>
+    <label>Управляющая компания</label>
+    <input id="c-ukname" placeholder="Название УК" value="{{ cx.uk_name or '' }}">
+    <textarea id="c-uk" placeholder="Контакты УК: телефон, офис, сайт...">{{ cx.uk_contacts or '' }}</textarea>
+    <label>Чаты жителей</label>
+    <textarea id="c-chats" placeholder="Ссылки на Telegram/WhatsApp чаты ЖК, по одной на строку">{{ cx.chat_links or '' }}</textarea>
+    <label>Заметки от жителей</label>
+    <textarea id="c-notes" placeholder="Что говорят жители: отопление, лифты, парковка, качество...">{{ cx.residents_notes or '' }}</textarea>
+    <button class="btn-save-c" onclick="saveContacts()">💾 Сохранить</button>
+    <span id="c-status" style="font-size:12px;color:#22c55e;margin-left:8px;"></span>
+  </div>
+
+  <div class="cx-card">
+    <h3>🔎 Где искать инфу по этому ЖК</h3>
+    <p style="font-size:13px;line-height:1.6;">
+      · <a href="https://2gis.kz/astana/search/{{ cx.name | urlencode }}" target="_blank">2GIS: отзывы ↗</a><br>
+      · <a href="https://www.google.com/maps/search/{{ (cx.name ~ ' Астана') | urlencode }}" target="_blank">Google Maps ↗</a><br>
+      · <a href="https://www.google.com/search?q={{ ('телеграм чат жителей ЖК ' ~ cx.name ~ ' Астана') | urlencode }}" target="_blank">Найти чат жителей ↗</a><br>
+      · <a href="https://www.google.com/search?q={{ ('site:krisha.kz ЖК ' ~ cx.name) | urlencode }}" target="_blank">Krisha: найти страницу ЖК ↗</a>
+    </p>
+  </div>
+
+</div>
+</div>
+
+<script>
+async function saveContacts() {
+  const r = await fetch('/admin/complex/{{ cx.id }}/contacts', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      osi_contacts: document.getElementById('c-osi').value,
+      uk_name: document.getElementById('c-ukname').value,
+      uk_contacts: document.getElementById('c-uk').value,
+      chat_links: document.getElementById('c-chats').value,
+      residents_notes: document.getElementById('c-notes').value,
+    }),
+  });
+  document.getElementById('c-status').textContent = r.ok ? 'Сохранено ✓' : 'Ошибка!';
+  setTimeout(() => document.getElementById('c-status').textContent = '', 2500);
+}
+</script>
+{% endblock %}

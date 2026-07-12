@@ -194,8 +194,8 @@ tr:last-child td { border-bottom: none; }
           {% if l.rent_source %}<br><span style="color:#888;font-size:10px;">{{ l.rent_source }}</span>{% endif %}
         {% else %}-{% endif %}
       </td>
-      <td><span class="yield-tag {{ yield_class }}">{{ yld }}%</span>
-        {% if l.payback_years %}<br><span style="color:#888;font-size:10px;">{{ l.payback_years }} лет</span>{% endif %}
+      <td><span class="yield-tag {{ yield_class }}">{{ yld | round(1) }}%</span>
+        {% if l.payback_years %}<br><span style="color:#888;font-size:10px;">{{ l.payback_years | round(1) }} лет</span>{% endif %}
       </td>
       <td>
         {% if l.bargain_discount_pct %}

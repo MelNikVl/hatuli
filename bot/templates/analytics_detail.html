@@ -43,6 +43,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .back-btn:hover { text-decoration: underline; }
 .full-width { grid-column: 1 / -1; }
 </style>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
 </head>
 <body>
 <nav class="nav">
@@ -87,8 +88,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
       {% if listing.reasons %}
       <div class="reasons" style="margin-top:16px;">
         <div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;">Причины:</div>
-        {% set reasons = listing.reasons | tojson | fromjson if listing.reasons else [] %}
-        {% for r in reasons %}
+        {% for r in reasons_list %}
         <div class="reason-item">{{ r }}</div>
         {% endfor %}
       </div>
@@ -101,7 +101,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
         <a href="{{ listing.url }}" target="_blank" style="font-size:12px;color:#1a1a2e;margin-left:8px;">открыть на Krisha ↗</a>
       </h2>
       <div class="row"><span class="key">Комнат</span><span class="val">{{ listing.rooms or '?' }}</span></div>
-      <div class="row"><span class="key">Площадь</span><span class="val">{{ listing.area | round(1) }}м²</span></div>
+      <div class="row"><span class="key">Площадь</span><span class="val">{{ (listing.area or 0) | round(1) }}м²</span></div>
       <div class="row"><span class="key">Этаж</span><span class="val">
         {{ listing.floor or '?' }}/{{ listing.floors_total or '?' }}
         {% if listing.floor == 1 %}<span style="color:#e53e3e;font-size:11px;"> ⚠ 1й этаж</span>
@@ -114,7 +114,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
       <div class="row"><span class="key">Продавец</span><span class="val">
         {% if listing.is_owner %}хозяин{% elif listing.is_owner == false %}риелтор{% else %}?{% endif %}
       </span></div>
-      <div class="row"><span class="key">Цена</span><span class="val" style="font-size:16px;color:#1a1a2e;">{{ "{:,.0f}".format(listing.price) }} ₸</span></div>
+      <div class="row"><span class="key">Цена</span><span class="val" style="font-size:16px;color:#1a1a2e;">{{ "{:,.0f}".format(listing.price or 0) }} ₸</span></div>
       <div class="row"><span class="key">Аренда (оценка)</span><span class="val" style="color:#1a6b1a;">{{ "{:,.0f}".format(listing.est_rent or 0) }} ₸/мес</span></div>
       <div class="row"><span class="key">Источник аренды</span><span class="val" style="font-size:11px;color:#888;">{{ listing.rent_source or '—' }}</span></div>
       <div class="row"><span class="key">Yield</span><span class="val" style="color:#1a6b1a;font-size:16px;font-weight:700;">{{ listing.yield_pct or 0 }}%</span></div>
@@ -193,5 +193,42 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
     </div>
   </div>
 </div>
+
+    {% if ai %}
+    <!-- AI-анализ текста -->
+    <div class="card" style="margin-top:16px;">
+      <h2>🤖 AI-анализ описания</h2>
+      <ul style="font-size:14px;line-height:1.7;padding-left:20px;">
+        {% if ai.urgency and ai.urgency != 'нет' %}<li><b>Срочность продажи: {{ ai.urgency }}</b>{% if ai.urgency_quote %} — «{{ ai.urgency_quote }}»{% endif %}</li>{% endif %}
+        {% if ai.finish %}<li>Отделка (по тексту): {{ ai.finish }}</li>{% endif %}
+        {% if ai.layout %}<li>Планировка: {{ ai.layout }}</li>{% endif %}
+        {% if ai.furniture %}<li>Мебель остаётся</li>{% endif %}
+        {% if ai.exchange %}<li style="color:#f59e0b;">⚠️ Предлагается обмен — обычно не инвест-вариант</li>{% endif %}
+        {% for d in ai.defects or [] %}<li>Дефект: {{ d }}</li>{% endfor %}
+        {% for n in ai.negotiation or [] %}<li>Зацепка для торга: {{ n }}</li>{% endfor %}
+        {% for f in ai.red_flags or [] %}<li style="color:#ef4444;">🚩 {{ f }}</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <!-- Как торговаться -->
+    <div class="card" style="margin-top:16px;">
+      <h2>🤝 Как торговаться по этому варианту</h2>
+      <ol style="font-size:14px;line-height:1.7;padding-left:20px;">
+        {% for p in negotiation_points %}<li>{{ p }}</li>{% endfor %}
+      </ol>
+    </div>
+
+    <!-- Вопросы продавцу -->
+    <div class="card" style="margin-top:16px;">
+      <h2>❓ Недостающая информация и вопросы продавцу</h2>
+      <ul style="font-size:14px;line-height:1.7;padding-left:20px;">
+        {% for q in seller_questions %}<li>{{ q }}</li>{% endfor %}
+      </ul>
+      {% if listing.rent_source %}
+      <p style="font-size:12px;color:#888;">Оценка аренды: источник — {{ listing.rent_source }}.</p>
+      {% endif %}
+    </div>
+
 </body>
 </html>

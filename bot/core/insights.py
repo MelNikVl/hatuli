@@ -10,25 +10,35 @@
   - Сводка истории цен: сколько раз снижали и на сколько
   - Владелец vs риелтор (комиссия риелтора ~1-3% — влияет на реальную цену)
 
-Настройки через .env (все с разумными дефолтами):
-  DEPOSIT_RATE=14.0        # ставка по депозиту KZT, % годовых (KDIF-максимум меняется — обновляй)
-  APPRECIATION_PCT=8.0     # консервативная оценка роста цены кв.м в год, %
-  MORTGAGE_RATE=17.0       # рыночная ипотечная ставка, % (льготные 7-20-25/Отбасы ниже)
+Настройки читаются из app_settings (БД, правятся ползунками в /admin/settings),
+fallback — переменные окружения, потом дефолты:
+  DEPOSIT_RATE=14.0        # ставка по депозиту KZT, % годовых
+  APPRECIATION_PCT=8.0     # оценка роста цены кв.м в год, %
+  MORTGAGE_RATE=17.0       # рыночная ипотечная ставка, %
   MORTGAGE_YEARS=20
   MORTGAGE_DOWN_PCT=20     # первоначальный взнос, %
-  REALTOR_FEE_PCT=2.0      # типичная комиссия риелтора при покупке через агента
+  REALTOR_FEE_PCT=2.0      # комиссия риелтора
 """
 from __future__ import annotations
 
 import os
 import re
 
-DEPOSIT_RATE = float(os.getenv("DEPOSIT_RATE", "14.0"))
-APPRECIATION_PCT = float(os.getenv("APPRECIATION_PCT", "8.0"))
-MORTGAGE_RATE = float(os.getenv("MORTGAGE_RATE", "17.0"))
-MORTGAGE_YEARS = int(os.getenv("MORTGAGE_YEARS", "20"))
-MORTGAGE_DOWN_PCT = float(os.getenv("MORTGAGE_DOWN_PCT", "20"))
-REALTOR_FEE_PCT = float(os.getenv("REALTOR_FEE_PCT", "2.0"))
+# Значения читаются динамически: app_settings (БД, правится ползунками
+# в /admin/settings) → переменная окружения → дефолт.
+from bot.db import settings as _app_settings
+
+
+def _cfg(key: str, default: float) -> float:
+    return _app_settings.get_float(key, float(os.getenv(key, str(default))))
+
+
+def DEPOSIT_RATE() -> float: return _cfg("DEPOSIT_RATE", 14.0)
+def APPRECIATION_PCT() -> float: return _cfg("APPRECIATION_PCT", 8.0)
+def MORTGAGE_RATE() -> float: return _cfg("MORTGAGE_RATE", 17.0)
+def MORTGAGE_YEARS() -> int: return int(_cfg("MORTGAGE_YEARS", 20))
+def MORTGAGE_DOWN_PCT() -> float: return _cfg("MORTGAGE_DOWN_PCT", 20)
+def REALTOR_FEE_PCT() -> float: return _cfg("REALTOR_FEE_PCT", 2.0)
 
 # ── Красные / зелёные флаги из текста объявления ─────────────────────────────
 
@@ -65,23 +75,23 @@ def total_return_pct(price: float, monthly_rent: float | None) -> dict:
     квартира обычно дорожает, и это часть дохода).
     """
     rental_yield = (monthly_rent * 12 / price * 100) if (monthly_rent and price) else 0.0
-    total = rental_yield + APPRECIATION_PCT
-    vs_deposit = total - DEPOSIT_RATE
+    total = rental_yield + APPRECIATION_PCT()
+    vs_deposit = total - DEPOSIT_RATE()
     return {
         "rental_yield": rental_yield,
-        "appreciation": APPRECIATION_PCT,
+        "appreciation": APPRECIATION_PCT(),
         "total": total,
-        "deposit_rate": DEPOSIT_RATE,
+        "deposit_rate": DEPOSIT_RATE(),
         "vs_deposit": vs_deposit,   # >0 — квартира выгоднее депозита
     }
 
 
 def mortgage_estimate(price: float) -> dict:
     """Аннуитетный платёж по рыночной ставке."""
-    down = price * MORTGAGE_DOWN_PCT / 100
+    down = price * MORTGAGE_DOWN_PCT() / 100
     principal = price - down
-    r = MORTGAGE_RATE / 100 / 12
-    n = MORTGAGE_YEARS * 12
+    r = MORTGAGE_RATE() / 100 / 12
+    n = MORTGAGE_YEARS() * 12
     if r <= 0:
         monthly = principal / n
     else:
@@ -89,8 +99,8 @@ def mortgage_estimate(price: float) -> dict:
     return {
         "down_payment": down,
         "monthly": monthly,
-        "rate": MORTGAGE_RATE,
-        "years": MORTGAGE_YEARS,
+        "rate": MORTGAGE_RATE(),
+        "years": MORTGAGE_YEARS(),
     }
 
 
@@ -99,8 +109,8 @@ def realtor_note(is_owner, seller_type: str | None, price: float | None) -> str 
     if is_owner or seller_type == "owner":
         return "✅ От собственника — без комиссии риелтора"
     if seller_type == "agent" and price:
-        fee = price * REALTOR_FEE_PCT / 100
-        return f"💼 Через риелтора — заложи ещё ~{_fmt(fee)} комиссии ({REALTOR_FEE_PCT:.0f}%)"
+        fee = price * REALTOR_FEE_PCT() / 100
+        return f"💼 Через риелтора — заложи ещё ~{_fmt(fee)} комиссии ({REALTOR_FEE_PCT():.0f}%)"
     if seller_type == "developer":
         return "🏗 От застройщика"
     return None

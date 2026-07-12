@@ -302,6 +302,23 @@ async def fetch_apartment_details(url: str) -> dict:
     if since_match:
         result["published_since"] = since_match.group(1)
 
+    # ── Координаты объявления (для зон приоритета) ────────────────────────
+    # krisha кладёт координаты в JS-блоб: "lat":51.xx ... "lon":71.xx
+    lat_m = _re.search(r'"lat"\s*:\s*(\d{2}\.\d+)', resp.text)
+    lon_m = _re.search(r'"lon"\s*:\s*(\d{2}\.\d+)', resp.text)
+    if lat_m and lon_m:
+        try:
+            lat, lon = float(lat_m.group(1)), float(lon_m.group(1))
+            # sanity: Астана ~ 51.0-51.3, 71.2-71.7
+            if 50.0 < lat < 53.0 and 69.0 < lon < 73.0:
+                result["lat"], result["lon"] = lat, lon
+        except ValueError:
+            pass
+
+    # ── Архивность: объявление снято/продано ─────────────────────────────
+    result["is_archived"] = ("В архиве" in resp.text
+                             or "может быть неактуальным" in resp.text)
+
     logger.info("fetch_apartment_details: extracted %d fields from %s",
                 len(result), url)
     return result

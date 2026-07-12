@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">Настройки проекта</div>
+
+<style>
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.set-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+.set-label { font-weight: 600; font-size: 14px; margin-bottom: 4px; display: flex; justify-content: space-between; }
+.set-value { font-weight: 700; color: #2563eb; }
+.set-card input[type=range] { width: 100%; margin-top: 10px; accent-color: #2563eb; }
+.ctrl-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+.btn-big { border: none; border-radius: 10px; padding: 14px 24px; font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity .15s; }
+.btn-big:hover { opacity: .85; }
+.btn-start { background: #22c55e; color: #fff; }
+.btn-stop  { background: #ef4444; color: #fff; }
+.btn-money-on  { background: #f59e0b; color: #fff; }
+.btn-money-off { background: #64748b; color: #fff; }
+.btn-save { background: #2563eb; color: #fff; }
+.status-line { font-size: 13px; color: #888; margin-bottom: 20px; }
+.toast { position: fixed; bottom: 24px; right: 24px; background: #16a34a; color: #fff; padding: 12px 20px; border-radius: 10px; font-weight: 600; display: none; }
+</style>
+
+<div class="ctrl-row">
+  <button class="btn-big btn-start" id="btn-project" onclick="toggleProject()">…</button>
+  <button class="btn-big {{ 'btn-money-on' if monetization else 'btn-money-off' }}" id="btn-money" onclick="toggleMoney()">
+    {{ '💰 Монетизация: ВКЛ' if monetization else '💰 Монетизация: ВЫКЛ (всё бесплатно)' }}
+  </button>
+</div>
+<div class="status-line" id="svc-status">Проверяю статус сервисов…</div>
+
+<div class="settings-grid">
+  {% for s in sliders %}
+  <div class="set-card">
+    <div class="set-label">
+      <span>{{ s.label }}</span>
+      <span class="set-value"><span id="val-{{ s.key }}">{{ s.value }}</span> {{ s.unit }}</span>
+    </div>
+    <input type="range" min="{{ s.min }}" max="{{ s.max }}" step="{{ s.step }}"
+           value="{{ s.value }}" data-key="{{ s.key }}"
+           oninput="document.getElementById('val-{{ s.key }}').textContent = this.value">
+  </div>
+  {% endfor %}
+</div>
+
+<button class="btn-big btn-save" onclick="saveSettings()">💾 Сохранить настройки</button>
+<div style="font-size:12px;color:#888;margin-top:10px;">
+  Парсеры подхватывают новые значения в начале следующего цикла. Скоры пересчитываются при следующем проходе.
+</div>
+
+<div class="toast" id="toast">Сохранено ✓</div>
+
+<script>
+let projectRunning = false;
+
+async function refreshStatus() {
+  try {
+    const r = await fetch('/admin/project/status');
+    const d = await r.json();
+    projectRunning = d.running;
+    const parts = Object.entries(d.services).map(([k,v]) => `${k}: ${v ? '🟢' : '⚪'}`);
+    document.getElementById('svc-status').textContent = parts.join('   ');
+    const btn = document.getElementById('btn-project');
+    btn.textContent = projectRunning ? '⏹ Остановить проект' : '▶️ Запустить проект';
+    btn.className = 'btn-big ' + (projectRunning ? 'btn-stop' : 'btn-start');
+  } catch(e) {
+    document.getElementById('svc-status').textContent = 'Не удалось получить статус: ' + e;
+  }
+}
+
+async function toggleProject() {
+  const btn = document.getElementById('btn-project');
+  btn.disabled = true; btn.textContent = '…';
+  await fetch(projectRunning ? '/admin/project/stop' : '/admin/project/start', {method:'POST'});
+  btn.disabled = false;
+  await refreshStatus();
+}
+
+async function toggleMoney() {
+  const r = await fetch('/admin/monetization/toggle', {method:'POST'});
+  const d = await r.json();
+  const btn = document.getElementById('btn-money');
+  btn.textContent = d.enabled ? '💰 Монетизация: ВКЛ' : '💰 Монетизация: ВЫКЛ (всё бесплатно)';
+  btn.className = 'btn-big ' + (d.enabled ? 'btn-money-on' : 'btn-money-off');
+}
+
+async function saveSettings() {
+  const data = {};
+  document.querySelectorAll('input[type=range]').forEach(el => data[el.dataset.key] = el.value);
+  const r = await fetch('/admin/settings/save', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(data),
+  });
+  if (r.ok) {
+    const t = document.getElementById('toast');
+    t.style.display = 'block';
+    setTimeout(() => t.style.display = 'none', 2000);
+  }
+}
+
+refreshStatus();
+setInterval(refreshStatus, 15000);
+</script>
+{% endblock %}

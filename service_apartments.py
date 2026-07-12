@@ -36,10 +36,15 @@ async def run_cycle():
     from bot.core.apartment_parser import analyze_apartments
     from bot.core.sheets_sync import sync_apartments_to_sheets_pg
     from bot.db.pg import execute as pg_exec, fetchrow as pg_get
+    from bot.db import settings as app_settings
 
     log.info("=== Apartment cycle start ===")
 
-    results = await analyze_apartments("astana", max_pages=5)
+    # Подтягиваем настройки, выставленные через веб-терминал (/admin/settings)
+    await app_settings.load()
+    max_pages = app_settings.get_int("PARSER_MAX_PAGES", 5)
+
+    results = await analyze_apartments("astana", max_pages=max_pages)
     log.info("Parsed %d listings", len(results))
 
     new_cnt = upd_cnt = 0
@@ -133,10 +138,124 @@ async def run_cycle():
 
     log.info("DB: +%d new, ~%d updated", new_cnt, upd_cnt)
 
+    # ── Отделка: определяем по тексту, правим скор ────────────────────────
+    from bot.core.listing_intel import detect_finish_level
+    for r in results:
+        code, adj, label = detect_finish_level(r.get("title"), r.get("description"))
+        if code:
+            try:
+                await pg_exec(
+                    "UPDATE apartment_listings SET finish_level=$2, "
+                    "score_total = LEAST(100, GREATEST(0, COALESCE(score_total,0) + $3)) "
+                    "WHERE id=$1 AND (finish_level IS DISTINCT FROM $2)",
+                    r["id"], code, adj,
+                )
+            except Exception as e:
+                log.warning("finish update failed %s: %s", r["id"], e)
+
+    # ── Координаты + свежепойманная архивность из детального парсера ──────
+    for r in results:
+        try:
+            if r.get("lat") and r.get("lon"):
+                await pg_exec(
+                    "UPDATE apartment_listings SET lat=$2, lon=$3 WHERE id=$1",
+                    r["id"], r["lat"], r["lon"],
+                )
+            if r.get("is_archived"):
+                await pg_exec(
+                    "UPDATE apartment_listings SET is_active=FALSE, archived_at=now() WHERE id=$1",
+                    r["id"],
+                )
+        except Exception as e:
+            log.warning("coords/archive update failed %s: %s", r["id"], e)
+
+    # ── Зоны приоритета: пересчёт бонусов для всех объявлений с координатами ──
+    try:
+        from bot.core.zones import load_zones, zone_bonus_for
+        zones = await load_zones()
+        if zones:
+            from bot.db.pg import fetch as pg_fetch
+            coords = await pg_fetch(
+                "SELECT id, lat, lon, COALESCE(zone_bonus,0) AS zb FROM apartment_listings "
+                "WHERE lat IS NOT NULL AND lon IS NOT NULL"
+            )
+            zcnt = 0
+            for c in coords:
+                bonus, zname = zone_bonus_for(c["lat"], c["lon"], zones)
+                if bonus != c["zb"]:
+                    await pg_exec(
+                        "UPDATE apartment_listings SET zone_bonus=$2, zone_name=$3 WHERE id=$1",
+                        c["id"], bonus, zname,
+                    )
+                    zcnt += 1
+            if zcnt:
+                log.info("zones: updated bonus for %d listings", zcnt)
+    except Exception as e:
+        log.warning("zone recompute failed: %s", e)
+
+    # ── Первичка/вторичка ─────────────────────────────────────────────────
+    for r in results:
+        blob = f"{r.get('title','')} {r.get('description','')}".lower()
+        year = r.get("year_built")
+        is_primary = (year and year >= 2026) or "от застройщика" in blob or "сдача в" in blob
+        try:
+            await pg_exec(
+                "UPDATE apartment_listings SET market_type=$2 WHERE id=$1 AND market_type IS NULL",
+                r["id"], "primary" if is_primary else "secondary",
+            )
+        except Exception as e:
+            log.warning("market_type failed %s: %s", r["id"], e)
+
+    # ── Слои скоринга (шум, школы — OSM с кешем) ──────────────────────────
+    if app_settings.get_bool("OSM_LAYERS", True):
+        try:
+            from bot.score_layers import compute_all_layers, details_to_json
+            from bot.db.pg import fetch as pg_fetch2
+            candidates = await pg_fetch2("""
+                SELECT id, lat, lon FROM apartment_listings
+                WHERE lat IS NOT NULL AND lon IS NOT NULL
+                  AND is_active IS NOT FALSE
+                  AND (layers_computed_at IS NULL
+                       OR layers_computed_at < now() - interval '30 days')
+                ORDER BY score_total DESC NULLS LAST
+                LIMIT 10
+            """)
+            for c in candidates:
+                adj, details = await compute_all_layers(dict(c))
+                await pg_exec(
+                    "UPDATE apartment_listings SET layer_bonus=$2, "
+                    "layer_details=$3::jsonb, layers_computed_at=now() WHERE id=$1",
+                    c["id"], adj, details_to_json(details),
+                )
+                await asyncio.sleep(1.5)  # вежливость к Overpass
+            if candidates:
+                log.info("layers: computed for %d listings", len(candidates))
+        except Exception as e:
+            log.warning("layers failed: %s", e)
+
+    # ── AI-анализ текста (DeepSeek, включается настройкой) ────────────────
+    if app_settings.get_bool("AI_TEXT_ANALYSIS", False):
+        try:
+            from bot.core.ai_text_analysis import analyze_top_listings
+            await analyze_top_listings(limit=10)
+        except Exception as e:
+            log.warning("ai text analysis failed: %s", e)
+
+    # ── Проверка архивности топовых объявлений (максимум 15 за цикл) ──────
+    try:
+        from bot.core.archive_check import check_archived
+        res = await check_archived(limit=15)
+        log.info("archive check: %s", res)
+    except Exception as e:
+        log.warning("archive check failed: %s", e)
+
     # Google Sheets sync
     try:
         await sync_apartments_to_sheets_pg()
         log.info("Google Sheets: Квартиры synced")
+        from datetime import datetime, timezone
+        await app_settings.set("SHEETS_APARTMENTS_SYNCED_AT",
+                               datetime.now(timezone.utc).isoformat())
     except Exception as e:
         log.warning("Sheets sync failed: %s", e)
 

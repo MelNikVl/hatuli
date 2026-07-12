@@ -16,7 +16,7 @@ import bot.state as _state
 from bot.db.compat import BotDB
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
-_LOG_FILE = "bot.log"
+_LOG_FILE = "web.log"
 
 
 def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: str = "") -> FastAPI:
@@ -234,7 +234,12 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
         from bot.db.pg import fetch as pg_fetch
 
-        conditions = ["score_total IS NOT NULL"]
+        conditions = [
+            "score_total IS NOT NULL",
+            "is_active IS NOT FALSE",
+            "COALESCE(is_duplicate, FALSE) = FALSE",
+            "last_seen > now() - interval '14 days'",
+        ]
         params = []
         i = 1
 
@@ -305,7 +310,18 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     async def analytics_detail(request: Request, listing_id: str):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
+        try:
+            return await _analytics_detail_inner(request, listing_id)
+        except Exception:
+            import traceback
+            tb = traceback.format_exc()
+            return HTMLResponse(
+                f"<h2>Ошибка карточки {listing_id}</h2><pre style='background:#111;color:#f88;"
+                f"padding:16px;border-radius:8px;overflow:auto;'>{tb}</pre>",
+                status_code=500,
+            )
 
+    async def _analytics_detail_inner(request: Request, listing_id: str):
         from bot.db.pg import fetchrow as pg_fetchrow, fetch as pg_fetch
         from bot.core.bargain import get_comparables, analyze_bargain
 
@@ -338,6 +354,32 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             LIMIT 10
         """, listing.get("district"), listing.get("rooms"))
 
+        # Аргументы для торга и вопросы продавцу
+        from bot.core.listing_intel import build_negotiation_points, build_seller_questions
+        negotiation_points = build_negotiation_points(dict(listing), bargain, len(comps))
+        seller_questions = build_seller_questions(dict(listing))
+
+        # AI-анализ (JSONB может прийти строкой)
+        ai = listing.get("ai_analysis")
+        if isinstance(ai, str):
+            try:
+                import json as _j
+                ai = _j.loads(ai)
+            except ValueError:
+                ai = None
+
+        # reasons хранится как JSON-строка — парсим здесь (в jinja нет fromjson)
+        import json as _json
+        reasons_list = []
+        raw_reasons = listing.get("reasons")
+        if raw_reasons:
+            try:
+                parsed = _json.loads(raw_reasons) if isinstance(raw_reasons, str) else raw_reasons
+                if isinstance(parsed, list):
+                    reasons_list = parsed
+            except (ValueError, TypeError):
+                reasons_list = [str(raw_reasons)]
+
         return templates.TemplateResponse(
             "analytics_detail.html",
             {
@@ -346,14 +388,44 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "comps": [dict(r) for r in comps],
                 "bargain": bargain,
                 "rental_comps": [dict(r) for r in rental_comps],
+                "reasons_list": reasons_list,
+                "negotiation_points": negotiation_points,
+                "seller_questions": seller_questions,
+                "ai": ai,
             },
         )
 
+
+    def _sheets_ok(key: str):
+        from bot.db import settings as _as
+        from datetime import datetime, timezone
+        raw = _as.get(key, "")
+        if not raw:
+            return None
+        try:
+            ts = datetime.fromisoformat(raw)
+            return (datetime.now(timezone.utc) - ts).total_seconds() < 86400
+        except ValueError:
+            return None
+
+    def _sheets_when(key: str):
+        from bot.db import settings as _as
+        from datetime import datetime
+        raw = _as.get(key, "")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw).strftime("%d.%m %H:%M")
+        except ValueError:
+            return None
 
     @app.get("/admin/dashboard/data")
     async def dashboard_data(request: Request):
         if not is_authed(request):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        from bot.db import settings as _as
+        await _as.load()  # свежие времена синка Sheets
 
         from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow, fetchval as pg_fetchval
         from datetime import datetime, timezone, timedelta
@@ -387,8 +459,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "hour": rental_hour,
                 "with_complex": rental_with_complex,
                 "last_parsed": last_rental_str,
-                "sheets_ok": None,
-                "sheets_updated": None,
+                "sheets_ok": _sheets_ok("SHEETS_RENTAL_SYNCED_AT"),
+                "sheets_updated": _sheets_when("SHEETS_RENTAL_SYNCED_AT"),
             }
         except Exception as e:
             result["rental"] = {"ok": False, "error": str(e), "total": 0, "today": 0, "hour": 0,
@@ -414,8 +486,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "hour": apt_hour,
                 "high_score_count": apt_high,
                 "last_parsed": last_apt_str,
-                "sheets_ok": None,
-                "sheets_updated": None,
+                "sheets_ok": _sheets_ok("SHEETS_APARTMENTS_SYNCED_AT"),
+                "sheets_updated": _sheets_when("SHEETS_APARTMENTS_SYNCED_AT"),
             }
         except Exception as e:
             result["apartments"] = {"ok": False, "error": str(e), "total": 0, "today": 0,
@@ -478,11 +550,11 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         return templates.TemplateResponse("logs_page.html", {"request": request})
 
     @app.get("/admin/logs/file")
-    async def logs_file_data(request: Request, f: str = "bot.log", n: int = 200):
+    async def logs_file_data(request: Request, f: str = "web.log", n: int = 200):
         if not is_authed(request):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         # Разрешённые файлы
-        allowed = {"bot.log", "rental.log", "apartments.log", "web.log"}
+        allowed = {"bot.log", "rental.log", "apartments.log", "web.log", "korter.log"}
         if f not in allowed:
             return JSONResponse({"lines": [], "error": "not allowed"})
         log_path = os.path.join(os.path.dirname(__file__), "..", f)
@@ -625,52 +697,33 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
         return RedirectResponse(url="/admin/complexes", status_code=302)
 
+
+    @app.get("/admin/complex_scores", response_class=HTMLResponse)
+    async def complex_scores_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+
+        from bot.db.pg import fetch
+
+        rows = await fetch("""
+            SELECT complex_name, rooms,
+                   round(avg_score, 1) as avg_score,
+                   round(median_price/1000000, 1) as price_m,
+                   round(yield_pct, 1) as yield_pct,
+                   listings_count
+            FROM complex_scores
+            WHERE yield_pct IS NOT NULL
+            ORDER BY yield_pct DESC
+            LIMIT 50
+        """)
+
+        return templates.TemplateResponse(
+            "complex_scores.html",
+            {"request": request, "complexes": [dict(r) for r in rows]}
+        )
+
+    # Доп. маршруты: настройки-ползунки, монетизация, запуск проекта, топ-10
+    from terminal_extras import make_extras_router
+    app.include_router(make_extras_router(templates))
+
     return app
-
-    @app.get("/admin/complex_scores", response_class=HTMLResponse)
-    async def complex_scores_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        
-        from bot.db.pg import fetch
-        
-        rows = await fetch("""
-            SELECT complex_name, rooms, 
-                   round(avg_score, 1) as avg_score,
-                   round(median_price/1000000, 1) as price_m,
-                   round(yield_pct, 1) as yield_pct,
-                   listings_count
-            FROM complex_scores
-            WHERE yield_pct IS NOT NULL
-            ORDER BY yield_pct DESC
-            LIMIT 50
-        """)
-        
-        return templates.TemplateResponse(
-            "complex_scores.html",
-            {"request": request, "complexes": [dict(r) for r in rows]}
-        )
-
-    @app.get("/admin/complex_scores", response_class=HTMLResponse)
-    async def complex_scores_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        
-        from bot.db.pg import fetch
-        
-        rows = await fetch("""
-            SELECT complex_name, rooms, 
-                   round(avg_score, 1) as avg_score,
-                   round(median_price/1000000, 1) as price_m,
-                   round(yield_pct, 1) as yield_pct,
-                   listings_count
-            FROM complex_scores
-            WHERE yield_pct IS NOT NULL
-            ORDER BY yield_pct DESC
-            LIMIT 50
-        """)
-        
-        return templates.TemplateResponse(
-            "complex_scores.html",
-            {"request": request, "complexes": [dict(r) for r in rows]}
-        )

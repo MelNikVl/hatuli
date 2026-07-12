@@ -165,7 +165,7 @@ async def analyze_apartments(city="astana", max_pages=5):
             s["yield_pct"] = round((rent * 12 / s["price"]) * 100, 1)
             s["est_rent"] = rent
             s["payback_years"] = round(s["price"] / (rent * 12), 1)
-            s["rent_source"] = f"n={rent_data.get('sample_count',0)}"
+            s["rent_source"] = f"{rent_data.get('level','?')}, n={rent_data.get('sample_count',0)}"
         else:
             s["yield_pct"] = 0
             s["est_rent"] = 0

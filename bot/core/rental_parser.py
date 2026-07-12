@@ -230,11 +230,11 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                 """
                 INSERT INTO rental_listings
                     (id, url, title, price, area, rooms, floor, floors_total,
-                     address, district, complex_name, city, prop_type, published_at, found_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                     address, district, complex_name, city, prop_type, published_at, found_at, last_seen)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
                 ON CONFLICT (id) DO UPDATE SET
                     price        = EXCLUDED.price,
-                    found_at     = EXCLUDED.found_at,
+                    last_seen    = EXCLUDED.last_seen,
                     complex_name = COALESCE(rental_listings.complex_name, EXCLUDED.complex_name)
                 """,
                 l.id, l.url, l.title, l.price, l.area, l.rooms, l.floor, l.floors_total,
@@ -257,7 +257,7 @@ async def rebuild_rental_index() -> None:
         """
         SELECT city, district, complex_name, rooms, prop_type, price, area
         FROM rental_listings
-        WHERE found_at > NOW() - INTERVAL '30 days'
+        WHERE COALESCE(last_seen, found_at) > NOW() - INTERVAL '30 days'
           AND price > 15000
           AND price < 2000000
         """
@@ -294,6 +294,13 @@ async def rebuild_rental_index() -> None:
         k4 = (city, district, "", None, prop_type)
         if k4 != k3:
             groups[k4].append(price)
+
+        # Агрегаты по городу (для честного фолбэка с сохранением комнатности)
+        k5 = (city, "", "", rooms, prop_type)
+        groups[k5].append(price)
+        k6 = (city, "", "", None, prop_type)
+        if k6 != k5:
+            groups[k6].append(price)
 
     upserted = 0
     for (city, district, complex_name, rooms, prop_type), prices in groups.items():
@@ -353,16 +360,20 @@ async def lookup_rental_estimate(
     """
     from bot.db.pg import fetchrow
 
+    # ВАЖНО: комнатность сохраняем как можно дольше — аренда однушки,
+    # применённая к трёшке, даёт мусорный yield. Порядок:
+    # ЖК+комнаты → район+комнаты → город+комнаты → район → город.
     attempts = []
     if complex_name:
-        attempts += [(city, district, complex_name, rooms),
-                     (city, district, complex_name, None)]
+        attempts.append((city, district, complex_name, rooms, "ЖК"))
     if district:
-        attempts += [(city, district, None, rooms),
-                     (city, district, None, None)]
-    attempts.append((city, None, None, None))
+        attempts.append((city, district, None, rooms, "район"))
+    attempts.append((city, None, None, rooms, "город"))
+    if district:
+        attempts.append((city, district, None, None, "район (все комн.)"))
+    attempts.append((city, None, None, None, "город (все комн.)"))
 
-    for (c, d, jk, r) in attempts:
+    for (c, d, jk, r, level) in attempts:
         row = await fetchrow(
             """
             SELECT median_price, avg_price, p25_price, p75_price, sample_count, price_per_sqm
@@ -377,7 +388,9 @@ async def lookup_rental_estimate(
             c, d, jk, r, prop_type,
         )
         if row:
-            return dict(row)
+            result = dict(row)
+            result["level"] = level
+            return result
     return None
 
 
