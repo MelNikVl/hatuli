@@ -102,6 +102,8 @@ async def sync_apartments_to_sheets_pg():
                    rent_source, bargain_target, bargain_discount_pct, bargain_rec,
                    url, first_seen, last_seen
             FROM apartment_listings
+            WHERE is_active IS NOT FALSE
+              AND COALESCE(is_duplicate, FALSE) = FALSE
             ORDER BY score_total DESC NULLS LAST
             LIMIT 2000
             """

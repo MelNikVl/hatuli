@@ -60,7 +60,7 @@ tr:last-child td{border-bottom:none}
   <thead>
     <tr>
       <th>ЖК</th><th>Район</th><th>Год</th><th>Застройщик</th>
-      <th>Цена/м²</th><th>Yield</th><th>Продажи</th><th>Аренда</th><th>Флаги</th><th></th>
+      <th>Цена/м²</th><th>Yield</th><th>В продаже</th><th>Продано*</th><th>Аренда</th><th>Флаги</th><th></th>
     </tr>
   </thead>
   <tbody>
@@ -75,6 +75,7 @@ tr:last-child td{border-bottom:none}
     <td>{% if c.avg_price_m2 %}{{ (c.avg_price_m2 / 1000) | round(0) | int }}к ₸{% else %}—{% endif %}</td>
     <td><span class="yield-tag {{ yield_cls }}">{% if yld %}{{ yld | round(1) }}%{% else %}—{% endif %}</span></td>
     <td><strong>{{ c.listings_count or 0 }}</strong><div class="data-bar"><div class="data-bar-fill" style="width:{{ [[((c.listings_count or 0) / 20 * 100), 100] | min, 0] | max }}%"></div></div></td>
+    <td>{% if c.sold_count %}<strong style="color:#16a34a;">{{ c.sold_count }}</strong>{% else %}<span style="color:#94a3b8">0</span>{% endif %}</td>
     <td>{% if c.rental_listings_count %}{{ c.rental_listings_count }}{% else %}<span style="color:#94a3b8">—</span>{% endif %}</td>
     <td>
       <span class="flag {% if not c.has_parking %}off{% endif %}" title="Паркинг">🅿️</span>
@@ -87,6 +88,10 @@ tr:last-child td{border-bottom:none}
   {% endfor %}
   </tbody>
 </table>
+<p style="font-size:12px;color:#888;margin-top:10px;">
+  * «Продано» = сколько объявлений этого ЖК ушло в архив за историю мониторинга (с 12.07.2026) — приближение скорости продаж.<br>
+  «Рейтинг» — это сортировка (по умолчанию — по числу активных объявлений в продаже; переключается на yield / цену / год). Счётчики пересчитываются каждый цикл парсера из живой базы.
+</p>
 
 <div class="modal-overlay" id="modal">
   <div class="modal">

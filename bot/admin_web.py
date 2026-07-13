@@ -359,6 +359,24 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         negotiation_points = build_negotiation_points(dict(listing), bargain, len(comps))
         seller_questions = build_seller_questions(dict(listing))
 
+        # Скор первички (JSONB может прийти строкой)
+        primary_details = listing.get("primary_score_details")
+        if isinstance(primary_details, str):
+            try:
+                import json as _j3
+                primary_details = _j3.loads(primary_details)
+            except ValueError:
+                primary_details = None
+
+        # Слои локации (JSONB может прийти строкой)
+        layers = listing.get("layer_details")
+        if isinstance(layers, str):
+            try:
+                import json as _j2
+                layers = _j2.loads(layers)
+            except ValueError:
+                layers = None
+
         # AI-анализ (JSONB может прийти строкой)
         ai = listing.get("ai_analysis")
         if isinstance(ai, str):
@@ -392,6 +410,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "negotiation_points": negotiation_points,
                 "seller_questions": seller_questions,
                 "ai": ai,
+                "layers": layers,
+                "primary_details": primary_details,
             },
         )
 
@@ -554,7 +574,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         if not is_authed(request):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         # Разрешённые файлы
-        allowed = {"bot.log", "rental.log", "apartments.log", "web.log", "korter.log"}
+        allowed = {"bot.log", "rental.log", "apartments.log", "web.log",
+                   "korter.log", "homsters.log", "market.log"}
         if f not in allowed:
             return JSONResponse({"lines": [], "error": "not allowed"})
         log_path = os.path.join(os.path.dirname(__file__), "..", f)

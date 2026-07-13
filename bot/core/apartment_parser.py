@@ -47,11 +47,13 @@ def _extract_rooms(title):
     return int(m.group(1)) if m else None
 
 
-async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000_000):
-    """Parse apartment sale listings from krisha.kz."""
+async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000_000,
+                                     start_page=1):
+    """Parse apartment sale listings from krisha.kz.
+    start_page: с какой страницы начинать (для глубокого обхода всей выдачи)."""
     listings = []
 
-    for page in range(1, max_pages + 1):
+    for page in range(start_page, start_page + max_pages):
         params = {"das[_sys.hasphoto]": 1, "das[price][to]": max_price}
         if page > 1:
             params["page"] = page
@@ -116,7 +118,7 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
     return listings
 
 
-async def analyze_apartments(city="astana", max_pages=5):
+async def analyze_apartments(city="astana", max_pages=5, start_page=1):
     """Full pipeline: parse sales + rentals, score, return sorted results."""
     from bot.core.apartment_score_v2 import compute_apartment_score_v2 as compute_apartment_score
     from collections import defaultdict
@@ -125,7 +127,7 @@ async def analyze_apartments(city="astana", max_pages=5):
     rental_idx = None  # теперь используем rental_index из PostgreSQL
 
     # 2. Parse sales
-    sales = await parse_apartments_for_sale(city, max_pages=max_pages)
+    sales = await parse_apartments_for_sale(city, max_pages=max_pages, start_page=start_page)
 
     # 3. Build price-per-m2 index by district
     district_prices = defaultdict(list)
@@ -201,28 +203,41 @@ async def analyze_apartments(city="astana", max_pages=5):
         s["score_total"] = score["total_score"]
         results.append(s)
 
-    # Fetch detailed info for top candidates (score >= 55)
+    # Fetch detailed info (координаты, фото, отделка) — теперь не только для
+    # топ-скора: иначе карта показывает только хорошие объекты (все зелёные),
+    # ведь у слабых просто никогда не появляются координаты. Берём половину
+    # батча — лучшие по скору (для точности топа), половину — случайную
+    # выборку из остальных (чтобы карта отражала реальный разброс качества).
     results.sort(key=lambda x: x["score_total"], reverse=True)
 
+    from bot.db import settings as _app_settings
+    detail_batch = _app_settings.get_int("DETAIL_FETCH_BATCH", 15)
+
+    candidates = [r for r in results if not r.get("details_fetched")]
+    half = max(1, detail_batch // 2)
+    top_half = candidates[:half]
+    rest = candidates[half:]
+    random_half = random.sample(rest, min(half, len(rest))) if rest else []
+    to_fetch = top_half + random_half
+
     from bot.core.apartment_details import fetch_apartment_details
-    for r in results[:5]:  # max 5 details per cycle
-        if r.get("score_total", 0) >= 55 and not r.get("details_fetched"):
-            url = r.get("url", "")
-            if url:
-                logger.info("fetching details for %s (score=%d)", r["id"], r["score_total"])
-                await asyncio.sleep(random.uniform(8.0, 15.0))  # пауза чтобы не блокировали
-                details = await fetch_apartment_details(url)
-                if details:
-                    r.update(details)
-                    r["details_fetched"] = True
-                    # Re-score with new info
-                    cname = r.get("address", "").split(",")[0].strip().lower()
-                    same_count = complex_counter.get(cname, 1)
-                    d = _norm_district(r.get("district", ""))
-                    avg_m2 = district_avg_m2.get(d)
-                    score = compute_apartment_score(r, monthly_rent=r.get("est_rent"), same_complex_count=same_count, district_avg_m2=avg_m2)
-                    r["score_data"] = score
-                    r["score_total"] = score["total_score"]
+    for r in to_fetch:
+        url = r.get("url", "")
+        if url:
+            logger.info("fetching details for %s (score=%d)", r["id"], r["score_total"])
+            await asyncio.sleep(random.uniform(8.0, 15.0))  # пауза чтобы не блокировали
+            details = await fetch_apartment_details(url)
+            if details:
+                r.update(details)
+                r["details_fetched"] = True
+                # Re-score with new info
+                cname = r.get("address", "").split(",")[0].strip().lower()
+                same_count = complex_counter.get(cname, 1)
+                d = _norm_district(r.get("district", ""))
+                avg_m2 = district_avg_m2.get(d)
+                score = compute_apartment_score(r, monthly_rent=r.get("est_rent"), same_complex_count=same_count, district_avg_m2=avg_m2)
+                r["score_data"] = score
+                r["score_total"] = score["total_score"]
 
 
     results.sort(key=lambda x: x["score_total"], reverse=True)

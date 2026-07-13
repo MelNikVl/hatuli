@@ -12,6 +12,7 @@
 """
 import asyncio
 import json
+from datetime import datetime, timezone
 import logging
 import os
 import random
@@ -44,8 +45,42 @@ async def run_cycle():
     await app_settings.load()
     max_pages = app_settings.get_int("PARSER_MAX_PAGES", 5)
 
+    # ── Свежие объявления: первые страницы выдачи (как раньше) ────────────
     results = await analyze_apartments("astana", max_pages=max_pages)
-    log.info("Parsed %d listings", len(results))
+    log.info("Parsed %d fresh listings (pages 1-%d)", len(results), max_pages)
+
+    # ── ГЛУБОКИЙ ОБХОД: идём до конца выдачи, запоминая позицию ───────────
+    # Крыша по Астане ≤80млн — это ~100-200 страниц. Свежий парс покрывает
+    # только первые 5, дальше живут объявления, которые никто не «поднимает»
+    # — они никогда не попадут в базу без сквозного обхода. Каждый цикл
+    # дочитываем DEEP_SWEEP_BATCH страниц с сохранённой позиции; дойдя до
+    # конца выдачи (пустая страница) — начинаем заново с 6-й. Полный круг
+    # при 5 стр/цикл и ~70-100 циклах в сутки занимает меньше суток,
+    # при этом нагрузка на Крышу не растёт скачком.
+    deep_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
+    if deep_batch > 0:
+        cursor = app_settings.get_int("DEEP_SWEEP_PAGE", max_pages + 1)
+        if cursor <= max_pages:
+            cursor = max_pages + 1
+        try:
+            deep_results = await analyze_apartments(
+                "astana", max_pages=deep_batch, start_page=cursor)
+            if deep_results:
+                results.extend(deep_results)
+                next_cursor = cursor + deep_batch
+                log.info("Deep sweep: pages %d-%d → %d listings, cursor → %d",
+                         cursor, cursor + deep_batch - 1, len(deep_results), next_cursor)
+            else:
+                next_cursor = max_pages + 1
+                log.info("Deep sweep: page %d пуста — конец выдачи, круг завершён, "
+                         "cursor → %d (новый круг)", cursor, next_cursor)
+            await app_settings.set("DEEP_SWEEP_PAGE", str(next_cursor))
+            await app_settings.set("DEEP_SWEEP_LAST_AT",
+                                   datetime.now(timezone.utc).isoformat())
+        except Exception as e:
+            log.warning("Deep sweep failed (продолжаем со свежими): %s", e)
+
+    log.info("Parsed %d listings total", len(results))
 
     new_cnt = upd_cnt = 0
 
@@ -56,6 +91,15 @@ async def run_cycle():
         reasons_json = json.dumps(sd.get("reasons", []), ensure_ascii=False)
 
         exists = await pg_get("SELECT id, price FROM apartment_listings WHERE id=$1", r["id"])
+
+        # История изменения цены (для статистики "цена выросла/упала")
+        if exists and r.get("price") and exists["price"] and exists["price"] != r["price"]:
+            try:
+                await pg_exec(
+                    "INSERT INTO price_history (listing_id, old_price, new_price) VALUES ($1,$2,$3)",
+                    r["id"], exists["price"], r["price"])
+            except Exception as e:
+                log.warning("price_history failed %s: %s", r["id"], e)
 
         try:
             if not exists:
@@ -206,6 +250,58 @@ async def run_cycle():
         except Exception as e:
             log.warning("market_type failed %s: %s", r["id"], e)
 
+    # ── Отдельная модель скоринга ПЕРВИЧКИ ─────────────────────────────────
+    # (developer + стадия + дисконт к вторичке + локация — вместо базовой
+    # модели, где 20% веса это фиктивный для первички yield)
+    try:
+        from bot.core.primary_score import compute_primary_score
+        from bot.db.pg import fetch as pg_fetch3
+
+        primary_rows = await pg_fetch3("""
+            SELECT id, title, description, year_built, price, area, district,
+                   complex_name
+            FROM apartment_listings
+            WHERE market_type = 'primary' AND is_active IS NOT FALSE
+              AND (primary_score_total IS NULL
+                   OR last_seen > now() - interval '1 day')
+            ORDER BY last_seen DESC NULLS LAST
+            LIMIT 30
+        """)
+        for r in primary_rows:
+            r = dict(r)
+            developer = None
+            cx = await pg_fetch3(
+                "SELECT source_info FROM complexes WHERE name ILIKE '%' || $1 || '%' LIMIT 1",
+                r.get("complex_name") or "",
+            ) if r.get("complex_name") else []
+            if cx and cx[0]["source_info"]:
+                si = cx[0]["source_info"]
+                if isinstance(si, str):
+                    si = json.loads(si)
+                developer = (si.get("korter") or si.get("homsters") or {}).get("developer")
+
+            secondary_median = None
+            if r.get("district") and r.get("area"):
+                med_row = await pg_fetch3("""
+                    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY price/NULLIF(area,0)) AS m
+                    FROM apartment_listings
+                    WHERE market_type = 'secondary' AND district = $1
+                      AND area BETWEEN $2 * 0.7 AND $2 * 1.3
+                      AND COALESCE(is_duplicate, FALSE) = FALSE AND price > 500000
+                """, r["district"], r["area"])
+                secondary_median = med_row[0]["m"] if med_row else None
+
+            score, details = compute_primary_score(r, developer, secondary_median)
+            await pg_exec(
+                "UPDATE apartment_listings SET primary_score_total=$2, "
+                "primary_score_details=$3::jsonb, score_total=$2 WHERE id=$1",
+                r["id"], score, json.dumps(details, ensure_ascii=False),
+            )
+        if primary_rows:
+            log.info("primary score: computed for %d listings", len(primary_rows))
+    except Exception as e:
+        log.warning("primary score failed: %s", e)
+
     # ── Слои скоринга (шум, школы — OSM с кешем) ──────────────────────────
     if app_settings.get_bool("OSM_LAYERS", True):
         try:
@@ -240,6 +336,50 @@ async def run_cycle():
             await analyze_top_listings(limit=10)
         except Exception as e:
             log.warning("ai text analysis failed: %s", e)
+
+    # ── Живая статистика ЖК: активные в продаже / продано / аренда ────────
+    # (раньше listings_count был заморожен со времён миграции — отсюда
+    # "рейтинг 1" у большинства ЖК; теперь пересчитывается каждый цикл)
+    try:
+        await pg_exec("""
+            UPDATE complexes c SET
+                listings_count = s.active_cnt,
+                sold_count     = s.sold_cnt,
+                avg_price_m2   = s.avg_m2
+            FROM (
+                SELECT complex_name,
+                       COUNT(*) FILTER (WHERE is_active IS NOT FALSE)             AS active_cnt,
+                       COUNT(*) FILTER (WHERE is_active IS FALSE)                 AS sold_cnt,
+                       AVG(price / NULLIF(area,0)) FILTER (WHERE is_active IS NOT FALSE) AS avg_m2
+                FROM apartment_listings
+                WHERE complex_name IS NOT NULL AND complex_name != ''
+                  AND COALESCE(is_duplicate, FALSE) = FALSE
+                GROUP BY complex_name
+            ) s
+            WHERE lower(c.name) = lower(s.complex_name)
+        """)
+        await pg_exec("""
+            UPDATE complexes c SET rental_listings_count = s.cnt
+            FROM (
+                SELECT complex_name, COUNT(*) AS cnt FROM rental_listings
+                WHERE complex_name IS NOT NULL AND complex_name != ''
+                  AND last_seen > now() - interval '14 days'
+                GROUP BY complex_name
+            ) s
+            WHERE lower(c.name) = lower(s.complex_name)
+        """)
+        # Новые ЖК, которых ещё нет в справочнике — создаём
+        await pg_exec("""
+            INSERT INTO complexes (name, district, listings_count)
+            SELECT al.complex_name, MAX(al.district),
+                   COUNT(*) FILTER (WHERE al.is_active IS NOT FALSE)
+            FROM apartment_listings al
+            WHERE al.complex_name IS NOT NULL AND al.complex_name != ''
+              AND NOT EXISTS (SELECT 1 FROM complexes c WHERE lower(c.name) = lower(al.complex_name))
+            GROUP BY al.complex_name
+        """)
+    except Exception as e:
+        log.warning("complex stats refresh failed: %s", e)
 
     # ── Проверка архивности топовых объявлений (максимум 15 за цикл) ──────
     try:

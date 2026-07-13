@@ -21,10 +21,11 @@
 </style>
 
 <div class="hint">
-  Нарисуй область мышкой (кнопка ⬠ на карте слева), дай ей имя и бонус к скору —
-  все объявления с координатами внутри зоны получат прибавку к скору.
-  Пересчёт происходит в следующем цикле парсера. Примеры зон: Ботанический парк,
-  первая линия пр. Туран, пр. Мангилик Ел, Центральный парк.
+  Нарисуй область мышкой (кнопка ⬠ слева на карте), дай имя и баллы — любые от −50 до +50,
+  минусовые делают анти-зону (промзона, неликвидная окраина: штраф к скору).
+  <b>Редактирование:</b> кнопка ✏ на карте — двигай вершины существующих зон, затем «Save».
+  Баллы и имя меняются в списке справа. Если несколько зон пересекаются — действует
+  сильнейшая по модулю. Пересчёт объявлений — в следующем цикле парсера.
 </div>
 
 <div class="zones-layout">
@@ -33,12 +34,9 @@
     <h3 style="margin-top:0;">Новая зона</h3>
     <div class="zone-form">
       <input id="z-name" placeholder="Название (напр. Ботанический парк)">
-      <select id="z-bonus">
-        <option value="5">+5 баллов</option>
-        <option value="10" selected>+10 баллов</option>
-        <option value="15">+15 баллов</option>
-        <option value="20">+20 баллов</option>
-      </select>
+      <input id="z-bonus" type="number" value="10" min="-50" max="50" step="1"
+             title="Баллы от −50 до +50. Минус = анти-зона (промзона, неликвидная окраина)">
+      <div style="font-size:11px;color:#888;margin:-4px 0 8px;">Баллы: от −50 до +50. Отрицательные = анти-зона (штраф к скору).</div>
       <button class="btn-zone-save" id="z-save" disabled onclick="saveZone()">Сначала нарисуй полигон</button>
     </div>
     <h3>Существующие зоны</h3>
@@ -53,7 +51,6 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 const drawnItems = new L.FeatureGroup().addTo(map);
-const zonesLayer = new L.FeatureGroup().addTo(map);
 
 map.addControl(new L.Control.Draw({
   draw: { polygon: { shapeOptions: { color: '#2563eb' } },
@@ -62,6 +59,24 @@ map.addControl(new L.Control.Draw({
 }));
 
 let pendingPolygon = null;
+
+// Редактирование вершин существующих зон: кнопка ✏ (edit) на карте
+map.on(L.Draw.Event.EDITED, async e => {
+  const updates = [];
+  e.layers.eachLayer(l => {
+    if (l._zoneId) {
+      const ring = l.toGeoJSON().geometry.coordinates[0];
+      updates.push({id: l._zoneId, name: l._zoneName, bonus: l._zoneBonus, polygon: ring});
+    }
+  });
+  for (const u of updates) {
+    await fetch('/admin/zones/save', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(u),
+    });
+  }
+  if (updates.length) loadZones();
+});
 
 map.on(L.Draw.Event.CREATED, e => {
   drawnItems.clearLayers();
@@ -103,8 +118,19 @@ async function deleteZone(id) {
   loadZones();
 }
 
+async function updateZoneMeta(id) {
+  const name = document.getElementById(`zn-${id}`).value.trim() || 'Зона';
+  const bonus = parseInt(document.getElementById(`zb-${id}`).value) || 0;
+  await fetch('/admin/zones/save', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id, name, bonus}),   // без polygon = меняем только имя/баллы
+  });
+  loadZones();
+}
+
 async function loadZones() {
-  zonesLayer.clearLayers();
+  // чистим только сохранённые зоны, не текущий незаконченный рисунок
+  drawnItems.eachLayer(l => { if (l._zoneId) drawnItems.removeLayer(l); });
   const r = await fetch('/admin/zones/list');
   const d = await r.json();
   const list = document.getElementById('zone-list');
@@ -112,17 +138,24 @@ async function loadZones() {
     list.innerHTML = '<em style="color:#888;font-size:13px;">пока нет зон</em>';
     return;
   }
-  list.innerHTML = d.zones.map(z =>
-    `<div class="zone-item">
-       <span>${z.name} <span class="zbadge" style="background:#2563eb">+${z.bonus}</span></span>
+  list.innerHTML = d.zones.map(z => {
+    const neg = z.bonus < 0;
+    return `<div class="zone-item" style="flex-wrap:wrap;gap:4px;">
+       <input id="zn-${z.id}" value="${z.name}" style="flex:1;min-width:100px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12px;">
+       <input id="zb-${z.id}" type="number" value="${z.bonus}" min="-50" max="50" style="width:60px;padding:4px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:${neg ? '#ef4444' : '#16a34a'};font-weight:700;font-size:12px;">
+       <button class="del" style="background:#2563eb;" title="Сохранить имя/баллы" onclick="updateZoneMeta(${z.id})">💾</button>
        <button class="del" onclick="deleteZone(${z.id})">✕</button>
-     </div>`).join('');
+     </div>`;
+  }).join('');
   d.zones.forEach(z => {
     let ring = z.polygon;
     if (ring.length && Array.isArray(ring[0][0])) ring = ring[0];
     const latlngs = ring.map(p => [p[1], p[0]]);  // [lon,lat] -> [lat,lon]
-    L.polygon(latlngs, {color: z.color || '#2563eb', fillOpacity: 0.15})
-      .bindTooltip(`${z.name} (+${z.bonus})`).addTo(zonesLayer);
+    const neg = z.bonus < 0;
+    const poly = L.polygon(latlngs, {color: neg ? '#ef4444' : (z.color || '#2563eb'), fillOpacity: 0.15})
+      .bindTooltip(`${z.name} (${z.bonus > 0 ? '+' : ''}${z.bonus})`);
+    poly._zoneId = z.id; poly._zoneName = z.name; poly._zoneBonus = z.bonus;
+    drawnItems.addLayer(poly);   // в редактируемый слой — теперь ✏ работает и для них
   });
 }
 

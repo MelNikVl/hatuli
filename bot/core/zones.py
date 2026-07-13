@@ -55,13 +55,18 @@ def _point_in_ring(lat: float, lon: float, ring: list) -> bool:
 
 def zone_bonus_for(lat: float | None, lon: float | None,
                    zones: list[dict]) -> tuple[int, str | None]:
-    """Максимальный бонус среди зон, в которые попала точка."""
+    """
+    Бонус зоны для точки. Зоны могут быть и ПОЛОЖИТЕЛЬНЫМИ (приоритет),
+    и ОТРИЦАТЕЛЬНЫМИ (анти-зоны: промзона, окраина...). Если точка попала
+    в несколько зон — берётся самая "сильная" по модулю (сильный минус
+    перевешивает слабый плюс и наоборот).
+    """
     if not lat or not lon or not zones:
         return 0, None
     best_bonus, best_name = 0, None
     for z in zones:
         try:
-            if _point_in_ring(lat, lon, z["ring"]) and z["bonus"] > best_bonus:
+            if _point_in_ring(lat, lon, z["ring"]) and abs(z["bonus"]) > abs(best_bonus):
                 best_bonus, best_name = z["bonus"], z["name"]
         except Exception:
             continue

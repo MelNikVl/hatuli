@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Сервисы, которыми управляет кнопка "Запустить проект".
 # Веб-терминал (krisha-web) сюда не входит — он всегда работает.
-PROJECT_SERVICES = ["krisha-rental", "krisha-apartments", "krisha-alerts", "krisha-korter"]
+PROJECT_SERVICES = ["krisha-rental", "krisha-apartments", "krisha-alerts", "krisha-korter", "krisha-homsters", "krisha-market"]
 
 # Настройки, редактируемые ползунками: key -> (подпись, min, max, шаг, единица)
 SLIDER_SETTINGS = {
@@ -42,6 +42,8 @@ SLIDER_SETTINGS = {
     "REALTOR_FEE_PCT":   ("Комиссия риелтора", 0, 5, 0.5, "%"),
     "ALERT_THRESHOLD":   ("Порог скора для алертов", 50, 90, 1, "баллов"),
     "PARSER_MAX_PAGES":  ("Страниц Krisha за цикл", 1, 40, 1, "стр."),
+    "DEEP_SWEEP_BATCH":  ("Глубокий обход: доп. страниц за цикл (0=выкл)", 0, 20, 1, "стр."),
+    "DETAIL_FETCH_BATCH": ("Деталей/координат за цикл (полскора+полслучайно)", 2, 40, 1, "шт."),
 }
 
 
@@ -71,6 +73,8 @@ def make_extras_router(templates) -> APIRouter:
             "request": request,
             "sliders": sliders,
             "monetization": app_settings.get_bool("MONETIZATION_ENABLED"),
+            "ai_analysis": app_settings.get_bool("AI_TEXT_ANALYSIS"),
+            "deepseek_key_set": bool(__import__("os").getenv("DEEPSEEK_API_KEY")),
         })
 
     @router.post("/admin/settings/save")
@@ -92,6 +96,16 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({"ok": True, "saved": saved})
 
     # ── Монетизация ───────────────────────────────────────────────────────
+
+    @router.post("/admin/ai-analysis/toggle")
+    async def ai_analysis_toggle(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await app_settings.load()
+        new_value = "0" if app_settings.get_bool("AI_TEXT_ANALYSIS") else "1"
+        await app_settings.set("AI_TEXT_ANALYSIS", new_value)
+        logger.info("AI text analysis -> %s", new_value)
+        return JSONResponse({"ok": True, "enabled": new_value == "1"})
 
     @router.post("/admin/monetization/toggle")
     async def monetization_toggle(request: Request):
@@ -189,7 +203,139 @@ def make_extras_router(templates) -> APIRouter:
             "deposit_rate": app_settings.get_float("DEPOSIT_RATE", 14.0),
             "appreciation": app_settings.get_float("APPRECIATION_PCT", 8.0),
             "max_pages": app_settings.get_int("PARSER_MAX_PAGES", 5),
+            # Рыночные данные (справочные, собирает service_market_data раз в ~7 дней)
+            "nbrk_rate": app_settings.get("NBRK_BASE_RATE", None),
+            "kdif_rates": (app_settings.get("KDIF_RATES_RAW", "") or "").split(" ;; "),
+            "otbasy_rates": (app_settings.get("OTBASY_RATES_RAW", "") or "").split(" ;; "),
+            "stat_rows": (app_settings.get("STAT_HOUSING_ASTANA_RAW", "") or "").split("\n"),
+            "stat_url": app_settings.get("STAT_HOUSING_FILE_URL", None),
+            "market_updated": app_settings.get("MARKET_DATA_UPDATED_AT", None),
         })
+
+    # ── API: точки для карты на дашборде ─────────────────────────────────
+
+    # ── Детализация парсеров: график добавлений + статистика ─────────────
+
+    @router.get("/admin/parser/sales", response_class=HTMLResponse)
+    async def parser_sales(request: Request, days: int = 1):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        days = days if days in (1, 3, 5) else 1
+        from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval
+
+        hourly = await pg_fetch("""
+            SELECT date_trunc('hour', found_at) AS h, COUNT(*) AS cnt
+            FROM apartment_listings
+            WHERE found_at > now() - ($1 || ' days')::interval
+            GROUP BY 1 ORDER BY 1
+        """, str(days))
+        labels = [r["h"].strftime("%d.%m %H:00") for r in hourly]
+        values = [r["cnt"] for r in hourly]
+
+        total_active = await pg_fetchval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+        today_new = await pg_fetchval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE found_at::date = CURRENT_DATE") or 0
+        today_archived = await pg_fetchval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE archived_at::date = CURRENT_DATE") or 0
+        price_up = await pg_fetchval(
+            "SELECT COUNT(DISTINCT listing_id) FROM price_history "
+            "WHERE changed_at::date = CURRENT_DATE AND new_price > old_price") or 0
+        price_down = await pg_fetchval(
+            "SELECT COUNT(DISTINCT listing_id) FROM price_history "
+            "WHERE changed_at::date = CURRENT_DATE AND new_price < old_price") or 0
+
+        stats = [
+            {"label": "всего в мониторинге (активных)", "value": f"{total_active:,}".replace(",", " ")},
+            {"label": "спаршено сегодня", "value": today_new},
+            {"label": "ушло в архив сегодня", "value": today_archived, "color": "#f59e0b"},
+            {"label": "цена выросла сегодня", "value": price_up, "color": "#ef4444"},
+            {"label": "цена снизилась сегодня", "value": price_down, "color": "#16a34a"},
+        ]
+        return templates.TemplateResponse("parser_detail.html", {
+            "request": request, "title": "🏠 Парсер продаж — детализация",
+            "days": days, "stats": stats,
+            "chart_labels": labels, "chart_values": values,
+        })
+
+    @router.get("/admin/parser/rental", response_class=HTMLResponse)
+    async def parser_rental(request: Request, days: int = 1):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        days = days if days in (1, 3, 5) else 1
+        from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval
+
+        hourly = await pg_fetch("""
+            SELECT date_trunc('hour', found_at) AS h, COUNT(*) AS cnt
+            FROM rental_listings
+            WHERE found_at > now() - ($1 || ' days')::interval
+            GROUP BY 1 ORDER BY 1
+        """, str(days))
+        labels = [r["h"].strftime("%d.%m %H:00") for r in hourly]
+        values = [r["cnt"] for r in hourly]
+
+        total = await pg_fetchval("SELECT COUNT(*) FROM rental_listings") or 0
+        fresh = await pg_fetchval(
+            "SELECT COUNT(*) FROM rental_listings WHERE last_seen > now() - interval '3 days'") or 0
+        today_new = await pg_fetchval(
+            "SELECT COUNT(*) FROM rental_listings WHERE found_at::date = CURRENT_DATE") or 0
+        gone = await pg_fetchval("""
+            SELECT COUNT(*) FROM rental_listings
+            WHERE last_seen::date = CURRENT_DATE - 3
+        """) or 0
+
+        stats = [
+            {"label": "всего в базе", "value": f"{total:,}".replace(",", " ")},
+            {"label": "живых (видели за 3 дня)", "value": f"{fresh:,}".replace(",", " ")},
+            {"label": "спаршено сегодня", "value": today_new},
+            {"label": "пропало из выдачи (сдано?)", "value": gone, "color": "#f59e0b"},
+        ]
+        return templates.TemplateResponse("parser_detail.html", {
+            "request": request, "title": "🏢 Парсер аренды — детализация",
+            "days": days, "stats": stats,
+            "chart_labels": labels, "chart_values": values,
+        })
+
+    @router.get("/admin/api/deep-sweep-status")
+    async def deep_sweep_status(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await app_settings.load()
+        return JSONResponse({
+            "cursor": app_settings.get_int("DEEP_SWEEP_PAGE", 0),
+            "batch": app_settings.get_int("DEEP_SWEEP_BATCH", 5),
+            "last_at": app_settings.get("DEEP_SWEEP_LAST_AT", None),
+        })
+
+    @router.get("/admin/api/map-points")
+    async def map_points(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT id, lat, lon, price, rooms, area, address, complex_name,
+                   url,
+                   (COALESCE(score_total,0) + COALESCE(zone_bonus,0)
+                    + COALESCE(layer_bonus,0)) AS eff_score
+            FROM apartment_listings
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+              AND is_active IS NOT FALSE
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND last_seen > now() - interval '14 days'
+            ORDER BY eff_score DESC
+            LIMIT 2000
+        """)
+        pts = [{
+            "id": r["id"],
+            "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "score": int(r["eff_score"] or 0),
+            "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
+            "address": r["address"] or "", "complex": r["complex_name"] or "",
+            "url": r["url"] or "",
+            "top": idx < 10,   # топ-10 лучших — сердечки на карте
+        } for idx, r in enumerate(rows)]
+        return JSONResponse({"points": pts, "count": len(pts)})
 
     # ── Скор: полное описание модели (сердце проекта) ────────────────────
 
@@ -224,23 +370,39 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.post("/admin/zones/save")
     async def zones_save(request: Request):
+        """Создание новой зоны ИЛИ обновление существующей (если передан id).
+        Баллы — свободные, от −50 до +50 (минус = анти-зона)."""
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
         import json as _json
         data = await request.json()
+        zone_id = data.get("id")
         name = (data.get("name") or "Зона").strip()[:100]
-        bonus = max(0, min(30, int(data.get("bonus", 10))))
-        color = data.get("color", "#2563eb")
-        polygon = data.get("polygon")  # [[lon,lat], ...]
+        bonus = max(-50, min(50, int(data.get("bonus", 10))))
+        color = "#ef4444" if bonus < 0 else data.get("color", "#2563eb")
+        polygon = data.get("polygon")  # [[lon,lat], ...] или None при апдейте только баллов
+
+        from bot.db.pg import fetchval, execute
+        if zone_id:  # обновление существующей
+            if polygon and len(polygon) >= 3:
+                await execute(
+                    "UPDATE priority_zones SET name=$2, bonus=$3, color=$4, polygon=$5::jsonb WHERE id=$1",
+                    int(zone_id), name, bonus, color, _json.dumps(polygon))
+            else:
+                await execute(
+                    "UPDATE priority_zones SET name=$2, bonus=$3, color=$4 WHERE id=$1",
+                    int(zone_id), name, bonus, color)
+            logger.info("zone updated: #%s %s (%+d)", zone_id, name, bonus)
+            return JSONResponse({"ok": True, "id": int(zone_id)})
+
         if not polygon or len(polygon) < 3:
             return JSONResponse({"error": "polygon too small"}, status_code=400)
-        from bot.db.pg import fetchval
         zone_id = await fetchval(
             "INSERT INTO priority_zones (name, bonus, color, polygon) "
             "VALUES ($1, $2, $3, $4::jsonb) RETURNING id",
             name, bonus, color, _json.dumps(polygon),
         )
-        logger.info("zone saved: %s (+%d)", name, bonus)
+        logger.info("zone saved: %s (%+d)", name, bonus)
         return JSONResponse({"ok": True, "id": zone_id})
 
     @router.post("/admin/zones/delete")

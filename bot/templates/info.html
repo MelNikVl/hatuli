@@ -90,4 +90,37 @@
   <h3>💹 Полная доходность и «рост {{ appreciation }}%»</h3>
   <p>Полная доходность = аренда + рост цены. Рост — это <b>настройка</b> (ползунок в <a href="/admin/settings">Настройках</a>), не расчёт: консервативная оценка удорожания кв.м в Астане. Официальную динамику цен публикует Бюро нацстатистики (stat.gov.kz) — раз в квартал можно сверять и крутить ползунок. Когда в базе накопится полгода-год истории цен, посчитаем собственный рост по районам.</p>
 </div>
+
+<div class="info-card">
+  <h3>📊 Рыночные данные (обновляются автоматически раз в ~7 дней)</h3>
+  {% if market_updated %}
+  <p style="font-size:12px;color:#888;">Последнее обновление: {{ market_updated[:16].replace('T',' ') }} UTC — сервис krisha-market</p>
+  {% else %}
+  <p style="color:#f59e0b;">Данные ещё не собирались — запусти <code>venv/bin/python service_market_data.py --test</code>, затем включи сервис krisha-market.</p>
+  {% endif %}
+
+  <p><b>Базовая ставка НБРК:</b> {{ nbrk_rate ~ '%' if nbrk_rate else 'нет данных' }}
+  <span style="font-size:12px;color:#888;">— ориентир стоимости денег; ипотечные и депозитные ставки пляшут от неё. Источник: nationalbank.kz (регексом с главной), у НБРК есть и полноценный API: data.nationalbank.kz/api-docs.</span></p>
+
+  <p><b>Ставки по депозитам (KDIF):</b>
+  <span style="font-size:12px;color:#888;">с 01.03.2025 KDIF публикует не «потолок», а рыночный ориентир — средневзвешенные ставки банков. Это прямой конкурент твоей доходности: если квартира даёт yield ниже сберегательного депозита, инвестиция сомнительна. Источник: kdif.kz/reward-rates.</span></p>
+  {% if kdif_rates and kdif_rates[0] %}
+  <ul style="font-size:13px;">{% for r in kdif_rates[:8] %}<li>{{ r }}</li>{% endfor %}</ul>
+  {% else %}<p style="font-size:13px;color:#888;">нет данных</p>{% endif %}
+
+  <p><b>Отбасы банк:</b>
+  <span style="font-size:12px;color:#888;">жилстройсбережения: займ ~5% после накопления 50%, депозит ~2% + госпремия 20% на взносы (до лимита). Ставки почти статичны. Парсинг главной — экспериментальный.</span></p>
+  {% if otbasy_rates and otbasy_rates[0] %}
+  <ul style="font-size:13px;">{% for r in otbasy_rates[:6] %}<li>{{ r }}</li>{% endfor %}</ul>
+  {% else %}<p style="font-size:13px;color:#888;">нет данных</p>{% endif %}
+
+  <p><b>Индекс цен на жильё (Бюро нацстатистики, stat.gov.kz):</b>
+  <span style="font-size:12px;color:#888;">официальный помесячный индекс по Астане: новостройки (черновая/чистовая) отдельно от перепродажи и аренды. Открытая лицензия АСПИР РК, бесплатно. Это кандидат на замену ручного роста {{ appreciation }}% в скоринге реальной динамикой{% if stat_url %} · <a href="{{ stat_url }}" target="_blank">свежий xlsx</a>{% endif %}.</span></p>
+  {% if stat_rows and stat_rows[0] %}
+  <ul style="font-size:12px;">{% for r in stat_rows[:10] %}<li>{{ r }}</li>{% endfor %}</ul>
+  {% else %}<p style="font-size:13px;color:#888;">нет данных</p>{% endif %}
+
+  <p style="font-size:12px;color:#888;">Все значения — справочные: ползунки DEPOSIT_RATE и APPRECIATION_PCT в <a href="/admin/settings">Настройках</a> НЕ меняются автоматически, чтобы кривой парс не сломал скоринг молча. Сверяй и крути руками.</p>
+</div>
+
 {% endblock %}

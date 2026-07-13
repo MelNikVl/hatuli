@@ -41,12 +41,19 @@ HEADERS = {
     "Accept-Language": "ru-RU,ru;q=0.9",
 }
 
-# (URL, класс жилья или None для общего списка)
+# (URL, класс жилья или None) — район/класс фильтры Korter являются
+# ОТДЕЛЬНЫМИ server-rendered страницами (проверено вручную), не JS-пагинацией.
+# Комбинация класса + района + общего списка даёт максимальное покрытие за
+# один HTTP-прогон без браузерной автоматизации.
 SOURCES = [
     (f"{BASE}/новостройки-астаны-эконом-класса", "эконом"),
     (f"{BASE}/новостройки-астаны-комфорт-класса", "комфорт"),
     (f"{BASE}/новостройки-астаны-бизнес-класса", "бизнес"),
     (f"{BASE}/новостройки-астаны-элит-класса", "элит"),
+    (f"{BASE}/новостройки-астаны-есильский-район", None),
+    (f"{BASE}/новостройки-астаны-алматинский-район", None),
+    (f"{BASE}/новостройки-астаны-сарыаркинский-район", None),
+    (f"{BASE}/новостройки-астаны-байконурский-район", None),
     (f"{BASE}/новостройки-астаны", None),
 ]
 
@@ -62,11 +69,7 @@ _NAV_HREF_SKIP = re.compile(
 )
 
 
-def norm_name(name: str) -> str:
-    n = name.lower()
-    n = re.sub(r"^(жк|жилой комплекс|жилой массив|коттеджный городок|мкр)\.?\s+", "", n)
-    n = re.sub(r"[«»\"'()]", "", n)
-    return re.sub(r"\s+", " ", n).strip()
+from bot.core.site_enrichment import norm_name, save_enrichment
 
 
 def _dedupe_name(raw: str) -> str:
@@ -165,28 +168,7 @@ async def fetch_all(test: bool) -> dict[str, dict]:
 
 
 async def save_to_db(found: dict) -> None:
-    from bot.db.pg import fetch, execute
-    ours = await fetch("SELECT id, name FROM complexes")
-    by_norm = {norm_name(r["name"]): r["id"] for r in ours if r["name"]}
-
-    matched = 0
-    for key, data in found.items():
-        cid = by_norm.get(key)
-        if not cid:
-            continue
-        matched += 1
-        await execute(
-            """UPDATE complexes SET
-                 housing_class = COALESCE($2, housing_class),
-                 korter_url    = COALESCE($3, korter_url),
-                 source_info   = $4::jsonb,
-                 updated_at    = now()
-               WHERE id = $1""",
-            cid, data.get("housing_class"), data.get("url"),
-            json.dumps(data, ensure_ascii=False, default=str),
-        )
-    log.info("Матчинг: %d из %d ЖК korter найдены в нашей базе и обновлены",
-             matched, len(found))
+    await save_enrichment(found, "korter", set_housing_class=True)
 
 
 async def main():

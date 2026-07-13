@@ -27,8 +27,11 @@ logging.basicConfig(
 log = logging.getLogger("korter_service")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
-MIN_INTERVAL_H = 1
-MAX_INTERVAL_H = 4
+# Раз в 5 дней (± небольшой джиттер, чтобы не бить ровно по расписанию).
+# Один прогон уже собирает всё нужное (класс+район+общий список ~60-100 ЖК),
+# дальше это просто периодическое дополнение/обновление, часто не нужно.
+MIN_INTERVAL_H = 5 * 24 - 6
+MAX_INTERVAL_H = 5 * 24 + 6
 
 
 async def run_cycle():
@@ -59,7 +62,7 @@ async def main():
             log.error("Korter loop error: %s", e, exc_info=True)
 
         sleep_h = random.uniform(MIN_INTERVAL_H, MAX_INTERVAL_H)
-        log.info("Sleeping %.1f hours...\n", sleep_h)
+        log.info("Sleeping %.1f hours (~%.1f days)...\n", sleep_h, sleep_h/24)
         await asyncio.sleep(sleep_h * 3600)
 
 

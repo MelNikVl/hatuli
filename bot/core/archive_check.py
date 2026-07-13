@@ -36,22 +36,23 @@ ARCHIVE_MARKERS = (
 )
 
 
-async def _check_one(client: httpx.AsyncClient, url: str) -> bool | None:
-    """True = архив, False = живое, None = не удалось проверить."""
+async def _check_one(client: httpx.AsyncClient, url: str) -> str | None:
+    """'deleted' = страницы больше нет (404/410), 'archived' = помечено
+    архивом на странице, 'alive' = живое, None = не удалось проверить."""
     try:
         resp = await client.get(url)
     except Exception as exc:
         logger.warning("archive check failed %s: %s", url, exc)
         return None
     if resp.status_code in (404, 410):
-        return True
+        return "deleted"
     if resp.status_code in (403, 429):
         logger.warning("archive check blocked (%s), stopping", resp.status_code)
         raise RuntimeError("blocked")
     if resp.status_code != 200:
         return None
     text = resp.text
-    return any(m in text for m in ARCHIVE_MARKERS)
+    return "archived" if any(m in text for m in ARCHIVE_MARKERS) else "alive"
 
 
 async def check_archived(limit: int = 20) -> dict:
@@ -79,7 +80,13 @@ async def check_archived(limit: int = 20) -> dict:
             if result is None:
                 continue
             checked += 1
-            if result:
+            if result == "deleted":
+                # Страницы больше нет — удаляем и из нашей базы (правило:
+                # архив = остаётся в БД / скрыт из Sheets; удалено = удаляем везде)
+                archived += 1
+                await execute("DELETE FROM apartment_listings WHERE id = $1", r["id"])
+                logger.info("deleted (страница удалена): %s", r["url"])
+            elif result == "archived":
                 archived += 1
                 await execute("""
                     UPDATE apartment_listings
@@ -92,5 +99,5 @@ async def check_archived(limit: int = 20) -> dict:
                     "UPDATE apartment_listings SET archive_checked_at = now() WHERE id = $1",
                     r["id"],
                 )
-    logger.info("archive check: %d checked, %d archived", checked, archived)
+    logger.info("archive check: %d checked, %d archived/deleted", checked, archived)
     return {"checked": checked, "archived": archived}

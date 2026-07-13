@@ -25,7 +25,11 @@
   <button class="btn-big {{ 'btn-money-on' if monetization else 'btn-money-off' }}" id="btn-money" onclick="toggleMoney()">
     {{ '💰 Монетизация: ВКЛ' if monetization else '💰 Монетизация: ВЫКЛ (всё бесплатно)' }}
   </button>
+  <button class="btn-big {{ 'btn-money-on' if ai_analysis else 'btn-money-off' }}" id="btn-ai" onclick="toggleAi()" {{ 'disabled title="DEEPSEEK_API_KEY не задан в .env"' | safe if not deepseek_key_set else '' }}>
+    {{ '🤖 AI-анализ текста: ВКЛ' if ai_analysis else '🤖 AI-анализ текста: ВЫКЛ' }}
+  </button>
 </div>
+{% if not deepseek_key_set %}<p style="font-size:12px;color:#f59e0b;margin-top:-10px;">DEEPSEEK_API_KEY не найден в .env — кнопка неактивна, пока ключ не прописан на сервере.</p>{% endif %}
 <div class="status-line" id="svc-status">Проверяю статус сервисов…</div>
 
 <div class="settings-grid">
@@ -80,6 +84,14 @@ async function toggleMoney() {
   const d = await r.json();
   const btn = document.getElementById('btn-money');
   btn.textContent = d.enabled ? '💰 Монетизация: ВКЛ' : '💰 Монетизация: ВЫКЛ (всё бесплатно)';
+  btn.className = 'btn-big ' + (d.enabled ? 'btn-money-on' : 'btn-money-off');
+}
+
+async function toggleAi() {
+  const r = await fetch('/admin/ai-analysis/toggle', {method:'POST'});
+  const d = await r.json();
+  const btn = document.getElementById('btn-ai');
+  btn.textContent = d.enabled ? '🤖 AI-анализ текста: ВКЛ' : '🤖 AI-анализ текста: ВЫКЛ';
   btn.className = 'btn-big ' + (d.enabled ? 'btn-money-on' : 'btn-money-off');
 }
 
