@@ -4,6 +4,47 @@
   Рейтинг ЖК
   <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} жилых комплексов</small>
 </div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;margin-bottom:16px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+    <b style="font-size:14px;">🗺 Карта ЖК Астаны</b>
+    <span style="font-size:12px;color:#888;"><span id="cxmap-count">…</span> ЖК с координатами · размер точки = объявлений в продаже · наведи курсор · клик = карточка ЖК</span>
+  </div>
+  <div id="cx-rating-map" style="height:380px;border-radius:8px;"></div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const map = L.map('cx-rating-map').setView([51.128, 71.43], 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+
+  fetch('/admin/api/complexes-map').then(r => r.json()).then(d => {
+    document.getElementById('cxmap-count').textContent = d.complexes.length;
+    d.complexes.forEach(c => {
+      // размер = активные объявления (рейтинг), цвет = год (старее -> серее, новее -> синее)
+      const radius = Math.min(14, 5 + Math.sqrt(c.active || 0) * 1.6);
+      const yr = c.year || 2010;
+      const t = Math.max(0, Math.min(1, (yr - 2005) / 21));
+      const from = [148,163,184], to = [37,99,235];
+      const col = from.map((f,i) => Math.round(f + (to[i]-f)*t));
+      const m = L.circleMarker([c.lat, c.lon], {
+        radius: radius,
+        fillColor: `rgb(${col[0]},${col[1]},${col[2]})`,
+        color: '#fff', weight: 1, fillOpacity: 0.85,
+      }).addTo(map);
+      m.bindTooltip(
+        `<b>${c.name}</b>${c.class ? ' · ' + c.class : ''}<br>` +
+        `Год: ${c.year || '?'} · Рейтинг: ${c.active} в продаже, ${c.sold} продано<br>` +
+        `Застройщик: ${c.developer}`,
+        {sticky: true}
+      );
+      m.on('click', () => location.href = '/admin/complex/' + c.id);
+    });
+  });
+});
+</script>
 <style>
 .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center}
 .filters select,.filters input{padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px}

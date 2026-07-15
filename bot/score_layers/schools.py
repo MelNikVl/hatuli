@@ -27,10 +27,55 @@ out tags center 50;
 """
 
 
+async def _from_local_table(lat: float, lon: float) -> tuple[int, str] | None:
+    """Если справочник city_poi наполнен (poi_import.py) — считаем по нему:
+    без сетевых запросов, без лимитов Overpass. Иначе None -> фолбэк."""
+    from bot.db.pg import fetch
+    from bot.score_layers.osm import haversine_m
+    try:
+        # bbox ~800м вокруг точки, точное расстояние — хаверсином
+        rows = await fetch("""
+            SELECT kind, lat, lon FROM city_poi
+            WHERE lat BETWEEN $1 - 0.008 AND $1 + 0.008
+              AND lon BETWEEN $2 - 0.013 AND $2 + 0.013
+        """, lat, lon)
+    except Exception:
+        return None
+    if rows is None:
+        return None
+    kinds = set()
+    for r in rows:
+        if haversine_m(lat, lon, r["lat"], r["lon"]) <= 700:
+            kinds.add(r["kind"])
+    if not kinds:
+        # Пустой результат по локальной таблице достоверен, только если
+        # таблица вообще наполнена — иначе честнее сходить в Overpass
+        from bot.db.pg import fetchval
+        try:
+            total = await fetchval("SELECT COUNT(*) FROM city_poi")
+        except Exception:
+            return None
+        if not total:
+            return None
+        return 0, "школ/садиков в 700м не найдено"
+    has_school, has_kg, has_uni = "school" in kinds, "kindergarten" in kinds, "university" in kinds
+    if has_school and has_kg:
+        return 5, "школа и садик в 700м — семейная локация"
+    if has_school or has_kg:
+        return 3, f"{'школа' if has_school else 'садик'} в 700м"
+    if has_uni:
+        return 2, "вуз рядом — арендный спрос студентов"
+    return 0, "школ/садиков в 700м не найдено"
+
+
 async def compute(listing: dict) -> tuple[int, str]:
     lat, lon = listing.get("lat"), listing.get("lon")
     if not lat or not lon:
         return 0, "нет координат"
+
+    local = await _from_local_table(lat, lon)
+    if local is not None:
+        return local
 
     data = await overpass_cached(lat, lon, "schools",
                                  _QUERY.format(lat=lat, lon=lon))

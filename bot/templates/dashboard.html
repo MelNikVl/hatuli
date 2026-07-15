@@ -17,7 +17,8 @@
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
     <b>🗺 Карта объектов</b>
     <span style="font-size:12px;color:#888;">
-      <span id="map-count">...</span> активных объектов ·
+      <label style="cursor:pointer;margin-right:8px;"><input type="checkbox" id="poi-toggle" style="vertical-align:middle;"> 🏫 школы/садики</label>
+      <span id="map-count">...</span> активных объектов (<span id="map-coverage">...</span> с координатами) ·
       <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#9ca3af;"></span> слабый скор →
       <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#16a34a;"></span> отличный · ❤️ топ-10
     </span>
@@ -50,6 +51,11 @@
 
   fetch('/admin/api/map-points').then(r => r.json()).then(d => {
     document.getElementById('map-count').textContent = d.count;
+    if (d.coverage) {
+      const pct = d.coverage.total ? Math.round(100 * d.coverage.with_coords / d.coverage.total) : 0;
+      document.getElementById('map-coverage').textContent =
+        `${d.coverage.with_coords} из ${d.coverage.total}, ${pct}%`;
+    }
     const scores = d.points.map(p => p.score);
     const p10 = percentile(scores, 0.10);
     const p90 = percentile(scores, 0.90);
@@ -74,10 +80,12 @@
         }).addTo(map);
       }
       const priceM = p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : '—';
+      const ageText = p.age === 0 ? 'сегодня' : p.age === 1 ? '1 день' :
+                      p.age < 5 ? p.age + ' дня' : p.age + ' дней';
       m.bindPopup(
         `<b>Скор: ${p.score}</b> · ${p.rooms || '?'}-комн, ${p.area || '?'} м²<br>` +
-        `${priceM}<br>` +
-        `${p.complex ? '🏢 ' + p.complex + '<br>' : ''}` +
+        `${priceM} · на рынке ${ageText}<br>` +
+        `${p.complex ? '🏢 ' + p.complex + '<br>' : '🏢 ЖК не определён<br>'}` +
         `${p.address ? '📍 ' + p.address + '<br>' : ''}` +
         `<a href="/admin/analytics/${p.id}">Карточка</a> · <a href="${p.url}" target="_blank">Крыша</a>`
       );
@@ -85,6 +93,37 @@
   }).catch(e => {
     document.getElementById('map-count').textContent = 'ошибка загрузки';
   });
+
+  // Школы/садики/вузы — отдельным включаемым слоем
+  const poiLayer = L.layerGroup();
+  let poiLoaded = false;
+  document.getElementById('poi-toggle').addEventListener('change', function() {
+    if (this.checked) {
+      if (!poiLoaded) {
+        fetch('/admin/api/city-poi').then(r => r.json()).then(d => {
+          d.poi.forEach(p => {
+            const icon = p.kind === 'school' ? '🏫' : p.kind === 'kindergarten' ? '🧸' : '🎓';
+            L.marker([p.lat, p.lon], {
+              icon: L.divIcon({className: '', html: `<div style="font-size:14px;opacity:.85;">${icon}</div>`,
+                               iconSize: [14,14], iconAnchor: [7,7]}),
+            }).bindTooltip(`${icon} ${p.name || (p.kind === 'school' ? 'школа' : p.kind === 'kindergarten' ? 'детсад' : 'вуз')}${p.address ? '<br>' + p.address : ''}`)
+              .addTo(poiLayer);
+          });
+          poiLoaded = true;
+          if (!d.poi.length) alert('Справочник POI пуст — запусти на сервере: venv/bin/python poi_import.py');
+        });
+      }
+      poiLayer.addTo(map);
+    } else {
+      map.removeLayer(poiLayer);
+    }
+  });
+
+  fetch('/admin/api/duplicates').then(r => r.json()).then(d => {
+    const el = document.getElementById('pg-dups-rent');
+    if (el) el.textContent = d.rentals;
+
+  }).catch(() => {});
 
   fetch('/admin/api/deep-sweep-status').then(r => r.json()).then(d => {
     const el = document.getElementById('deep-sweep-cursor');
@@ -204,7 +243,7 @@
       <div class="svc-stat"><div class="val" id="db-apt">—</div><div class="lbl">квартиры</div></div>
       <div class="svc-stat"><div class="val" id="db-inv">—</div><div class="lbl">инвест</div></div>
     </div>
-    <div class="svc-detail">Дубли квартир: <strong id="db-dupes">—</strong></div>
+    <div class="svc-detail">Дубли квартир: <strong id="db-dupes">—</strong> · аренды: <strong id="pg-dups-rent">—</strong></div>
     <div class="svc-detail" id="db-error" style="color:#ef4444;display:none"></div>
   </div>
 

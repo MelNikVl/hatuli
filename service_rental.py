@@ -87,6 +87,15 @@ async def main():
 
         except Exception as e:
             log.error("Rental loop error: %s", e, exc_info=True)
+        # === Дедупликация аренды ===
+        try:
+            from bot.core.dedup_listings import deduplicate_rental_listings
+            dup_count = await deduplicate_rental_listings()
+            if dup_count:
+                log.info("Deduplicated %d rental listings", dup_count)
+        except Exception as e:
+            log.warning("Rental deduplication failed: %s", e)
+
 
         sleep_sec = random.uniform(5 * 60, 15 * 60)
         log.info("Sleeping %.0f min...\n", sleep_sec / 60)

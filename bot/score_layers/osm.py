@@ -4,6 +4,11 @@
 Координаты округляются до 3 знаков (~110 м сетка) — один запрос к Overpass
 на ячейку, дальше ответ берётся из кеша (osm_cache) 60 дней.
 Overpass бесплатный, но просит вежливости: не дёргаем чаще необходимого.
+
+НАДЁЖНОСТЬ: у Overpass несколько независимых серверов-зеркал с одинаковым
+API. Основной overpass-api.de иногда недоступен (перегрузка/бан IP/сетевые
+проблемы конкретного хостера) — пробуем по очереди несколько зеркал, чтобы
+единая точка отказа не гасила все 5 слоёв локации разом.
 """
 from __future__ import annotations
 
@@ -16,12 +21,41 @@ from bot.db.pg import execute, fetchrow
 
 logger = logging.getLogger(__name__)
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Порядок = порядок попыток. Все зеркала совместимы по API.
+OVERPASS_MIRRORS = [
+    # maps.mail.ru — первым: единственное зеркало, доступное с сервера
+    # (проверено 14.07.2026: остальные — connection refused либо таймаут,
+    # похоже на блокировку маршрутов до европейских хостеров). Остальные
+    # оставлены как фолбэк на случай, если доступность изменится.
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+]
 CACHE_DAYS = 60
 
 
 def grid(v: float) -> float:
     return round(v, 3)
+
+
+async def overpass_request(query: str, timeout: float = 30.0) -> dict | None:
+    """POST-запрос к Overpass с перебором зеркал при отказе."""
+    last_error = None
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for mirror in OVERPASS_MIRRORS:
+            try:
+                resp = await client.post(mirror, data={"data": query})
+                if resp.status_code == 200:
+                    return resp.json()
+                logger.warning("overpass %s -> HTTP %s", mirror, resp.status_code)
+                last_error = f"HTTP {resp.status_code}"
+            except Exception as exc:
+                logger.warning("overpass %s failed: %s", mirror, exc)
+                last_error = str(exc)
+    logger.error("Все зеркала Overpass недоступны. Последняя ошибка: %s. "
+                "Проверь сеть: curl -v %s", last_error, OVERPASS_MIRRORS[0])
+    return None
 
 
 async def overpass_cached(lat: float, lon: float, kind: str, query: str) -> dict | None:
@@ -39,15 +73,8 @@ async def overpass_cached(lat: float, lon: float, kind: str, query: str) -> dict
     except Exception as exc:
         logger.warning("osm_cache read failed: %s", exc)
 
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(OVERPASS_URL, data={"data": query})
-        if resp.status_code != 200:
-            logger.warning("overpass %s -> %s", kind, resp.status_code)
-            return None
-        data = resp.json()
-    except Exception as exc:
-        logger.warning("overpass %s failed: %s", kind, exc)
+    data = await overpass_request(query)
+    if data is None:
         return None
 
     try:

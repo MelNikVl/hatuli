@@ -44,6 +44,7 @@ SLIDER_SETTINGS = {
     "PARSER_MAX_PAGES":  ("Страниц Krisha за цикл", 1, 40, 1, "стр."),
     "DEEP_SWEEP_BATCH":  ("Глубокий обход: доп. страниц за цикл (0=выкл)", 0, 20, 1, "стр."),
     "DETAIL_FETCH_BATCH": ("Деталей/координат за цикл (полскора+полслучайно)", 2, 40, 1, "шт."),
+    "COORD_BACKFILL_BATCH": ("Добивка координат по ВСЕЙ базе за цикл", 0, 40, 1, "шт."),
 }
 
 
@@ -224,9 +225,9 @@ def make_extras_router(templates) -> APIRouter:
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval
 
         hourly = await pg_fetch("""
-            SELECT date_trunc('hour', found_at) AS h, COUNT(*) AS cnt
+            SELECT date_trunc('hour', first_seen) AS h, COUNT(*) AS cnt
             FROM apartment_listings
-            WHERE found_at > now() - ($1 || ' days')::interval
+            WHERE first_seen > now() - ($1 || ' days')::interval
             GROUP BY 1 ORDER BY 1
         """, str(days))
         labels = [r["h"].strftime("%d.%m %H:00") for r in hourly]
@@ -236,7 +237,7 @@ def make_extras_router(templates) -> APIRouter:
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
             "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
         today_new = await pg_fetchval(
-            "SELECT COUNT(*) FROM apartment_listings WHERE found_at::date = CURRENT_DATE") or 0
+            "SELECT COUNT(*) FROM apartment_listings WHERE first_seen::date = CURRENT_DATE") or 0
         today_archived = await pg_fetchval(
             "SELECT COUNT(*) FROM apartment_listings WHERE archived_at::date = CURRENT_DATE") or 0
         price_up = await pg_fetchval(
@@ -297,6 +298,63 @@ def make_extras_router(templates) -> APIRouter:
             "chart_labels": labels, "chart_values": values,
         })
 
+    @router.get("/admin/api/duplicates")
+    async def api_duplicates(request: Request):
+        """Статистика дублей для дашборда."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetchval as pg_fetchval
+        apt = await pg_fetchval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE") or 0
+        rent = 0
+        try:
+            rent = await pg_fetchval(
+                "SELECT COUNT(*) FROM rental_listings WHERE is_duplicate = TRUE") or 0
+        except Exception:
+            pass  # колонка появится после первого прогона дедупа аренды
+        return JSONResponse({"apartments": apt, "rentals": rent})
+
+    @router.get("/admin/api/city-poi")
+    async def city_poi(request: Request):
+        """Школы/садики/вузы города для отображения на картах."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch(
+            "SELECT kind, name, lat, lon, address FROM city_poi LIMIT 3000")
+        return JSONResponse({"poi": [dict(r) for r in rows]})
+
+    @router.get("/admin/api/complexes-map")
+    async def complexes_map(request: Request):
+        """Все ЖК с координатами (центроид объявлений) для карты рейтинга."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT c.id, c.name, c.year_built, c.housing_class,
+                   COALESCE(c.listings_count, 0) AS active_cnt,
+                   COALESCE(c.sold_count, 0) AS sold_cnt,
+                   COALESCE(d.name,
+                            c.source_info->'korter'->>'developer',
+                            c.source_info->'homsters'->>'developer') AS developer,
+                   g.lat, g.lon
+            FROM complexes c
+            LEFT JOIN developers d ON d.id = c.developer_id
+            JOIN LATERAL (
+                SELECT AVG(lat) AS lat, AVG(lon) AS lon
+                FROM apartment_listings al
+                WHERE al.complex_name ILIKE '%' || c.name || '%' AND al.lat IS NOT NULL
+            ) g ON g.lat IS NOT NULL
+            LIMIT 1500
+        """)
+        return JSONResponse({"complexes": [{
+            "id": r["id"], "name": r["name"],
+            "year": r["year_built"], "class": r["housing_class"],
+            "active": r["active_cnt"], "sold": r["sold_cnt"],
+            "developer": r["developer"] or "—",
+            "lat": float(r["lat"]), "lon": float(r["lon"]),
+        } for r in rows]})
+
     @router.get("/admin/api/deep-sweep-status")
     async def deep_sweep_status(request: Request):
         if not is_authed(request):
@@ -312,10 +370,18 @@ def make_extras_router(templates) -> APIRouter:
     async def map_points(request: Request):
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
-        from bot.db.pg import fetch as pg_fetch
+        from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
+
+        total_active = await pg_fetchval2(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+        with_coords = await pg_fetchval2(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE AND lat IS NOT NULL") or 0
         rows = await pg_fetch("""
             SELECT id, lat, lon, price, rooms, area, address, complex_name,
                    url,
+                   EXTRACT(EPOCH FROM (now() - first_seen))/86400 AS age_days,
                    (COALESCE(score_total,0) + COALESCE(zone_bonus,0)
                     + COALESCE(layer_bonus,0)) AS eff_score
             FROM apartment_listings
@@ -333,9 +399,13 @@ def make_extras_router(templates) -> APIRouter:
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
             "address": r["address"] or "", "complex": r["complex_name"] or "",
             "url": r["url"] or "",
+            "age": int(r["age_days"] or 0),
             "top": idx < 10,   # топ-10 лучших — сердечки на карте
         } for idx, r in enumerate(rows)]
-        return JSONResponse({"points": pts, "count": len(pts)})
+        return JSONResponse({
+            "points": pts, "count": len(pts),
+            "coverage": {"with_coords": with_coords, "total": total_active},
+        })
 
     # ── Скор: полное описание модели (сердце проекта) ────────────────────
 
@@ -430,6 +500,35 @@ def make_extras_router(templates) -> APIRouter:
             return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
 
         cname = cx["name"]
+
+        # Координаты ЖК = центроид координат его объявлений; адрес = самый
+        # частый адрес среди объявлений (в complexes своих координат нет)
+        geo = await fetchrow("""
+            SELECT AVG(lat) AS lat, AVG(lon) AS lon
+            FROM apartment_listings
+            WHERE complex_name ILIKE '%' || $1 || '%' AND lat IS NOT NULL
+        """, cname)
+        addr_row = await fetchrow("""
+            SELECT address, COUNT(*) AS cnt FROM apartment_listings
+            WHERE complex_name ILIKE '%' || $1 || '%'
+              AND address IS NOT NULL AND address != ''
+            GROUP BY address ORDER BY cnt DESC LIMIT 1
+        """, cname)
+
+        # Застройщик: справочник developers -> Korter -> Homsters
+        developer = cx["developer_name"]
+        if not developer and cx["source_info"]:
+            si = cx["source_info"]
+            if isinstance(si, str):
+                import json as _j
+                try:
+                    si = _j.loads(si)
+                except ValueError:
+                    si = {}
+            if isinstance(si, dict):
+                developer = ((si.get("korter") or {}).get("developer")
+                             or (si.get("homsters") or {}).get("developer"))
+
         sale_listings = await fetch("""
             SELECT id, title, rooms, area, floor, floors_total, price, yield_pct,
                    score_total, url, is_active, first_seen, last_seen, archived_at
@@ -490,6 +589,9 @@ def make_extras_router(templates) -> APIRouter:
         return templates.TemplateResponse("complex_detail.html", {
             "request": request,
             "cx": dict(cx),
+            "geo": {"lat": float(geo["lat"]), "lon": float(geo["lon"])} if geo and geo["lat"] else None,
+            "cx_address": addr_row["address"] if addr_row else None,
+            "developer": developer,
             "sales": [dict(r) for r in sale_listings],
             "rentals": [dict(r) for r in rentals],
             "stats": [dict(r) for r in stats],

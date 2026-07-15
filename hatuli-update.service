@@ -1,0 +1,11 @@
+[Unit]
+Description=Hatuli Git Auto Update
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/update-hatuli.sh
+StandardOutput=append:/home/nik/krisha_bot/update.log
+StandardError=append:/home/nik/krisha_bot/update.log

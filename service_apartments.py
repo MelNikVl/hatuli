@@ -213,6 +213,58 @@ async def run_cycle():
         except Exception as e:
             log.warning("coords/archive update failed %s: %s", r["id"], e)
 
+    # ── БЭКФИЛЛ координат по ВСЕЙ базе (не только текущий цикл) ────────────
+    # Баг, который это чинит: раньше детали докачивались только для
+    # объявлений, увиденных в ЭТОМ цикле парсинга страниц. Объявление,
+    # вставленное неделю назад и не попавшее тогда в случайную выборку на
+    # докачку, больше никогда не получало координат — отсюда целые районы
+    # без единой точки на карте, сколько бы времени ни прошло. Этот блок
+    # работает НАПРЯМУЮ с БД: берёт любые активные объявления без lat/lon,
+    # независимо от того, встретились ли они в сегодняшних страницах.
+    try:
+        from bot.db import settings as _app_settings2
+        backfill_batch = _app_settings2.get_int("COORD_BACKFILL_BATCH", 15)
+        if backfill_batch > 0:
+            from bot.db.pg import fetch as _pg_fetch_bf
+            from bot.core.apartment_details import fetch_apartment_details as _fetch_details_bf
+
+            missing = await _pg_fetch_bf("""
+                SELECT id, url FROM apartment_listings
+                WHERE lat IS NULL AND is_active IS NOT FALSE AND url IS NOT NULL
+                  AND (coord_fetch_attempted_at IS NULL
+                       OR coord_fetch_attempted_at < now() - interval '3 days')
+                ORDER BY coord_fetch_attempted_at ASC NULLS FIRST, first_seen ASC
+                LIMIT $1
+            """, backfill_batch)
+
+            got = 0
+            for m in missing:
+                await asyncio.sleep(random.uniform(8.0, 15.0))
+                try:
+                    details = await _fetch_details_bf(m["url"])
+                except Exception as e:
+                    log.warning("backfill fetch failed %s: %s", m["id"], e)
+                    details = None
+                if details and details.get("lat") and details.get("lon"):
+                    await pg_exec(
+                        "UPDATE apartment_listings SET lat=$2, lon=$3, "
+                        "coord_fetch_attempted_at=now() WHERE id=$1",
+                        m["id"], details["lat"], details["lon"],
+                    )
+                    got += 1
+                else:
+                    # Не нашли координаты — отметим попытку, чтобы не долбить
+                    # это же объявление каждый цикл; повторим через 3 дня.
+                    await pg_exec(
+                        "UPDATE apartment_listings SET coord_fetch_attempted_at=now() WHERE id=$1",
+                        m["id"],
+                    )
+            if missing:
+                log.info("coord backfill: %d/%d listings got coordinates (батч %d)",
+                         got, len(missing), backfill_batch)
+    except Exception as e:
+        log.warning("coord backfill failed: %s", e)
+
     # ── Зоны приоритета: пересчёт бонусов для всех объявлений с координатами ──
     try:
         from bot.core.zones import load_zones, zone_bonus_for
@@ -391,6 +443,15 @@ async def run_cycle():
 
     # Google Sheets sync
     try:
+        # === Дедупликация (приоритет объявлений от хозяина) ===
+        try:
+            from bot.core.dedup_listings import deduplicate_apartment_listings
+            dup_count = await deduplicate_apartment_listings()
+            if dup_count:
+                log.info("Deduplicated %d apartment listings", dup_count)
+        except Exception as e:
+            log.warning("Apartment deduplication failed: %s", e)
+
         await sync_apartments_to_sheets_pg()
         log.info("Google Sheets: Квартиры synced")
         from datetime import datetime, timezone
