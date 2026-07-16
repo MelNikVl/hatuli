@@ -131,6 +131,9 @@ async def _dedup_table(table: str, order_col: str) -> int:
 
     await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN DEFAULT FALSE")
     await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS duplicate_of TEXT")
+    # когда именно объявление было помечено дублем — для статистики
+    # «сколько дублей нашли и убрали с карты сегодня» на дашборде
+    await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS dup_marked_at TIMESTAMPTZ")
 
     have = await _table_columns(table)
     want = ["id", "url", "address", "rooms", "area", "price", "floor", "is_owner"]
@@ -146,7 +149,8 @@ async def _dedup_table(table: str, order_col: str) -> int:
 
     for dup_id, primary_id in duplicates.items():
         await execute(
-            f"UPDATE {table} SET is_duplicate=TRUE, duplicate_of=$1 WHERE id=$2",
+            f"UPDATE {table} SET is_duplicate=TRUE, duplicate_of=$1, "
+            f"dup_marked_at=COALESCE(dup_marked_at, NOW()) WHERE id=$2",
             primary_id, dup_id)
     # ВАЖНО: is_active НЕ трогаем — иначе затирался бы архив.
     return len(duplicates)

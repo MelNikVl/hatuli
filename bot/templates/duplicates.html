@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">⚠ Дубли объявлений
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ rows|length }} дублей квартир (показаны свежие 300) · аренды: {{ rent_cnt }}</small>
+</div>
+<p style="font-size:13px;color:#888;">Дубль скрыт из топов, карты и Google Sheets, но остаётся в базе. Primary — либо более старое объявление, либо (приоритет) объявление от хозяина.</p>
+<table style="width:100%;border-collapse:collapse;font-size:13px;">
+  <tr style="text-align:left;border-bottom:2px solid var(--border);">
+    <th style="padding:8px;">Дубль</th><th style="padding:8px;">Кто</th><th style="padding:8px;">→ Primary</th><th style="padding:8px;">Кто</th>
+  </tr>
+  {% for r in rows %}
+  <tr style="border-bottom:1px solid var(--border);">
+    <td style="padding:7px 8px;">
+      <a href="/admin/analytics/{{ r.dup_id }}">{{ r.dup_addr or r.dup_id }}</a>
+      {% if r.dup_price %}<span style="color:#888;"> · {{ (r.dup_price/1000000)|round(1) }} млн</span>{% endif %}
+    </td>
+    <td style="padding:7px 8px;">{{ '👤 хозяин' if r.dup_owner else '🏢 риелтор' }}</td>
+    <td style="padding:7px 8px;">
+      {% if r.primary_id %}<a href="/admin/analytics/{{ r.primary_id }}"><b>{{ r.primary_addr or r.primary_id }}</b></a>
+      {% if r.primary_price %}<span style="color:#888;"> · {{ (r.primary_price/1000000)|round(1) }} млн</span>{% endif %}
+      {% else %}—{% endif %}
+    </td>
+    <td style="padding:7px 8px;">{{ '👤 хозяин' if r.primary_owner else '🏢 риелтор' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% if not rows %}<p style="color:#888;">Дублей пока не найдено.</p>{% endif %}
+{% endblock %}

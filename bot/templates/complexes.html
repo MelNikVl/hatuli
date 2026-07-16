@@ -124,7 +124,7 @@ tr:last-child td{border-bottom:none}
       <span class="flag {% if not c.has_closed_territory %}off{% endif %}" title="Закрытая территория">🔒</span>
       <span class="flag {% if not c.has_playground %}off{% endif %}" title="Детская площадка">🛝</span>
     </td>
-    <td><button class="edit-btn" onclick='openEdit({{ c | tojson }})'>✏️</button></td>
+    {% if request.cookies.get('admin_auth') == '1' %}<td><button class="edit-btn" onclick='openEdit({{ c | tojson }})'>✏️</button></td>{% else %}<td></td>{% endif %}
   </tr>
   {% endfor %}
   </tbody>

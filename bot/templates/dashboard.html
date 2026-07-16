@@ -1,29 +1,118 @@
 {% extends "base.html" %}
 {% block content %}
+{% set authed = request.cookies.get('admin_auth') == '1' %}
 <div class="page-title">
-  Панель управления
+  {% if authed %}Панель управления{% else %}Карта недвижимости Астаны{% endif %}
   <small id="last-refresh" style="font-size:13px;color:#888;font-weight:400;">обновляется...</small>
+  {% if authed %}
   <a href="https://docs.google.com/spreadsheets/d/1KaHKjg70JEfX3kLc7A8ZtNPJwsp108iSA8kIqVfrtdI/edit"
      target="_blank" rel="noopener"
      style="float:right;font-size:13px;font-weight:600;background:#22c55e;color:#fff;padding:6px 14px;border-radius:8px;text-decoration:none;">
     📊 Google Sheets
   </a>
+  {% endif %}
 </div>
 
-<!-- Карта объектов: серый = слабый скор, зелёный = отличное соотношение цена/качество -->
+<!-- Карта объектов: квадратная, всё управление справа. Фильтры как на Крыше. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:16px;">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-    <b>🗺 Карта объектов</b>
-    <span style="font-size:12px;color:#888;">
-      <label style="cursor:pointer;margin-right:8px;"><input type="checkbox" id="poi-toggle" style="vertical-align:middle;"> 🏫 школы/садики</label>
-      <span id="map-count">...</span> активных объектов (<span id="map-coverage">...</span> с координатами) ·
-      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#9ca3af;"></span> слабый скор →
-      <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#16a34a;"></span> отличный · ❤️ топ-10
-    </span>
+
+<style>
+.map-flex { display: flex; gap: 16px; align-items: stretch; margin-bottom: 16px; }
+.map-box  { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; flex: 1 1 auto; min-width: 0; }
+#objects-map { width: 100%; aspect-ratio: 1 / 1; max-height: 78vh; border-radius: 8px; }
+.map-panel { width: 270px; flex-shrink: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto; }
+.mp-group label.mp-title { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 6px; }
+.seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { flex: 1; background: var(--surface2); color: var(--muted); border: none; padding: 7px 4px; font-size: 12.5px; cursor: pointer; }
+.seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+.chips { display: flex; gap: 6px; }
+.chips button { flex: 1; background: var(--surface2); color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 6px 0; font-size: 13px; cursor: pointer; }
+.chips button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.range2 { display: flex; gap: 8px; align-items: center; }
+.range2 input { width: 100%; min-width: 0; }
+.mp-check { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; color: var(--text); }
+.map-stats { font-size: 12px; color: var(--muted); line-height: 1.7; border-top: 1px solid var(--border); padding-top: 10px; }
+.map-stats b { color: var(--text); }
+.dup-badge { display: inline-block; background: rgba(243,156,18,.15); color: var(--yellow); border-radius: 6px; padding: 2px 8px; font-weight: 600; }
+@media (max-width: 900px) { .map-flex { flex-direction: column; } .map-panel { width: auto; } }
+</style>
+
+<div class="map-flex">
+  <!-- Квадратная карта -->
+  <div class="map-box">
+    <div id="objects-map"></div>
   </div>
-  <div id="objects-map" style="height:420px;border-radius:8px;"></div>
+
+  <!-- Панель управления справа -->
+  <div class="map-panel">
+    <div class="mp-group">
+      <label class="mp-title">Сделка</label>
+      <div class="seg" id="f-deal">
+        <button data-v="sale" class="on">Покупка</button>
+        <button data-v="rent">Аренда</button>
+      </div>
+    </div>
+
+    <div class="mp-group">
+      <label class="mp-title">Цена, <span id="price-unit">млн ₸</span></label>
+      <div class="range2">
+        <input type="number" id="f-price-min" placeholder="от" min="0">
+        <span style="color:var(--muted)">—</span>
+        <input type="number" id="f-price-max" placeholder="до" min="0">
+      </div>
+    </div>
+
+    <div class="mp-group">
+      <label class="mp-title">Комнаты</label>
+      <div class="chips" id="f-rooms">
+        <button data-v="1">1</button>
+        <button data-v="2">2</button>
+        <button data-v="3">3</button>
+        <button data-v="4">4+</button>
+      </div>
+    </div>
+
+    <div class="mp-group">
+      <label class="mp-title">Метраж, м²</label>
+      <div class="range2">
+        <input type="number" id="f-area-min" placeholder="от" min="0">
+        <span style="color:var(--muted)">—</span>
+        <input type="number" id="f-area-max" placeholder="до" min="0">
+      </div>
+    </div>
+
+    <div class="mp-group" id="market-group">
+      <label class="mp-title">Рынок</label>
+      <div class="seg" id="f-market">
+        <button data-v="all" class="on">Все</button>
+        <button data-v="primary">Новостройки</button>
+        <button data-v="secondary">Вторичка</button>
+      </div>
+    </div>
+
+    <div class="mp-group">
+      <label class="mp-title">Продавец</label>
+      <div class="seg" id="f-owner">
+        <button data-v="all" class="on">От всех</button>
+        <button data-v="owner">От хозяев</button>
+      </div>
+    </div>
+
+    <label class="mp-check"><input type="checkbox" id="f-complexes"> 🏢 Показать только ЖК</label>
+    <label class="mp-check"><input type="checkbox" id="poi-toggle"> 🏫 Школы / садики</label>
+
+    <div class="map-stats">
+      <div>На карте: <b id="map-count">…</b> <span id="map-count-lbl">объектов</span></div>
+      <div id="coverage-row">С координатами: <b id="map-coverage">…</b></div>
+      <div style="margin-top:6px;">Дублей сегодня: <span class="dup-badge" id="dup-today">…</span></div>
+      <div style="font-size:11px;">найдено и скрыто с карты · <a href="/admin/info" style="color:var(--accent2)">как это работает</a></div>
+      <div style="margin-top:8px;font-size:11px;">
+        <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#9ca3af;"></span> слабый скор →
+        <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#16a34a;"></span> отличный · ❤️ топ-10
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -31,70 +120,172 @@
   const map = L.map('objects-map').setView([51.128, 71.43], 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
               {attribution: '&copy; OSM'}).addTo(map);
+  const pointsLayer = L.layerGroup().addTo(map);
+  const complexLayer = L.layerGroup();
 
-  // серый #9ca3af → зелёный #16a34a — ОТНОСИТЕЛЬНО реального разброса
-  // скора в текущих данных (перцентили), а не фиксированного диапазона.
-  // Иначе если у всех объектов скор, скажем, 70-80 — все точки выйдут
-  // зелёными и карта ничего не покажет про относительное качество.
+  // ── Состояние фильтров ────────────────────────────────────────────────
+  const F = { deal: 'sale', market: 'all', owner: 'all', rooms: new Set() };
+
+  function segInit(id, key) {
+    const box = document.getElementById(id);
+    box.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        box.querySelectorAll('button').forEach(b => b.classList.remove('on'));
+        btn.classList.add('on');
+        F[key] = btn.dataset.v;
+        if (key === 'deal') onDealChange();
+        applyFilters();
+      });
+    });
+  }
+  segInit('f-deal', 'deal');
+  segInit('f-market', 'market');
+  segInit('f-owner', 'owner');
+
+  document.querySelectorAll('#f-rooms button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v = btn.dataset.v;
+      if (F.rooms.has(v)) { F.rooms.delete(v); btn.classList.remove('on'); }
+      else { F.rooms.add(v); btn.classList.add('on'); }
+      applyFilters();
+    });
+  });
+
+  let debounceT = null;
+  ['f-price-min','f-price-max','f-area-min','f-area-max'].forEach(id => {
+    document.getElementById(id).addEventListener('input', () => {
+      clearTimeout(debounceT);
+      debounceT = setTimeout(applyFilters, 600);
+    });
+  });
+
+  function onDealChange() {
+    // для аренды рынок первичка/вторичка не имеет смысла, цена — в тысячах
+    document.getElementById('market-group').style.display = F.deal === 'rent' ? 'none' : '';
+    document.getElementById('price-unit').textContent = F.deal === 'rent' ? 'тыс ₸/мес' : 'млн ₸';
+    document.getElementById('f-price-min').value = '';
+    document.getElementById('f-price-max').value = '';
+  }
+
+  // ── Загрузка точек ────────────────────────────────────────────────────
   function scoreColor(s, p10, p90) {
     const t = p90 > p10 ? Math.max(0, Math.min(1, (s - p10) / (p90 - p10))) : 0.5;
     const from = [156,163,175], to = [22,163,74];
     const c = from.map((f,i) => Math.round(f + (to[i]-f)*t));
     return `rgb(${c[0]},${c[1]},${c[2]})`;
   }
-
   function percentile(arr, p) {
+    if (!arr.length) return 0;
     const s = [...arr].sort((a,b) => a-b);
-    const idx = Math.floor(s.length * p);
-    return s[Math.min(idx, s.length - 1)];
+    return s[Math.min(Math.floor(s.length * p), s.length - 1)];
+  }
+  function num(id) { const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? 0 : v; }
+
+  function applyFilters() {
+    if (document.getElementById('f-complexes').checked) return; // режим ЖК — точки не грузим
+    const mult = F.deal === 'rent' ? 1e3 : 1e6; // тыс ₸ или млн ₸ → ₸
+    const params = new URLSearchParams({
+      deal: F.deal,
+      price_min: Math.round(num('f-price-min') * mult),
+      price_max: Math.round(num('f-price-max') * mult),
+      rooms: [...F.rooms].join(','),
+      area_min: num('f-area-min'),
+      area_max: num('f-area-max'),
+      market: F.market,
+      owner: F.owner,
+    });
+    document.getElementById('map-count').textContent = '…';
+    fetch('/admin/api/map-points?' + params).then(r => r.json()).then(d => {
+      pointsLayer.clearLayers();
+      document.getElementById('map-count').textContent = d.count;
+      document.getElementById('map-count-lbl').textContent =
+        d.deal === 'rent' ? 'объявлений аренды (по центру ЖК)' : 'объектов';
+      const covRow = document.getElementById('coverage-row');
+      if (d.coverage) {
+        covRow.style.display = '';
+        const pct = d.coverage.total ? Math.round(100 * d.coverage.with_coords / d.coverage.total) : 0;
+        document.getElementById('map-coverage').textContent =
+          `${d.coverage.with_coords} из ${d.coverage.total}, ${pct}%`;
+      } else {
+        covRow.style.display = 'none';
+      }
+      const scores = d.points.map(p => p.score);
+      const p10 = percentile(scores, 0.10), p90 = percentile(scores, 0.90);
+      d.points.forEach(p => {
+        let m;
+        if (p.top) {
+          m = L.marker([p.lat, p.lon], {
+            icon: L.divIcon({
+              className: '',
+              html: '<div style="font-size:22px;line-height:22px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));">❤️</div>',
+              iconSize: [22, 22], iconAnchor: [11, 11],
+            }),
+            zIndexOffset: 1000,
+          }).addTo(pointsLayer);
+        } else {
+          m = L.circleMarker([p.lat, p.lon], {
+            radius: 6,
+            fillColor: p.rent ? '#3498db' : scoreColor(p.score, p10, p90),
+            color: '#ffffff', weight: 1,
+            fillOpacity: 0.85,
+          }).addTo(pointsLayer);
+        }
+        const priceTxt = p.price
+          ? (p.rent ? (p.price/1e3).toFixed(0) + ' тыс ₸/мес' : (p.price/1e6).toFixed(1) + ' млн ₸')
+          : '—';
+        const ageText = p.age === 0 ? 'сегодня' : p.age === 1 ? '1 день' :
+                        p.age < 5 ? p.age + ' дня' : p.age + ' дней';
+        m.bindPopup(
+          (p.rent ? `<b>Аренда</b> · ` : `<b>Скор: ${p.score}</b> · `) +
+          `${p.rooms || '?'}-комн, ${p.area || '?'} м²<br>` +
+          `${priceTxt} · на рынке ${ageText}<br>` +
+          `${p.complex ? '🏢 ' + p.complex + '<br>' : '🏢 ЖК не определён<br>'}` +
+          `${p.address ? '📍 ' + p.address + '<br>' : ''}` +
+          (p.rent ? `<a href="${p.url}" target="_blank">Крыша</a>`
+                  : `<a href="/admin/analytics/${p.id}">Карточка</a> · <a href="${p.url}" target="_blank">Крыша</a>`) +
+          (p.rent ? '<br><span style="color:#888;font-size:11px;">точка = центр ЖК, не точный адрес</span>' : '')
+        );
+      });
+    }).catch(() => {
+      document.getElementById('map-count').textContent = 'ошибка загрузки';
+    });
   }
 
-  fetch('/admin/api/map-points').then(r => r.json()).then(d => {
-    document.getElementById('map-count').textContent = d.count;
-    if (d.coverage) {
-      const pct = d.coverage.total ? Math.round(100 * d.coverage.with_coords / d.coverage.total) : 0;
-      document.getElementById('map-coverage').textContent =
-        `${d.coverage.with_coords} из ${d.coverage.total}, ${pct}%`;
-    }
-    const scores = d.points.map(p => p.score);
-    const p10 = percentile(scores, 0.10);
-    const p90 = percentile(scores, 0.90);
-    d.points.forEach(p => {
-      let m;
-      if (p.top) {
-        // Топ-10 лучших предложений — красные сердечки, поверх остальных
-        m = L.marker([p.lat, p.lon], {
-          icon: L.divIcon({
-            className: '',
-            html: '<div style="font-size:22px;line-height:22px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));">❤️</div>',
-            iconSize: [22, 22], iconAnchor: [11, 11],
-          }),
-          zIndexOffset: 1000,
-        }).addTo(map);
+  // ── Режим «только ЖК» ─────────────────────────────────────────────────
+  let complexesLoaded = false;
+  document.getElementById('f-complexes').addEventListener('change', function() {
+    if (this.checked) {
+      map.removeLayer(pointsLayer);
+      if (!complexesLoaded) {
+        fetch('/admin/api/complexes-map').then(r => r.json()).then(d => {
+          d.complexes.forEach(c => {
+            L.circleMarker([c.lat, c.lon], {
+              radius: Math.min(14, 5 + Math.sqrt(c.active || 1)),
+              fillColor: '#8b5cf6', color: '#ffffff', weight: 1, fillOpacity: 0.8,
+            }).bindPopup(
+              `<b>🏢 ${c.name}</b><br>` +
+              `${c.developer !== '—' ? 'Застройщик: ' + c.developer + '<br>' : ''}` +
+              `${c.year ? 'Год: ' + c.year + ' · ' : ''}${c.class ? 'Класс: ' + c.class + '<br>' : ''}` +
+              `Объявлений: ${c.active} активных · ${c.sold} в архиве<br>` +
+              `<a href="/admin/complexes?search=${encodeURIComponent(c.name)}">Подробнее</a>`
+            ).addTo(complexLayer);
+          });
+          complexesLoaded = true;
+          document.getElementById('map-count').textContent = d.complexes.length;
+          document.getElementById('map-count-lbl').textContent = 'ЖК';
+        });
       } else {
-        m = L.circleMarker([p.lat, p.lon], {
-          radius: 6,
-          fillColor: scoreColor(p.score, p10, p90),
-          color: '#ffffff', weight: 1,
-          fillOpacity: 0.85,
-        }).addTo(map);
+        document.getElementById('map-count-lbl').textContent = 'ЖК';
       }
-      const priceM = p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : '—';
-      const ageText = p.age === 0 ? 'сегодня' : p.age === 1 ? '1 день' :
-                      p.age < 5 ? p.age + ' дня' : p.age + ' дней';
-      m.bindPopup(
-        `<b>Скор: ${p.score}</b> · ${p.rooms || '?'}-комн, ${p.area || '?'} м²<br>` +
-        `${priceM} · на рынке ${ageText}<br>` +
-        `${p.complex ? '🏢 ' + p.complex + '<br>' : '🏢 ЖК не определён<br>'}` +
-        `${p.address ? '📍 ' + p.address + '<br>' : ''}` +
-        `<a href="/admin/analytics/${p.id}">Карточка</a> · <a href="${p.url}" target="_blank">Крыша</a>`
-      );
-    });
-  }).catch(e => {
-    document.getElementById('map-count').textContent = 'ошибка загрузки';
+      complexLayer.addTo(map);
+    } else {
+      map.removeLayer(complexLayer);
+      pointsLayer.addTo(map);
+      applyFilters();
+    }
   });
 
-  // Школы/садики/вузы — отдельным включаемым слоем
+  // ── POI (школы/садики) ────────────────────────────────────────────────
   const poiLayer = L.layerGroup();
   let poiLoaded = false;
   document.getElementById('poi-toggle').addEventListener('change', function() {
@@ -110,7 +301,6 @@
               .addTo(poiLayer);
           });
           poiLoaded = true;
-          if (!d.poi.length) alert('Справочник POI пуст — запусти на сервере: venv/bin/python poi_import.py');
         });
       }
       poiLayer.addTo(map);
@@ -119,11 +309,17 @@
     }
   });
 
+  // ── Дубли за сегодня ──────────────────────────────────────────────────
   fetch('/admin/api/duplicates').then(r => r.json()).then(d => {
+    const today = d.today !== undefined ? d.today
+                : (d.apartments_today || 0) + (d.rentals_today || 0);
+    document.getElementById('dup-today').textContent =
+      `${today} (${d.apartments_today || 0} продажа · ${d.rentals_today || 0} аренда)`;
     const el = document.getElementById('pg-dups-rent');
     if (el) el.textContent = d.rentals;
-
-  }).catch(() => {});
+  }).catch(() => {
+    document.getElementById('dup-today').textContent = '—';
+  });
 
   fetch('/admin/api/deep-sweep-status').then(r => r.json()).then(d => {
     const el = document.getElementById('deep-sweep-cursor');
@@ -133,8 +329,11 @@
         : 'ещё не начат';
     }
   }).catch(() => {});
+
+  applyFilters(); // первичная загрузка
 })();
 </script>
+
 
 <style>
 .services-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 24px; }
@@ -171,6 +370,7 @@
 .sec { font-size: 14px; font-weight: 600; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; margin-top: 8px; }
 </style>
 
+{% if authed %}
 <!-- Сервисы -->
 <div class="sec">Сервисы</div>
 <div class="services-grid" id="services-grid">
@@ -248,6 +448,7 @@
   </div>
 
 </div>
+{% endif %}
 
 <!-- Быстрые ссылки -->
 <div class="sec">Навигация</div>
@@ -259,9 +460,11 @@
   <a href="/admin/logs">📋 Логи</a>
 </div>
 
+{% if authed %}
 <!-- Мини-лог -->
 <div class="sec">Последние логи</div>
 <div class="terminal" id="mini-log" style="height:160px">загрузка…</div>
+{% endif %}
 
 <script>
 async function refreshDashboard() {
@@ -374,9 +577,13 @@ async function refreshLog() {
   } catch(e) {}
 }
 
+{% if authed %}
 refreshDashboard();
 refreshLog();
 setInterval(refreshDashboard, 30000);
 setInterval(refreshLog, 10000);
+{% else %}
+document.getElementById('last-refresh').textContent = '';
+{% endif %}
 </script>
 {% endblock %}

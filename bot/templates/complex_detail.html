@@ -26,6 +26,30 @@
 </div>
 {% endif %}
 
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:16px;">
+  <b style="font-size:14px;">ℹ️ Информация о ЖК</b>
+  <table style="font-size:13px;margin-top:8px;border-collapse:collapse;">
+    <tr><td style="padding:3px 14px 3px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b></td></tr>
+    <tr><td style="padding:3px 14px 3px 0;color:#888;">Год постройки/сдачи</td><td><b>{{ cx.year_built or '—' }}</b></td></tr>
+    <tr><td style="padding:3px 14px 3px 0;color:#888;">Район</td><td><b>{{ cx.district or '—' }}</b></td></tr>
+    {% if cx_sources.korter %}
+    <tr><td style="padding:3px 14px 3px 0;color:#888;">Korter</td><td>
+      {% if cx_sources.korter.price_m2 %}цена/м² ≈ {{ '{:,.0f}'.format(cx_sources.korter.price_m2).replace(',', ' ') }} ₸ · {% endif %}
+      {% if cx_sources.korter.url %}<a href="{{ cx_sources.korter.url }}" target="_blank">страница ЖК на korter.kz →</a>{% endif %}
+    </td></tr>
+    {% endif %}
+    {% if cx_sources.homsters %}
+    <tr><td style="padding:3px 14px 3px 0;color:#888;">Homsters</td><td>
+      {% if cx_sources.homsters.price_from %}от {{ '{:,.0f}'.format(cx_sources.homsters.price_from).replace(',', ' ') }} ₸ · {% endif %}
+      {% if cx_sources.homsters.area_min %}{{ cx_sources.homsters.area_min }}–{{ cx_sources.homsters.area_max }} м² · {% endif %}
+      {% if cx_sources.homsters.stage_badge %}{{ cx_sources.homsters.stage_badge }} · {% endif %}
+      {% if cx_sources.homsters.url %}<a href="{{ cx_sources.homsters.url }}" target="_blank">на homsters.kz →</a>{% endif %}
+    </td></tr>
+    {% endif %}
+  </table>
+  {% if not cx_sources %}<p style="font-size:12px;color:#888;margin:6px 0 0;">Данные Korter/Homsters ещё не подтянулись для этого ЖК — появятся в ближайших 5-дневных циклах обогащения.</p>{% endif %}
+</div>
+
 <style>
 .cx-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
 .cx-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
