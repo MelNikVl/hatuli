@@ -32,3 +32,13 @@ python-multipart==0.0.9
 # Testing
 pytest==8.3.3
 pytest-asyncio==0.24.0
+
+# PostgreSQL (основная БД — без этого не запустится вообще ничего)
+asyncpg==0.29.0
+
+# Google Sheets sync
+gspread==6.1.2
+google-auth==2.34.0
+
+# Homsters.kz enrichment: обходит anti-bot защиту (403 без этого)
+curl_cffi==0.7.1
