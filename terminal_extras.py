@@ -55,6 +55,10 @@ def make_extras_router(templates) -> APIRouter:
     def is_authed(request: Request) -> bool:
         return request.cookies.get("admin_auth") == "1"
 
+    # Доступно во всех шаблонах: {{ is_admin(request) }} — для скрытия
+    # админ-элементов на публичных страницах
+    templates.env.globals["is_admin"] = is_authed
+
     # ── Настройки ─────────────────────────────────────────────────────────
 
     @router.get("/admin/settings", response_class=HTMLResponse)
@@ -398,10 +402,33 @@ def make_extras_router(templates) -> APIRouter:
         })
 
     @router.get("/admin/api/map-points")
-    async def map_points(request: Request):
-        if not is_authed(request):
-            return JSONResponse({"error": "auth"}, status_code=401)
+    async def map_points(request: Request, type: str = "sale", rooms: str = "",
+                         price_min: float = 0, price_max: float = 0,
+                         min_score: int = 0):
+        # публичный (карта на главной без логина); coverage — только админу
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
+
+        if type == "rental":
+            conds, params, i = ["1=1"], [], 1
+            if rooms:
+                conds.append(f"rooms = ${i}"); params.append(int(rooms)); i += 1
+            if price_min > 0:
+                conds.append(f"price >= ${i}"); params.append(int(price_min)); i += 1
+            if price_max > 0:
+                conds.append(f"price <= ${i}"); params.append(int(price_max)); i += 1
+            rows = await pg_fetch(f"""
+                SELECT id, url, price, rooms, complex_name, found_at
+                FROM rental_listings
+                WHERE {' AND '.join(conds)}
+                  AND last_seen > now() - interval '7 days'
+                  AND COALESCE(is_duplicate, FALSE) = FALSE
+                ORDER BY found_at DESC LIMIT 200
+            """, *params)
+            return JSONResponse({"rentals": [{
+                "id": r["id"], "url": r["url"], "price": r["price"],
+                "rooms": r["rooms"], "complex": r["complex_name"] or "",
+                "found": r["found_at"].strftime("%d.%m") if r["found_at"] else "",
+            } for r in rows], "count": len(rows)})
 
         total_active = await pg_fetchval2(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
@@ -409,7 +436,17 @@ def make_extras_router(templates) -> APIRouter:
         with_coords = await pg_fetchval2(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
             "AND COALESCE(is_duplicate, FALSE) = FALSE AND lat IS NOT NULL") or 0
-        rows = await pg_fetch("""
+        conds, params, i = [], [], 1
+        if rooms:
+            conds.append(f"AND rooms = ${i}"); params.append(int(rooms)); i += 1
+        if price_min > 0:
+            conds.append(f"AND price >= ${i}"); params.append(int(price_min)); i += 1
+        if price_max > 0:
+            conds.append(f"AND price <= ${i}"); params.append(int(price_max)); i += 1
+        if min_score > 0:
+            conds.append(f"AND (COALESCE(score_total,0) + COALESCE(zone_bonus,0) + COALESCE(layer_bonus,0)) >= ${i}")
+            params.append(min_score); i += 1
+        rows = await pg_fetch(f"""
             SELECT id, lat, lon, price, rooms, area, address, complex_name,
                    url,
                    EXTRACT(EPOCH FROM (now() - first_seen))/86400 AS age_days,
@@ -420,9 +457,10 @@ def make_extras_router(templates) -> APIRouter:
               AND is_active IS NOT FALSE
               AND COALESCE(is_duplicate, FALSE) = FALSE
               AND last_seen > now() - interval '14 days'
+              {' '.join(conds)}
             ORDER BY eff_score DESC
             LIMIT 2000
-        """)
+        """, *params)
         pts = [{
             "id": r["id"],
             "lat": float(r["lat"]), "lon": float(r["lon"]),
@@ -433,10 +471,10 @@ def make_extras_router(templates) -> APIRouter:
             "age": int(r["age_days"] or 0),
             "top": idx < 10,   # топ-10 лучших — сердечки на карте
         } for idx, r in enumerate(rows)]
-        return JSONResponse({
-            "points": pts, "count": len(pts),
-            "coverage": {"with_coords": with_coords, "total": total_active},
-        })
+        resp = {"points": pts, "count": len(pts)}
+        if is_authed(request):
+            resp["coverage"] = {"with_coords": with_coords, "total": total_active}
+        return JSONResponse(resp)
 
     # ── Скор: полное описание модели (сердце проекта) ────────────────────
 

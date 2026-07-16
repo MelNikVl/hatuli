@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Hatuli — аналитика недвижимости Астаны</title>
+  <title>Krisha Bot — Admin</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -115,37 +115,38 @@
 
 <aside class="sidebar">
   <div class="sidebar-logo">
-    <div class="title">🏠 Hatuli</div>
-    <div class="sub">Аналитика недвижимости Астаны</div>
+    <div class="title">🏠 Krisha Bot</div>
+    <div class="sub">Admin Panel</div>
   </div>
-  {% set authed = request.cookies.get('admin_auth') == '1' %}
   <nav class="nav">
-    <div class="nav-section">Аналитика</div>
-    <a href="/admin"             class="{% if request.url.path == '/admin' %}active{% endif %}"><span class="ico">📊</span> Дашборд</a>
-    <a href="/admin/analytics"   class="{% if 'analytics' in request.url.path %}active{% endif %}"><span class="ico">🔎</span> Аналитика квартир</a>
+    <div class="nav-section">Мониторинг</div>
+    {% set admin = is_admin(request) %}
+    <a href="/admin"             class="{% if request.url.path == '/admin' %}active{% endif %}"><span class="ico">🗺</span> Карта</a>
+    <a href="/admin/analytics"   class="{% if 'analytics' in request.url.path %}active{% endif %}"><span class="ico">📊</span> Аналитика</a>
     <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}"><span class="ico">🏢</span> Рейтинг ЖК</a>
     <a href="/admin/top10"       class="{% if 'top10' in request.url.path %}active{% endif %}"><span class="ico">🏆</span> Топ-10</a>
     <a href="/admin/score-explained" class="{% if 'score-explained' in request.url.path %}active{% endif %}"><span class="ico">❤️</span> Скор</a>
-    <a href="/admin/info"        class="{% if request.url.path == '/admin/info' %}active{% endif %}"><span class="ico">ℹ️</span> Инфо</a>
-    {% if authed %}
-    <div class="nav-section">Мониторинг</div>
-    <a href="/admin/logs"        class="{% if 'logs' in request.url.path %}active{% endif %}"><span class="ico">📋</span> Логи</a>
+    {% if admin %}
+    <div class="nav-section">ПАРСЕРЫ</div>
+    <a href="/admin/parser/sales"  class="{% if 'parser/sales' in request.url.path %}active{% endif %}"><span class="ico">🏠</span> Продажи</a>
+    <a href="/admin/parser/rental" class="{% if 'parser/rental' in request.url.path %}active{% endif %}"><span class="ico">🏢</span> Аренда</a>
+    <a href="/admin/duplicates"  class="{% if 'duplicates' in request.url.path %}active{% endif %}"><span class="ico">👯</span> Дубли</a>
     <a href="/admin/issues"      class="{% if 'issues' in request.url.path %}active{% endif %}"><span class="ico">⚠️</span> Ошибки парсера</a>
-    <div class="nav-section">Управление</div>
-    <a href="/admin/zones"       class="{% if 'zones' in request.url.path %}active{% endif %}"><span class="ico">🗺</span> Зоны</a>
-    <a href="/admin/settings"    class="{% if 'settings' in request.url.path %}active{% endif %}"><span class="ico">⚙️</span> Настройки</a>
+    <a href="/admin/logs"        class="{% if 'logs' in request.url.path %}active{% endif %}"><span class="ico">📋</span> Логи</a>
+    <div class="nav-section">ИНСТРУМЕНТЫ</div>
+    <a href="/admin/zones"       class="{% if 'zones' in request.url.path %}active{% endif %}"><span class="ico">📐</span> Зоны</a>
+    <a href="/admin/info"        class="{% if request.url.path == '/admin/info' %}active{% endif %}"><span class="ico">ℹ️</span> Инфо</a>
+    <a href="https://docs.google.com/spreadsheets/d/1KaHKjg70JEfX3kLc7A8ZtNPJwsp108iSA8kIqVfrtdI/edit" target="_blank"><span class="ico">📗</span> Google Sheets</a>
     {% endif %}
+    <div class="nav-section">Управление</div>
+    {% if admin %}<a href="/admin/settings"    class="{% if 'settings' in request.url.path %}active{% endif %}"><span class="ico">⚙️</span> Настройки</a>{% endif %}
     {# <a href="/admin/users" class="{% if request.url.path == '/admin/users' %}active{% endif %}"><span class="ico">👥</span> Пользователи</a> #}
     {# <a href="/admin/users/stats" class="{% if 'users/stats' in request.url.path %}active{% endif %}"><span class="ico">📈</span> Стат. пользователей</a> #}
     {# <a href="/admin/subscriptions" class="{% if 'subscriptions' in request.url.path %}active{% endif %}"><span class="ico">🔑</span> Подписки</a> #}
     {# <a href="/admin/parser/stats" class="{% if 'parser/stats' in request.url.path %}active{% endif %}"><span class="ico">🤖</span> Стат. парсера</a> #}
   </nav>
   <div class="sidebar-footer">
-    {% if authed %}
-    <a href="/admin/logout">⬅ Выйти</a>
-    {% else %}
-    <a href="/admin/login">🔑 Вход для админа</a>
-    {% endif %}
+    {% if admin %}<a href="/admin/logout">⬅ Выйти</a>{% else %}<a href="/admin/login">🔑 Войти</a>{% endif %}
   </div>
 </aside>
 

@@ -46,8 +46,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin", response_class=HTMLResponse)
     async def dashboard(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
+        # Публичная страница: карта и фильтры без логина; админ-элементы
+        # скрываются в шаблоне через is_admin(request)
         stats = await db.get_dashboard_stats()
         return templates.TemplateResponse(
             "dashboard.html", {
