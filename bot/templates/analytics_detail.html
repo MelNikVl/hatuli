@@ -214,6 +214,23 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
     </div>
     {% endif %}
 
+    {% if hexd %}
+    <!-- Гексагон-анализ цены -->
+    <div class="card" style="margin-top:16px;border-left:3px solid #8b5cf6;">
+      <h2>⬡ Гексагон-анализ цены</h2>
+      <p style="font-size:13px;">
+        Deal Index: <b style="font-size:17px;color:{{ '#16a34a' if hexd.di > 1.02 else ('#ef4444' if hexd.di < 0.98 else '#888') }};">{{ hexd.di }}</b>
+        {% if hexd.di > 1.02 %}— дешевле микролокального рынка на {{ ((hexd.di - 1) * 100) | round(0) | int }}%{% elif hexd.di < 0.98 %}— дороже микролокального рынка на {{ ((1 - hexd.di) * 100) | round(0) | int }}%{% else %}— в рынке{% endif %}
+      </p>
+      <table style="font-size:13px;border-collapse:collapse;">
+        <tr><td style="padding:3px 14px 3px 0;color:#888;">Фактическая цена/м²</td><td><b>{{ '{:,.0f}'.format(hexd.actual_m2).replace(',', ' ') }} ₸</b></td></tr>
+        <tr><td style="padding:3px 14px 3px 0;color:#888;">Ожидание локального рынка</td><td><b>{{ '{:,.0f}'.format(hexd.expected_m2).replace(',', ' ') }} ₸/м²</b></td></tr>
+        <tr><td style="padding:3px 14px 3px 0;color:#888;">Источник сравнения</td><td>{{ hexd.sources }} ({{ hexd.segment }}: в гексагоне {{ hexd.hex_n }}, в кольце {{ hexd.ring_n }})</td></tr>
+        <tr><td style="padding:3px 14px 3px 0;color:#888;">Сетка</td><td>ребро {{ hexd.edge_m | int }} м</td></tr>
+      </table>
+    </div>
+    {% endif %}
+
     {% if layers %}
     <!-- Слой локации: разбор -->
     <div class="card" style="margin-top:16px;">

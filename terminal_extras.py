@@ -42,10 +42,10 @@ SLIDER_SETTINGS = {
     "REALTOR_FEE_PCT":   ("Комиссия риелтора", 0, 5, 0.5, "%"),
     "ALERT_THRESHOLD":   ("Порог скора для алертов", 50, 90, 1, "баллов"),
     "PARSER_MAX_PAGES":  ("Страниц Krisha за цикл", 1, 40, 1, "стр."),
-    "PARSER_MAX_PRICE_MLN": ("Потолок цены выдачи (0 = без лимита)", 0, 300, 10, "млн ₸"),
     "DEEP_SWEEP_BATCH":  ("Глубокий обход: доп. страниц за цикл (0=выкл)", 0, 20, 1, "стр."),
     "DETAIL_FETCH_BATCH": ("Деталей/координат за цикл (полскора+полслучайно)", 2, 40, 1, "шт."),
     "COORD_BACKFILL_BATCH": ("Добивка координат по ВСЕЙ базе за цикл", 0, 40, 1, "шт."),
+    "HEX_EDGE_M":          ("Гексагон-сетка: ребро (м)", 30, 200, 10, "м"),
 }
 
 
@@ -169,7 +169,8 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/top10", response_class=HTMLResponse)
     async def top10_page(request: Request):
-        # публичная страница
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
         rows = await fetch("""
             SELECT id, url, title, rooms, district, complex_name, area, floor,
                    floors_total, price, est_rent, yield_pct, score_total,
@@ -196,7 +197,8 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/info", response_class=HTMLResponse)
     async def info_page(request: Request):
-        # публичная страница
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
         await app_settings.load()
         return templates.TemplateResponse("info.html", {
             "request": request,
@@ -297,39 +299,57 @@ def make_extras_router(templates) -> APIRouter:
             "chart_labels": labels, "chart_values": values,
         })
 
+    @router.get("/admin/duplicates", response_class=HTMLResponse)
+    async def duplicates_page(request: Request):
+        """Страница дублей: кто чей дубль, со ссылками."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT d.id AS dup_id, d.address AS dup_addr, d.price AS dup_price,
+                   d.is_owner AS dup_owner, d.duplicate_of AS primary_id,
+                   p.address AS primary_addr, p.price AS primary_price,
+                   p.is_owner AS primary_owner
+            FROM apartment_listings d
+            LEFT JOIN apartment_listings p ON p.id = d.duplicate_of
+            WHERE d.is_duplicate = TRUE
+            ORDER BY d.last_seen DESC NULLS LAST
+            LIMIT 300
+        """)
+        rent_cnt = 0
+        try:
+            from bot.db.pg import fetchval as pg_fetchval
+            rent_cnt = await pg_fetchval(
+                "SELECT COUNT(*) FROM rental_listings WHERE is_duplicate = TRUE") or 0
+        except Exception:
+            pass
+        return templates.TemplateResponse("duplicates.html", {
+            "request": request,
+            "rows": [dict(r) for r in rows],
+            "rent_cnt": rent_cnt,
+        })
+
     @router.get("/admin/api/duplicates")
     async def api_duplicates(request: Request):
-        """Статистика дублей для дашборда (публичный API)."""
+        """Статистика дублей для дашборда."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetchval as pg_fetchval
         apt = await pg_fetchval(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE") or 0
-        rent = apt_today = rent_today = 0
+        rent = 0
         try:
             rent = await pg_fetchval(
                 "SELECT COUNT(*) FROM rental_listings WHERE is_duplicate = TRUE") or 0
         except Exception:
             pass  # колонка появится после первого прогона дедупа аренды
-        # «Сегодня» — по времени Астаны, а не UTC
-        try:
-            apt_today = await pg_fetchval(
-                "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE "
-                "AND (dup_marked_at AT TIME ZONE 'Asia/Almaty')::date = "
-                "    (now() AT TIME ZONE 'Asia/Almaty')::date") or 0
-            rent_today = await pg_fetchval(
-                "SELECT COUNT(*) FROM rental_listings WHERE is_duplicate = TRUE "
-                "AND (dup_marked_at AT TIME ZONE 'Asia/Almaty')::date = "
-                "    (now() AT TIME ZONE 'Asia/Almaty')::date") or 0
-        except Exception:
-            pass  # dup_marked_at появится после первого прогона обновлённого дедупа
-        return JSONResponse({
-            "apartments": apt, "rentals": rent,
-            "apartments_today": apt_today, "rentals_today": rent_today,
-            "today": apt_today + rent_today,
-        })
+        return JSONResponse({"apartments": apt, "rentals": rent})
 
     @router.get("/admin/api/city-poi")
     async def city_poi(request: Request):
-        """Школы/садики/вузы города для отображения на картах (публичный API)."""
+        """Школы/садики/вузы города для отображения на картах."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch(
             "SELECT kind, name, lat, lon, address FROM city_poi LIMIT 3000")
@@ -337,7 +357,9 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/complexes-map")
     async def complexes_map(request: Request):
-        """Все ЖК с координатами (центроид объявлений) для карты (публичный API)."""
+        """Все ЖК с координатами (центроид объявлений) для карты рейтинга."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT c.id, c.name, c.year_built, c.housing_class,
@@ -352,7 +374,7 @@ def make_extras_router(templates) -> APIRouter:
             JOIN LATERAL (
                 SELECT AVG(lat) AS lat, AVG(lon) AS lon
                 FROM apartment_listings al
-                WHERE al.complex_name ILIKE '%' || c.name || '%' AND al.lat IS NOT NULL
+                WHERE lower(trim(al.complex_name)) = lower(trim(c.name)) AND al.lat IS NOT NULL
             ) g ON g.lat IS NOT NULL
             LIMIT 1500
         """)
@@ -366,7 +388,8 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/deep-sweep-status")
     async def deep_sweep_status(request: Request):
-        # публичный API (только позиция курсора, ничего чувствительного)
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
         await app_settings.load()
         return JSONResponse({
             "cursor": app_settings.get_int("DEEP_SWEEP_PAGE", 0),
@@ -375,130 +398,10 @@ def make_extras_router(templates) -> APIRouter:
         })
 
     @router.get("/admin/api/map-points")
-    async def map_points(
-        request: Request,
-        deal: str = "sale",        # sale | rent
-        price_min: int = 0,        # ₸
-        price_max: int = 0,        # ₸, 0 = без потолка
-        rooms: str = "",           # csv: "1,2,3,4" (4 = 4 и больше)
-        area_min: float = 0,
-        area_max: float = 0,
-        market: str = "all",       # all | primary | secondary (только для sale)
-        owner: str = "all",        # all | owner
-    ):
-        """Точки на карту дашборда. Публичный API.
-        Фильтры повторяют логику Крыши: сделка, цена, комнаты, метраж,
-        первичка/вторичка, только от хозяев."""
+    async def map_points(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
-
-        def _rooms_condition(col: str, idx: int, params: list):
-            """rooms=csv; '4' означает 4+."""
-            wanted = [r.strip() for r in rooms.split(",") if r.strip().isdigit()]
-            if not wanted or len(wanted) >= 4:
-                return None, idx
-            parts = []
-            for r in wanted:
-                r = int(r)
-                if r >= 4:
-                    parts.append(f"{col} >= 4")
-                else:
-                    parts.append(f"{col} = ${idx}")
-                    params.append(r)
-                    idx += 1
-            return "(" + " OR ".join(parts) + ")", idx
-
-        if deal == "rent":
-            # У аренды нет своих координат — привязываем к центроиду ЖК
-            # (средние координаты объявлений о продаже в том же ЖК).
-            conds = ["COALESCE(rl.is_duplicate, FALSE) = FALSE",
-                     "rl.complex_name IS NOT NULL AND rl.complex_name != ''",
-                     "rl.price > 0",
-                     "COALESCE(rl.last_seen, rl.found_at) > now() - interval '14 days'"]
-            params: list = []
-            i = 1
-            if price_min > 0:
-                conds.append(f"rl.price >= ${i}"); params.append(price_min); i += 1
-            if price_max > 0:
-                conds.append(f"rl.price <= ${i}"); params.append(price_max); i += 1
-            if area_min > 0:
-                conds.append(f"rl.area >= ${i}"); params.append(area_min); i += 1
-            if area_max > 0:
-                conds.append(f"rl.area <= ${i}"); params.append(area_max); i += 1
-            rc, i = _rooms_condition("rl.rooms", i, params)
-            if rc:
-                conds.append(rc)
-            # is_owner в rental_listings может отсутствовать — проверяем схему
-            if owner == "owner":
-                has_owner = await pg_fetchval2(
-                    "SELECT COUNT(*) FROM information_schema.columns "
-                    "WHERE table_name='rental_listings' AND column_name='is_owner'")
-                if has_owner:
-                    conds.append("rl.is_owner IS TRUE")
-
-            rows = await pg_fetch(f"""
-                WITH cent AS (
-                    SELECT complex_name, AVG(lat) AS lat, AVG(lon) AS lon
-                    FROM apartment_listings
-                    WHERE lat IS NOT NULL AND complex_name IS NOT NULL AND complex_name != ''
-                    GROUP BY complex_name
-                )
-                SELECT rl.id, rl.url, rl.price, rl.rooms, rl.area, rl.address,
-                       rl.complex_name,
-                       EXTRACT(EPOCH FROM (now() - rl.found_at))/86400 AS age_days,
-                       c.lat, c.lon
-                FROM rental_listings rl
-                JOIN cent c ON c.complex_name = rl.complex_name
-                WHERE {' AND '.join(conds)}
-                ORDER BY rl.found_at DESC
-                LIMIT 2000
-            """, *params)
-            pts = []
-            for r in rows:
-                # детерминированный джиттер, чтобы объявления одного ЖК
-                # не сливались в одну точку
-                h = hash(str(r["id"]))
-                jlat = ((h % 1000) - 500) / 500 * 0.0012
-                jlon = (((h // 1000) % 1000) - 500) / 500 * 0.0018
-                pts.append({
-                    "id": str(r["id"]),
-                    "lat": float(r["lat"]) + jlat, "lon": float(r["lon"]) + jlon,
-                    "score": 0, "rent": True,
-                    "price": r["price"], "rooms": r["rooms"],
-                    "area": float(r["area"] or 0),
-                    "address": r["address"] or "", "complex": r["complex_name"] or "",
-                    "url": r["url"] or "",
-                    "age": int(r["age_days"] or 0),
-                    "top": False,
-                })
-            return JSONResponse({"points": pts, "count": len(pts),
-                                 "coverage": None, "deal": "rent"})
-
-        # ── Продажа (по умолчанию) ────────────────────────────────────────
-        conds = ["lat IS NOT NULL AND lon IS NOT NULL",
-                 "is_active IS NOT FALSE",
-                 "COALESCE(is_duplicate, FALSE) = FALSE",
-                 "last_seen > now() - interval '14 days'"]
-        params = []
-        i = 1
-        if price_min > 0:
-            conds.append(f"price >= ${i}"); params.append(price_min); i += 1
-        if price_max > 0:
-            conds.append(f"price <= ${i}"); params.append(price_max); i += 1
-        if area_min > 0:
-            conds.append(f"area >= ${i}"); params.append(area_min); i += 1
-        if area_max > 0:
-            conds.append(f"area <= ${i}"); params.append(area_max); i += 1
-        rc, i = _rooms_condition("rooms", i, params)
-        if rc:
-            conds.append(rc)
-        if market == "primary":
-            conds.append("(market_type = 'primary' OR is_new_build IS TRUE)")
-        elif market == "secondary":
-            conds.append("(market_type = 'secondary' OR (market_type IS NULL AND is_new_build IS NOT TRUE))")
-        if owner == "owner":
-            conds.append("is_owner IS TRUE")
-
-        where = " AND ".join(conds)
 
         total_active = await pg_fetchval2(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
@@ -506,17 +409,20 @@ def make_extras_router(templates) -> APIRouter:
         with_coords = await pg_fetchval2(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
             "AND COALESCE(is_duplicate, FALSE) = FALSE AND lat IS NOT NULL") or 0
-        rows = await pg_fetch(f"""
+        rows = await pg_fetch("""
             SELECT id, lat, lon, price, rooms, area, address, complex_name,
                    url,
                    EXTRACT(EPOCH FROM (now() - first_seen))/86400 AS age_days,
                    (COALESCE(score_total,0) + COALESCE(zone_bonus,0)
                     + COALESCE(layer_bonus,0)) AS eff_score
             FROM apartment_listings
-            WHERE {where}
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+              AND is_active IS NOT FALSE
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND last_seen > now() - interval '14 days'
             ORDER BY eff_score DESC
             LIMIT 2000
-        """, *params)
+        """)
         pts = [{
             "id": r["id"],
             "lat": float(r["lat"]), "lon": float(r["lon"]),
@@ -528,7 +434,7 @@ def make_extras_router(templates) -> APIRouter:
             "top": idx < 10,   # топ-10 лучших — сердечки на карте
         } for idx, r in enumerate(rows)]
         return JSONResponse({
-            "points": pts, "count": len(pts), "deal": "sale",
+            "points": pts, "count": len(pts),
             "coverage": {"with_coords": with_coords, "total": total_active},
         })
 
@@ -536,7 +442,8 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/score-explained", response_class=HTMLResponse)
     async def score_explained(request: Request):
-        # публичная страница — описание модели скоринга
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
         return templates.TemplateResponse("score_explained.html", {"request": request})
 
     # ── Зоны приоритета: карта с рисованием полигонов ────────────────────
@@ -630,11 +537,11 @@ def make_extras_router(templates) -> APIRouter:
         geo = await fetchrow("""
             SELECT AVG(lat) AS lat, AVG(lon) AS lon
             FROM apartment_listings
-            WHERE complex_name ILIKE '%' || $1 || '%' AND lat IS NOT NULL
+            WHERE lower(trim(complex_name)) = lower(trim($1)) AND lat IS NOT NULL
         """, cname)
         addr_row = await fetchrow("""
             SELECT address, COUNT(*) AS cnt FROM apartment_listings
-            WHERE complex_name ILIKE '%' || $1 || '%'
+            WHERE lower(trim(complex_name)) = lower(trim($1))
               AND address IS NOT NULL AND address != ''
             GROUP BY address ORDER BY cnt DESC LIMIT 1
         """, cname)
@@ -657,7 +564,7 @@ def make_extras_router(templates) -> APIRouter:
             SELECT id, title, rooms, area, floor, floors_total, price, yield_pct,
                    score_total, url, is_active, first_seen, last_seen, archived_at
             FROM apartment_listings
-            WHERE complex_name ILIKE '%' || $1 || '%'
+            WHERE lower(trim(complex_name)) = lower(trim($1))
               AND COALESCE(is_duplicate, FALSE) = FALSE
             ORDER BY is_active DESC NULLS FIRST, score_total DESC NULLS LAST
             LIMIT 60
@@ -666,7 +573,7 @@ def make_extras_router(templates) -> APIRouter:
         rentals = await fetch("""
             SELECT rooms, price, area, found_at
             FROM rental_listings
-            WHERE complex_name ILIKE '%' || $1 || '%' AND price > 0
+            WHERE lower(trim(complex_name)) = lower(trim($1)) AND price > 0
             ORDER BY found_at DESC LIMIT 30
         """, cname)
 
@@ -682,7 +589,7 @@ def make_extras_router(templates) -> APIRouter:
                    MIN(archived_at) FILTER (WHERE archived_at IS NOT NULL) AS first_archived,
                    MAX(archived_at) FILTER (WHERE archived_at IS NOT NULL) AS last_archived
             FROM apartment_listings
-            WHERE complex_name ILIKE '%' || $1 || '%'
+            WHERE lower(trim(complex_name)) = lower(trim($1))
               AND COALESCE(is_duplicate, FALSE) = FALSE AND price > 500000
             GROUP BY rooms ORDER BY rooms
         """, cname)
@@ -692,7 +599,7 @@ def make_extras_router(templates) -> APIRouter:
         obs = await _fetchrow("""
             SELECT MIN(first_seen) AS since, MAX(last_seen) AS until
             FROM apartment_listings
-            WHERE complex_name ILIKE '%' || $1 || '%'
+            WHERE lower(trim(complex_name)) = lower(trim($1))
         """, cname)
 
         # Аренда: скорость ухода. "Ушло" = не видели парсером > 3 дней.
@@ -706,13 +613,27 @@ def make_extras_router(templates) -> APIRouter:
                                AND last_seen IS NOT NULL AND last_seen > found_at)
                        AS avg_days_listed
             FROM rental_listings
-            WHERE complex_name ILIKE '%' || $1 || '%' AND price > 0
+            WHERE lower(trim(complex_name)) = lower(trim($1)) AND price > 0
             GROUP BY rooms ORDER BY rooms
         """, cname)
+
+        # Данные источников (korter/homsters) для блока информации
+        cx_sources = {}
+        _si = cx["source_info"]
+        if _si:
+            if isinstance(_si, str):
+                import json as _j4
+                try:
+                    _si = _j4.loads(_si)
+                except ValueError:
+                    _si = {}
+            if isinstance(_si, dict):
+                cx_sources = _si
 
         return templates.TemplateResponse("complex_detail.html", {
             "request": request,
             "cx": dict(cx),
+            "cx_sources": cx_sources,
             "geo": {"lat": float(geo["lat"]), "lon": float(geo["lon"])} if geo and geo["lat"] else None,
             "cx_address": addr_row["address"] if addr_row else None,
             "developer": developer,

@@ -26,18 +26,6 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     def is_authed(request: Request) -> bool:
         return request.cookies.get("admin_auth") == "1"
 
-    # ─────────────────────────────────────────────────────────────────────
-    # ПУБЛИЧНЫЙ ДОСТУП: просмотровые страницы (дашборд, аналитика, рейтинг
-    # ЖК, топ-10, инфо, скор) открыты всем без авторизации. Пароль нужен
-    # ТОЛЬКО для управления: настройки, зоны, логи, ошибки, запуск/остановка
-    # сервисов, редактирование ЖК. В шаблонах наличие админ-куки скрывает/
-    # показывает служебные разделы.
-    # ─────────────────────────────────────────────────────────────────────
-
-    @app.get("/", response_class=HTMLResponse)
-    async def root():
-        return RedirectResponse(url="/admin", status_code=302)
-
     @app.get("/admin/login", response_class=HTMLResponse)
     async def admin_login_page(request: Request):
         return templates.TemplateResponse("login.html", {"request": request, "error": None})
@@ -58,7 +46,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin", response_class=HTMLResponse)
     async def dashboard(request: Request):
-        # публичная главная страница
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
         stats = await db.get_dashboard_stats()
         return templates.TemplateResponse(
             "dashboard.html", {
@@ -240,7 +229,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         sort: str = "score_total",
         limit: int = 50,
     ):
-        # публичная страница аналитики
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+
         from bot.db.pg import fetch as pg_fetch
 
         conditions = [
@@ -317,7 +308,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
     async def analytics_detail(request: Request, listing_id: str):
-        # публичная карточка объявления
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
         try:
             return await _analytics_detail_inner(request, listing_id)
         except Exception:
@@ -376,6 +368,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             except ValueError:
                 primary_details = None
 
+        # Гексагон-анализ цены
+        hexd = listing.get("hex_details")
+        if isinstance(hexd, str):
+            try:
+                import json as _j5
+                hexd = _j5.loads(hexd)
+            except ValueError:
+                hexd = None
+
         # Слои локации (JSONB может прийти строкой)
         layers = listing.get("layer_details")
         if isinstance(layers, str):
@@ -419,6 +420,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "seller_questions": seller_questions,
                 "ai": ai,
                 "layers": layers,
+                "hexd": hexd,
                 "primary_details": primary_details,
             },
         )
@@ -449,7 +451,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin/dashboard/data")
     async def dashboard_data(request: Request):
-        # публичный API для карточек дашборда
+        if not is_authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
 
         from bot.db import settings as _as
         await _as.load()  # свежие времена синка Sheets
@@ -606,7 +609,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         sort: str = "listings",
         search: str = "",
     ):
-        # публичный рейтинг ЖК (редактирование — только с админ-кукой)
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+
         from bot.db.pg import fetch as pg_fetch
 
         conditions = []
@@ -726,7 +731,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin/complex_scores", response_class=HTMLResponse)
     async def complex_scores_page(request: Request):
-        # публичная страница
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+
         from bot.db.pg import fetch
 
         rows = await fetch("""

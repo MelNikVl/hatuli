@@ -44,64 +44,55 @@ async def run_cycle():
     # Подтягиваем настройки, выставленные через веб-терминал (/admin/settings)
     await app_settings.load()
     max_pages = app_settings.get_int("PARSER_MAX_PAGES", 5)
-    # Ценовой потолок выдачи: 0 = без лимита (вся Крыша).
-    # Раньше был жёстко зашит 80 млн — квартиры дороже вообще не попадали в базу.
-    max_price_mln = app_settings.get_int("PARSER_MAX_PRICE_MLN", 80)
-    max_price = max_price_mln * 1_000_000 if max_price_mln > 0 else 0
 
     # ── Свежие объявления: первые страницы выдачи (как раньше) ────────────
-    results = await analyze_apartments("astana", max_pages=max_pages, max_price=max_price)
-    log.info("Parsed %d fresh listings (pages 1-%d, потолок %s)",
-             len(results), max_pages,
-             f"{max_price_mln} млн" if max_price_mln else "нет")
+    results = await analyze_apartments("astana", max_pages=max_pages)
+    log.info("Parsed %d fresh listings (pages 1-%d)", len(results), max_pages)
 
     # ── ГЛУБОКИЙ ОБХОД: идём до конца выдачи, запоминая позицию ───────────
-    # Крыша по Астане — это ~100-200 страниц. Свежий парс покрывает
+    # Крыша по Астане ≤80млн — это ~100-200 страниц. Свежий парс покрывает
     # только первые 5, дальше живут объявления, которые никто не «поднимает»
     # — они никогда не попадут в базу без сквозного обхода. Каждый цикл
     # дочитываем DEEP_SWEEP_BATCH страниц с сохранённой позиции; дойдя до
-    # НАСТОЯЩЕГО конца выдачи (успешно скачанная пустая страница) —
-    # начинаем заново. ВАЖНО: сетевые ошибки больше НЕ сбрасывают курсор —
-    # раньше любой сбой выглядел как «пустая выдача», обход прыгал в начало
-    # и хвост выдачи мог не достигаться неделями. Теперь при сбое курсор
-    # остаётся на месте и батч повторяется в следующем цикле.
+    # конца выдачи (пустая страница) — начинаем заново с 6-й. Полный круг
+    # при 5 стр/цикл и ~70-100 циклах в сутки занимает меньше суток,
+    # при этом нагрузка на Крышу не растёт скачком.
     deep_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
     if deep_batch > 0:
         cursor = app_settings.get_int("DEEP_SWEEP_PAGE", max_pages + 1)
         if cursor <= max_pages:
             cursor = max_pages + 1
         try:
-            sweep_stats: dict = {}
             deep_results = await analyze_apartments(
-                "astana", max_pages=deep_batch, start_page=cursor,
-                max_price=max_price, stats=sweep_stats)
-            pages_ok = sweep_stats.get("pages_ok", 0)
-            pages_failed = sweep_stats.get("pages_failed", 0)
-            reached_end = sweep_stats.get("reached_end", False)
-
+                "astana", max_pages=deep_batch, start_page=cursor)
+            # Крыша на несуществующие страницы отдаёт последнюю (НЕ пустую!),
+            # поэтому "пустая страница" как признак конца не работает — курсор
+            # улетал на страницу 900+. Новый детект: если в батче нет ни
+            # одного объявления, которого ещё нет в БД, — выдача исчерпана.
+            new_ids = 0
             if deep_results:
+                from bot.db.pg import fetchval as _pg_fv
+                for _r in deep_results:
+                    known = await _pg_fv(
+                        "SELECT 1 FROM apartment_listings WHERE id=$1", _r["id"])
+                    if not known:
+                        new_ids += 1
+            if deep_results and new_ids > 0:
                 results.extend(deep_results)
-
-            if reached_end:
-                next_cursor = max_pages + 1
-                log.info("Deep sweep: страницы %d-%d → %d объявлений, конец выдачи — "
-                         "круг завершён, cursor → %d (новый круг)",
-                         cursor, cursor + pages_ok, len(deep_results), next_cursor)
-            elif pages_ok == 0 and pages_failed > 0:
-                next_cursor = cursor  # весь батч упал — повторим с того же места
-                log.warning("Deep sweep: все %d страниц батча упали (сеть/анти-бот), "
-                            "курсор остаётся на %d", pages_failed, cursor)
-            else:
-                next_cursor = cursor + pages_ok + pages_failed
-                log.info("Deep sweep: pages %d-%d → %d listings (ok=%d, fail=%d), cursor → %d",
+                next_cursor = cursor + deep_batch
+                log.info("Deep sweep: pages %d-%d → %d listings (%d новых), cursor → %d",
                          cursor, cursor + deep_batch - 1, len(deep_results),
-                         pages_ok, pages_failed, next_cursor)
-
+                         new_ids, next_cursor)
+            else:
+                results.extend(deep_results or [])
+                next_cursor = max_pages + 1
+                log.info("Deep sweep: страница %d — новых объявлений нет, круг "
+                         "завершён, cursor → %d (новый круг)", cursor, next_cursor)
             await app_settings.set("DEEP_SWEEP_PAGE", str(next_cursor))
             await app_settings.set("DEEP_SWEEP_LAST_AT",
                                    datetime.now(timezone.utc).isoformat())
         except Exception as e:
-            log.warning("Deep sweep failed (продолжаем со свежими, курсор не трогаем): %s", e)
+            log.warning("Deep sweep failed (продолжаем со свежими): %s", e)
 
     log.info("Parsed %d listings total", len(results))
 
@@ -346,7 +337,7 @@ async def run_cycle():
             r = dict(r)
             developer = None
             cx = await pg_fetch3(
-                "SELECT source_info FROM complexes WHERE name ILIKE '%' || $1 || '%' LIMIT 1",
+                "SELECT source_info FROM complexes WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
                 r.get("complex_name") or "",
             ) if r.get("complex_name") else []
             if cx and cx[0]["source_info"]:
@@ -466,6 +457,13 @@ async def run_cycle():
 
     # Google Sheets sync
     try:
+        # === Гексагональный анализ цены (микролокальный Deal Index) ===
+        try:
+            from bot.core.hex_price import apply_hex_prices
+            await apply_hex_prices()
+        except Exception as e:
+            log.warning("hex price failed: %s", e)
+
         # === Дедупликация (приоритет объявлений от хозяина) ===
         try:
             from bot.core.dedup_listings import deduplicate_apartment_listings
