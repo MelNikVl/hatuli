@@ -310,14 +310,12 @@ def make_extras_router(templates) -> APIRouter:
             return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
-            SELECT d.id AS dup_id, d.address AS dup_addr, d.price AS dup_price,
-                   d.is_owner AS dup_owner, d.duplicate_of AS primary_id,
-                   p.address AS primary_addr, p.price AS primary_price,
-                   p.is_owner AS primary_owner
-            FROM apartment_listings d
-            LEFT JOIN apartment_listings p ON p.id = d.duplicate_of
-            WHERE d.is_duplicate = TRUE
-            ORDER BY d.last_seen DESC NULLS LAST
+            SELECT p.id, p.address, p.price, p.rooms, p.area, p.is_owner,
+                   p.lat, p.lon, p.complex_name, COUNT(d.id) AS dup_cnt
+            FROM apartment_listings p
+            JOIN apartment_listings d ON d.duplicate_of = p.id AND d.is_duplicate = TRUE
+            GROUP BY p.id
+            ORDER BY dup_cnt DESC, p.last_seen DESC NULLS LAST
             LIMIT 300
         """)
         rent_cnt = 0

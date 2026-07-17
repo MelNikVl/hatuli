@@ -1,28 +1,51 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-title">⚠ Дубли объявлений
-  <small style="font-size:13px;color:#888;font-weight:400;">{{ rows|length }} дублей квартир (показаны свежие 300) · аренды: {{ rent_cnt }}</small>
+<div class="page-title">👯 Дубли объявлений
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ rows|length }} объявлений имеют дубли · аренды: {{ rent_cnt }}</small>
 </div>
-<p style="font-size:13px;color:#888;">Дубль скрыт из топов, карты и Google Sheets, но остаётся в базе. Primary — либо более старое объявление, либо (приоритет) объявление от хозяина.</p>
-<table style="width:100%;border-collapse:collapse;font-size:13px;">
-  <tr style="text-align:left;border-bottom:2px solid var(--border);">
-    <th style="padding:8px;">Дубль</th><th style="padding:8px;">Кто</th><th style="padding:8px;">→ Primary</th><th style="padding:8px;">Кто</th>
-  </tr>
-  {% for r in rows %}
-  <tr style="border-bottom:1px solid var(--border);">
-    <td style="padding:7px 8px;">
-      <a href="/admin/analytics/{{ r.dup_id }}">{{ r.dup_addr or r.dup_id }}</a>
-      {% if r.dup_price %}<span style="color:#888;"> · {{ (r.dup_price/1000000)|round(1) }} млн</span>{% endif %}
-    </td>
-    <td style="padding:7px 8px;">{{ '👤 хозяин' if r.dup_owner else '🏢 риелтор' }}</td>
-    <td style="padding:7px 8px;">
-      {% if r.primary_id %}<a href="/admin/analytics/{{ r.primary_id }}"><b>{{ r.primary_addr or r.primary_id }}</b></a>
-      {% if r.primary_price %}<span style="color:#888;"> · {{ (r.primary_price/1000000)|round(1) }} млн</span>{% endif %}
-      {% else %}—{% endif %}
-    </td>
-    <td style="padding:7px 8px;">{{ '👤 хозяин' if r.primary_owner else '🏢 риелтор' }}</td>
-  </tr>
-  {% endfor %}
-</table>
-{% if not rows %}<p style="color:#888;">Дублей пока не найдено.</p>{% endif %}
+<p style="font-size:13px;color:#888;">Каждая точка — «главное» объявление (primary), размер и цифра — сколько у него дублей. Много дублей = квартиру толкают несколько риелторов — обычно признак долгой продажи и пространства для торга. Дубли скрыты из топов, карты и Sheets, но остаются в базе; primary — от хозяина, если он есть.</p>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;margin-bottom:16px;">
+  <div id="dup-map" style="height:440px;border-radius:8px;"></div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;">
+  <b style="font-size:14px;">Рейтинг по числу дублей</b>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;">
+    <tr style="text-align:left;color:#888;border-bottom:2px solid var(--border);">
+      <th style="padding:6px 8px;">Дублей</th><th style="padding:6px 8px;">Объявление</th><th style="padding:6px 8px;">ЖК</th><th style="padding:6px 8px;">Цена</th><th style="padding:6px 8px;">Продавец</th>
+    </tr>
+    {% for r in rows[:60] %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:6px 8px;"><b style="font-size:15px;color:{{ '#ef4444' if r.dup_cnt >= 3 else '#f59e0b' }};">×{{ r.dup_cnt }}</b></td>
+      <td style="padding:6px 8px;"><a href="/admin/analytics/{{ r.id }}">{{ r.address or r.id }}</a> · {{ r.rooms or '?' }}-комн{% if r.area %}, {{ r.area }} м²{% endif %}</td>
+      <td style="padding:6px 8px;">{{ r.complex_name or '—' }}</td>
+      <td style="padding:6px 8px;">{{ (r.price/1000000)|round(1) if r.price else '—' }} млн</td>
+      <td style="padding:6px 8px;">{{ '👤 хозяин' if r.is_owner else '🏢 риелтор' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const map = L.map('dup-map').setView([51.128, 71.43], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+  const pts = [
+    {% for r in rows if r.lat and r.lon %}
+    {id: "{{ r.id }}", lat: {{ r.lat }}, lon: {{ r.lon }}, n: {{ r.dup_cnt }},
+     addr: {{ (r.address or r.id) | tojson }}, price: {{ r.price or 0 }}},
+    {% endfor %}
+  ];
+  pts.forEach(p => {
+    L.marker([p.lat, p.lon], {icon: L.divIcon({className:'',
+      html:`<div style="background:${p.n >= 3 ? '#ef4444' : '#f59e0b'};color:#fff;border-radius:50%;width:${18 + Math.min(p.n,6)*3}px;height:${18 + Math.min(p.n,6)*3}px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:11px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4);">${p.n}</div>`,
+      iconSize:[24,24], iconAnchor:[12,12]})})
+      .bindPopup(`<b>${p.n} дублей</b><br>${p.addr}<br>${p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : ''}<br><a href="/admin/analytics/${p.id}">Карточка</a>`)
+      .addTo(map);
+  });
+});
+</script>
 {% endblock %}

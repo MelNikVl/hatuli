@@ -1,54 +1,66 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-title">🏢 {{ cx.name }} <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% endif %}</small></div>
-<div style="margin:-6px 0 14px;font-size:14px;">
-  <div>📍 <b>{{ cx_address or 'адрес не определён (появится после докачки координат объявлений)' }}</b></div>
-  <div>🏗 Застройщик: <b>{{ developer or '—' }}</b>{% if not developer %} <span style="font-size:12px;color:#f59e0b;">(не определён — появится из Korter/Homsters по мере обогащения)</span>{% endif %}</div>
-</div>
-
-{% if geo %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;margin-bottom:16px;">
-  <div id="cx-map" style="height:280px;border-radius:8px;"></div>
-</div>
-<script>
-(function() {
-  const map = L.map('cx-map').setView([{{ geo.lat }}, {{ geo.lon }}], 15);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
-  L.marker([{{ geo.lat }}, {{ geo.lon }}]).addTo(map)
-    .bindPopup('{{ cx.name | e }}{% if cx_address %}<br>{{ cx_address | e }}{% endif %}');
-})();
-</script>
-{% else %}
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:16px;font-size:13px;color:#888;">
-  🗺 Карта появится, когда хотя бы у одного объявления этого ЖК будут координаты (докачиваются постепенно).
-</div>
-{% endif %}
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:16px;">
-  <b style="font-size:14px;">ℹ️ Информация о ЖК</b>
-  <table style="font-size:13px;margin-top:8px;border-collapse:collapse;">
-    <tr><td style="padding:3px 14px 3px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b></td></tr>
-    <tr><td style="padding:3px 14px 3px 0;color:#888;">Год постройки/сдачи</td><td><b>{{ cx.year_built or '—' }}</b></td></tr>
-    <tr><td style="padding:3px 14px 3px 0;color:#888;">Район</td><td><b>{{ cx.district or '—' }}</b></td></tr>
-    {% if cx_sources.korter %}
-    <tr><td style="padding:3px 14px 3px 0;color:#888;">Korter</td><td>
-      {% if cx_sources.korter.price_m2 %}цена/м² ≈ {{ '{:,.0f}'.format(cx_sources.korter.price_m2).replace(',', ' ') }} ₸ · {% endif %}
-      {% if cx_sources.korter.url %}<a href="{{ cx_sources.korter.url }}" target="_blank">страница ЖК на korter.kz →</a>{% endif %}
-    </td></tr>
+<!-- Карта (квадрат) слева · основная информация справа -->
+<div style="display:grid;grid-template-columns:minmax(280px,420px) 1fr;gap:16px;margin-bottom:16px;align-items:start;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+    {% if geo %}
+    <div id="cx-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      const map = L.map('cx-map').setView([{{ geo.lat }}, {{ geo.lon }}], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+      L.marker([{{ geo.lat }}, {{ geo.lon }}]).addTo(map)
+        .bindPopup('{{ cx.name | e }}{% if cx_address %}<br>{{ cx_address | e }}{% endif %}');
+      setTimeout(() => map.invalidateSize(), 200);
+    });
+    </script>
+    {% else %}
+    <div style="aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;color:#888;font-size:13px;text-align:center;padding:20px;">🗺 Карта появится после докачки координат объявлений этого ЖК</div>
     {% endif %}
-    {% if cx_sources.homsters %}
-    <tr><td style="padding:3px 14px 3px 0;color:#888;">Homsters</td><td>
-      {% if cx_sources.homsters.price_from %}от {{ '{:,.0f}'.format(cx_sources.homsters.price_from).replace(',', ' ') }} ₸ · {% endif %}
-      {% if cx_sources.homsters.area_min %}{{ cx_sources.homsters.area_min }}–{{ cx_sources.homsters.area_max }} м² · {% endif %}
-      {% if cx_sources.homsters.stage_badge %}{{ cx_sources.homsters.stage_badge }} · {% endif %}
-      {% if cx_sources.homsters.url %}<a href="{{ cx_sources.homsters.url }}" target="_blank">на homsters.kz →</a>{% endif %}
-    </td></tr>
-    {% endif %}
-  </table>
-  {% if not cx_sources %}<p style="font-size:12px;color:#888;margin:6px 0 0;">Данные Korter/Homsters ещё не подтянулись для этого ЖК — появятся в ближайших 5-дневных циклах обогащения.</p>{% endif %}
+  </div>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;">
+    <b style="font-size:15px;">Основная информация</b>
+    <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">
+      <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx_address or 'не определён' }}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{{ developer or '—' }}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Год постройки/сдачи</td><td><b>{{ cx.year_built or '—' }}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Район</td><td><b>{{ cx.district or '—' }}</b></td></tr>
+      {% if cx_sources.homsters and cx_sources.homsters.price_from %}
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Цена от (первичка)</td><td><b>{{ '{:,.0f}'.format(cx_sources.homsters.price_from).replace(',', ' ') }} ₸</b></td></tr>
+      {% endif %}
+      {% if cx_sources.korter and cx_sources.korter.price_m2 %}
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Цена/м² (Korter)</td><td><b>{{ '{:,.0f}'.format(cx_sources.korter.price_m2).replace(',', ' ') }} ₸</b></td></tr>
+      {% endif %}
+    </table>
+  </div>
 </div>
+
+<!-- Снизу: люди/контакты и где искать инфу -->
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;">
+    <b style="font-size:14px;">👥 Люди и контакты</b>
+    <p style="font-size:13px;margin:8px 0 4px;">Застройщик: <b>{{ developer or 'не определён' }}</b></p>
+    <p style="font-size:12px;color:#888;margin:4px 0 0;">Прямые телефоны агрегаторы не публикуют — контакты отдела продаж ищи на странице ЖК по ссылкам справа или на сайте застройщика. Парс сайтов застройщиков — в планах.</p>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;">
+    <b style="font-size:14px;">🔎 Где искать инфу по этому ЖК</b>
+    <ul style="font-size:13px;margin:8px 0 0;padding-left:18px;">
+      {% if cx.korter_url %}<li><a href="{{ cx.korter_url }}" target="_blank">Страница ЖК на korter.kz →</a></li>{% endif %}
+      {% if cx_sources.korter and cx_sources.korter.url %}<li><a href="{{ cx_sources.korter.url }}" target="_blank">korter.kz (данные класса/цен) →</a></li>{% endif %}
+      {% if cx_sources.homsters and cx_sources.homsters.url %}<li><a href="{{ cx_sources.homsters.url }}" target="_blank">homsters.kz (первичка{% if cx_sources.homsters.stage_badge %}, {{ cx_sources.homsters.stage_badge }}{% endif %}) →</a></li>{% endif %}
+      <li><a href="https://krisha.kz/prodazha/kvartiry/astana/?das[live.rc]={{ cx.name | urlencode }}" target="_blank">Поиск по ЖК на krisha.kz →</a></li>
+      <li><a href="https://2gis.kz/nur_sultan/search/{{ cx.name | urlencode }}" target="_blank">2GIS: {{ cx.name }} →</a></li>
+    </ul>
+  </div>
+</div>
+
+
 
 <style>
 .cx-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }

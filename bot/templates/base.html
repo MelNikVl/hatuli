@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Krisha Bot — Admin</title>
+  <title>Hatuli — Admin</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -115,7 +115,7 @@
 
 <aside class="sidebar">
   <div class="sidebar-logo">
-    <div class="title">🏠 Krisha Bot</div>
+    <div class="title">🏘 Hatuli</div>
     <div class="sub">Admin Panel</div>
   </div>
   <nav class="nav">
@@ -124,7 +124,6 @@
     <a href="/admin"             class="{% if request.url.path == '/admin' %}active{% endif %}"><span class="ico">🗺</span> Карта</a>
     <a href="/admin/analytics"   class="{% if 'analytics' in request.url.path %}active{% endif %}"><span class="ico">📊</span> Аналитика</a>
     <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}"><span class="ico">🏢</span> Рейтинг ЖК</a>
-    <a href="/admin/top10"       class="{% if 'top10' in request.url.path %}active{% endif %}"><span class="ico">🏆</span> Топ-10</a>
     <a href="/admin/score-explained" class="{% if 'score-explained' in request.url.path %}active{% endif %}"><span class="ico">❤️</span> Скор</a>
     {% if admin %}
     <div class="nav-section">ПАРСЕРЫ</div>
