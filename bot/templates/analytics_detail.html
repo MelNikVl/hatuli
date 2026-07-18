@@ -94,6 +94,13 @@
       <h2>Объект
         <a href="{{ listing.url }}" target="_blank" style="font-size:12px;color:#1a1a2e;margin-left:8px;">открыть на Krisha ↗</a>
       </h2>
+      {% if photos %}
+      <div style="display:flex;gap:8px;overflow-x:auto;margin-bottom:12px;">
+        {% for p in photos[:10] %}
+        <a href="{{ p }}" target="_blank"><img src="{{ p }}" loading="lazy" style="height:120px;border-radius:8px;"></a>
+        {% endfor %}
+      </div>
+      {% endif %}
       <div class="row"><span class="key">📍 Адрес</span><span class="val"><b>{{ listing.address or '—' }}</b></span></div>
       {% if listing.zone_name %}
       <div class="row"><span class="key">📌 Зона</span><span class="val"><b style="color:{{ '#ef4444' if listing.zone_bonus and listing.zone_bonus < 0 else '#16a34a' }};">{{ listing.zone_name }} ({{ '%+d'|format(listing.zone_bonus or 0) }} к скору)</b></span></div>

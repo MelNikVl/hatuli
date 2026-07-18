@@ -368,6 +368,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             except ValueError:
                 primary_details = None
 
+        # Фото (JSONB может прийти строкой)
+        photos = listing.get("photos")
+        if isinstance(photos, str):
+            try:
+                import json as _j6
+                photos = _j6.loads(photos)
+            except ValueError:
+                photos = None
+
         # Гексагон-анализ цены
         hexd = listing.get("hex_details")
         if isinstance(hexd, str):
@@ -421,6 +430,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "ai": ai,
                 "layers": layers,
                 "hexd": hexd,
+                "photos": photos or [],
                 "primary_details": primary_details,
             },
         )

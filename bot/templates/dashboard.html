@@ -1,16 +1,15 @@
 {% extends "base.html" %}
 {% block content %}
 {% set admin = is_admin(request) %}
-<div class="page-title">Карта предложений Астаны</div>
+<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+  <div class="page-title" style="margin-bottom:0;">Карта предложений Астаны</div>
+  {% if admin %}<div id="admin-stats" style="display:flex;gap:10px;flex-wrap:wrap;"></div>{% endif %}
+</div>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <!-- Статистика (админ) -->
-{% if admin %}
-<div id="admin-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px;"></div>
-{% endif %}
-
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
 <!-- Фильтры справа: порядок в flex через order -->
 <div style="order:2;flex:0 0 240px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;">
@@ -22,10 +21,16 @@
     <select id="f-rooms" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">любые</option><option>1</option><option>2</option><option>3</option><option>4</option>
     </select></div>
-  <div><label style="font-size:11px;color:#888;display:block;">Цена от, млн ₸</label>
-    <input id="f-pmin" type="number" min="0" step="1" style="width:90px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
-  <div><label style="font-size:11px;color:#888;display:block;">Цена до, млн ₸</label>
-    <input id="f-pmax" type="number" min="0" step="1" style="width:90px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
+  <div><label style="font-size:11px;color:#888;display:block;">Продавец</label>
+    <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+      <option value="">все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
+    </select></div>
+  <div><label style="font-size:11px;color:#888;display:block;">Цена, млн ₸</label>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <input id="f-pmin" type="number" min="0" step="1" placeholder="от" style="width:50%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+      <span style="color:#888;">—</span>
+      <input id="f-pmax" type="number" min="0" step="1" placeholder="до" style="width:50%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+    </div></div>
   <div id="f-score-wrap"><label style="font-size:11px;color:#888;display:block;">Мин. скор</label>
     <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
   {% if admin %}
@@ -45,11 +50,6 @@
   <div id="objects-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
 </div>
 
-<!-- Список (аренда — координат нет, показываем свежие предложения) -->
-<div id="rental-wrap" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;">
-  <p style="font-size:12px;color:#888;margin-top:0;">Свежие предложения аренды за 7 дней (у аренды нет координат — карта недоступна).</p>
-  <table style="width:100%;border-collapse:collapse;font-size:14px;" id="rental-table"></table>
-</div>
 </div><!-- /левая колонка -->
 </div><!-- /flex -->
 
@@ -80,23 +80,19 @@ function applyFilters() {
   if (pmin > 0) p.set('price_min', pmin);
   if (pmax > 0) p.set('price_max', pmax);
   if (ms && type === 'sale') p.set('min_score', ms);
+  const seller = document.getElementById('f-seller').value;
+  if (seller && type === 'sale') p.set('seller', seller);
 
-  document.getElementById('map-wrap').style.display = type === 'sale' ? '' : 'none';
-  document.getElementById('rental-wrap').style.display = type === 'rental' ? '' : 'none';
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
 
   fetch('/admin/api/map-points?' + p.toString()).then(r => r.json()).then(d => {
     if (type === 'rental') {
-      const rows = (d.rentals || []).map(r =>
-        `<tr style="border-bottom:1px solid var(--border);">
-          <td style="padding:6px 8px;"><a href="${r.url}" target="_blank">${r.complex || 'ЖК не определён'}</a></td>
-          <td style="padding:6px 8px;">${r.rooms || '?'}-комн</td>
-          <td style="padding:6px 8px;"><b>${r.price ? (r.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b></td>
-          <td style="padding:6px 8px;color:#888;">${r.found}</td>
-        </tr>`).join('');
-      document.getElementById('rental-table').innerHTML =
-        '<tr style="text-align:left;color:#888;"><th style="padding:6px 8px;">ЖК</th><th style="padding:6px 8px;">Комнат</th><th style="padding:6px 8px;">Цена</th><th style="padding:6px 8px;">Найдено</th></tr>' + rows;
-      document.getElementById('result-count').textContent = d.count + ' объявлений';
+      pointsLayer.clearLayers();
+      (d.points || []).forEach(pt => {
+        const m = L.circleMarker([pt.lat, pt.lon], {radius:6, fillColor:'#3b82f6', color:'#fff', weight:1, fillOpacity:.85}).addTo(pointsLayer);
+        m.bindPopup(`<b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн<br>🏢 ${pt.complex || 'ЖК не определён'} <span style="color:#888;">(позиция по ЖК, приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}`);
+      });
+      document.getElementById('result-count').textContent = d.count + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} без привязки к ЖК)` : '');
       return;
     }
     pointsLayer.clearLayers();
@@ -120,15 +116,18 @@ function applyFilters() {
       const pct = d.coverage.total ? Math.round(100*d.coverage.with_coords/d.coverage.total) : 0;
       const kr = d.coverage.krisha_total;
       const el = document.getElementById('admin-stats');
-      if (el) el.innerHTML = [
+      if (el) el.innerHTML = mkStats([
         [d.coverage.total.toLocaleString('ru'), 'активных в базе'],
         [kr ? kr.toLocaleString('ru') : '—', 'всего на Крыше (≤ потолка цены)'],
         [`${d.coverage.with_coords.toLocaleString('ru')} · ${pct}%`, 'с координатами'],
         [d.coverage.dups.toLocaleString('ru'), 'дублей среди активных'],
-      ].map(([v,l]) => `<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;"><div style="font-size:26px;font-weight:800;">${v}</div><div style="font-size:12.5px;color:#888;margin-top:2px;">${l}</div></div>`).join('');
+      ]);
       if (hexOn) drawHexGrid();
     }
   });
+}
+function mkStats(items) {
+  return items.map(([v,l]) => `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 14px;text-align:center;"><div style="font-size:17px;font-weight:800;line-height:1.1;">${v}</div><div style="font-size:11px;color:#888;">${l}</div></div>`).join('');
 }
 let lastPoints = [], hexOn = false, hexEdge = 50;
 const hexLayer = L.layerGroup();

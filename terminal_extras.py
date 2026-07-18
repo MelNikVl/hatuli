@@ -370,11 +370,15 @@ def make_extras_router(templates) -> APIRouter:
                    COALESCE(d.name,
                             c.source_info->'korter'->>'developer',
                             c.source_info->'homsters'->>'developer') AS developer,
-                   g.lat, g.lon
+                   c.avg_price_m2,
+                   g.lat, g.lon, g.avg_score
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
             JOIN LATERAL (
-                SELECT AVG(lat) AS lat, AVG(lon) AS lon
+                SELECT AVG(lat) AS lat, AVG(lon) AS lon,
+                       AVG(COALESCE(score_total,0) + COALESCE(zone_bonus,0)
+                           + COALESCE(layer_bonus,0))
+                         FILTER (WHERE is_active IS NOT FALSE) AS avg_score
                 FROM apartment_listings al
                 WHERE lower(trim(al.complex_name)) = lower(trim(c.name)) AND al.lat IS NOT NULL
             ) g ON g.lat IS NOT NULL
@@ -385,6 +389,8 @@ def make_extras_router(templates) -> APIRouter:
             "year": r["year_built"], "class": r["housing_class"],
             "active": r["active_cnt"], "sold": r["sold_cnt"],
             "developer": r["developer"] or "—",
+            "avg_score": round(float(r["avg_score"])) if r["avg_score"] else None,
+            "price_m2": round(float(r["avg_price_m2"])) if r["avg_price_m2"] else None,
             "lat": float(r["lat"]), "lon": float(r["lon"]),
         } for r in rows]})
 
@@ -402,31 +408,51 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/api/map-points")
     async def map_points(request: Request, type: str = "sale", rooms: str = "",
                          price_min: float = 0, price_max: float = 0,
-                         min_score: int = 0):
+                         min_score: int = 0, seller: str = ""):
         # публичный (карта на главной без логина); coverage — только админу
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
 
         if type == "rental":
+            # У аренды нет своих координат — привязываем к центроиду ЖК
+            # (по объявлениям продажи того же ЖК). Позиция приблизительная.
             conds, params, i = ["1=1"], [], 1
             if rooms:
-                conds.append(f"rooms = ${i}"); params.append(int(rooms)); i += 1
+                conds.append(f"r.rooms = ${i}"); params.append(int(rooms)); i += 1
             if price_min > 0:
-                conds.append(f"price >= ${i}"); params.append(int(price_min)); i += 1
+                conds.append(f"r.price >= ${i}"); params.append(int(price_min)); i += 1
             if price_max > 0:
-                conds.append(f"price <= ${i}"); params.append(int(price_max)); i += 1
+                conds.append(f"r.price <= ${i}"); params.append(int(price_max)); i += 1
             rows = await pg_fetch(f"""
-                SELECT id, url, price, rooms, complex_name, found_at
-                FROM rental_listings
+                SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.found_at,
+                       g.lat, g.lon
+                FROM rental_listings r
+                LEFT JOIN LATERAL (
+                    SELECT AVG(lat) AS lat, AVG(lon) AS lon
+                    FROM apartment_listings al
+                    WHERE lower(trim(al.complex_name)) = lower(trim(r.complex_name))
+                      AND al.lat IS NOT NULL
+                ) g ON TRUE
                 WHERE {' AND '.join(conds)}
-                  AND last_seen > now() - interval '7 days'
-                  AND COALESCE(is_duplicate, FALSE) = FALSE
-                ORDER BY found_at DESC LIMIT 200
+                  AND r.last_seen > now() - interval '7 days'
+                  AND COALESCE(r.is_duplicate, FALSE) = FALSE
+                ORDER BY r.found_at DESC LIMIT 400
             """, *params)
-            return JSONResponse({"rentals": [{
-                "id": r["id"], "url": r["url"], "price": r["price"],
-                "rooms": r["rooms"], "complex": r["complex_name"] or "",
-                "found": r["found_at"].strftime("%d.%m") if r["found_at"] else "",
-            } for r in rows], "count": len(rows)})
+            pts, no_geo = [], 0
+            import random as _rnd
+            for r in rows:
+                if r["lat"] is None:
+                    no_geo += 1
+                    continue
+                pts.append({
+                    "id": r["id"], "url": r["url"] or "",
+                    "lat": float(r["lat"]) + _rnd.uniform(-0.0004, 0.0004),
+                    "lon": float(r["lon"]) + _rnd.uniform(-0.0006, 0.0006),
+                    "price": r["price"], "rooms": r["rooms"],
+                    "complex": r["complex_name"] or "",
+                    "found": r["found_at"].strftime("%d.%m") if r["found_at"] else "",
+                })
+            return JSONResponse({"points": pts, "mode": "rental",
+                                 "count": len(pts), "no_geo": no_geo})
 
         total_active = await pg_fetchval2(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
@@ -444,6 +470,10 @@ def make_extras_router(templates) -> APIRouter:
         if min_score > 0:
             conds.append(f"AND (COALESCE(score_total,0) + COALESCE(zone_bonus,0) + COALESCE(layer_bonus,0)) >= ${i}")
             params.append(min_score); i += 1
+        if seller == "owner":
+            conds.append("AND is_owner IS TRUE")
+        elif seller == "agent":
+            conds.append("AND is_owner IS DISTINCT FROM TRUE")
         rows = await pg_fetch(f"""
             SELECT id, lat, lon, price, rooms, area, address, complex_name,
                    url,

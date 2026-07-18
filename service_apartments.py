@@ -231,6 +231,11 @@ async def run_cycle():
                     "UPDATE apartment_listings SET lat=$2, lon=$3 WHERE id=$1",
                     r["id"], r["lat"], r["lon"],
                 )
+            if r.get("photos"):
+                await pg_exec(
+                    "UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
+                    r["id"], json.dumps(r["photos"]),
+                )
             if r.get("is_archived"):
                 await pg_exec(
                     "UPDATE apartment_listings SET is_active=FALSE, archived_at=now() WHERE id=$1",
@@ -277,6 +282,10 @@ async def run_cycle():
                         "coord_fetch_attempted_at=now() WHERE id=$1",
                         m["id"], details["lat"], details["lon"],
                     )
+                    if details.get("photos"):
+                        await pg_exec(
+                            "UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
+                            m["id"], json.dumps(details["photos"]))
                     got += 1
                 else:
                     # Не нашли координаты — отметим попытку, чтобы не долбить
@@ -445,6 +454,18 @@ async def run_cycle():
                 GROUP BY complex_name
             ) s
             WHERE lower(c.name) = lower(s.complex_name)
+        """)
+        # Фото ЖК = первое фото любого его объявления
+        await pg_exec("""
+            UPDATE complexes c SET photo_url = s.photo
+            FROM (
+                SELECT DISTINCT ON (lower(trim(complex_name)))
+                       lower(trim(complex_name)) AS cname,
+                       photos->>0 AS photo
+                FROM apartment_listings
+                WHERE photos IS NOT NULL AND complex_name IS NOT NULL
+            ) s
+            WHERE lower(trim(c.name)) = s.cname AND c.photo_url IS NULL
         """)
         # Новые ЖК, которых ещё нет в справочнике — создаём
         await pg_exec("""

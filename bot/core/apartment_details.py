@@ -303,6 +303,20 @@ async def fetch_apartment_details(url: str) -> dict:
         result["published_since"] = since_match.group(1)
 
     # ── Координаты объявления (для зон приоритета) ────────────────────────
+    # ── Фото: og:image + галерея (URL с CDN, сами файлы не качаем) ──
+    photo_urls = []
+    og = _re.search(r'property="og:image"\s+content="([^"]+)"', resp.text)
+    if og:
+        photo_urls.append(og.group(1))
+    for m in _re.finditer(r'https://[^\s"\'<>]+?(?:photos|photo)[^\s"\'<>]*?\.(?:jpe?g|webp)', resp.text):
+        u = m.group(0)
+        if u not in photo_urls:
+            photo_urls.append(u)
+        if len(photo_urls) >= 15:
+            break
+    if photo_urls:
+        result["photos"] = photo_urls
+
     # krisha кладёт координаты в JS-блоб: "lat":51.xx ... "lon":71.xx
     lat_m = _re.search(r'"lat"\s*:\s*(\d{2}\.\d+)', resp.text)
     lon_m = _re.search(r'"lon"\s*:\s*(\d{2}\.\d+)', resp.text)

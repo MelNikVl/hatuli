@@ -24,6 +24,7 @@
   </div>
 
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;">
+    {% if cx.photo_url %}<img src="{{ cx.photo_url }}" loading="lazy" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;margin-bottom:10px;">{% endif %}
     <b style="font-size:15px;">Основная информация</b>
     <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">
       <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx_address or 'не определён' }}</b></td></tr>
