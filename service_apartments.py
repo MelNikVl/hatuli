@@ -496,7 +496,7 @@ async def main():
         log.error("First cycle error: %s", e, exc_info=True)
 
     while True:
-        sleep_min = random.uniform(10, 20)
+        sleep_min = random.uniform(50, 80)  # ~раз в час, рандом
         log.info("Next cycle in %.0f min...", sleep_min)
         await asyncio.sleep(sleep_min * 60)
         try:
