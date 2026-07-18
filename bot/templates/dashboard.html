@@ -6,8 +6,14 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-<!-- Фильтры -->
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:14px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+<!-- Статистика (админ) -->
+{% if admin %}
+<div id="admin-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:14px;"></div>
+{% endif %}
+
+<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+<!-- Фильтры справа: порядок в flex через order -->
+<div style="order:2;flex:0 0 240px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;">
   <div><label style="font-size:11px;color:#888;display:block;">Тип</label>
     <select id="f-type" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="sale">Продажа</option><option value="rental">Аренда</option>
@@ -25,21 +31,27 @@
   {% if admin %}
   <label style="font-size:13px;cursor:pointer;padding-bottom:8px;"><input type="checkbox" id="poi-toggle"> 🏫 школы/садики</label>
   {% endif %}
-  <button onclick="applyFilters()" style="padding:9px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14px;cursor:pointer;">Показать</button>
-  <span id="result-count" style="font-size:12px;color:#888;padding-bottom:9px;"></span>
-  {% if admin %}<span id="map-coverage" style="font-size:12px;color:#888;padding-bottom:9px;"></span>{% endif %}
+  <button onclick="applyFilters()" style="padding:11px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;">Показать</button>
+  <span id="result-count" style="font-size:13px;color:#888;"></span>
+  {% if admin %}
+  <button id="hex-toggle" onclick="toggleHexGrid()" style="padding:9px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">⬡ Гекс-сетка: выкл</button>
+  {% endif %}
 </div>
 
-<!-- Карта (продажа) -->
+<!-- Карта: квадратная, слева -->
+<div style="order:1;flex:1 1 560px;min-width:340px;">
+
 <div id="map-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
-  <div id="objects-map" style="height:520px;border-radius:8px;"></div>
+  <div id="objects-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
 </div>
 
 <!-- Список (аренда — координат нет, показываем свежие предложения) -->
 <div id="rental-wrap" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;">
   <p style="font-size:12px;color:#888;margin-top:0;">Свежие предложения аренды за 7 дней (у аренды нет координат — карта недоступна).</p>
-  <table style="width:100%;border-collapse:collapse;font-size:13px;" id="rental-table"></table>
+  <table style="width:100%;border-collapse:collapse;font-size:14px;" id="rental-table"></table>
 </div>
+</div><!-- /левая колонка -->
+</div><!-- /flex -->
 
 <script>
 const map = L.map('objects-map').setView([51.128, 71.43], 12);
@@ -102,13 +114,67 @@ function applyFilters() {
       m.bindPopup(`<b>Скор: ${pt.score}</b> · ${pt.rooms || '?'}-комн, ${pt.area || '?'} м²<br>${priceM} · на рынке ${ageText}<br>${pt.complex ? '🏢 ' + pt.complex : '🏢 ЖК не определён'}<br>${pt.address ? '📍 ' + pt.address + '<br>' : ''}<a href="/admin/analytics/${pt.id}">Карточка</a> · <a href="${pt.url}" target="_blank">Крыша</a>`);
     });
     document.getElementById('result-count').textContent = d.count + ' объектов';
-    const cov = document.getElementById('map-coverage');
-    if (cov && d.coverage) {
+    lastPoints = d.points;
+    if (d.coverage) {
+      hexEdge = d.coverage.hex_edge || 50;
       const pct = d.coverage.total ? Math.round(100*d.coverage.with_coords/d.coverage.total) : 0;
-      cov.textContent = `· с координатами ${d.coverage.with_coords} из ${d.coverage.total} (${pct}%)`;
+      const kr = d.coverage.krisha_total;
+      const el = document.getElementById('admin-stats');
+      if (el) el.innerHTML = [
+        [d.coverage.total.toLocaleString('ru'), 'активных в базе'],
+        [kr ? kr.toLocaleString('ru') : '—', 'всего на Крыше (≤ потолка цены)'],
+        [`${d.coverage.with_coords.toLocaleString('ru')} · ${pct}%`, 'с координатами'],
+        [d.coverage.dups.toLocaleString('ru'), 'дублей среди активных'],
+      ].map(([v,l]) => `<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;"><div style="font-size:26px;font-weight:800;">${v}</div><div style="font-size:12.5px;color:#888;margin-top:2px;">${l}</div></div>`).join('');
+      if (hexOn) drawHexGrid();
     }
   });
 }
+let lastPoints = [], hexOn = false, hexEdge = 50;
+const hexLayer = L.layerGroup();
+const LAT0 = 51.128, LON0 = 71.430,
+      MLAT = 110574.0, MLON = 111320.0 * Math.cos(LAT0 * Math.PI/180);
+function hexAxial(lat, lon, edge) {
+  const x = (lon - LON0) * MLON, y = (lat - LAT0) * MLAT;
+  let q = (Math.sqrt(3)/3 * x - y/3) / edge, r = (2/3 * y) / edge;
+  const s = -q - r;
+  let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+  const dq = Math.abs(rq-q), dr = Math.abs(rr-r), ds = Math.abs(rs-s);
+  if (dq > dr && dq > ds) rq = -rr - rs; else if (dr > ds) rr = -rq - rs;
+  return [rq, rr];
+}
+function hexCenter(q, r, edge) {
+  const x = edge * Math.sqrt(3) * (q + r/2), y = edge * 1.5 * r;
+  return [LAT0 + y/MLAT, LON0 + x/MLON];
+}
+function hexCorners(q, r, edge) {
+  const [clat, clon] = hexCenter(q, r, edge);
+  const out = [];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI/180 * (60*i - 30);
+    out.push([clat + (edge*Math.sin(a))/MLAT, clon + (edge*Math.cos(a))/MLON]);
+  }
+  return out;
+}
+function drawHexGrid() {
+  hexLayer.clearLayers();
+  const seen = new Set();
+  lastPoints.forEach(p => {
+    const [q, r] = hexAxial(p.lat, p.lon, hexEdge);
+    const key = q + ':' + r;
+    if (seen.has(key)) return;
+    seen.add(key);
+    L.polygon(hexCorners(q, r, hexEdge), {color:'#8b5cf6', weight:1, fillOpacity:0.06}).addTo(hexLayer);
+  });
+  hexLayer.addTo(map);
+}
+function toggleHexGrid() {
+  hexOn = !hexOn;
+  const b = document.getElementById('hex-toggle');
+  if (hexOn) { drawHexGrid(); b.textContent = '⬡ Гекс-сетка: вкл (' + hexEdge + 'м)'; }
+  else { map.removeLayer(hexLayer); b.textContent = '⬡ Гекс-сетка: выкл'; }
+}
+
 applyFilters();
 
 {% if admin %}

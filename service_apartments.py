@@ -57,6 +57,16 @@ async def run_cycle():
     # конца выдачи (пустая страница) — начинаем заново с 6-й. Полный круг
     # при 5 стр/цикл и ~70-100 циклах в сутки занимает меньше суток,
     # при этом нагрузка на Крышу не растёт скачком.
+    # Реальный размер выдачи с Крыши -> детерминированный конец круга.
+    # (Прежний детектор "в батче нет новых id" после первого круга ломался:
+    # известные страницы попадаются уже в начале, курсор вечно сбрасывался
+    # и глубокие страницы не перечитывались.)
+    from bot.core import apartment_parser as _ap
+    if _ap.LAST_TOTAL_FOUND:
+        await app_settings.set("KRISHA_TOTAL_FOUND", str(_ap.LAST_TOTAL_FOUND))
+    krisha_total = app_settings.get_int("KRISHA_TOTAL_FOUND", 0)
+    max_deep_page = (krisha_total // 20 + 2) if krisha_total else 0
+
     deep_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
     if deep_batch > 0:
         cursor = app_settings.get_int("DEEP_SWEEP_PAGE", max_pages + 1)
@@ -77,7 +87,8 @@ async def run_cycle():
                         "SELECT 1 FROM apartment_listings WHERE id=$1", _r["id"])
                     if not known:
                         new_ids += 1
-            if deep_results and new_ids > 0:
+            past_end = max_deep_page and cursor > max_deep_page
+            if deep_results and (new_ids > 0 or not past_end) and not past_end:
                 results.extend(deep_results)
                 next_cursor = cursor + deep_batch
                 log.info("Deep sweep: pages %d-%d → %d listings (%d новых), cursor → %d",
@@ -86,8 +97,9 @@ async def run_cycle():
             else:
                 results.extend(deep_results or [])
                 next_cursor = max_pages + 1
-                log.info("Deep sweep: страница %d — новых объявлений нет, круг "
-                         "завершён, cursor → %d (новый круг)", cursor, next_cursor)
+                log.info("Deep sweep: страница %d (последняя ~%d по счётчику "
+                         "Крыши) — круг завершён, cursor → %d", cursor,
+                         max_deep_page, next_cursor)
             await app_settings.set("DEEP_SWEEP_PAGE", str(next_cursor))
             await app_settings.set("DEEP_SWEEP_LAST_AT",
                                    datetime.now(timezone.utc).isoformat())

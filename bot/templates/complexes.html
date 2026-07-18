@@ -12,7 +12,7 @@
     <b style="font-size:14px;">🗺 Карта ЖК Астаны</b>
     <span style="font-size:12px;color:#888;"><span id="cxmap-count">…</span> ЖК с координатами · размер точки = объявлений в продаже · наведи курсор · клик = карточка ЖК</span>
   </div>
-  <div id="cx-rating-map" style="height:380px;border-radius:8px;"></div>
+  <div id="cx-rating-map" style="aspect-ratio:1/1;max-width:820px;margin:0 auto;border-radius:8px;"></div>
 </div>
 
 <script>
@@ -124,7 +124,7 @@ tr:last-child td{border-bottom:none}
       <span class="flag {% if not c.has_closed_territory %}off{% endif %}" title="Закрытая территория">🔒</span>
       <span class="flag {% if not c.has_playground %}off{% endif %}" title="Детская площадка">🛝</span>
     </td>
-    {% if request.cookies.get('admin_auth') == '1' %}<td><button class="edit-btn" onclick='openEdit({{ c | tojson }})'>✏️</button></td>{% else %}<td></td>{% endif %}
+    <td><button class="edit-btn" onclick='openEdit({{ c | tojson }})'>✏️</button></td>
   </tr>
   {% endfor %}
   </tbody>

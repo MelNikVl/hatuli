@@ -471,7 +471,17 @@ def make_extras_router(templates) -> APIRouter:
         } for idx, r in enumerate(rows)]
         resp = {"points": pts, "count": len(pts)}
         if is_authed(request):
-            resp["coverage"] = {"with_coords": with_coords, "total": total_active}
+            dups_active = await pg_fetchval2(
+                "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE "
+                "AND is_active IS NOT FALSE") or 0
+            from bot.db import settings as _st
+            await _st.load()
+            resp["coverage"] = {
+                "with_coords": with_coords, "total": total_active,
+                "dups": dups_active,
+                "krisha_total": _st.get_int("KRISHA_TOTAL_FOUND", 0),
+                "hex_edge": _st.get_int("HEX_EDGE_M", 50),
+            }
         return JSONResponse(resp)
 
     # ── Скор: полное описание модели (сердце проекта) ────────────────────

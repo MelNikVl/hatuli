@@ -12,6 +12,11 @@ from collections import Counter
 from urllib.parse import urlencode
 
 import httpx
+import re as _re_mod
+
+LAST_TOTAL_FOUND: int | None = None
+_re_total = _re_mod.compile(r"Найдено[^\d]{0,20}([\d\s\xa0\u2009]{1,12})")
+_re_total_clean = _re_mod.compile(r"\D")
 from bs4 import BeautifulSoup
 
 from bot.core.rental_parser import lookup_rental_estimate
@@ -48,26 +53,13 @@ def _extract_rooms(title):
 
 
 async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000_000,
-                                     start_page=1, stats: dict | None = None):
+                                     start_page=1):
     """Parse apartment sale listings from krisha.kz.
-    start_page: с какой страницы начинать (для глубокого обхода всей выдачи).
-    max_price:  0 или None = без ценового потолка (вся выдача).
-    stats:      если передан dict — заполняется телеметрией обхода:
-                pages_ok / pages_failed / reached_end. Это позволяет
-                глубокому обходу отличать «выдача реально закончилась»
-                от «страница не скачалась» — раньше оба случая выглядели
-                как пустой результат и курсор ошибочно сбрасывался в начало.
-    """
+    start_page: с какой страницы начинать (для глубокого обхода всей выдачи)."""
     listings = []
-    if stats is not None:
-        stats.setdefault("pages_ok", 0)
-        stats.setdefault("pages_failed", 0)
-        stats.setdefault("reached_end", False)
 
     for page in range(start_page, start_page + max_pages):
-        params = {"das[_sys.hasphoto]": 1}
-        if max_price:  # 0/None = без потолка
-            params["das[price][to]"] = max_price
+        params = {"das[_sys.hasphoto]": 1, "das[price][to]": max_price}
         if page > 1:
             params["page"] = page
         url = f"{BASE_URL}/prodazha/kvartiry/{city}/?{urlencode(params)}"
@@ -79,19 +71,23 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
                 resp.raise_for_status()
             except Exception as exc:
                 logger.warning("apt_parser: page %d failed: %s", page, exc)
-                if stats is not None:
-                    stats["pages_failed"] += 1
                 continue
+
+        # Общее число объявлений в выдаче ("Найдено N объявлений") — для
+        # детерминированного конца глубокого обхода (последняя страница =
+        # ceil(N/20)). Обновляется при каждом парсе первой страницы.
+        global LAST_TOTAL_FOUND
+        m_total = _re_total.search(resp.text)
+        if m_total:
+            try:
+                LAST_TOTAL_FOUND = int(_re_total_clean.sub("", m_total.group(1)))
+            except ValueError:
+                pass
 
         soup = BeautifulSoup(resp.text, "html.parser")
         cards = soup.select("div.a-card") or soup.select("section.a-card")
         if not cards:
-            # Страница скачалась успешно, но карточек нет — настоящий конец выдачи
-            if stats is not None:
-                stats["reached_end"] = True
             break
-        if stats is not None:
-            stats["pages_ok"] += 1
 
         for card in cards:
             try:
@@ -138,8 +134,7 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
     return listings
 
 
-async def analyze_apartments(city="astana", max_pages=5, start_page=1,
-                             max_price=80_000_000, stats: dict | None = None):
+async def analyze_apartments(city="astana", max_pages=5, start_page=1):
     """Full pipeline: parse sales + rentals, score, return sorted results."""
     from bot.core.apartment_score_v2 import compute_apartment_score_v2 as compute_apartment_score
     from collections import defaultdict
@@ -148,8 +143,7 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
     rental_idx = None  # теперь используем rental_index из PostgreSQL
 
     # 2. Parse sales
-    sales = await parse_apartments_for_sale(city, max_pages=max_pages, start_page=start_page,
-                                            max_price=max_price, stats=stats)
+    sales = await parse_apartments_for_sale(city, max_pages=max_pages, start_page=start_page)
 
     # 3. Build price-per-m2 index by district
     district_prices = defaultdict(list)
