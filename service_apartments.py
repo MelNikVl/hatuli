@@ -588,8 +588,8 @@ async def run_cycle():
     try:
         # === Гексагональный анализ цены (микролокальный Deal Index) ===
         try:
-            from bot.core.hex_price import apply_hex_prices
-            await apply_hex_prices()
+            from bot.core.deal_score import apply_deal_scores
+            await apply_deal_scores()
         except Exception as e:
             log.warning("hex price failed: %s", e)
 
