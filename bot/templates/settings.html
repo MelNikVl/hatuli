@@ -33,7 +33,9 @@
 <div class="status-line" id="svc-status">Проверяю статус сервисов…</div>
 
 <div class="settings-grid">
-  {% for s in sliders %}
+  {% for gname, gsliders in slider_groups.items() %}
+<h3 style="margin:22px 0 8px;font-size:15px;">{{ gname }}</h3>
+{% for s in gsliders %}
   <div class="set-card">
     <div class="set-label">
       <span>{{ s.label }}</span>
@@ -44,6 +46,7 @@
            oninput="document.getElementById('val-{{ s.key }}').textContent = this.value">
   </div>
   {% endfor %}
+{% endfor %}
 </div>
 
 <button class="btn-big btn-save" onclick="saveSettings()">💾 Сохранить настройки</button>

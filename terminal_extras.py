@@ -33,19 +33,20 @@ logger = logging.getLogger(__name__)
 PROJECT_SERVICES = ["krisha-rental", "krisha-apartments", "krisha-alerts", "krisha-korter", "krisha-homsters", "krisha-market"]
 
 # Настройки, редактируемые ползунками: key -> (подпись, min, max, шаг, единица)
+# (label, min, max, step, unit, ГРУППА)
 SLIDER_SETTINGS = {
-    "DEPOSIT_RATE":      ("Ставка депозита (KZT)", 5, 25, 0.5, "%"),
-    "APPRECIATION_PCT":  ("Ожидаемый рост цены кв.м", 0, 20, 0.5, "%/год"),
-    "MORTGAGE_RATE":     ("Ставка ипотеки", 5, 25, 0.5, "%"),
-    "MORTGAGE_YEARS":    ("Срок ипотеки", 5, 30, 1, "лет"),
-    "MORTGAGE_DOWN_PCT": ("Первоначальный взнос", 10, 50, 5, "%"),
-    "REALTOR_FEE_PCT":   ("Комиссия риелтора", 0, 5, 0.5, "%"),
-    "ALERT_THRESHOLD":   ("Порог скора для алертов", 50, 90, 1, "баллов"),
-    "PARSER_MAX_PAGES":  ("Страниц Krisha за цикл", 1, 40, 1, "стр."),
-    "DEEP_SWEEP_BATCH":  ("Глубокий обход: доп. страниц за цикл (0=выкл)", 0, 20, 1, "стр."),
-    "DETAIL_FETCH_BATCH": ("Деталей/координат за цикл (полскора+полслучайно)", 2, 40, 1, "шт."),
-    "COORD_BACKFILL_BATCH": ("Добивка координат по ВСЕЙ базе за цикл", 0, 40, 1, "шт."),
-    "HEX_EDGE_M":          ("Гексагон-сетка: ребро (м)", 30, 200, 10, "м"),
+    "DEPOSIT_RATE":      ("Ставка депозита (KZT)", 5, 25, 0.5, "%", "💰 Финансовые допущения"),
+    "APPRECIATION_PCT":  ("Ожидаемый рост цены кв.м", 0, 20, 0.5, "%/год", "💰 Финансовые допущения"),
+    "MORTGAGE_RATE":     ("Ставка ипотеки", 5, 25, 0.5, "%", "💰 Финансовые допущения"),
+    "MORTGAGE_YEARS":    ("Срок ипотеки", 5, 30, 1, "лет", "💰 Финансовые допущения"),
+    "MORTGAGE_DOWN_PCT": ("Первоначальный взнос", 10, 50, 5, "%", "💰 Финансовые допущения"),
+    "REALTOR_FEE_PCT":   ("Комиссия риелтора", 0, 5, 0.5, "%", "💰 Финансовые допущения"),
+    "ALERT_THRESHOLD":   ("Порог скора для алертов", 50, 90, 1, "баллов", "🎯 Скоринг"),
+    "HEX_EDGE_M":        ("Гексагон-сетка: ребро (м)", 30, 200, 10, "м", "🎯 Скоринг"),
+    "PARSER_MAX_PAGES":  ("Страниц Krisha за цикл (свежие)", 1, 40, 1, "стр.", "🕷 Обход парсера"),
+    "DEEP_SWEEP_BATCH":  ("Глубокий обход: доп. страниц за цикл (0=выкл)", 0, 20, 1, "стр.", "🕷 Обход парсера"),
+    "DETAIL_FETCH_BATCH": ("Деталей/координат за цикл (полскора+полслучайно)", 2, 40, 1, "шт.", "🕷 Обход парсера"),
+    "COORD_BACKFILL_BATCH": ("Добивка координат по ВСЕЙ базе за цикл", 0, 40, 1, "шт.", "🕷 Обход парсера"),
 }
 
 
@@ -67,17 +68,19 @@ def make_extras_router(templates) -> APIRouter:
             return RedirectResponse(url="/admin/login", status_code=302)
         await app_settings.load()
         current = app_settings.all_settings()
-        sliders = [
-            {
+        groups: dict[str, list] = {}
+        for key, (label, mn, mx, step, unit, group) in SLIDER_SETTINGS.items():
+            groups.setdefault(group, []).append({
                 "key": key, "label": label, "min": mn, "max": mx,
                 "step": step, "unit": unit,
                 "value": current.get(key, "0"),
-            }
-            for key, (label, mn, mx, step, unit) in SLIDER_SETTINGS.items()
-        ]
+            })
+        sliders = [s for g in groups.values() for s in g]  # обратная совместимость
+
         return templates.TemplateResponse("settings.html", {
             "request": request,
             "sliders": sliders,
+            "slider_groups": groups,
             "monetization": app_settings.get_bool("MONETIZATION_ENABLED"),
             "ai_analysis": app_settings.get_bool("AI_TEXT_ANALYSIS"),
             "deepseek_key_set": bool(__import__("os").getenv("DEEPSEEK_API_KEY")),
@@ -357,6 +360,21 @@ def make_extras_router(templates) -> APIRouter:
             "SELECT kind, name, lat, lon, address FROM city_poi LIMIT 3000")
         return JSONResponse({"poi": [dict(r) for r in rows]})
 
+    @router.get("/admin/complex/find")
+    async def complex_find(request: Request, name: str = ""):
+        """Переход на карточку ЖК по имени (для ссылок из попапов карты).
+        Точное совпадение lower/trim; если ЖК нет — на список с поиском."""
+        from bot.db.pg import fetchval as pg_fv
+        cid = None
+        if name.strip():
+            cid = await pg_fv(
+                "SELECT id FROM complexes WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
+                name)
+        if cid:
+            return RedirectResponse(url=f"/admin/complex/{cid}", status_code=302)
+        from urllib.parse import quote
+        return RedirectResponse(url=f"/admin/complexes?search={quote(name)}", status_code=302)
+
     @router.get("/admin/api/complexes-map")
     async def complexes_map(request: Request):
         """Все ЖК с координатами (центроид объявлений) для карты рейтинга."""
@@ -423,7 +441,7 @@ def make_extras_router(templates) -> APIRouter:
             if price_max > 0:
                 conds.append(f"r.price <= ${i}"); params.append(int(price_max)); i += 1
             rows = await pg_fetch(f"""
-                SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.found_at,
+                SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.district, r.found_at,
                        g.lat, g.lon
                 FROM rental_listings r
                 LEFT JOIN LATERAL (
@@ -433,23 +451,38 @@ def make_extras_router(templates) -> APIRouter:
                       AND al.lat IS NOT NULL
                 ) g ON TRUE
                 WHERE {' AND '.join(conds)}
-                  AND r.last_seen > now() - interval '7 days'
+                  AND r.last_seen > now() - interval '14 days'
                   AND COALESCE(r.is_duplicate, FALSE) = FALSE
-                ORDER BY r.found_at DESC LIMIT 400
+                ORDER BY r.found_at DESC LIMIT 1000
             """, *params)
+            # Каскад привязки: ЖК -> центроид района -> без привязки.
+            district_geo = {r2["district"]: (float(r2["lat"]), float(r2["lon"]))
+                            for r2 in await pg_fetch("""
+                SELECT district, AVG(lat) AS lat, AVG(lon) AS lon
+                FROM apartment_listings
+                WHERE lat IS NOT NULL AND district IS NOT NULL AND district != ''
+                GROUP BY district""")}
             pts, no_geo = [], 0
             import random as _rnd
             for r in rows:
-                if r["lat"] is None:
-                    no_geo += 1
-                    continue
+                d = dict(r)
+                if d["lat"] is not None:
+                    lat, lon, binding, jit = float(d["lat"]), float(d["lon"]), "ЖК", 0.0005
+                else:
+                    dg = district_geo.get(d.get("district") or "")
+                    if dg:
+                        lat, lon, binding, jit = dg[0], dg[1], "район", 0.004
+                    else:
+                        no_geo += 1
+                        continue
                 pts.append({
-                    "id": r["id"], "url": r["url"] or "",
-                    "lat": float(r["lat"]) + _rnd.uniform(-0.0004, 0.0004),
-                    "lon": float(r["lon"]) + _rnd.uniform(-0.0006, 0.0006),
-                    "price": r["price"], "rooms": r["rooms"],
-                    "complex": r["complex_name"] or "",
-                    "found": r["found_at"].strftime("%d.%m") if r["found_at"] else "",
+                    "id": d["id"], "url": d["url"] or "",
+                    "lat": lat + _rnd.uniform(-jit, jit),
+                    "lon": lon + _rnd.uniform(-jit * 1.5, jit * 1.5),
+                    "price": d["price"], "rooms": d["rooms"],
+                    "complex": d["complex_name"] or "",
+                    "binding": binding,
+                    "found": d["found_at"].strftime("%d.%m") if d["found_at"] else "",
                 })
             return JSONResponse({"points": pts, "mode": "rental",
                                  "count": len(pts), "no_geo": no_geo})

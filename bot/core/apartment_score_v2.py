@@ -313,6 +313,10 @@ def compute_apartment_score_v2(
 
     total = s_yield + s_pm + s_loc + s_apt + s_floor + s_complex + s_supply
 
+    # Собственник: +5 (нет комиссии риелтора, прямой контакт, торг проще)
+    if is_owner is True:
+        total += 5
+
     # Анализ торга
     bargain = bargain_analysis(price, area, district, rooms, comparables or [])
 

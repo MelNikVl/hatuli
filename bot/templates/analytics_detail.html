@@ -101,6 +101,7 @@
         {% endfor %}
       </div>
       {% endif %}
+      <div class="row"><span class="key">🗺 Привязка к карте</span><span class="val">{% if listing.lat %}точные координаты (с детальной страницы Крыши){% else %}<span style="color:#f59e0b;">нет координат — в очереди докачки деталей</span>{% endif %}</span></div>
       <div class="row"><span class="key">📍 Адрес</span><span class="val"><b>{{ listing.address or '—' }}</b></span></div>
       {% if listing.zone_name %}
       <div class="row"><span class="key">📌 Зона</span><span class="val"><b style="color:{{ '#ef4444' if listing.zone_bonus and listing.zone_bonus < 0 else '#16a34a' }};">{{ listing.zone_name }} ({{ '%+d'|format(listing.zone_bonus or 0) }} к скору)</b></span></div>
@@ -112,7 +113,7 @@
         {% if listing.floor == 1 %}<span style="color:#e53e3e;font-size:11px;"> ⚠ 1й этаж</span>
         {% elif listing.floor == listing.floors_total %}<span style="color:#e53e3e;font-size:11px;"> ⚠ последний</span>{% endif %}
       </span></div>
-      <div class="row"><span class="key">ЖК</span><span class="val">{{ listing.complex_name or '—' }}</span></div>
+      <div class="row"><span class="key">ЖК</span><span class="val">{% if listing.complex_name %}<a href="/admin/complex/find?name={{ listing.complex_name | urlencode }}"><b>{{ listing.complex_name }}</b></a>{% else %}—{% endif %}</span></div>
       <div class="row"><span class="key">Район</span><span class="val">{{ listing.district or '—' }}</span></div>
       <div class="row"><span class="key">Год постройки</span><span class="val">{{ listing.year_built or '—' }}</span></div>
       <div class="row"><span class="key">Новостройка</span><span class="val">{{ 'да' if listing.is_new_build else 'нет' }}</span></div>
@@ -159,7 +160,7 @@
         <tr><th>ЖК</th><th>Район</th><th>Комн</th><th>₸/мес</th></tr>
         {% for r in rental_comps %}
         <tr>
-          <td>{{ r.complex_name or '—' }}</td>
+          <td>{% if r.complex_name %}<a href="/admin/complex/find?name={{ r.complex_name | urlencode }}">{{ r.complex_name }}</a>{% else %}—{% endif %}</td>
           <td>{{ r.district or '—' }}</td>
           <td>{{ r.rooms or '?' }}к</td>
           <td><strong>{{ "{:,.0f}".format(r.price) }}</strong></td>
@@ -179,7 +180,7 @@
         <tr><th>ЖК</th><th>Адрес</th><th>Площадь</th><th>Этаж</th><th>Цена</th><th>Дней в базе</th></tr>
         {% for c in comps %}
         <tr>
-          <td>{{ c.complex_name or '—' }}</td>
+          <td>{% if c.complex_name %}<a href="/admin/complex/find?name={{ c.complex_name | urlencode }}">{{ c.complex_name }}</a>{% else %}—{% endif %}</td>
           <td style="font-size:11px;color:#666;">{{ c.address or '—' }}</td>
           <td>{{ c.area | round(1) }}м²</td>
           <td>{{ c.floor or '?' }}/{{ c.floors_total or '?' }}</td>

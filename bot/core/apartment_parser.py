@@ -113,6 +113,10 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
 
                 addr_tag = card.select_one(".a-card__subtitle") or card.select_one(".a-card__text-preview")
                 address = " ".join(addr_tag.get_text(" ", strip=True).split()) if addr_tag else ""
+
+                # Продавец: бейдж/текст карточки ("Хозяин недвижимости" и т.п.)
+                card_text = card.get_text(" ", strip=True)
+                is_owner = bool(re.search(r"хозяин|владел|собственник", card_text, re.IGNORECASE))
                 district = address.split(",")[0].strip() if address else ""
 
                 rooms = _extract_rooms(title)
@@ -124,6 +128,7 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
                 listings.append({
                     "id": lid, "url": listing_url, "title": title,
                     "price": price, "address": address, "district": district,
+                    "is_owner": is_owner,
                     "rooms": rooms, "area": area, "published_at": published,
                     "description": "",
                 })

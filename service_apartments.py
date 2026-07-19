@@ -313,6 +313,11 @@ async def run_cycle():
             zcnt = 0
             for c in coords:
                 bonus, zname = zone_bonus_for(c["lat"], c["lon"], zones)
+                if zname is None:
+                    # Вне всех зон: штраф -20 (фокус стратегии — зонные локации).
+                    # Применяется только когда зоны нарисованы; без координат
+                    # объявление не наказываем (данных нет — не вина объекта).
+                    bonus = -20
                 if bonus != c["zb"]:
                     await pg_exec(
                         "UPDATE apartment_listings SET zone_bonus=$2, zone_name=$3 WHERE id=$1",

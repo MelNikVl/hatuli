@@ -25,7 +25,7 @@
     <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
     </select></div>
-  <div><label style="font-size:11px;color:#888;display:block;">Цена, млн ₸</label>
+  <div><label style="font-size:11px;color:#888;display:block;" id="f-price-label">Цена, млн ₸</label>
     <div style="display:flex;gap:6px;align-items:center;">
       <input id="f-pmin" type="number" min="0" step="1" placeholder="от" style="width:50%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <span style="color:#888;">—</span>
@@ -44,7 +44,7 @@
 </div>
 
 <!-- Карта: квадратная, слева -->
-<div style="order:1;flex:1 1 560px;min-width:340px;">
+<div style="order:1;flex:1 1 420px;min-width:320px;max-width:560px;">
 
 <div id="map-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
   <div id="objects-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
@@ -73,8 +73,9 @@ function applyFilters() {
   const type = document.getElementById('f-type').value;
   const p = new URLSearchParams({type});
   const rooms = document.getElementById('f-rooms').value;
-  const pmin = parseFloat(document.getElementById('f-pmin').value || 0) * 1e6;
-  const pmax = parseFloat(document.getElementById('f-pmax').value || 0) * 1e6;
+  const priceMul = type === 'rental' ? 1e3 : 1e6;   // аренда: тыс ₸/мес
+  const pmin = parseFloat(document.getElementById('f-pmin').value || 0) * priceMul;
+  const pmax = parseFloat(document.getElementById('f-pmax').value || 0) * priceMul;
   const ms = document.getElementById('f-score').value;
   if (rooms) p.set('rooms', rooms);
   if (pmin > 0) p.set('price_min', pmin);
@@ -84,15 +85,19 @@ function applyFilters() {
   if (seller && type === 'sale') p.set('seller', seller);
 
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
+  document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена, тыс ₸/мес' : 'Цена, млн ₸';
 
   fetch('/admin/api/map-points?' + p.toString()).then(r => r.json()).then(d => {
     if (type === 'rental') {
       pointsLayer.clearLayers();
-      (d.points || []).forEach(pt => {
+      lastPoints = d.points || [];
+      lastPoints.forEach(pt => {
         const m = L.circleMarker([pt.lat, pt.lon], {radius:6, fillColor:'#3b82f6', color:'#fff', weight:1, fillOpacity:.85}).addTo(pointsLayer);
-        m.bindPopup(`<b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн<br>🏢 ${pt.complex || 'ЖК не определён'} <span style="color:#888;">(позиция по ЖК, приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}`);
+        const cx = pt.complex ? `<a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}">${pt.complex}</a>` : 'ЖК не определён';
+        m.bindPopup(`<b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}`);
       });
-      document.getElementById('result-count').textContent = d.count + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} без привязки к ЖК)` : '');
+      document.getElementById('result-count').textContent = d.count + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без привязки)` : '');
+      if (hexOn) drawHexGrid();
       return;
     }
     pointsLayer.clearLayers();
@@ -107,7 +112,7 @@ function applyFilters() {
       }
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) + ' млн ₸' : '—';
       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
-      m.bindPopup(`<b>Скор: ${pt.score}</b> · ${pt.rooms || '?'}-комн, ${pt.area || '?'} м²<br>${priceM} · на рынке ${ageText}<br>${pt.complex ? '🏢 ' + pt.complex : '🏢 ЖК не определён'}<br>${pt.address ? '📍 ' + pt.address + '<br>' : ''}<a href="/admin/analytics/${pt.id}">Карточка</a> · <a href="${pt.url}" target="_blank">Крыша</a>`);
+      m.bindPopup(`<b>Скор: ${pt.score}</b> · ${pt.rooms || '?'}-комн, ${pt.area || '?'} м²<br>${priceM} · на рынке ${ageText}<br>${pt.complex ? '🏢 <a href="/admin/complex/find?name=' + encodeURIComponent(pt.complex) + '">' + pt.complex + '</a>' : '🏢 ЖК не определён'}<br>${pt.address ? '📍 ' + pt.address + '<br>' : ''}<a href="/admin/analytics/${pt.id}">Карточка</a> · <a href="${pt.url}" target="_blank">Крыша</a>`);
     });
     document.getElementById('result-count').textContent = d.count + ' объектов';
     lastPoints = d.points;

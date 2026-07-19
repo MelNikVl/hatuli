@@ -21,7 +21,7 @@
     <tr style="border-bottom:1px solid var(--border);">
       <td style="padding:6px 8px;"><b style="font-size:15px;color:{{ '#ef4444' if r.dup_cnt >= 3 else '#f59e0b' }};">×{{ r.dup_cnt }}</b></td>
       <td style="padding:6px 8px;"><a href="/admin/analytics/{{ r.id }}">{{ r.address or r.id }}</a> · {{ r.rooms or '?' }}-комн{% if r.area %}, {{ r.area }} м²{% endif %}</td>
-      <td style="padding:6px 8px;">{{ r.complex_name or '—' }}</td>
+      <td style="padding:6px 8px;">{% if r.complex_name %}<a href="/admin/complex/find?name={{ r.complex_name | urlencode }}">{{ r.complex_name }}</a>{% else %}—{% endif %}</td>
       <td style="padding:6px 8px;">{{ (r.price/1000000)|round(1) if r.price else '—' }} млн</td>
       <td style="padding:6px 8px;">{{ '👤 хозяин' if r.is_owner else '🏢 риелтор' }}</td>
     </tr>
