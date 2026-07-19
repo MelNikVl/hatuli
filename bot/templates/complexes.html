@@ -16,12 +16,12 @@ async function auditCx(apply) {
   if (!apply) {
     const d = await (await fetch('/admin/complexes/audit')).json();
     st.textContent = d.count
-      ? 'Подозрительные: ' + d.suspects.map(s => `${s.name} (${s.street_hits}/${s.listings})`).join(', ')
+      ? 'Подозрительные: ' + d.suspects.map(s => `${s.name} [${s.reason}]`).join(', ')
       : 'псевдо-ЖК не найдены ✓';
   } else {
     if (!confirm('Пометить псевдо-ЖК улицами и отвязать их объявления?')) { st.textContent=''; return; }
     const d = await (await fetch('/admin/complexes/audit/apply', {method:'POST'})).json();
-    st.textContent = `помечено улиц: ${d.flagged}, отвязано объявлений: ${d.unbound}`;
+    st.textContent = `помечено улиц: ${d.flagged}, отвязано объявлений: ${d.unbound}, пересчитано координат ЖК: ${d.coords_recomputed || 0}`;
     setTimeout(() => location.reload(), 1500);
   }
 }

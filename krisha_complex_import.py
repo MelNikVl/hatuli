@@ -189,13 +189,21 @@ async def save_to_db(found: dict[int, dict]) -> int:
                     "RETURNING id", d["developer"].strip())
                 developer_id = developer_id["id"] if developer_id else None
 
+            # Координаты с официальной карточки Крыши — приоритетнее
+            # вычисленных: перезаписываем, если расходятся > ~250 м
             await execute("""
                 UPDATE complexes SET
                     developer_id = COALESCE(developer_id, $2),
                     address      = COALESCE(address, $3),
                     year_built   = COALESCE(year_built, $4),
-                    lat          = COALESCE(lat, $5),
-                    lon          = COALESCE(lon, $6),
+                    lat          = CASE WHEN $5 IS NOT NULL AND (
+                                        lat IS NULL OR
+                                        (lat - $5)^2 + (lon - $6)^2 > 8.0e-6)
+                                   THEN $5 ELSE lat END,
+                    lon          = CASE WHEN $5 IS NOT NULL AND (
+                                        lat IS NULL OR
+                                        (lat - $5)^2 + (lon - $6)^2 > 8.0e-6)
+                                   THEN $6 ELSE lon END,
                     photo_url    = COALESCE(photo_url, $7),
                     krisha_url   = COALESCE(krisha_url, $8),
                     source_info  = $9::jsonb,

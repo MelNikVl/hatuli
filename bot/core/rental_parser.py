@@ -473,8 +473,9 @@ async def backfill_rental_details(batch: int = 8) -> dict:
             n = re.sub(r"^\s*(жк|кг)\.?\s+", "", cx.lower())
             n = re.sub(r"[«»\"'()]", " ", n)
             n = re.sub(r"\s+", " ", n).strip()
-            if n in streets:
-                cx = None  # ЖК-улица — не привязываем
+            from bot.core.complex_audit import _JUNK_NAMES
+            if n in streets or n in _JUNK_NAMES or len(n) < 4:
+                cx = None  # ЖК-улица / мусорное имя — не привязываем
 
         sets, params, i = ["coord_fetch_attempted_at=now()"], [], 1
         if details.get("lat") and details.get("lon"):

@@ -37,13 +37,20 @@ async def ensure_columns() -> None:
     await execute("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS is_street BOOLEAN DEFAULT FALSE")
 
 
+# Мусорные «названия ЖК» — не ЖК по определению
+_JUNK_NAMES = {"астана", "город", "жк", "квартира", "дом", "нур-султан",
+               "астана город", "казахстан", "продажа", "аренда"}
+
+
 async def audit_complexes(min_share: float = 0.6, min_cnt: int = 3) -> list[dict]:
     """Возвращает список подозрительных 'ЖК':
-    {id, name, listings, street_hits, share}"""
+    {id, name, listings, street_hits, share, reason}
+    Два критерия: 1) название = улица (в адресах объявлений);
+    2) мусорное/слишком короткое название («астана», «жк»…)."""
     from bot.db.pg import fetch
     await ensure_columns()
     rows = await fetch("""
-        SELECT c.id, c.name, c.is_street,
+        SELECT c.id, c.name, c.is_street, c.krisha_url, c.korter_url,
                COUNT(al.id) AS listings,
                COUNT(al.id) FILTER (
                    WHERE al.address IS NOT NULL
@@ -61,11 +68,19 @@ async def audit_complexes(min_share: float = 0.6, min_cnt: int = 3) -> list[dict
     out = []
     for r in rows:
         share = (r["street_hits"] or 0) / r["listings"]
-        if share >= min_share:
+        n = _norm(r["name"])
+        # стоп-лист («астана», «жк»…) — мусор всегда, даже с карточкой Крыши
+        # (у Крыши бывают псевдо-комплексы с именем города);
+        # короткое имя (<4) — мусор, только если нет своей карточки
+        junk = (n in _JUNK_NAMES) or \
+               (len(n) < 4 and not r["krisha_url"] and not r["korter_url"])
+        if share >= min_share or junk:
             out.append({
                 "id": r["id"], "name": r["name"],
                 "listings": r["listings"], "street_hits": r["street_hits"],
                 "share": round(share, 2),
+                "reason": "мусорное название" if junk and share < min_share
+                          else "название — улица",
             })
     return out
 
@@ -90,7 +105,43 @@ async def purge_street_complexes(min_share: float = 0.6, min_cnt: int = 3) -> di
         total_unbound += n
         logger.warning("audit: '%s' помечен улицей (%.0f%% адресов), отвязано %d объявлений",
                        s["name"], s["share"] * 100, n)
-    return {"flagged": len(suspects), "unbound": total_unbound, "suspects": suspects}
+    # у помеченных улиц убираем координаты — чтобы точно не рисовались на картах
+    for s in suspects:
+        await execute("UPDATE complexes SET lat = NULL, lon = NULL WHERE id = $1",
+                      s["id"])
+    # пересчёт координат оставшихся ЖК по актуальным привязкам
+    recomputed = await recompute_complex_coords()
+    return {"flagged": len(suspects), "unbound": total_unbound,
+            "suspects": suspects, "coords_recomputed": recomputed}
+
+
+async def recompute_complex_coords() -> int:
+    """Координаты ЖК = среднее координат его объявлений с ТОЧНЫМИ
+    координатами. Правит маркеры 'в реке', которые появились из-за
+    кривых привязок. ЖК с карточкой Крыши (krisha_url) не трогаем —
+    там координаты официальные."""
+    from bot.db.pg import execute
+    res = await execute("""
+        UPDATE complexes c SET lat = g.lat, lon = g.lon
+        FROM (
+            SELECT lower(trim(al.complex_name)) AS cx,
+                   AVG(al.lat) AS lat, AVG(al.lon) AS lon,
+                   COUNT(*) AS n
+            FROM apartment_listings al
+            WHERE al.complex_name IS NOT NULL AND btrim(al.complex_name) != ''
+              AND al.lat IS NOT NULL AND al.lon IS NOT NULL
+            GROUP BY 1
+        ) g
+        WHERE lower(trim(c.name)) = g.cx
+          AND g.n >= 2
+          AND c.krisha_url IS NULL
+          AND COALESCE(c.is_street, FALSE) = FALSE
+          AND (c.lat IS NULL
+               OR (c.lat - g.lat)^2 + (c.lon - g.lon)^2 > 1.0e-4)  -- дрейф > ~600 м
+    """)
+    n = int((res or "").split()[-1] or 0)
+    logger.info("complex coords recomputed: %d", n)
+    return n
 
 
 async def street_names() -> set[str]:

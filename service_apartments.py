@@ -113,6 +113,8 @@ async def run_cycle():
         from bot.core.complex_audit import street_names as _street_names
         import re as _re_s
         _streets = await _street_names()
+        from bot.core.complex_audit import _JUNK_NAMES
+        _streets |= set(_JUNK_NAMES)
         if _streets:
             def _norm_s(s):
                 s = (s or "").lower()
@@ -121,10 +123,12 @@ async def run_cycle():
                 return _re_s.sub(r"\s+", " ", s).strip()
             cleared = 0
             for r in results:
-                if r.get("complex_name") and _norm_s(r["complex_name"]) in _streets:
-                    r["complex_name"] = None
-                    r["complex_url"] = None
-                    cleared += 1
+                if r.get("complex_name"):
+                    _n = _norm_s(r["complex_name"])
+                    if _n in _streets or len(_n) < 4:
+                        r["complex_name"] = None
+                        r["complex_url"] = None
+                        cleared += 1
             if cleared:
                 log.info("street filter: убрано %d привязок к ЖК-улицам", cleared)
     except Exception as e:
@@ -338,7 +342,8 @@ async def run_cycle():
                             _n = _re_b.sub(r"^\s*(жк|кг)\.?\s+", "", _n)
                             _n = _re_b.sub(r"[«»\"'()]", " ", _n)
                             _n = _re_b.sub(r"\s+", " ", _n).strip()
-                            if _n in _st2:
+                            from bot.core.complex_audit import _JUNK_NAMES
+                            if _n in _st2 or _n in _JUNK_NAMES or len(_n) < 4:
                                 details.pop("complex_name", None)
                                 details.pop("complex_url", None)
                         except Exception:

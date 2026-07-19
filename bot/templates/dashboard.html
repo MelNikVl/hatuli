@@ -143,7 +143,7 @@ function applyFilters() {
       <div style="font-size:21px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:14px;font-weight:700;">млн ₸</span></div>
       <div style="font-size:14px;color:#374151;margin-top:3px;">${pt.rooms || '?'}-комн · <b style="font-size:15px;">${areaTxt}</b> м²<span style="font-size:11.5px;color:#888;">${ppm}</span></div>
     </div>
-    <div style="background:${sc};color:#fff;border-radius:9px;padding:5px 10px;font-weight:800;font-size:16px;box-shadow:0 1px 3px rgba(0,0,0,.25);" title="Скор">${pt.score}</div>
+    <a href="/admin/analytics/${pt.id}" title="Скор — нажми, чтобы увидеть из чего он складывается" style="background:${sc};color:#fff;border-radius:9px;padding:5px 10px;font-weight:800;font-size:16px;box-shadow:0 1px 3px rgba(0,0,0,.25);text-decoration:none;display:block;">${pt.score}</a>
   </div>
   <div style="font-size:11.5px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}</div>
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>

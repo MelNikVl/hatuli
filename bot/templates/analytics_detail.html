@@ -272,6 +272,17 @@
       <h2>🎯 Deal Score: {{ hexd.deal }}/100
         <span style="font-size:12px;font-weight:400;color:#888;">· уверенность данных {{ hexd.confidence }}%</span>
       </h2>
+      {% set pluses = [] %}{% set minuses = [] %}
+      {% for key, label in comp_meta %}
+        {% if hexd.components[key].score >= 65 %}{{ pluses.append(hexd.components[key].text) or '' }}{% endif %}
+        {% if hexd.components[key].score <= 40 %}{{ minuses.append(hexd.components[key].text) or '' }}{% endif %}
+      {% endfor %}
+      <p style="font-size:13px;margin:4px 0 10px;line-height:1.5;">
+        {% if hexd.deal >= 75 %}<b style="color:#16a34a;">Отличная сделка.</b>{% elif hexd.deal >= 55 %}<b style="color:#2563eb;">Хороший вариант.</b>{% elif hexd.deal >= 40 %}<b style="color:#b45309;">Средний вариант.</b>{% else %}<b style="color:#ef4444;">Слабый вариант.</b>{% endif %}
+        {% if pluses %}<b>Плюсы:</b> {{ pluses | join('; ') }}.{% endif %}
+        {% if minuses %}<b>Минусы:</b> {{ minuses | join('; ') }}.{% endif %}
+        {% if not pluses and not minuses %}Выраженных плюсов и минусов нет — объект «в рынке».{% endif %}
+      </p>
       {% for key, label in comp_meta %}
       {% set c = hexd.components[key] %}
       <div style="display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;">
