@@ -135,7 +135,6 @@
     <a href="/admin/zones"       class="{% if 'zones' in request.url.path %}active{% endif %}"><span class="ico">📐</span> Зоны</a>
     <a href="/admin/info"        class="{% if request.url.path == '/admin/info' %}active{% endif %}"><span class="ico">ℹ️</span> Инфо</a>
     <a href="/admin/score-explained" class="{% if 'score-explained' in request.url.path %}active{% endif %}" style="padding-left:34px;"><span class="ico">↳</span> Скор</a>
-    <a href="https://docs.google.com/spreadsheets/d/1KaHKjg70JEfX3kLc7A8ZtNPJwsp108iSA8kIqVfrtdI/edit" target="_blank"><span class="ico">📗</span> Google Sheets</a>
     {% endif %}
     <div class="nav-section">Управление</div>
     {% if admin %}

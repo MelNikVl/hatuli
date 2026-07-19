@@ -432,6 +432,7 @@ def make_extras_router(templates) -> APIRouter:
                             c.source_info->'korter'->>'developer',
                             c.source_info->'homsters'->>'developer') AS developer,
                    c.avg_price_m2, c.lat AS c_lat, c.lon AS c_lon,
+                   c.photo_url,
                    g.lat, g.lon, g.avg_score
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
@@ -456,6 +457,7 @@ def make_extras_router(templates) -> APIRouter:
             "developer": r["developer"] or "—",
             "avg_score": round(float(r["avg_score"])) if r["avg_score"] else None,
             "price_m2": round(float(r["avg_price_m2"])) if r["avg_price_m2"] else None,
+            "photo": r["photo_url"],
             "lat": float(r["c_lat"] if r["c_lat"] is not None else r["lat"]),
             "lon": float(r["c_lon"] if r["c_lon"] is not None else r["lon"]),
         } for r in rows]})
@@ -561,7 +563,7 @@ def make_extras_router(templates) -> APIRouter:
             conds.append("AND is_owner IS DISTINCT FROM TRUE")
         rows = await pg_fetch(f"""
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
-                   a.complex_name, a.url,
+                   a.complex_name, a.url, a.photos,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
                    (COALESCE(a.score_total,0) + COALESCE(a.zone_bonus,0)
                     + COALESCE(a.layer_bonus,0)) AS eff_score,
@@ -581,11 +583,22 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY eff_score DESC
             LIMIT 2000
         """, *params)
+        import json as _json_ph
+        def _photos_of(r):
+            ph = r["photos"]
+            if isinstance(ph, str):
+                try:
+                    ph = _json_ph.loads(ph)
+                except ValueError:
+                    ph = []
+            return (ph or [])[:5]
+
         pts = [{
             "id": r["id"],
             "lat": float(r["lat"]),
             "lon": float(r["lon"]),
             "score": int(r["eff_score"] or 0),
+            "photos": _photos_of(r),
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
             "address": r["address"] or "", "complex": r["complex_name"] or "",
             "url": r["url"] or "",
@@ -678,6 +691,17 @@ def make_extras_router(templates) -> APIRouter:
 
         from bot.db.pg import fetchval, execute
         if zone_id:  # обновление существующей
+            if hexes:
+                # добавление новых гексов к уже существующим кольцам зоны
+                old = await fetchval(
+                    "SELECT polygon FROM priority_zones WHERE id=$1", int(zone_id))
+                if isinstance(old, str):
+                    old = _json.loads(old)
+                old = old or []
+                # нормализуем к списку колец и дописываем новые гексы
+                if old and not isinstance(old[0][0], list):
+                    old = [old]
+                polygon = old + hexes
             if polygon and (hexes or len(polygon) >= 3):
                 await execute(
                     "UPDATE priority_zones SET name=$2, bonus=$3, color=$4, polygon=$5::jsonb WHERE id=$1",

@@ -286,21 +286,36 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             *params,
         )
 
-        # Статистика rental_index
+        # Гистограмма распределения скоров (по текущим фильтрам, без min_score)
+        hist_rows = await pg_fetch(f"""
+            SELECT (score_total / 5) * 5 AS bucket, COUNT(*) AS cnt
+            FROM apartment_listings
+            WHERE {' AND '.join(c for c in conditions if 'score_total >=' not in c)}
+              AND score_total IS NOT NULL
+            GROUP BY 1 ORDER BY 1
+        """, *params[:-1])  # последний параметр — min_score, его не применяем
+
+        # Компактный rental index: медиана аренды 1к и 2к
         rental_stats = await pg_fetch("""
-            SELECT district, rooms, median_price, sample_count, complex_name
+            SELECT rooms, median_price, sample_count
             FROM rental_index
-            WHERE prop_type = 'apartment'
-            ORDER BY sample_count DESC
-            LIMIT 30
+            WHERE prop_type = 'apartment' AND rooms IN (1, 2)
+            ORDER BY rooms, sample_count DESC
         """)
+        rental_summary = {}
+        for r in rental_stats:
+            k = int(r["rooms"])
+            if k not in rental_summary:
+                rental_summary[k] = {"price": r["median_price"], "n": 0}
+            rental_summary[k]["n"] += r["sample_count"] or 0
 
         return templates.TemplateResponse(
             "analytics.html",
             {
                 "request": request,
                 "listings": [dict(r) for r in rows],
-                "rental_stats": [dict(r) for r in rental_stats],
+                "score_hist": [dict(r) for r in hist_rows],
+                "rental_summary": rental_summary,
                 "filters": {
                     "district": district,
                     "rooms": rooms,

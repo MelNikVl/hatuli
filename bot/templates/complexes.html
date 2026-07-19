@@ -58,6 +58,7 @@ document.addEventListener('DOMContentLoaded', function() {
         color: '#fff', weight: 1, fillOpacity: 0.85,
       }).addTo(map);
       m.bindTooltip(
+        (c.photo ? `<img src="${c.photo}" style="width:200px;height:110px;object-fit:cover;border-radius:6px;display:block;margin-bottom:4px;" onerror="this.style.display='none'">` : '') +
         `<b>${c.name}</b>${c.class ? ' · ' + c.class : ''}<br>` +
         `${c.avg_score ? 'Средний скор: <b>' + c.avg_score + '</b> · ' : ''}Год: ${c.year || '?'}<br>` +
         `В продаже: ${c.active} · продано: ${c.sold}${c.price_m2 ? ' · ' + Math.round(c.price_m2/1000) + ' тыс ₸/м²' : ''}<br>` +

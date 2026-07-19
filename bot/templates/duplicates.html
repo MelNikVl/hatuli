@@ -50,7 +50,7 @@
       <td style="padding:6px 8px;"><a href="/admin/complex/find?name={{ s.cx | urlencode }}">{{ s.cx }}</a></td>
       <td style="padding:6px 8px;">{{ s.rooms }}к · ~{{ s.area_bucket | int }} м²</td>
       <td style="padding:6px 8px;font-size:12px;">
-        {% for it in s.items %}
+        {% for it in s['items'] %}
         <a href="/admin/analytics/{{ it.id }}">{{ (it.price/1e6)|round(1) }} млн</a>{% if it.floor %} · {{ it.floor }}эт{% endif %}{{ ' 👤' if it.is_owner }}{{ ' · ' if not loop.last }}
         {% endfor %}
       </td>

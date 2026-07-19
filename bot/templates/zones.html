@@ -86,9 +86,10 @@ function hexRound(q, r) {
   return [rq, rr];
 }
 function hexCorners(lon, lat, e) {
+  // pointy-top раскладка (центры: cx=e·√3·(q+r/2), cy=e·1.5r) → углы 30°+60°·i
   const pts = [];
   for (let i = 0; i < 6; i++) {
-    const a = (60 * i) * D2R;
+    const a = (60 * i + 30) * D2R;
     pts.push([lat + e * Math.sin(a) / MLAT, lon + e * Math.cos(a) / MLON]);
   }
   return pts;
@@ -96,7 +97,7 @@ function hexCorners(lon, lat, e) {
 function hexRingLonLat(lon, lat, e) {  // для сохранения: [lon,lat]
   const pts = [];
   for (let i = 0; i < 6; i++) {
-    const a = (60 * i) * D2R;
+    const a = (60 * i + 30) * D2R;
     pts.push([lon + e * Math.cos(a) / MLON, lat + e * Math.sin(a) / MLAT]);
   }
   pts.push(pts[0]);
@@ -107,13 +108,16 @@ function hexRingLonLat(lon, lat, e) {  // для сохранения: [lon,lat]
 const gridLayer = L.layerGroup().addTo(map);
 const zonesLayer = L.layerGroup().addTo(map);
 const selLayer = L.layerGroup().addTo(map);
-const selected = new Map();  // "q,r" -> {q, r, layer}
+const selected = new Map();   // "q,r" -> {q, r}
+const gridHexes = new Map();  // "q,r" -> {q, r, lon, lat} — видимая сетка
+let zonesData = [];           // существующие зоны (для контекстного меню)
 
 function curEdge() { return parseInt(document.getElementById('z-edge').value); }
 
 // ── Сетка ────────────────────────────────────────────────────────────────
 function drawGrid() {
   gridLayer.clearLayers();
+  gridHexes.clear();
   document.getElementById('grid-hint').style.display = 'none';
   if (!document.getElementById('z-grid').checked) return;
   const e = curEdge();
@@ -136,6 +140,7 @@ function drawGrid() {
       const c = hexCenter(q, r, e);
       if (c.lon < b.getWest() || c.lon > b.getEast() || c.lat < b.getSouth() || c.lat > b.getNorth()) continue;
       const key = q + ',' + r;
+      gridHexes.set(key, {q, r, lon: c.lon, lat: c.lat});
       const isSel = selected.has(key);
       const poly = L.polygon(hexCorners(c.lon, c.lat, e), {
         color: isSel ? '#16a34a' : '#94a3b8',
@@ -164,6 +169,80 @@ function updateCounter() {
 }
 
 function clearSelection() { selected.clear(); drawGrid(); updateCounter(); }
+
+// ── Групповое выделение рамкой: Shift + drag ─────────────────────────────
+let boxStart = null, boxRect = null;
+map.on('mousedown', e => {
+  if (!e.originalEvent.shiftKey) return;
+  map.dragging.disable();
+  boxStart = e.latlng;
+});
+map.on('mousemove', e => {
+  if (!boxStart) return;
+  if (boxRect) map.removeLayer(boxRect);
+  boxRect = L.rectangle(L.latLngBounds(boxStart, e.latlng),
+    {color: '#2563eb', weight: 1.5, dashArray: '4', fillOpacity: 0.08}).addTo(map);
+});
+map.on('mouseup', e => {
+  if (!boxStart) return;
+  const bounds = L.latLngBounds(boxStart, e.latlng);
+  if (boxRect) { map.removeLayer(boxRect); boxRect = null; }
+  boxStart = null;
+  map.dragging.enable();
+  let added = 0;
+  gridHexes.forEach((h, key) => {
+    if (!selected.has(key) && bounds.contains([h.lat, h.lon])) {
+      selected.set(key, {q: h.q, r: h.r});
+      added++;
+    }
+  });
+  if (added) { drawGrid(); updateCounter(); }
+});
+
+// ── Контекстное меню (правая кнопка): новая зона / добавить к существующей ──
+let ctxMenu = null;
+function hideCtx() { if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; } }
+map.on('click', hideCtx);
+
+map.on('contextmenu', e => {
+  if (selected.size === 0) return;   // нечего добавлять
+  L.DomEvent.preventDefault(e.originalEvent);
+  hideCtx();
+  const p = map.latLngToContainerPoint(e.latlng);
+  ctxMenu = L.DomUtil.create('div', '', map.getContainer());
+  ctxMenu.style.cssText = `position:absolute;left:${p.x}px;top:${p.y}px;z-index:1200;
+    background:#fff;border:1px solid #ddd;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.2);
+    padding:6px;min-width:230px;font-size:13px;`;
+  const mkItem = (label, fn) => {
+    const b = L.DomUtil.create('button', '', ctxMenu);
+    b.textContent = label;
+    b.style.cssText = 'display:block;width:100%;text-align:left;padding:8px 10px;border:none;background:none;cursor:pointer;border-radius:6px;font-size:13px;';
+    b.onmouseover = () => b.style.background = '#f1f5f9';
+    b.onmouseout = () => b.style.background = 'none';
+    b.onclick = () => { hideCtx(); fn(); };
+  };
+  mkItem(`➕ Новая зона из ${selected.size} гексов`, () => {
+    document.getElementById('z-name').focus();
+    document.getElementById('z-save').scrollIntoView({behavior: 'smooth', block: 'center'});
+  });
+  zonesData.forEach(z => {
+    mkItem(`📎 Добавить к «${z.name}» (${z.bonus > 0 ? '+' : ''}${z.bonus})`, () => addToZone(z));
+  });
+});
+
+async function addToZone(z) {
+  const e = curEdge();
+  const hexes = [...selected.values()].map(({q, r}) => {
+    const c = hexCenter(q, r, e);
+    return hexRingLonLat(c.lon, c.lat, e);
+  });
+  const r = await fetch('/admin/zones/save', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id: z.id, name: z.name, bonus: z.bonus, hexes}),
+  });
+  if (r.ok) { clearSelection(); loadZones(); }
+  else alert('Ошибка: ' + await r.text());
+}
 
 async function saveZone() {
   const name = document.getElementById('z-name').value.trim() || 'Зона';
@@ -209,6 +288,7 @@ async function loadZones() {
   zonesLayer.clearLayers();
   const r = await fetch('/admin/zones/list');
   const d = await r.json();
+  zonesData = d.zones || [];
   const list = document.getElementById('zone-list');
   if (!d.zones.length) {
     list.innerHTML = '<em style="color:#888;font-size:13px;">пока нет зон</em>';
