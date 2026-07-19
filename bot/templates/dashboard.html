@@ -21,6 +21,10 @@
     <select id="f-rooms" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">любые</option><option>1</option><option>2</option><option>3</option><option>4</option>
     </select></div>
+  <div id="f-market-wrap"><label style="font-size:11px;color:#888;display:block;">Рынок</label>
+    <select id="f-market" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+      <option value="">весь</option><option value="secondary">вторичка</option><option value="primary">первичка (в стройке)</option>
+    </select></div>
   <div><label style="font-size:11px;color:#888;display:block;">Продавец</label>
     <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
@@ -108,7 +112,10 @@ function applyFilters() {
   if (ms && type === 'sale') p.set('min_score', ms);
   const seller = document.getElementById('f-seller').value;
   if (seller && type === 'sale') p.set('seller', seller);
+  const market = document.getElementById('f-market').value;
+  if (market && type === 'sale') p.set('market', market);
 
+  document.getElementById('f-market-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
@@ -168,7 +175,8 @@ function applyFilters() {
     </div>
     <a href="/admin/analytics/${pt.id}" title="Скор — нажми, чтобы увидеть из чего он складывается" style="background:${sc};color:#fff;border-radius:9px;padding:5px 10px;font-weight:800;font-size:16px;box-shadow:0 1px 3px rgba(0,0,0,.25);text-decoration:none;display:block;">${pt.score}</a>
   </div>
-  <div style="font-size:11.5px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}</div>
+  ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
+  <div style="font-size:11.5px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}${pt.geo === 'address' ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}</div>
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
   ${pt.address ? `<div style="font-size:11.5px;color:#666;margin-top:2px;">📍 ${pt.address}</div>` : ''}
@@ -262,7 +270,8 @@ function drawHexGrid() {
     const key = q + ':' + r;
     if (seen.has(key)) return;
     seen.add(key);
-    L.polygon(hexCorners(q, r, hexEdge), {color:'#8b5cf6', weight:1, fillOpacity:0.06}).addTo(hexLayer);
+    // interactive:false — сетка чисто визуальная, клики проходят сквозь неё к маркерам
+    L.polygon(hexCorners(q, r, hexEdge), {color:'#8b5cf6', weight:1, fillOpacity:0.06, interactive:false}).addTo(hexLayer);
   });
   hexLayer.addTo(map);
 }

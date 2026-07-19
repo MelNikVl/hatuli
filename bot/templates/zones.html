@@ -22,6 +22,7 @@
 <div class="hint">
   Зоны собираются <b>из гексагонов</b>: включи сетку, выбери размер ребра и кликай по гексам —
   они закрашиваются (зелёным для плюс-зоны, красным для анти-зоны). Клик по выбранному гексу убирает его.
+  <b>Массовое выделение: зажми Ctrl (или Shift) и растяни рамку</b> — все гексы под ней добавятся к выбору.
   Баллы: от −50 до +50 (минус = анти-зона: промзона, неликвидная окраина). При пересечении зон действует сильнейшая по модулю.
   Пересчёт объявлений — в следующем цикле парсера.<br>
   <b>Какой размер ребра выбрать:</b> 50 м — ювелирно вокруг парка/школы; <b>100 м — оптимум по умолчанию</b>
@@ -170,10 +171,10 @@ function updateCounter() {
 
 function clearSelection() { selected.clear(); drawGrid(); updateCounter(); }
 
-// ── Групповое выделение рамкой: Shift + drag ─────────────────────────────
+// ── Групповое выделение рамкой: Ctrl + drag (или Shift + drag) ───────────
 let boxStart = null, boxRect = null;
 map.on('mousedown', e => {
-  if (!e.originalEvent.shiftKey) return;
+  if (!e.originalEvent.ctrlKey && !e.originalEvent.metaKey && !e.originalEvent.shiftKey) return;
   map.dragging.disable();
   boxStart = e.latlng;
 });

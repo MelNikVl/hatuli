@@ -330,8 +330,12 @@ async def fetch_apartment_details(url: str) -> dict:
         u = m.group(0)
         if u not in photo_urls:
             photo_urls.append(u)
-        if len(photo_urls) >= 15:
-            break
+    # Последнее фото галереи — рекламный баннер Крыши, не наше. Выкидываем.
+    # (обрезаем ДО лимита в 15, иначе при длинной галерее баннер не попал бы
+    # в хвост и мы бы срезали настоящее фото)
+    if len(photo_urls) >= 2:
+        photo_urls = photo_urls[:-1]
+    photo_urls = photo_urls[:15]
     if photo_urls:
         result["photos"] = photo_urls
 

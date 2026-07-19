@@ -476,7 +476,7 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/api/map-points")
     async def map_points(request: Request, type: str = "sale", rooms: str = "",
                          price_min: float = 0, price_max: float = 0,
-                         min_score: int = 0, seller: str = ""):
+                         min_score: int = 0, seller: str = "", market: str = ""):
         # публичный (карта на главной без логина); coverage — только админу
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
 
@@ -561,11 +561,20 @@ def make_extras_router(templates) -> APIRouter:
             conds.append("AND is_owner IS TRUE")
         elif seller == "agent":
             conds.append("AND is_owner IS DISTINCT FROM TRUE")
+        # Рынок: первичка = market_type='primary'; вторичка = всё остальное
+        # (NULL считаем вторичкой — детектор ещё не дошёл до объявления)
+        if market == "primary":
+            conds.append("AND a.market_type = 'primary'")
+        elif market == "secondary":
+            conds.append("AND COALESCE(a.market_type, 'secondary') <> 'primary'")
         rows = await pg_fetch(f"""
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
-                   a.complex_name, a.url, a.photos,
+                   a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
-                   (COALESCE(a.score_total,0) + COALESCE(a.zone_bonus,0)
+                   (CASE WHEN a.market_type = 'primary' AND a.primary_score_total IS NOT NULL
+                         THEN a.primary_score_total
+                         ELSE COALESCE(a.score_total,0) END
+                    + COALESCE(a.zone_bonus,0)
                     + COALESCE(a.layer_bonus,0)) AS eff_score,
                    ph.old_price AS prev_price,
                    ph.changed_at AS price_changed_at
@@ -602,6 +611,8 @@ def make_extras_router(templates) -> APIRouter:
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
             "address": r["address"] or "", "complex": r["complex_name"] or "",
             "url": r["url"] or "",
+            "market": r["market_type"] or "",
+            "geo": r["geo_source"] or "",
             "age": int(r["age_days"] or 0),
             # последняя смена цены (если была) — для попапа на карте
             "prev_price": r["prev_price"],

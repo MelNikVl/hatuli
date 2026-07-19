@@ -225,9 +225,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         request: Request,
         district: str = "",
         rooms: str = "",
-        min_score: int = 60,
+        min_score: int = 0,
         sort: str = "score_total",
-        limit: int = 50,
+        limit: int = 10,
         seller: str = "",
     ):
         if not is_authed(request):
@@ -281,7 +281,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             FROM apartment_listings
             WHERE {where}
             ORDER BY {sort_col} DESC NULLS LAST
-            LIMIT {min(limit, 200)}
+            LIMIT {limit if limit in (10, 20, 30) else 10}
             """,
             *params,
         )

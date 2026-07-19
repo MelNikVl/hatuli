@@ -88,8 +88,9 @@ tr:last-child td { border-bottom: none; }
         </select>
       </div>
       <div class="filter-group">
-        <label>Мин. скор</label>
-        <input type="number" name="min_score" value="{{ filters.min_score }}" min="0" max="100" style="width:80px">
+        <label title="Скрывает объекты со скором ниже порога. 0 = показывать все. Гистограмма ниже его игнорирует — клик по столбику ставит порог.">Мин. скор ⓘ</label>
+        <input type="number" name="min_score" value="{{ filters.min_score }}" min="0" max="100" style="width:80px"
+               title="Скрывает объекты со скором ниже порога. 0 = показывать все.">
       </div>
       <div class="filter-group">
         <label>Сортировка</label>
@@ -101,11 +102,11 @@ tr:last-child td { border-bottom: none; }
         </select>
       </div>
       <div class="filter-group">
-        <label>Показать</label>
+        <label>Показать лучших</label>
         <select name="limit">
-          <option value="50" {% if filters.limit == 50 %}selected{% endif %}>50</option>
-          <option value="100" {% if filters.limit == 100 %}selected{% endif %}>100</option>
-          <option value="200" {% if filters.limit == 200 %}selected{% endif %}>200</option>
+          <option value="10" {% if filters.limit == 10 %}selected{% endif %}>топ-10</option>
+          <option value="20" {% if filters.limit == 20 %}selected{% endif %}>топ-20</option>
+          <option value="30" {% if filters.limit == 30 %}selected{% endif %}>топ-30</option>
         </select>
       </div>
       <button type="submit" class="btn">Применить</button>
@@ -127,15 +128,15 @@ tr:last-child td { border-bottom: none; }
   {% if score_hist %}
   {% set max_cnt = score_hist | map(attribute='cnt') | max %}
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:16px;">
-    <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Распределение объектов по скору <span style="color:#888;font-weight:400;">(без учёта фильтра «мин. скор»)</span></div>
-    <div style="display:flex;align-items:flex-end;gap:3px;height:90px;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:10px;">Распределение объектов по скору <span style="color:#888;font-weight:400;">(без учёта фильтра «мин. скор»)</span></div>
+    <div style="display:flex;align-items:flex-end;gap:4px;height:180px;">
       {% for b in score_hist %}
       <a href="/admin/analytics?min_score={{ b.bucket }}&district={{ filters.district }}&rooms={{ filters.rooms }}&seller={{ filters.seller }}"
          title="скор {{ b.bucket }}–{{ b.bucket + 4 }}: {{ b.cnt }} объектов — показать"
          style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;text-decoration:none;">
-        <div style="font-size:9px;color:#888;text-align:center;">{{ b.cnt }}</div>
-        <div style="height:{{ (b.cnt / max_cnt * 70) | round(0, 'floor') | int }}px;background:{{ '#16a34a' if b.bucket >= 65 else ('#f59e0b' if b.bucket >= 45 else '#cbd5e1') }};border-radius:3px 3px 0 0;"></div>
-        <div style="font-size:9px;color:#888;text-align:center;">{{ b.bucket }}</div>
+        <div style="font-size:13px;color:#666;text-align:center;font-weight:600;">{{ b.cnt }}</div>
+        <div style="height:{{ (b.cnt / max_cnt * 145) | round(0, 'floor') | int }}px;background:{{ '#16a34a' if b.bucket >= 65 else ('#f59e0b' if b.bucket >= 45 else '#cbd5e1') }};border-radius:3px 3px 0 0;"></div>
+        <div style="font-size:13px;color:#666;text-align:center;">{{ b.bucket }}</div>
       </a>
       {% endfor %}
     </div>

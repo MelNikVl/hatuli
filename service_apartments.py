@@ -258,7 +258,7 @@ async def run_cycle():
         try:
             if r.get("lat") and r.get("lon"):
                 await pg_exec(
-                    "UPDATE apartment_listings SET lat=$2, lon=$3 WHERE id=$1",
+                    "UPDATE apartment_listings SET lat=$2, lon=$3, geo_source='krisha' WHERE id=$1",
                     r["id"], r["lat"], r["lon"],
                 )
             if r.get("complex_url"):
@@ -322,7 +322,7 @@ async def run_cycle():
                 if details and (details.get("lat") or details.get("complex_name")):
                     if details.get("lat") and details.get("lon"):
                         await pg_exec(
-                            "UPDATE apartment_listings SET lat=$2, lon=$3, "
+                            "UPDATE apartment_listings SET lat=$2, lon=$3, geo_source='krisha', "
                             "coord_fetch_attempted_at=now() WHERE id=$1",
                             m["id"], details["lat"], details["lon"],
                         )
@@ -382,6 +382,38 @@ async def run_cycle():
     except Exception as e:
         log.warning("coord backfill failed: %s", e)
 
+    # ── Гео по адресу: объявления без координат ставим на карту по адресу ──
+    # Если у объявления нет координат с Крыши, но такой же адрес встречается
+    # у других объявлений С координатами — берём центроид этих координат.
+    # Помечаем geo_source='address' (приблизительная привязка, видно в попапе).
+    # В качестве источника используем только "настоящие" координаты
+    # (geo_source != 'address'), чтобы не было самоподкрепления.
+    try:
+        await pg_exec("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS geo_source TEXT")
+        geo_cnt = await pg_exec("""
+            UPDATE apartment_listings t
+            SET lat = s.lat, lon = s.lon, geo_source = 'address'
+            FROM (
+                SELECT lower(btrim(address)) AS addr, AVG(lat) AS lat, AVG(lon) AS lon
+                FROM apartment_listings
+                WHERE lat IS NOT NULL AND lon IS NOT NULL
+                  AND address IS NOT NULL AND btrim(address) <> ''
+                  AND COALESCE(geo_source, '') <> 'address'
+                GROUP BY 1
+            ) s
+            WHERE t.lat IS NULL
+              AND t.address IS NOT NULL
+              AND lower(btrim(t.address)) = s.addr
+        """)
+        try:
+            n = int(str(geo_cnt).split()[-1])
+        except (ValueError, IndexError):
+            n = 0
+        if n:
+            log.info("geo by address: привязано %d объявлений по адресу", n)
+    except Exception as e:
+        log.warning("geo-by-address failed: %s", e)
+
     # ── Зоны приоритета: пересчёт бонусов для всех объявлений с координатами ──
     try:
         from bot.core.zones import load_zones, zone_bonus_for
@@ -412,13 +444,37 @@ async def run_cycle():
         log.warning("zone recompute failed: %s", e)
 
     # ── Первичка/вторичка ─────────────────────────────────────────────────
+    # Правило: ВСЁ, что в стройке — первичка. Признаки:
+    #   • год постройки >= текущего (дом ещё не сдан / сдаётся)
+    #   • "от застройщика", "сдача в <будущий год/квартал>"
+    #   • явные маркеры стадии: "на этапе строительства", "котлован", "строится"
+    import re as _re_mt
+    from datetime import date as _date_mt
+    _cur_year = _date_mt.today().year
+
+    def _detect_primary(title: str, desc: str, year) -> bool:
+        blob = f"{title} {desc}".lower()
+        if year and year >= _cur_year:
+            return True
+        if "от застройщика" in blob:
+            return True
+        # "сдача в 2026", "сдача в 4 кв. 2027", "срок сдачи 2026"
+        if _re_mt.search(r"(?:срок\s+)?сдач[аи]\s+(?:в\s+)?(?:\d\s*кв\.?\s*)?20(?:2[6-9]|3\d)", blob):
+            return True
+        if _re_mt.search(r"на\s+этапе\s+строительств|стади[яи]\s+строительств|котлован|дом\s+строится", blob):
+            return True
+        return False
+
     for r in results:
-        blob = f"{r.get('title','')} {r.get('description','')}".lower()
-        year = r.get("year_built")
-        is_primary = (year and year >= 2026) or "от застройщика" in blob or "сдача в" in blob
+        is_primary = _detect_primary(r.get("title", "") or "", r.get("description", "") or "",
+                                     r.get("year_built"))
         try:
+            # NULL → выставляем всегда; secondary → повышаем до primary, если
+            # появились явные признаки стройки (обратно primary→secondary не
+            # понижаем автоматически — сданный дом уточняется вручную/годом)
             await pg_exec(
-                "UPDATE apartment_listings SET market_type=$2 WHERE id=$1 AND market_type IS NULL",
+                "UPDATE apartment_listings SET market_type=$2 WHERE id=$1 "
+                "AND (market_type IS NULL OR (market_type='secondary' AND $2='primary'))",
                 r["id"], "primary" if is_primary else "secondary",
             )
         except Exception as e:

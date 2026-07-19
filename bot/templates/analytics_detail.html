@@ -53,9 +53,19 @@
     <!-- Скор -->
     <div class="card">
       <h2>Скоринг</h2>
+      {% set zb = listing.zone_bonus or 0 %}
+      {% set lb = listing.layer_bonus or 0 %}
+      {% set base = listing.score_total or 0 %}
+      {% set eff = base + zb + lb %}
       <div style="text-align:center;margin-bottom:16px;">
-        <div class="score-big">{{ listing.score_total or 0 }}</div>
-        <div class="score-sub">из 100 баллов</div>
+        <div class="score-big">{{ eff }}</div>
+        <div class="score-sub">
+          эффективный скор — тот же, что на карте<br>
+          = {{ base }} база (из 100)
+          {% if zb %} <span style="color:{{ '#16a34a' if zb > 0 else '#ef4444' }};font-weight:600;">{{ '+' if zb > 0 }}{{ zb }} зона{% if listing.zone_name %} «{{ listing.zone_name }}»{% endif %}</span>{% endif %}
+          {% if lb %} <span style="color:{{ '#16a34a' if lb > 0 else '#ef4444' }};font-weight:600;">{{ '+' if lb > 0 }}{{ lb }} слои</span>{% endif %}
+          {% if not zb and not lb %} · бонусов зон/слоёв нет{% endif %}
+        </div>
       </div>
       <div class="breakdown">
         {% set breakdown = [
