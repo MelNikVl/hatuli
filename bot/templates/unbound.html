@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🧩 Объявления без привязки к ЖК
+  <small style="font-size:13px;color:#888;font-weight:400;">
+    {{ stats.unbound }} из {{ stats.total_active }} активных не привязаны
+    {% if stats.total_active %}({{ (stats.unbound / stats.total_active * 100) | round(1) }}%){% endif %}
+  </small>
+</div>
+<p style="font-size:13px;color:#888;max-width:900px;">
+  Это активные объявления продажи, у которых не определён ЖК (с детальной страницы Крыши название ЖК не извлеклось или деталь ещё не докачана).
+  Оранжевые точки — точные координаты объявления, синие — привязка по центру района (точных координат пока нет).
+  Кнопка «Привязать к ЖК» прогоняет три стадии: склейка по ссылке на карточку ЖК (с детальной страницы Крыши), поиск названия ЖК в заголовке/адресе, геопривязка к ближайшему ЖК.
+  Фоновая докачка деталей (COORD_BACKFILL_BATCH в настройках) теперь заодно вытаскивает с Крыши официальный блок «Жилой комплекс» и координаты для объявлений без ЖК.
+  Старые дома без названия ЖК так и останутся здесь — но у них есть адрес и геопозиция, поэтому на карту они попадают.
+</p>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+  <button onclick="rebind()" id="rebind-btn" style="padding:10px 20px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14px;cursor:pointer;">🔗 Привязать к ЖК</button>
+  <span style="font-size:12px;color:#888;">3 стадии: по ссылке на карточку ЖК · по названию из текста · по геопозиции (ближайший ЖК ≤ ~350 м)</span>
+  <span id="rebind-status" style="font-size:13px;color:#16a34a;"></span>
+  <span id="map-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+  <div id="unbound-map" style="aspect-ratio:16/9;width:100%;min-height:480px;border-radius:8px;"></div>
+</div>
+
+<script>
+const map = L.map('unbound-map').setView([51.128, 71.43], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+const layer = L.layerGroup().addTo(map);
+
+function loadPoints() {
+  fetch('/admin/api/unbound-points').then(r => r.json()).then(d => {
+    layer.clearLayers();
+    d.points.forEach(pt => {
+      const exact = pt.binding === 'точно';
+      const m = L.circleMarker([pt.lat, pt.lon], {
+        radius: 6, fillColor: exact ? '#f59e0b' : '#3b82f6',
+        color: '#fff', weight: 1, fillOpacity: .85}).addTo(layer);
+      m.bindPopup(
+        `<b>${pt.title || (pt.rooms + '-комн')}</b><br>` +
+        `${pt.price ? (pt.price/1e6).toFixed(1) + ' млн ₸' : '—'} · ${pt.rooms || '?'}-комн${pt.area ? ', ' + pt.area + ' м²' : ''}<br>` +
+        `${pt.address ? '📍 ' + pt.address + '<br>' : ''}` +
+        `<span style="color:#888;">координаты: ${exact ? 'точные' : 'по району (приблизительно)'} · в базе с ${pt.found}</span><br>` +
+        `<a href="/admin/analytics/${pt.id}">Карточка</a>${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}`);
+    });
+    document.getElementById('map-count').textContent =
+      d.count + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без координат)` : '');
+  });
+}
+
+async function rebind() {
+  const btn = document.getElementById('rebind-btn');
+  const st = document.getElementById('rebind-status');
+  btn.disabled = true; st.textContent = 'привязываем…';
+  try {
+    const r = await fetch('/admin/rebind', {method: 'POST'});
+    const d = await r.json();
+    st.textContent = `привязано ${d.bound} (по ссылке: ${d.by_url}, по тексту: ${d.by_text}, по гео: ${d.by_geo}) · осталось: ${d.left}`;
+    loadPoints();
+  } catch (e) { st.textContent = 'ошибка'; }
+  btn.disabled = false;
+  setTimeout(() => st.textContent = '', 6000);
+}
+
+loadPoints();
+</script>
+{% endblock %}

@@ -1,0 +1,963 @@
+From cb8fb37336d5ea0f80e6eb111fa8b3d16adda2b2 Mon Sep 17 00:00:00 2001
+From: hatuli-agent <agent@hatuli.local>
+Date: Sun, 19 Jul 2026 18:40:21 +0800
+Subject: [PATCH] =?UTF-8?q?fix:=20=D0=BA=D0=B0=D1=80=D1=82=D0=B0=20=D0=B3?=
+ =?UTF-8?q?=D0=BB=D0=B0=D0=B2=D0=BD=D0=BE=D0=B9=20(KeyError=20c=5Flat),=20?=
+ =?UTF-8?q?=D0=96=D0=9A-=D1=81=D0=BB=D0=BE=D0=B9,=20=D0=B8=D1=81=D1=82?=
+ =?UTF-8?q?=D0=BE=D1=80=D0=B8=D1=8F=20=D1=86=D0=B5=D0=BD,=20=D0=B4=D1=83?=
+ =?UTF-8?q?=D0=B1=D0=BB=D0=B8=20=D1=81=20=D1=82=D0=B8=D0=BF=D0=BE=D0=BC,?=
+ =?UTF-8?q?=20=D1=81=D1=82=D1=80=D0=B0=D0=BD=D0=B8=D1=86=D0=B0=20=D0=B1?=
+ =?UTF-8?q?=D0=B5=D0=B7=20=D0=96=D0=9A,=20=D1=84=D0=B8=D0=BB=D1=8C=D1=82?=
+ =?UTF-8?q?=D1=80=20=D0=BE=D1=82=20=D1=85=D0=BE=D0=B7=D1=8F=D0=B8=D0=BD?=
+ =?UTF-8?q?=D0=B0?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ bot/admin_web.py                    |  48 +++++
+ bot/core/dedup_listings.py          |  34 ++--
+ bot/templates/analytics.html        |   8 +
+ bot/templates/analytics_detail.html |  28 +++
+ bot/templates/base.html             |   1 +
+ bot/templates/complex_detail.html   |  20 ++-
+ bot/templates/dashboard.html        |  71 +++++++-
+ bot/templates/duplicates.html       |  53 +++++-
+ bot/templates/unbound.html          |  69 ++++++++
+ terminal_extras.py                  | 266 ++++++++++++++++++++++++++--
+ 10 files changed, 562 insertions(+), 36 deletions(-)
+ create mode 100644 bot/templates/unbound.html
+
+diff --git a/bot/admin_web.py b/bot/admin_web.py
+index 11c21cb..aba6e4f 100644
+--- a/bot/admin_web.py
++++ b/bot/admin_web.py
+@@ -228,6 +228,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path:
+         min_score: int = 60,
+         sort: str = "score_total",
+         limit: int = 50,
++        seller: str = "",
+     ):
+         if not is_authed(request):
+             return RedirectResponse(url="/admin/login", status_code=302)
+@@ -258,6 +259,11 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path:
+         params.append(min_score)
+         i += 1
+ 
++        if seller == "owner":
++            conditions.append("is_owner IS TRUE")
++        elif seller == "agent":
++            conditions.append("is_owner IS DISTINCT FROM TRUE")
++
+         valid_sorts = {"score_total", "yield_pct", "price", "bargain_discount_pct"}
+         sort_col = sort if sort in valid_sorts else "score_total"
+ 
+@@ -301,6 +307,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path:
+                     "min_score": min_score,
+                     "sort": sort,
+                     "limit": limit,
++                    "seller": seller,
+                 },
+                 "total": len(rows),
+             },
+@@ -416,6 +423,45 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path:
+             except (ValueError, TypeError):
+                 reasons_list = [str(raw_reasons)]
+ 
++        # История цены объявления
++        ph_rows = await pg_fetch("""
++            SELECT old_price, new_price, changed_at
++            FROM price_history WHERE listing_id = $1
++            ORDER BY changed_at ASC
++        """, listing_id)
++        price_history = []
++        if listing.get("first_seen"):
++            price_history.append({
++                "at": listing["first_seen"],
++                "price": ph_rows[0]["old_price"] if ph_rows else listing.get("price"),
++            })
++        for r in ph_rows:
++            price_history.append({"at": r["changed_at"], "price": r["new_price"]})
++
++        # SVG-путь мини-графика цены (считаем здесь, чтобы не мучить jinja)
++        price_chart = None
++        pts_prices = [p["price"] for p in price_history if p.get("price")]
++        if len(price_history) >= 1 and pts_prices:
++            W, H = 560, 120
++            mn, mx = min(pts_prices), max(pts_prices)
++            span = (mx - mn) or 1
++            n = len(price_history)
++            step = W / max(n - 1, 1)
++            coords = [
++                (i * step, H - ((p.get("price") or mn) - mn) / span * (H - 16) - 8)
++                for i, p in enumerate(price_history)
++            ]
++            path = " ".join(
++                ("M" if i == 0 else "L") + f"{x:.1f},{y:.1f}"
++                for i, (x, y) in enumerate(coords)
++            )
++            first_p, last_p = pts_prices[0], pts_prices[-1]
++            price_chart = {
++                "path": path, "dots": coords, "w": W, "h": H,
++                "delta": last_p - first_p,
++                "delta_pct": round((last_p - first_p) / first_p * 100, 1) if first_p else 0,
++            }
++
+         return templates.TemplateResponse(
+             "analytics_detail.html",
+             {
+@@ -432,6 +478,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path:
+                 "hexd": hexd,
+                 "photos": photos or [],
+                 "primary_details": primary_details,
++                "price_history": price_history,
++                "price_chart": price_chart,
+             },
+         )
+ 
+diff --git a/bot/core/dedup_listings.py b/bot/core/dedup_listings.py
+index d9b966b..e41198e 100644
+--- a/bot/core/dedup_listings.py
++++ b/bot/core/dedup_listings.py
+@@ -42,11 +42,16 @@ def _extract_photo_uuid(url: str | None) -> str | None:
+     return m.group(1) if m else None
+ 
+ 
+-def find_duplicates(listings: list[dict]) -> dict[str, str]:
+-    """Возвращает {duplicate_id: primary_id}. listings — отсортированы по
+-    возрасту (старые первыми), primary по умолчанию — более старое."""
++def find_duplicates(listings: list[dict],
++                    ) -> tuple[dict[str, str], dict[str, str]]:
++    """Возвращает ({duplicate_id: primary_id}, {duplicate_id: match_rule}).
++    listings — отсортированы по возрасту (старые первыми), primary по
++    умолчанию — более старое.
++    match_rule: 'photo' (тот же файл фото = точно тот же объект),
++    'addr_area' (адрес+комнаты+площадь), 'addr_price' (адрес+цена+этаж)."""
+     by_id = {str(l["id"]): l for l in listings}
+     duplicates: dict[str, str] = {}
++    match_rules: dict[str, str] = {}
+     photo_idx: dict[str, str] = {}
+     addr_idx: dict[tuple, list[str]] = {}
+     price_addr_idx: dict[tuple, str] = {}
+@@ -54,12 +59,14 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
+     def is_owner(l: dict) -> bool:
+         return l.get("is_owner") is True
+ 
+-    def mark(dup_id: str, primary_id: str):
++    def mark(dup_id: str, primary_id: str, rule: str = ""):
+         # если дубль сам был primary для кого-то — переподвесим тех на нового primary
+         for d, p in list(duplicates.items()):
+             if p == dup_id:
+                 duplicates[d] = primary_id
+         duplicates[dup_id] = primary_id
++        if rule:
++            match_rules[dup_id] = rule
+ 
+     for lst in listings:
+         lid = str(lst["id"])
+@@ -75,10 +82,12 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
+         cur_owner = is_owner(lst)
+ 
+         matched_primary: str | None = None
++        matched_rule = ""
+ 
+         # 1. UUID фото
+         if uuid and uuid in photo_idx and photo_idx[uuid] != lid:
+             matched_primary = photo_idx[uuid]
++            matched_rule = "photo"
+ 
+         # 2. адрес + комнаты + площадь
+         if matched_primary is None and addr and rooms is not None and area > 0:
+@@ -87,6 +96,7 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
+                 ex = by_id.get(ex_id)
+                 if ex and abs(float(ex.get("area") or 0) - area) <= 3:
+                     matched_primary = ex_id
++                    matched_rule = "addr_area"
+                     break
+ 
+         # 3. адрес + цена + этаж (запасной)
+@@ -94,16 +104,17 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
+             key2 = (addr, round(price / 100_000) * 100_000, floor)
+             if key2 in price_addr_idx and price_addr_idx[key2] != lid:
+                 matched_primary = price_addr_idx[key2]
++                matched_rule = "addr_price"
+ 
+         if matched_primary:
+             ex = by_id.get(matched_primary)
+             # приоритет хозяина: текущее от хозяина, существующий primary — нет
+             if cur_owner and ex is not None and not is_owner(ex):
+-                mark(matched_primary, lid)
++                mark(matched_primary, lid, matched_rule)
+                 if uuid:
+                     photo_idx[uuid] = lid
+             else:
+-                mark(lid, matched_primary)
++                mark(lid, matched_primary, matched_rule)
+                 continue  # дубль не индексируем
+ 
+         # индексируем как потенциальный primary
+@@ -115,7 +126,7 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
+             price_addr_idx.setdefault(
+                 (addr, round(price / 100_000) * 100_000, floor), lid)
+ 
+-    return duplicates
++    return duplicates, match_rules
+ 
+ 
+ async def _table_columns(table: str) -> set[str]:
+@@ -134,6 +145,8 @@ async def _dedup_table(table: str, order_col: str) -> int:
+     # когда именно объявление было помечено дублем — для статистики
+     # «сколько дублей нашли и убрали с карты сегодня» на дашборде
+     await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS dup_marked_at TIMESTAMPTZ")
++    # по какому правилу признан дублем: photo / addr_area / addr_price
++    await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS dup_match TEXT")
+ 
+     have = await _table_columns(table)
+     want = ["id", "url", "address", "rooms", "area", "price", "floor", "is_owner"]
+@@ -144,14 +157,15 @@ async def _dedup_table(table: str, order_col: str) -> int:
+         WHERE COALESCE(is_duplicate, FALSE) = FALSE
+         ORDER BY {order_col} ASC
+     """)
+-    duplicates = find_duplicates([dict(r) for r in rows])
++    duplicates, match_rules = find_duplicates([dict(r) for r in rows])
+     logger.info("%s: found %d duplicates", table, len(duplicates))
+ 
+     for dup_id, primary_id in duplicates.items():
+         await execute(
+             f"UPDATE {table} SET is_duplicate=TRUE, duplicate_of=$1, "
+-            f"dup_marked_at=COALESCE(dup_marked_at, NOW()) WHERE id=$2",
+-            primary_id, dup_id)
++            f"dup_marked_at=COALESCE(dup_marked_at, NOW()), "
++            f"dup_match=COALESCE(dup_match, $3) WHERE id=$2",
++            primary_id, dup_id, match_rules.get(dup_id) or None)
+     # ВАЖНО: is_active НЕ трогаем — иначе затирался бы архив.
+     return len(duplicates)
+ 
+diff --git a/bot/templates/analytics.html b/bot/templates/analytics.html
+index 8b9a38b..a9e74f5 100644
+--- a/bot/templates/analytics.html
++++ b/bot/templates/analytics.html
+@@ -79,6 +79,14 @@ tr:last-child td { border-bottom: none; }
+           <option value="3" {% if filters.rooms == '3' %}selected{% endif %}>3к</option>
+         </select>
+       </div>
++      <div class="filter-group">
++        <label>Продавец</label>
++        <select name="seller">
++          <option value="" {% if not filters.seller %}selected{% endif %}>Все</option>
++          <option value="owner" {% if filters.seller == 'owner' %}selected{% endif %}>От хозяина</option>
++          <option value="agent" {% if filters.seller == 'agent' %}selected{% endif %}>От агента</option>
++        </select>
++      </div>
+       <div class="filter-group">
+         <label>Мин. скор</label>
+         <input type="number" name="min_score" value="{{ filters.min_score }}" min="0" max="100" style="width:80px">
+diff --git a/bot/templates/analytics_detail.html b/bot/templates/analytics_detail.html
+index bbe4c87..1e3904d 100644
+--- a/bot/templates/analytics_detail.html
++++ b/bot/templates/analytics_detail.html
+@@ -152,6 +152,34 @@
+       {% endif %}
+     </div>
+ 
++    <!-- История цены -->
++    <div class="card">
++      <h2>📈 История цены</h2>
++      {% if price_history and price_history|length > 0 %}
++      <div style="margin-bottom:8px;">
++        <svg viewBox="0 0 {{ price_chart.w }} {{ price_chart.h }}" style="width:100%;height:120px;">
++          <path d="{{ price_chart.path }}" fill="none" stroke="#2563eb" stroke-width="2"/>
++          {% for x, y in price_chart.dots %}
++          <circle cx="{{ '%.1f'|format(x) }}" cy="{{ '%.1f'|format(y) }}" r="4" fill="#2563eb"/>
++          {% endfor %}
++        </svg>
++      </div>
++      <div class="row"><span class="key">Стартовая цена ({{ price_history[0].at.strftime('%d.%m.%Y') }})</span><span class="val">{{ "{:,.0f}".format(price_history[0].price or 0) }} ₸</span></div>
++      {% for p in price_history[1:] %}
++      <div class="row"><span class="key">{{ p.at.strftime('%d.%m.%Y') }}</span><span class="val">{{ "{:,.0f}".format(p.price or 0) }} ₸</span></div>
++      {% endfor %}
++      <div class="row"><span class="key">Изменение за всё время</span>
++        <span class="val" style="font-weight:700;color:{{ '#ef4444' if price_chart.delta > 0 else ('#16a34a' if price_chart.delta < 0 else '#888') }};">
++          {{ '+' if price_chart.delta > 0 else '' }}{{ "{:,.0f}".format(price_chart.delta) }} ₸ ({{ '%+0.1f'|format(price_chart.delta_pct) }}%)
++        </span></div>
++      {% if price_history|length == 1 %}
++      <div style="font-size:12px;color:#888;margin-top:6px;">Изменений цены пока не зафиксировано — история копится с каждым циклом парсера.</div>
++      {% endif %}
++      {% else %}
++      <div style="color:#888;font-size:13px;">История цены пока не накоплена.</div>
++      {% endif %}
++    </div>
++
+     <!-- Аренда рядом -->
+     <div class="card">
+       <h2>Аренда рядом (rental index)</h2>
+diff --git a/bot/templates/base.html b/bot/templates/base.html
+index af5d6a7..e09da0d 100644
+--- a/bot/templates/base.html
++++ b/bot/templates/base.html
+@@ -130,6 +130,7 @@
+     <a href="/admin/parser/sales"  class="{% if 'parser/sales' in request.url.path %}active{% endif %}"><span class="ico">🏠</span> Продажи</a>
+     <a href="/admin/parser/rental" class="{% if 'parser/rental' in request.url.path %}active{% endif %}"><span class="ico">🏢</span> Аренда</a>
+     <a href="/admin/duplicates"  class="{% if 'duplicates' in request.url.path %}active{% endif %}"><span class="ico">👯</span> Дубли</a>
++    <a href="/admin/unbound"     class="{% if 'unbound' in request.url.path %}active{% endif %}"><span class="ico">🧩</span> Без ЖК</a>
+     <div class="nav-section">ИНСТРУМЕНТЫ</div>
+     <a href="/admin/zones"       class="{% if 'zones' in request.url.path %}active{% endif %}"><span class="ico">📐</span> Зоны</a>
+     <a href="/admin/info"        class="{% if request.url.path == '/admin/info' %}active{% endif %}"><span class="ico">ℹ️</span> Инфо</a>
+diff --git a/bot/templates/complex_detail.html b/bot/templates/complex_detail.html
+index a2ccd1d..fa186cc 100644
+--- a/bot/templates/complex_detail.html
++++ b/bot/templates/complex_detail.html
+@@ -9,12 +9,28 @@
+   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+     {% if geo %}
+     <div id="cx-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
++    <div style="font-size:11px;color:#888;margin-top:6px;">
++      живых объявлений: <b>{{ live_cnt }}</b> · на карте: <b>{{ map_points | selectattr('lat') | list | length }}</b>
++      {% if live_no_coords %} · <span style="color:#f59e0b;">{{ live_no_coords }} ждут докачки координат</span>{% endif %}
++    </div>
+     <script>
+     document.addEventListener('DOMContentLoaded', function() {
+       const map = L.map('cx-map').setView([{{ geo.lat }}, {{ geo.lon }}], 15);
+       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+-      L.marker([{{ geo.lat }}, {{ geo.lon }}]).addTo(map)
+-        .bindPopup('{{ cx.name | e }}{% if cx_address %}<br>{{ cx_address | e }}{% endif %}');
++      const pts = {{ map_points | tojson }};
++      const bounds = [];
++      pts.forEach(p => {
++        if (!p.lat) return;
++        const col = p.is_active === false ? '#9ca3af' : (p.is_dup ? '#f59e0b' : '#22c55e');
++        const m = L.circleMarker([p.lat, p.lon], {radius:6, fillColor:col, color:'#fff', weight:1, fillOpacity:.9}).addTo(map);
++        m.bindPopup(`<b>${(p.price/1e6).toFixed(1)} млн ₸</b> · ${p.rooms || '?'}-комн${p.area ? ', ' + p.area + ' м²' : ''}` +
++          `${p.is_active === false ? '<br><span style="color:#888;">архив</span>' : ''}` +
++          `${p.is_dup ? '<br><span style="color:#f59e0b;">дубль</span>' : ''}` +
++          `<br><a href="/admin/analytics/${p.id}">Карточка</a>` +
++          (p.url ? ` · <a href="${p.url}" target="_blank">Крыша ↗</a>` : ''));
++        bounds.push([p.lat, p.lon]);
++      });
++      if (bounds.length > 1) map.fitBounds(bounds, {padding: [24, 24]});
+       setTimeout(() => map.invalidateSize(), 200);
+     });
+     </script>
+diff --git a/bot/templates/dashboard.html b/bot/templates/dashboard.html
+index 7eb17a9..8528862 100644
+--- a/bot/templates/dashboard.html
++++ b/bot/templates/dashboard.html
+@@ -34,6 +34,7 @@
+   <div id="f-score-wrap"><label style="font-size:11px;color:#888;display:block;">Мин. скор</label>
+     <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
+   {% if admin %}
++  <label style="font-size:13px;cursor:pointer;"><input type="checkbox" id="cx-toggle"> 🏢 все ЖК из каталога</label>
+   <label style="font-size:13px;cursor:pointer;padding-bottom:8px;"><input type="checkbox" id="poi-toggle"> 🏫 школы/садики</label>
+   {% endif %}
+   <button onclick="applyFilters()" style="padding:11px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;">Показать</button>
+@@ -43,11 +44,14 @@
+   {% endif %}
+ </div>
+ 
+-<!-- Карта: квадратная, слева -->
+-<div style="order:1;flex:1 1 420px;min-width:320px;max-width:560px;">
++<!-- Карта: слева, занимает всё свободное место.
++     РАЗМЕР КАРТЫ меняется здесь:
++       - ширина: flex-basis/max-width у контейнера ниже (сейчас flex:1 1 720px, без max-width = растягивается)
++       - высота: aspect-ratio у #objects-map (16/10, 1/1, 4/3...) или задай фикс. height, напр. height:75vh -->
++<div style="order:1;flex:1 1 720px;min-width:320px;">
+ 
+ <div id="map-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+-  <div id="objects-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
++  <div id="objects-map" style="aspect-ratio:16/10;width:100%;min-height:420px;border-radius:8px;"></div>
+ </div>
+ 
+ </div><!-- /левая колонка -->
+@@ -112,7 +116,14 @@ function applyFilters() {
+       }
+       const priceM = pt.price ? (pt.price/1e6).toFixed(1) + ' млн ₸' : '—';
+       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
+-      m.bindPopup(`<b>Скор: ${pt.score}</b> · ${pt.rooms || '?'}-комн, ${pt.area || '?'} м²<br>${priceM} · на рынке ${ageText}<br>${pt.complex ? '🏢 <a href="/admin/complex/find?name=' + encodeURIComponent(pt.complex) + '">' + pt.complex + '</a>' : '🏢 ЖК не определён'}<br>${pt.address ? '📍 ' + pt.address + '<br>' : ''}<a href="/admin/analytics/${pt.id}">Карточка</a> · <a href="${pt.url}" target="_blank">Крыша</a>`);
++      let priceTrend = '';
++      if (pt.prev_price && pt.prev_price !== pt.price) {
++        const dp = (pt.price - pt.prev_price) / 1e6;
++        const dir = dp > 0;
++        priceTrend = `<br><span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:600;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(1)} млн ${pt.price_changed ? '· ' + pt.price_changed : ''}</span>`;
++      }
++      m.bindPopup(`<b>Скор: ${pt.score}</b> · ${pt.rooms || '?'}-комн, ${pt.area || '?'} м²<br>${priceM} · на рынке ${ageText}${priceTrend}<br>${pt.complex ? '🏢 <a href="/admin/complex/find?name=' + encodeURIComponent(pt.complex) + '">' + pt.complex + '</a>' : '🏢 ЖК не определён'}<br>${pt.address ? '📍 ' + pt.address + '<br>' : ''}<div id="ph-${pt.id}" style="margin:6px 0;min-width:220px;">📈 история цены…</div><a href="/admin/analytics/${pt.id}">Карточка</a> · <a href="${pt.url}" target="_blank">Крыша</a>`);
++      m.on('popupopen', () => loadPriceHistory(pt.id));
+     });
+     document.getElementById('result-count').textContent = d.count + ' объектов';
+     lastPoints = d.points;
+@@ -122,10 +133,12 @@ function applyFilters() {
+       const kr = d.coverage.krisha_total;
+       const el = document.getElementById('admin-stats');
+       if (el) el.innerHTML = mkStats([
+-        [d.coverage.total.toLocaleString('ru'), 'активных в базе'],
+-        [kr ? kr.toLocaleString('ru') : '—', 'всего на Крыше (≤ потолка цены)'],
++        [d.coverage.total.toLocaleString('ru'), 'активных объявлений'],
++        [(d.coverage.complexes || 0).toLocaleString('ru'), 'ЖК в базе'],
+         [`${d.coverage.with_coords.toLocaleString('ru')} · ${pct}%`, 'с координатами'],
+         [d.coverage.dups.toLocaleString('ru'), 'дублей среди активных'],
++        [`<a href="/admin/unbound" style="color:inherit;">${(d.coverage.unbound || 0).toLocaleString('ru')}</a>`, 'без привязки к ЖК'],
++        [kr ? kr.toLocaleString('ru') : '—', 'всего на Крыше (≤ потолка цены)'],
+       ]);
+       if (hexOn) drawHexGrid();
+     }
+@@ -134,6 +147,33 @@ function applyFilters() {
+ function mkStats(items) {
+   return items.map(([v,l]) => `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 14px;text-align:center;"><div style="font-size:17px;font-weight:800;line-height:1.1;">${v}</div><div style="font-size:11px;color:#888;">${l}</div></div>`).join('');
+ }
++
++// Мини-график истории цены (SVG) — подгружается при открытии попапа
++function sparklineSVG(points, w, h) {
++  if (points.length === 0) return '';
++  const prices = points.map(p => p.price);
++  const mn = Math.min(...prices), mx = Math.max(...prices);
++  const span = mx - mn || 1;
++  const stepX = points.length > 1 ? w / (points.length - 1) : 0;
++  const coords = points.map((p, i) => [i * stepX, h - ((p.price - mn) / span) * (h - 6) - 3]);
++  const path = coords.map((c, i) => (i ? 'L' : 'M') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
++  const dots = coords.map(c => `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="2.4" fill="#2563eb"/>`).join('');
++  return `<svg width="${w}" height="${h}" style="display:block;">` +
++         `<path d="${path}" fill="none" stroke="#2563eb" stroke-width="1.6"/>${dots}</svg>`;
++}
++function loadPriceHistory(id) {
++  const el = document.getElementById('ph-' + id);
++  if (!el || el.dataset.loaded) return;
++  el.dataset.loaded = '1';
++  fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
++    if (!d.points || d.points.length === 0) { el.innerHTML = '<span style="color:#888;font-size:12px;">изменений цены не было</span>'; return; }
++    const rows = d.points.map(p => `<span style="white-space:nowrap;">${p.at}: <b>${(p.price/1e6).toFixed(1)}</b></span>`).join(' → ');
++    el.innerHTML = `<div style="font-size:11px;color:#888;">история цены, млн ₸</div>` +
++      sparklineSVG(d.points, 220, 44) +
++      `<div style="font-size:11px;color:#555;margin-top:2px;">${rows} млн</div>`;
++  }).catch(() => { el.innerHTML = ''; });
++}
++
+ let lastPoints = [], hexOn = false, hexEdge = 50;
+ const hexLayer = L.layerGroup();
+ const LAT0 = 51.128, LON0 = 71.430,
+@@ -182,6 +222,25 @@ function toggleHexGrid() {
+ applyFilters();
+ 
+ {% if admin %}
++// Слой всех ЖК каталога (не только те, что сейчас в фильтре)
++const cxLayer = L.layerGroup();
++let cxLoaded = false;
++document.getElementById('cx-toggle').addEventListener('change', function() {
++  if (this.checked) {
++    if (!cxLoaded) {
++      fetch('/admin/api/complexes-map').then(r => r.json()).then(d => {
++        d.complexes.forEach(c => {
++          L.circleMarker([c.lat, c.lon], {radius:5, fillColor:'#f59e0b', color:'#fff', weight:1, fillOpacity:.9})
++            .bindPopup(`<b>🏢 ${c.name}</b>${c.developer && c.developer !== '—' ? '<br>🏗 ' + c.developer : ''}${c.class ? '<br>Класс: ' + c.class : ''}${c.year ? '<br>Год: ' + c.year : ''}<br>Активных: ${c.active} · архив: ${c.sold}${c.price_m2 ? '<br>~' + Math.round(c.price_m2/1000) + ' тыс ₸/м²' : ''}<br><a href="/admin/complex/${c.id}">Карточка ЖК</a>`)
++            .addTo(cxLayer);
++        });
++        cxLoaded = true;
++      });
++    }
++    cxLayer.addTo(map);
++  } else { map.removeLayer(cxLayer); }
++});
++
+ const poiLayer = L.layerGroup();
+ let poiLoaded = false;
+ document.getElementById('poi-toggle').addEventListener('change', function() {
+diff --git a/bot/templates/duplicates.html b/bot/templates/duplicates.html
+index 98b9fc7..8ea85ac 100644
+--- a/bot/templates/duplicates.html
++++ b/bot/templates/duplicates.html
+@@ -3,7 +3,12 @@
+ <div class="page-title">👯 Дубли объявлений
+   <small style="font-size:13px;color:#888;font-weight:400;">{{ rows|length }} объявлений имеют дубли · аренды: {{ rent_cnt }}</small>
+ </div>
+-<p style="font-size:13px;color:#888;">Каждая точка — «главное» объявление (primary), размер и цифра — сколько у него дублей. Много дублей = квартиру толкают несколько риелторов — обычно признак долгой продажи и пространства для торга. Дубли скрыты из топов, карты и Sheets, но остаются в базе; primary — от хозяина, если он есть.</p>
++<p style="font-size:13px;color:#888;">
++  <b>Что такое дубль здесь:</b> это несколько объявлений <b>одного и того же объекта</b> (одна и та же квартира) — совпадение по файлу фото,
++  либо по адресу+комнатам+площади, либо по адресу+цене+этажу. Цифра на точке = сколько копий этого же объекта разместили (обычно риелторы дублируют хозяйское).
++  Много дублей = квартиру толкают несколько риелторов — признак долгой продажи и пространства для торга. Primary — от хозяина, если он есть; дубли скрыты из топов, карты и Sheets.<br>
++  Если же в одном ЖК продаётся <b>несколько разных, но одинаковых по метражу квартир</b> — это НЕ дубли, они все на карте объектов; такие группы показаны отдельно внизу страницы («Похожие квартиры в ЖК»).
++</p>
+ 
+ <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+ <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+@@ -29,21 +34,61 @@
+   </table>
+ </div>
+ 
++<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:16px;">
++  <b style="font-size:14px;">🏢 Похожие квартиры в одном ЖК (НЕ дубли — разные объекты)</b>
++  <p style="font-size:12px;color:#888;margin:6px 0 0;">
++    Один ЖК + одинаковая комнатность + площадь в одном бакете ±3 м². Это типовые квартиры (одна планировка в разных подъездах/этажах) —
++    каждая из них отдельный объект, все показываются на карте объектов. Группа из 3+ одинаковых = высокое предложение (supply) в этом ЖК.
++  </p>
++  <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
++    <tr style="text-align:left;color:#888;border-bottom:2px solid var(--border);">
++      <th style="padding:6px 8px;">Квартир</th><th style="padding:6px 8px;">ЖК</th><th style="padding:6px 8px;">Тип</th><th style="padding:6px 8px;">Объекты</th>
++    </tr>
++    {% for s in similar %}
++    <tr style="border-bottom:1px solid var(--border);">
++      <td style="padding:6px 8px;"><b style="color:#2563eb;">{{ s.cnt }}</b></td>
++      <td style="padding:6px 8px;"><a href="/admin/complex/find?name={{ s.cx | urlencode }}">{{ s.cx }}</a></td>
++      <td style="padding:6px 8px;">{{ s.rooms }}к · ~{{ s.area_bucket | int }} м²</td>
++      <td style="padding:6px 8px;font-size:12px;">
++        {% for it in s.items %}
++        <a href="/admin/analytics/{{ it.id }}">{{ (it.price/1e6)|round(1) }} млн</a>{% if it.floor %} · {{ it.floor }}эт{% endif %}{{ ' 👤' if it.is_owner }}{{ ' · ' if not loop.last }}
++        {% endfor %}
++      </td>
++    </tr>
++    {% endfor %}
++  </table>
++</div>
++
+ <script>
+ document.addEventListener('DOMContentLoaded', function() {
+   const map = L.map('dup-map').setView([51.128, 71.43], 12);
+   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
++  const matchLabel = {photo: '📸 та же фотография (точно один объект)',
++                      addr_area: '📍 адрес + комнаты + площадь',
++                      addr_price: '📍 адрес + цена + этаж', '?': '—'};
+   const pts = [
+     {% for r in rows if r.lat and r.lon %}
+-    {id: "{{ r.id }}", lat: {{ r.lat }}, lon: {{ r.lon }}, n: {{ r.dup_cnt }},
+-     addr: {{ (r.address or r.id) | tojson }}, price: {{ r.price or 0 }}},
++    {id: {{ r.id | tojson }}, lat: {{ r.lat }}, lon: {{ r.lon }}, n: {{ r.dup_cnt }},
++     addr: {{ (r.address or r.id) | tojson }}, price: {{ r.price or 0 }},
++     complex: {{ (r.complex_name or '') | tojson }},
++     dups: {{ r.dups | tojson }}},
+     {% endfor %}
+   ];
+   pts.forEach(p => {
++    const dupRows = p.dups.map(dd =>
++      `<div style="border-top:1px solid #eee;padding:3px 0;font-size:12px;">` +
++      `<a href="/admin/analytics/${dd.id}">${(dd.price/1e6).toFixed(1)} млн</a> · ` +
++      `${dd.is_owner ? '👤 хозяин' : '🏢 риелтор'} · <span style="color:#888;">${matchLabel[dd.match] || dd.match}</span>` +
++      `${dd.url ? ' · <a href="' + dd.url + '" target="_blank">Крыша ↗</a>' : ''}</div>`).join('');
+     L.marker([p.lat, p.lon], {icon: L.divIcon({className:'',
+       html:`<div style="background:${p.n >= 3 ? '#ef4444' : '#f59e0b'};color:#fff;border-radius:50%;width:${18 + Math.min(p.n,6)*3}px;height:${18 + Math.min(p.n,6)*3}px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:11px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4);">${p.n}</div>`,
+       iconSize:[24,24], iconAnchor:[12,12]})})
+-      .bindPopup(`<b>${p.n} дублей</b><br>${p.addr}<br>${p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : ''}<br><a href="/admin/analytics/${p.id}">Карточка</a>`)
++      .bindPopup(`<b>×${p.n} — это ${p.n + 1} объявлений ОДНОГО объекта</b><br>` +
++        `<span style="color:#888;font-size:12px;">одна и та же квартира, размещена несколько раз</span><br>` +
++        `${p.addr}${p.complex ? ' · 🏢 ' + p.complex : ''}<br>${p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : ''}<br>` +
++        `<a href="/admin/analytics/${p.id}"><b>Основная карточка</b></a> (primary)` +
++        `<div style="max-height:180px;overflow:auto;margin-top:6px;min-width:280px;">${dupRows}</div>`,
++        {maxWidth: 340})
+       .addTo(map);
+   });
+ });
+diff --git a/bot/templates/unbound.html b/bot/templates/unbound.html
+new file mode 100644
+index 0000000..5113602
+--- /dev/null
++++ b/bot/templates/unbound.html
+@@ -0,0 +1,69 @@
++{% extends "base.html" %}
++{% block content %}
++<div class="page-title">🧩 Объявления без привязки к ЖК
++  <small style="font-size:13px;color:#888;font-weight:400;">
++    {{ stats.unbound }} из {{ stats.total_active }} активных не привязаны
++    {% if stats.total_active %}({{ (stats.unbound / stats.total_active * 100) | round(1) }}%){% endif %}
++  </small>
++</div>
++<p style="font-size:13px;color:#888;max-width:900px;">
++  Это активные объявления продажи, у которых не определён ЖК (с детальной страницы Крыши название ЖК не извлеклось или деталь ещё не докачана).
++  Оранжевые точки — точные координаты объявления, синие — привязка по центру района (точных координат пока нет).
++  Кнопка «Привязать» прогоняет все такие объявления по справочнику ЖК и ищет название ЖК в заголовке и адресе.
++</p>
++
++<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
++<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
++
++<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
++  <button onclick="rebind()" id="rebind-btn" style="padding:10px 20px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14px;cursor:pointer;">🔗 Привязать по названию ЖК из текста</button>
++  <span id="rebind-status" style="font-size:13px;color:#16a34a;"></span>
++  <span id="map-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
++</div>
++
++<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
++  <div id="unbound-map" style="aspect-ratio:16/9;width:100%;min-height:480px;border-radius:8px;"></div>
++</div>
++
++<script>
++const map = L.map('unbound-map').setView([51.128, 71.43], 11);
++L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
++const layer = L.layerGroup().addTo(map);
++
++function loadPoints() {
++  fetch('/admin/api/unbound-points').then(r => r.json()).then(d => {
++    layer.clearLayers();
++    d.points.forEach(pt => {
++      const exact = pt.binding === 'точно';
++      const m = L.circleMarker([pt.lat, pt.lon], {
++        radius: 6, fillColor: exact ? '#f59e0b' : '#3b82f6',
++        color: '#fff', weight: 1, fillOpacity: .85}).addTo(layer);
++      m.bindPopup(
++        `<b>${pt.title || (pt.rooms + '-комн')}</b><br>` +
++        `${pt.price ? (pt.price/1e6).toFixed(1) + ' млн ₸' : '—'} · ${pt.rooms || '?'}-комн${pt.area ? ', ' + pt.area + ' м²' : ''}<br>` +
++        `${pt.address ? '📍 ' + pt.address + '<br>' : ''}` +
++        `<span style="color:#888;">координаты: ${exact ? 'точные' : 'по району (приблизительно)'} · в базе с ${pt.found}</span><br>` +
++        `<a href="/admin/analytics/${pt.id}">Карточка</a>${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}`);
++    });
++    document.getElementById('map-count').textContent =
++      d.count + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без координат)` : '');
++  });
++}
++
++async function rebind() {
++  const btn = document.getElementById('rebind-btn');
++  const st = document.getElementById('rebind-status');
++  btn.disabled = true; st.textContent = 'привязываем…';
++  try {
++    const r = await fetch('/admin/rebind', {method: 'POST'});
++    const d = await r.json();
++    st.textContent = `привязано ${d.bound} из ${d.candidates}`;
++    loadPoints();
++  } catch (e) { st.textContent = 'ошибка'; }
++  btn.disabled = false;
++  setTimeout(() => st.textContent = '', 6000);
++}
++
++loadPoints();
++</script>
++{% endblock %}
+diff --git a/terminal_extras.py b/terminal_extras.py
+index cea3b59..463c1b0 100644
+--- a/terminal_extras.py
++++ b/terminal_extras.py
+@@ -314,13 +314,39 @@ def make_extras_router(templates) -> APIRouter:
+         from bot.db.pg import fetch as pg_fetch
+         rows = await pg_fetch("""
+             SELECT p.id, p.address, p.price, p.rooms, p.area, p.is_owner,
+-                   p.lat, p.lon, p.complex_name, COUNT(d.id) AS dup_cnt
++                   p.lat, p.lon, p.complex_name, COUNT(d.id) AS dup_cnt,
++                   json_agg(json_build_object(
++                       'id', d.id, 'price', d.price, 'is_owner', d.is_owner,
++                       'url', d.url, 'match', COALESCE(d.dup_match, '?')
++                       ) ORDER BY d.is_owner DESC NULLS LAST, d.price ASC) AS dups
+             FROM apartment_listings p
+             JOIN apartment_listings d ON d.duplicate_of = p.id AND d.is_duplicate = TRUE
+             GROUP BY p.id
+             ORDER BY dup_cnt DESC, p.last_seen DESC NULLS LAST
+             LIMIT 300
+         """)
++        # «Похожие в ЖК»: ОДИН ЖК, одинаковая комнатность и площадь ±3 м²,
++        # но это НЕ дубли (разные объекты — разные адреса/фото).
++        # Это отвечает на вопрос «2-3 одинаковые квартиры в одном ЖК?»
++        similar = await pg_fetch("""
++            SELECT lower(trim(complex_name)) AS cx, rooms,
++                   round(area / 5) * 5 AS area_bucket,
++                   COUNT(*) AS cnt,
++                   json_agg(json_build_object(
++                       'id', id, 'price', price, 'area', area,
++                       'address', address, 'floor', floor, 'is_owner', is_owner
++                       ) ORDER BY price ASC) AS items,
++                   AVG(lat) AS lat, AVG(lon) AS lon
++            FROM apartment_listings
++            WHERE is_active IS NOT FALSE
++              AND COALESCE(is_duplicate, FALSE) = FALSE
++              AND complex_name IS NOT NULL AND btrim(complex_name) != ''
++              AND area IS NOT NULL AND rooms IS NOT NULL
++            GROUP BY 1, 2, 3
++            HAVING COUNT(*) >= 2
++            ORDER BY cnt DESC
++            LIMIT 60
++        """)
+         rent_cnt = 0
+         try:
+             from bot.db.pg import fetchval as pg_fetchval
+@@ -328,9 +354,23 @@ def make_extras_router(templates) -> APIRouter:
+                 "SELECT COUNT(*) FROM rental_listings WHERE is_duplicate = TRUE") or 0
+         except Exception:
+             pass
++        import json as _json2
++        out_rows = []
++        for r in rows:
++            d = dict(r)
++            if isinstance(d.get("dups"), str):
++                d["dups"] = _json2.loads(d["dups"])
++            out_rows.append(d)
++        out_sim = []
++        for r in similar:
++            d = dict(r)
++            if isinstance(d.get("items"), str):
++                d["items"] = _json2.loads(d["items"])
++            out_sim.append(d)
+         return templates.TemplateResponse("duplicates.html", {
+             "request": request,
+-            "rows": [dict(r) for r in rows],
++            "rows": out_rows,
++            "similar": out_sim,
+             "rent_cnt": rent_cnt,
+         })
+ 
+@@ -512,29 +552,39 @@ def make_extras_router(templates) -> APIRouter:
+         elif seller == "agent":
+             conds.append("AND is_owner IS DISTINCT FROM TRUE")
+         rows = await pg_fetch(f"""
+-            SELECT id, lat, lon, price, rooms, area, address, complex_name,
+-                   url,
+-                   EXTRACT(EPOCH FROM (now() - first_seen))/86400 AS age_days,
+-                   (COALESCE(score_total,0) + COALESCE(zone_bonus,0)
+-                    + COALESCE(layer_bonus,0)) AS eff_score
+-            FROM apartment_listings
+-            WHERE lat IS NOT NULL AND lon IS NOT NULL
+-              AND is_active IS NOT FALSE
+-              AND COALESCE(is_duplicate, FALSE) = FALSE
+-              AND last_seen > now() - interval '14 days'
++            SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
++                   a.complex_name, a.url,
++                   EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
++                   (COALESCE(a.score_total,0) + COALESCE(a.zone_bonus,0)
++                    + COALESCE(a.layer_bonus,0)) AS eff_score,
++                   ph.old_price AS prev_price,
++                   ph.changed_at AS price_changed_at
++            FROM apartment_listings a
++            LEFT JOIN LATERAL (
++                SELECT old_price, changed_at FROM price_history h
++                WHERE h.listing_id = a.id
++                ORDER BY changed_at DESC LIMIT 1
++            ) ph ON TRUE
++            WHERE a.lat IS NOT NULL AND a.lon IS NOT NULL
++              AND a.is_active IS NOT FALSE
++              AND COALESCE(a.is_duplicate, FALSE) = FALSE
++              AND a.last_seen > now() - interval '14 days'
+               {' '.join(conds)}
+             ORDER BY eff_score DESC
+             LIMIT 2000
+         """, *params)
+         pts = [{
+             "id": r["id"],
+-            "lat": float(r["c_lat"] if r["c_lat"] is not None else r["lat"]),
+-            "lon": float(r["c_lon"] if r["c_lon"] is not None else r["lon"]),
++            "lat": float(r["lat"]),
++            "lon": float(r["lon"]),
+             "score": int(r["eff_score"] or 0),
+             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
+             "address": r["address"] or "", "complex": r["complex_name"] or "",
+             "url": r["url"] or "",
+             "age": int(r["age_days"] or 0),
++            # последняя смена цены (если была) — для попапа на карте
++            "prev_price": r["prev_price"],
++            "price_changed": r["price_changed_at"].strftime("%d.%m.%Y") if r["price_changed_at"] else None,
+             "top": idx < 10,   # топ-10 лучших — сердечки на карте
+         } for idx, r in enumerate(rows)]
+         resp = {"points": pts, "count": len(pts)}
+@@ -542,11 +592,26 @@ def make_extras_router(templates) -> APIRouter:
+             dups_active = await pg_fetchval2(
+                 "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE "
+                 "AND is_active IS NOT FALSE") or 0
++            complexes_total = 0
++            unbound_active = 0
++            try:
++                complexes_total = await pg_fetchval2(
++                    "SELECT COUNT(*) FROM complexes") or 0
++                unbound_active = await pg_fetchval2("""
++                    SELECT COUNT(*) FROM apartment_listings
++                    WHERE is_active IS NOT FALSE
++                      AND COALESCE(is_duplicate, FALSE) = FALSE
++                      AND (complex_name IS NULL OR btrim(complex_name) = '')
++                """) or 0
++            except Exception:
++                pass
+             from bot.db import settings as _st
+             await _st.load()
+             resp["coverage"] = {
+                 "with_coords": with_coords, "total": total_active,
+                 "dups": dups_active,
++                "complexes": complexes_total,
++                "unbound": unbound_active,
+                 "krisha_total": _st.get_int("KRISHA_TOTAL_FOUND", 0),
+                 "hex_edge": _st.get_int("HEX_EDGE_M", 50),
+             }
+@@ -731,6 +796,24 @@ def make_extras_router(templates) -> APIRouter:
+             GROUP BY rooms ORDER BY rooms
+         """, cname)
+ 
++        # Все объявления ЖК с координатами — для карты на странице ЖК
++        cx_map_points = await fetch("""
++            SELECT id, lat, lon, price, rooms, area, is_active, url,
++                   COALESCE(is_duplicate, FALSE) AS is_dup
++            FROM apartment_listings
++            WHERE lower(trim(complex_name)) = lower(trim($1))
++              AND lat IS NOT NULL
++        """, cname)
++        cx_total = await fetchrow("""
++            SELECT COUNT(*) FILTER (WHERE is_active IS NOT FALSE
++                                    AND COALESCE(is_duplicate, FALSE) = FALSE) AS live,
++                   COUNT(*) FILTER (WHERE is_active IS NOT FALSE
++                                    AND COALESCE(is_duplicate, FALSE) = FALSE
++                                    AND lat IS NULL) AS live_no_coords
++            FROM apartment_listings
++            WHERE lower(trim(complex_name)) = lower(trim($1))
++        """, cname)
++
+         # Данные источников (korter/homsters) для блока информации
+         cx_sources = {}
+         _si = cx["source_info"]
+@@ -756,6 +839,9 @@ def make_extras_router(templates) -> APIRouter:
+             "stats": [dict(r) for r in stats],
+             "rental_stats": [dict(r) for r in rental_stats],
+             "obs": dict(obs) if obs else {},
++            "map_points": [dict(r) for r in cx_map_points],
++            "live_cnt": (cx_total["live"] or 0) if cx_total else 0,
++            "live_no_coords": (cx_total["live_no_coords"] or 0) if cx_total else 0,
+         })
+ 
+     @router.post("/admin/complex/{complex_id}/contacts")
+@@ -778,4 +864,156 @@ def make_extras_router(templates) -> APIRouter:
+         )
+         return JSONResponse({"ok": True})
+ 
++    # ── История цены объявления ───────────────────────────────────────────
++
++    @router.get("/admin/api/price-history/{listing_id}")
++    async def api_price_history(request: Request, listing_id: str):
++        """История цены для карточки/попапа на карте.
++        Публичный (как и сама карта) — ничего чувствительного тут нет."""
++        from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
++        rows = await pg_fetch("""
++            SELECT old_price, new_price, changed_at
++            FROM price_history
++            WHERE listing_id = $1
++            ORDER BY changed_at ASC
++        """, listing_id)
++        cur = await pg_fetchrow(
++            "SELECT price, first_seen FROM apartment_listings WHERE id = $1",
++            listing_id)
++        points = []
++        # стартовая точка — цена при первом появлении в базе
++        if cur and cur["first_seen"]:
++            first_price = rows[0]["old_price"] if rows else cur["price"]
++            points.append({"at": cur["first_seen"].strftime("%d.%m.%Y"),
++                           "price": first_price})
++        for r in rows:
++            points.append({"at": r["changed_at"].strftime("%d.%m.%Y"),
++                           "price": r["new_price"]})
++        return JSONResponse({
++            "points": points,
++            "current": cur["price"] if cur else None,
++            "changes": len(rows),
++        })
++
++    # ── Объявления без привязки к ЖК ──────────────────────────────────────
++
++    @router.get("/admin/unbound", response_class=HTMLResponse)
++    async def unbound_page(request: Request):
++        if not is_authed(request):
++            return RedirectResponse(url="/admin/login", status_code=302)
++        from bot.db.pg import fetchval as pg_fv
++        stats = {
++            "total_active": await pg_fv(
++                "SELECT COUNT(*) FROM apartment_listings "
++                "WHERE is_active IS NOT FALSE "
++                "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0,
++            "unbound": await pg_fv(
++                "SELECT COUNT(*) FROM apartment_listings "
++                "WHERE is_active IS NOT FALSE "
++                "AND COALESCE(is_duplicate, FALSE) = FALSE "
++                "AND (complex_name IS NULL OR btrim(complex_name) = '')") or 0,
++            "unbound_coords": await pg_fv(
++                "SELECT COUNT(*) FROM apartment_listings "
++                "WHERE is_active IS NOT FALSE "
++                "AND COALESCE(is_duplicate, FALSE) = FALSE "
++                "AND (complex_name IS NULL OR btrim(complex_name) = '') "
++                "AND lat IS NOT NULL") or 0,
++        }
++        return templates.TemplateResponse("unbound.html", {
++            "request": request, "stats": stats,
++        })
++
++    @router.get("/admin/api/unbound-points")
++    async def unbound_points(request: Request):
++        """Активные объявления без ЖК. Координаты свои, иначе центроид района."""
++        if not is_authed(request):
++            return JSONResponse({"error": "auth"}, status_code=401)
++        from bot.db.pg import fetch as pg_fetch
++        rows = await pg_fetch("""
++            SELECT id, url, title, price, rooms, area, address, district,
++                   lat, lon, first_seen
++            FROM apartment_listings
++            WHERE is_active IS NOT FALSE
++              AND COALESCE(is_duplicate, FALSE) = FALSE
++              AND (complex_name IS NULL OR btrim(complex_name) = '')
++            ORDER BY first_seen DESC LIMIT 3000
++        """)
++        district_geo = {r2["district"]: (float(r2["lat"]), float(r2["lon"]))
++                        for r2 in await pg_fetch("""
++            SELECT district, AVG(lat) AS lat, AVG(lon) AS lon
++            FROM apartment_listings
++            WHERE lat IS NOT NULL AND district IS NOT NULL AND district != ''
++            GROUP BY district""")}
++        import random as _rnd
++        pts, no_geo = [], 0
++        for r in rows:
++            d = dict(r)
++            if d["lat"] is not None:
++                lat, lon, binding = float(d["lat"]), float(d["lon"]), "точно"
++            else:
++                dg = district_geo.get(d.get("district") or "")
++                if not dg:
++                    no_geo += 1
++                    continue
++                lat, lon, binding = dg[0], dg[1], "район"
++                lat += _rnd.uniform(-0.004, 0.004)
++                lon += _rnd.uniform(-0.006, 0.006)
++            pts.append({
++                "id": d["id"], "url": d["url"] or "",
++                "title": d["title"] or "",
++                "lat": lat, "lon": lon, "binding": binding,
++                "price": d["price"], "rooms": d["rooms"],
++                "area": float(d["area"] or 0),
++                "address": d["address"] or "", "district": d["district"] or "",
++                "found": d["first_seen"].strftime("%d.%m.%Y") if d["first_seen"] else "",
++            })
++        return JSONResponse({"points": pts, "count": len(pts), "no_geo": no_geo})
++
++    @router.post("/admin/rebind")
++    async def rebind_listings(request: Request):
++        """Попытка привязать объявления без ЖК по названию ЖК из заголовка
++        и адреса против справочника complexes. Возвращает число привязанных."""
++        if not is_authed(request):
++            return JSONResponse({"error": "auth"}, status_code=401)
++        from bot.db.pg import fetch as pg_fetch, execute as pg_exec
++
++        complexes = await pg_fetch(
++            "SELECT name FROM complexes WHERE name IS NOT NULL AND btrim(name) != ''")
++        # нормализованное имя -> каноническое
++        import re as _re
++        def _norm(s: str) -> str:
++            s = s.lower()
++            s = _re.sub(r"^\s*(жк|кг)\.?\s+", "", s)
++            s = _re.sub(r"[«»\"']", " ", s)
++            return _re.sub(r"\s+", " ", s).strip()
++
++        norm_map = {}
++        for c in complexes:
++            n = _norm(c["name"])
++            if len(n) >= 3:
++                norm_map[n] = c["name"]
++
++        rows = await pg_fetch("""
++            SELECT id, title, address FROM apartment_listings
++            WHERE complex_name IS NULL OR btrim(complex_name) = ''
++        """)
++        bound = 0
++        for r in rows:
++            hay = _norm(" ".join([r["title"] or "", r["address"] or ""]))
++            if not hay:
++                continue
++            hit = None
++            for n, canon in norm_map.items():
++                if n in hay:
++                    hit = canon
++                    break
++            if hit:
++                await pg_exec(
++                    "UPDATE apartment_listings SET complex_name = $2 WHERE id = $1",
++                    r["id"], hit)
++                bound += 1
++        logger.info("rebind: %d объявлений привязано к ЖК из %d кандидатов",
++                    bound, len(rows))
++        return JSONResponse({"ok": True, "bound": bound, "candidates": len(rows)})
++
+     return router
+-- 
+2.39.5
+

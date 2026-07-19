@@ -3,7 +3,12 @@
 <div class="page-title">👯 Дубли объявлений
   <small style="font-size:13px;color:#888;font-weight:400;">{{ rows|length }} объявлений имеют дубли · аренды: {{ rent_cnt }}</small>
 </div>
-<p style="font-size:13px;color:#888;">Каждая точка — «главное» объявление (primary), размер и цифра — сколько у него дублей. Много дублей = квартиру толкают несколько риелторов — обычно признак долгой продажи и пространства для торга. Дубли скрыты из топов, карты и Sheets, но остаются в базе; primary — от хозяина, если он есть.</p>
+<p style="font-size:13px;color:#888;">
+  <b>Что такое дубль здесь:</b> это несколько объявлений <b>одного и того же объекта</b> (одна и та же квартира) — совпадение по файлу фото,
+  либо по адресу+комнатам+площади, либо по адресу+цене+этажу. Цифра на точке = сколько копий этого же объекта разместили (обычно риелторы дублируют хозяйское).
+  Много дублей = квартиру толкают несколько риелторов — признак долгой продажи и пространства для торга. Primary — от хозяина, если он есть; дубли скрыты из топов, карты и Sheets.<br>
+  Если же в одном ЖК продаётся <b>несколько разных, но одинаковых по метражу квартир</b> — это НЕ дубли, они все на карте объектов; такие группы показаны отдельно внизу страницы («Похожие квартиры в ЖК»).
+</p>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -29,21 +34,61 @@
   </table>
 </div>
 
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:16px;">
+  <b style="font-size:14px;">🏢 Похожие квартиры в одном ЖК (НЕ дубли — разные объекты)</b>
+  <p style="font-size:12px;color:#888;margin:6px 0 0;">
+    Один ЖК + одинаковая комнатность + площадь в одном бакете ±3 м². Это типовые квартиры (одна планировка в разных подъездах/этажах) —
+    каждая из них отдельный объект, все показываются на карте объектов. Группа из 3+ одинаковых = высокое предложение (supply) в этом ЖК.
+  </p>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
+    <tr style="text-align:left;color:#888;border-bottom:2px solid var(--border);">
+      <th style="padding:6px 8px;">Квартир</th><th style="padding:6px 8px;">ЖК</th><th style="padding:6px 8px;">Тип</th><th style="padding:6px 8px;">Объекты</th>
+    </tr>
+    {% for s in similar %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:6px 8px;"><b style="color:#2563eb;">{{ s.cnt }}</b></td>
+      <td style="padding:6px 8px;"><a href="/admin/complex/find?name={{ s.cx | urlencode }}">{{ s.cx }}</a></td>
+      <td style="padding:6px 8px;">{{ s.rooms }}к · ~{{ s.area_bucket | int }} м²</td>
+      <td style="padding:6px 8px;font-size:12px;">
+        {% for it in s.items %}
+        <a href="/admin/analytics/{{ it.id }}">{{ (it.price/1e6)|round(1) }} млн</a>{% if it.floor %} · {{ it.floor }}эт{% endif %}{{ ' 👤' if it.is_owner }}{{ ' · ' if not loop.last }}
+        {% endfor %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
   const map = L.map('dup-map').setView([51.128, 71.43], 12);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+  const matchLabel = {photo: '📸 та же фотография (точно один объект)',
+                      addr_area: '📍 адрес + комнаты + площадь',
+                      addr_price: '📍 адрес + цена + этаж', '?': '—'};
   const pts = [
     {% for r in rows if r.lat and r.lon %}
-    {id: "{{ r.id }}", lat: {{ r.lat }}, lon: {{ r.lon }}, n: {{ r.dup_cnt }},
-     addr: {{ (r.address or r.id) | tojson }}, price: {{ r.price or 0 }}},
+    {id: {{ r.id | tojson }}, lat: {{ r.lat }}, lon: {{ r.lon }}, n: {{ r.dup_cnt }},
+     addr: {{ (r.address or r.id) | tojson }}, price: {{ r.price or 0 }},
+     complex: {{ (r.complex_name or '') | tojson }},
+     dups: {{ r.dups | tojson }}},
     {% endfor %}
   ];
   pts.forEach(p => {
+    const dupRows = p.dups.map(dd =>
+      `<div style="border-top:1px solid #eee;padding:3px 0;font-size:12px;">` +
+      `<a href="/admin/analytics/${dd.id}">${(dd.price/1e6).toFixed(1)} млн</a> · ` +
+      `${dd.is_owner ? '👤 хозяин' : '🏢 риелтор'} · <span style="color:#888;">${matchLabel[dd.match] || dd.match}</span>` +
+      `${dd.url ? ' · <a href="' + dd.url + '" target="_blank">Крыша ↗</a>' : ''}</div>`).join('');
     L.marker([p.lat, p.lon], {icon: L.divIcon({className:'',
       html:`<div style="background:${p.n >= 3 ? '#ef4444' : '#f59e0b'};color:#fff;border-radius:50%;width:${18 + Math.min(p.n,6)*3}px;height:${18 + Math.min(p.n,6)*3}px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:11px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4);">${p.n}</div>`,
       iconSize:[24,24], iconAnchor:[12,12]})})
-      .bindPopup(`<b>${p.n} дублей</b><br>${p.addr}<br>${p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : ''}<br><a href="/admin/analytics/${p.id}">Карточка</a>`)
+      .bindPopup(`<b>×${p.n} — это ${p.n + 1} объявлений ОДНОГО объекта</b><br>` +
+        `<span style="color:#888;font-size:12px;">одна и та же квартира, размещена несколько раз</span><br>` +
+        `${p.addr}${p.complex ? ' · 🏢 ' + p.complex : ''}<br>${p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : ''}<br>` +
+        `<a href="/admin/analytics/${p.id}"><b>Основная карточка</b></a> (primary)` +
+        `<div style="max-height:180px;overflow:auto;margin-top:6px;min-width:280px;">${dupRows}</div>`,
+        {maxWidth: 340})
       .addTo(map);
   });
 });

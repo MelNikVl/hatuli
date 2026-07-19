@@ -34,6 +34,7 @@
   <div id="f-score-wrap"><label style="font-size:11px;color:#888;display:block;">Мин. скор</label>
     <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
   {% if admin %}
+  <label style="font-size:13px;cursor:pointer;"><input type="checkbox" id="cx-toggle"> 🏢 все ЖК из каталога</label>
   <label style="font-size:13px;cursor:pointer;padding-bottom:8px;"><input type="checkbox" id="poi-toggle"> 🏫 школы/садики</label>
   {% endif %}
   <button onclick="applyFilters()" style="padding:11px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;">Показать</button>
@@ -43,11 +44,14 @@
   {% endif %}
 </div>
 
-<!-- Карта: квадратная, слева -->
-<div style="order:1;flex:1 1 420px;min-width:320px;max-width:560px;">
+<!-- Карта: слева, занимает всё свободное место.
+     РАЗМЕР КАРТЫ меняется здесь:
+       - ширина: flex-basis/max-width у контейнера ниже (сейчас flex:1 1 720px, без max-width = растягивается)
+       - высота: aspect-ratio у #objects-map (16/10, 1/1, 4/3...) или задай фикс. height, напр. height:75vh -->
+<div style="order:1;flex:1 1 720px;min-width:320px;">
 
 <div id="map-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
-  <div id="objects-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
+  <div id="objects-map" style="aspect-ratio:16/10;width:100%;min-height:420px;border-radius:8px;"></div>
 </div>
 
 </div><!-- /левая колонка -->
@@ -112,7 +116,14 @@ function applyFilters() {
       }
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) + ' млн ₸' : '—';
       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
-      m.bindPopup(`<b>Скор: ${pt.score}</b> · ${pt.rooms || '?'}-комн, ${pt.area || '?'} м²<br>${priceM} · на рынке ${ageText}<br>${pt.complex ? '🏢 <a href="/admin/complex/find?name=' + encodeURIComponent(pt.complex) + '">' + pt.complex + '</a>' : '🏢 ЖК не определён'}<br>${pt.address ? '📍 ' + pt.address + '<br>' : ''}<a href="/admin/analytics/${pt.id}">Карточка</a> · <a href="${pt.url}" target="_blank">Крыша</a>`);
+      let priceTrend = '';
+      if (pt.prev_price && pt.prev_price !== pt.price) {
+        const dp = (pt.price - pt.prev_price) / 1e6;
+        const dir = dp > 0;
+        priceTrend = `<br><span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:600;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(1)} млн ${pt.price_changed ? '· ' + pt.price_changed : ''}</span>`;
+      }
+      m.bindPopup(`<b>Скор: ${pt.score}</b> · ${pt.rooms || '?'}-комн, ${pt.area || '?'} м²<br>${priceM} · на рынке ${ageText}${priceTrend}<br>${pt.complex ? '🏢 <a href="/admin/complex/find?name=' + encodeURIComponent(pt.complex) + '">' + pt.complex + '</a>' : '🏢 ЖК не определён'}<br>${pt.address ? '📍 ' + pt.address + '<br>' : ''}<div id="ph-${pt.id}" style="margin:6px 0;min-width:220px;">📈 история цены…</div><a href="/admin/analytics/${pt.id}">Карточка</a> · <a href="${pt.url}" target="_blank">Крыша</a>`);
+      m.on('popupopen', () => loadPriceHistory(pt.id));
     });
     document.getElementById('result-count').textContent = d.count + ' объектов';
     lastPoints = d.points;
@@ -122,10 +133,12 @@ function applyFilters() {
       const kr = d.coverage.krisha_total;
       const el = document.getElementById('admin-stats');
       if (el) el.innerHTML = mkStats([
-        [d.coverage.total.toLocaleString('ru'), 'активных в базе'],
-        [kr ? kr.toLocaleString('ru') : '—', 'всего на Крыше (≤ потолка цены)'],
+        [d.coverage.total.toLocaleString('ru'), 'активных объявлений'],
+        [(d.coverage.complexes || 0).toLocaleString('ru'), 'ЖК в базе'],
         [`${d.coverage.with_coords.toLocaleString('ru')} · ${pct}%`, 'с координатами'],
         [d.coverage.dups.toLocaleString('ru'), 'дублей среди активных'],
+        [`<a href="/admin/unbound" style="color:inherit;">${(d.coverage.unbound || 0).toLocaleString('ru')}</a>`, 'без привязки к ЖК'],
+        [kr ? kr.toLocaleString('ru') : '—', 'всего на Крыше (≤ потолка цены)'],
       ]);
       if (hexOn) drawHexGrid();
     }
@@ -134,6 +147,33 @@ function applyFilters() {
 function mkStats(items) {
   return items.map(([v,l]) => `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 14px;text-align:center;"><div style="font-size:17px;font-weight:800;line-height:1.1;">${v}</div><div style="font-size:11px;color:#888;">${l}</div></div>`).join('');
 }
+
+// Мини-график истории цены (SVG) — подгружается при открытии попапа
+function sparklineSVG(points, w, h) {
+  if (points.length === 0) return '';
+  const prices = points.map(p => p.price);
+  const mn = Math.min(...prices), mx = Math.max(...prices);
+  const span = mx - mn || 1;
+  const stepX = points.length > 1 ? w / (points.length - 1) : 0;
+  const coords = points.map((p, i) => [i * stepX, h - ((p.price - mn) / span) * (h - 6) - 3]);
+  const path = coords.map((c, i) => (i ? 'L' : 'M') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
+  const dots = coords.map(c => `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="2.4" fill="#2563eb"/>`).join('');
+  return `<svg width="${w}" height="${h}" style="display:block;">` +
+         `<path d="${path}" fill="none" stroke="#2563eb" stroke-width="1.6"/>${dots}</svg>`;
+}
+function loadPriceHistory(id) {
+  const el = document.getElementById('ph-' + id);
+  if (!el || el.dataset.loaded) return;
+  el.dataset.loaded = '1';
+  fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
+    if (!d.points || d.points.length === 0) { el.innerHTML = '<span style="color:#888;font-size:12px;">изменений цены не было</span>'; return; }
+    const rows = d.points.map(p => `<span style="white-space:nowrap;">${p.at}: <b>${(p.price/1e6).toFixed(1)}</b></span>`).join(' → ');
+    el.innerHTML = `<div style="font-size:11px;color:#888;">история цены, млн ₸</div>` +
+      sparklineSVG(d.points, 220, 44) +
+      `<div style="font-size:11px;color:#555;margin-top:2px;">${rows} млн</div>`;
+  }).catch(() => { el.innerHTML = ''; });
+}
+
 let lastPoints = [], hexOn = false, hexEdge = 50;
 const hexLayer = L.layerGroup();
 const LAT0 = 51.128, LON0 = 71.430,
@@ -182,6 +222,25 @@ function toggleHexGrid() {
 applyFilters();
 
 {% if admin %}
+// Слой всех ЖК каталога (не только те, что сейчас в фильтре)
+const cxLayer = L.layerGroup();
+let cxLoaded = false;
+document.getElementById('cx-toggle').addEventListener('change', function() {
+  if (this.checked) {
+    if (!cxLoaded) {
+      fetch('/admin/api/complexes-map').then(r => r.json()).then(d => {
+        d.complexes.forEach(c => {
+          L.circleMarker([c.lat, c.lon], {radius:5, fillColor:'#f59e0b', color:'#fff', weight:1, fillOpacity:.9})
+            .bindPopup(`<b>🏢 ${c.name}</b>${c.developer && c.developer !== '—' ? '<br>🏗 ' + c.developer : ''}${c.class ? '<br>Класс: ' + c.class : ''}${c.year ? '<br>Год: ' + c.year : ''}<br>Активных: ${c.active} · архив: ${c.sold}${c.price_m2 ? '<br>~' + Math.round(c.price_m2/1000) + ' тыс ₸/м²' : ''}<br><a href="/admin/complex/${c.id}">Карточка ЖК</a>`)
+            .addTo(cxLayer);
+        });
+        cxLoaded = true;
+      });
+    }
+    cxLayer.addTo(map);
+  } else { map.removeLayer(cxLayer); }
+});
+
 const poiLayer = L.layerGroup();
 let poiLoaded = false;
 document.getElementById('poi-toggle').addEventListener('change', function() {

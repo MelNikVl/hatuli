@@ -228,6 +228,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         min_score: int = 60,
         sort: str = "score_total",
         limit: int = 50,
+        seller: str = "",
     ):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
@@ -257,6 +258,11 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         conditions.append(f"score_total >= ${i}")
         params.append(min_score)
         i += 1
+
+        if seller == "owner":
+            conditions.append("is_owner IS TRUE")
+        elif seller == "agent":
+            conditions.append("is_owner IS DISTINCT FROM TRUE")
 
         valid_sorts = {"score_total", "yield_pct", "price", "bargain_discount_pct"}
         sort_col = sort if sort in valid_sorts else "score_total"
@@ -301,6 +307,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                     "min_score": min_score,
                     "sort": sort,
                     "limit": limit,
+                    "seller": seller,
                 },
                 "total": len(rows),
             },
@@ -416,6 +423,45 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             except (ValueError, TypeError):
                 reasons_list = [str(raw_reasons)]
 
+        # История цены объявления
+        ph_rows = await pg_fetch("""
+            SELECT old_price, new_price, changed_at
+            FROM price_history WHERE listing_id = $1
+            ORDER BY changed_at ASC
+        """, listing_id)
+        price_history = []
+        if listing.get("first_seen"):
+            price_history.append({
+                "at": listing["first_seen"],
+                "price": ph_rows[0]["old_price"] if ph_rows else listing.get("price"),
+            })
+        for r in ph_rows:
+            price_history.append({"at": r["changed_at"], "price": r["new_price"]})
+
+        # SVG-путь мини-графика цены (считаем здесь, чтобы не мучить jinja)
+        price_chart = None
+        pts_prices = [p["price"] for p in price_history if p.get("price")]
+        if len(price_history) >= 1 and pts_prices:
+            W, H = 560, 120
+            mn, mx = min(pts_prices), max(pts_prices)
+            span = (mx - mn) or 1
+            n = len(price_history)
+            step = W / max(n - 1, 1)
+            coords = [
+                (i * step, H - ((p.get("price") or mn) - mn) / span * (H - 16) - 8)
+                for i, p in enumerate(price_history)
+            ]
+            path = " ".join(
+                ("M" if i == 0 else "L") + f"{x:.1f},{y:.1f}"
+                for i, (x, y) in enumerate(coords)
+            )
+            first_p, last_p = pts_prices[0], pts_prices[-1]
+            price_chart = {
+                "path": path, "dots": coords, "w": W, "h": H,
+                "delta": last_p - first_p,
+                "delta_pct": round((last_p - first_p) / first_p * 100, 1) if first_p else 0,
+            }
+
         return templates.TemplateResponse(
             "analytics_detail.html",
             {
@@ -432,6 +478,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "hexd": hexd,
                 "photos": photos or [],
                 "primary_details": primary_details,
+                "price_history": price_history,
+                "price_chart": price_chart,
             },
         )
 

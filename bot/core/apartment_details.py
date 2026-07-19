@@ -213,16 +213,34 @@ async def fetch_apartment_details(url: str) -> dict:
             result["developer_known"] = False
 
     # ── Complex name ─────────────────────────────────────────────────────
-    complex_patterns = [
-        r"жк\s+[«\"']?([А-ЯЁA-Zа-яёa-z][^\n,\.«»\"']{2,30})[«»\"']?",
-        r"жилой\s+комплекс\s+[«\"']?([^\n,\.«»\"']{3,30})",
-        r"[«\"']([А-ЯЁ][А-ЯЁа-яёa-z\s]{2,25})[»\"']\s*(жк|жилой|резид)",
-    ]
-    for pat in complex_patterns:
-        m = re.search(pat, combined, re.IGNORECASE)
-        if m:
-            result["complex_name"] = m.group(1).strip().title()
-            break
+    # 1) Официальный блок Крыши «Жилой комплекс» со ссылкой на карточку ЖК
+    #    (data-name="map.complex") — это каноническое название ЖК и прямая
+    #    ссылка на его страницу (там адрес и карта ЖК). Самый надёжный источник.
+    cx_el = soup.select_one(
+        'div.offer__info-item[data-name="map.complex"] a[href*="/complex/show/"]')
+    if not cx_el:
+        # запасной вариант — любая ссылка на карточку ЖК на странице
+        cx_el = soup.select_one('a[href*="/complex/show/"]')
+    if cx_el:
+        cx_name = cx_el.get_text(strip=True)
+        if cx_name:
+            result["complex_name"] = cx_name
+            href = cx_el.get("href", "")
+            result["complex_url"] = (
+                "https://krisha.kz" + href) if href.startswith("/") else href
+
+    # 2) Фолбэк: поиск названия ЖК в тексте (заголовок/параметры/описание)
+    if not result.get("complex_name"):
+        complex_patterns = [
+            r"жк\s+[«\"']?([А-ЯЁA-Zа-яёa-z][^\n,\.«»\"']{2,30})[«»\"']?",
+            r"жилой\s+комплекс\s+[«\"']?([^\n,\.«»\"']{3,30})",
+            r"[«\"']([А-ЯЁ][А-ЯЁа-яёa-z\s]{2,25})[»\"']\s*(жк|жилой|резид)",
+        ]
+        for pat in complex_patterns:
+            m = re.search(pat, combined, re.IGNORECASE)
+            if m:
+                result["complex_name"] = m.group(1).strip().title()
+                break
 
     # ── Seller type ────────────────────────────────────────────────────────
     seller_el = (soup.select_one(".offer__seller-type") or

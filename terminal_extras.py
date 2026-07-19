@@ -314,12 +314,38 @@ def make_extras_router(templates) -> APIRouter:
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT p.id, p.address, p.price, p.rooms, p.area, p.is_owner,
-                   p.lat, p.lon, p.complex_name, COUNT(d.id) AS dup_cnt
+                   p.lat, p.lon, p.complex_name, COUNT(d.id) AS dup_cnt,
+                   json_agg(json_build_object(
+                       'id', d.id, 'price', d.price, 'is_owner', d.is_owner,
+                       'url', d.url, 'match', COALESCE(d.dup_match, '?')
+                       ) ORDER BY d.is_owner DESC NULLS LAST, d.price ASC) AS dups
             FROM apartment_listings p
             JOIN apartment_listings d ON d.duplicate_of = p.id AND d.is_duplicate = TRUE
             GROUP BY p.id
             ORDER BY dup_cnt DESC, p.last_seen DESC NULLS LAST
             LIMIT 300
+        """)
+        # «Похожие в ЖК»: ОДИН ЖК, одинаковая комнатность и площадь ±3 м²,
+        # но это НЕ дубли (разные объекты — разные адреса/фото).
+        # Это отвечает на вопрос «2-3 одинаковые квартиры в одном ЖК?»
+        similar = await pg_fetch("""
+            SELECT lower(trim(complex_name)) AS cx, rooms,
+                   round(area / 5) * 5 AS area_bucket,
+                   COUNT(*) AS cnt,
+                   json_agg(json_build_object(
+                       'id', id, 'price', price, 'area', area,
+                       'address', address, 'floor', floor, 'is_owner', is_owner
+                       ) ORDER BY price ASC) AS items,
+                   AVG(lat) AS lat, AVG(lon) AS lon
+            FROM apartment_listings
+            WHERE is_active IS NOT FALSE
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND complex_name IS NOT NULL AND btrim(complex_name) != ''
+              AND area IS NOT NULL AND rooms IS NOT NULL
+            GROUP BY 1, 2, 3
+            HAVING COUNT(*) >= 2
+            ORDER BY cnt DESC
+            LIMIT 60
         """)
         rent_cnt = 0
         try:
@@ -328,9 +354,23 @@ def make_extras_router(templates) -> APIRouter:
                 "SELECT COUNT(*) FROM rental_listings WHERE is_duplicate = TRUE") or 0
         except Exception:
             pass
+        import json as _json2
+        out_rows = []
+        for r in rows:
+            d = dict(r)
+            if isinstance(d.get("dups"), str):
+                d["dups"] = _json2.loads(d["dups"])
+            out_rows.append(d)
+        out_sim = []
+        for r in similar:
+            d = dict(r)
+            if isinstance(d.get("items"), str):
+                d["items"] = _json2.loads(d["items"])
+            out_sim.append(d)
         return templates.TemplateResponse("duplicates.html", {
             "request": request,
-            "rows": [dict(r) for r in rows],
+            "rows": out_rows,
+            "similar": out_sim,
             "rent_cnt": rent_cnt,
         })
 
@@ -512,29 +552,39 @@ def make_extras_router(templates) -> APIRouter:
         elif seller == "agent":
             conds.append("AND is_owner IS DISTINCT FROM TRUE")
         rows = await pg_fetch(f"""
-            SELECT id, lat, lon, price, rooms, area, address, complex_name,
-                   url,
-                   EXTRACT(EPOCH FROM (now() - first_seen))/86400 AS age_days,
-                   (COALESCE(score_total,0) + COALESCE(zone_bonus,0)
-                    + COALESCE(layer_bonus,0)) AS eff_score
-            FROM apartment_listings
-            WHERE lat IS NOT NULL AND lon IS NOT NULL
-              AND is_active IS NOT FALSE
-              AND COALESCE(is_duplicate, FALSE) = FALSE
-              AND last_seen > now() - interval '14 days'
+            SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
+                   a.complex_name, a.url,
+                   EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
+                   (COALESCE(a.score_total,0) + COALESCE(a.zone_bonus,0)
+                    + COALESCE(a.layer_bonus,0)) AS eff_score,
+                   ph.old_price AS prev_price,
+                   ph.changed_at AS price_changed_at
+            FROM apartment_listings a
+            LEFT JOIN LATERAL (
+                SELECT old_price, changed_at FROM price_history h
+                WHERE h.listing_id = a.id
+                ORDER BY changed_at DESC LIMIT 1
+            ) ph ON TRUE
+            WHERE a.lat IS NOT NULL AND a.lon IS NOT NULL
+              AND a.is_active IS NOT FALSE
+              AND COALESCE(a.is_duplicate, FALSE) = FALSE
+              AND a.last_seen > now() - interval '14 days'
               {' '.join(conds)}
             ORDER BY eff_score DESC
             LIMIT 2000
         """, *params)
         pts = [{
             "id": r["id"],
-            "lat": float(r["c_lat"] if r["c_lat"] is not None else r["lat"]),
-            "lon": float(r["c_lon"] if r["c_lon"] is not None else r["lon"]),
+            "lat": float(r["lat"]),
+            "lon": float(r["lon"]),
             "score": int(r["eff_score"] or 0),
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
             "address": r["address"] or "", "complex": r["complex_name"] or "",
             "url": r["url"] or "",
             "age": int(r["age_days"] or 0),
+            # последняя смена цены (если была) — для попапа на карте
+            "prev_price": r["prev_price"],
+            "price_changed": r["price_changed_at"].strftime("%d.%m.%Y") if r["price_changed_at"] else None,
             "top": idx < 10,   # топ-10 лучших — сердечки на карте
         } for idx, r in enumerate(rows)]
         resp = {"points": pts, "count": len(pts)}
@@ -542,11 +592,26 @@ def make_extras_router(templates) -> APIRouter:
             dups_active = await pg_fetchval2(
                 "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE "
                 "AND is_active IS NOT FALSE") or 0
+            complexes_total = 0
+            unbound_active = 0
+            try:
+                complexes_total = await pg_fetchval2(
+                    "SELECT COUNT(*) FROM complexes") or 0
+                unbound_active = await pg_fetchval2("""
+                    SELECT COUNT(*) FROM apartment_listings
+                    WHERE is_active IS NOT FALSE
+                      AND COALESCE(is_duplicate, FALSE) = FALSE
+                      AND (complex_name IS NULL OR btrim(complex_name) = '')
+                """) or 0
+            except Exception:
+                pass
             from bot.db import settings as _st
             await _st.load()
             resp["coverage"] = {
                 "with_coords": with_coords, "total": total_active,
                 "dups": dups_active,
+                "complexes": complexes_total,
+                "unbound": unbound_active,
                 "krisha_total": _st.get_int("KRISHA_TOTAL_FOUND", 0),
                 "hex_edge": _st.get_int("HEX_EDGE_M", 50),
             }
@@ -731,6 +796,24 @@ def make_extras_router(templates) -> APIRouter:
             GROUP BY rooms ORDER BY rooms
         """, cname)
 
+        # Все объявления ЖК с координатами — для карты на странице ЖК
+        cx_map_points = await fetch("""
+            SELECT id, lat, lon, price, rooms, area, is_active, url,
+                   COALESCE(is_duplicate, FALSE) AS is_dup
+            FROM apartment_listings
+            WHERE lower(trim(complex_name)) = lower(trim($1))
+              AND lat IS NOT NULL
+        """, cname)
+        cx_total = await fetchrow("""
+            SELECT COUNT(*) FILTER (WHERE is_active IS NOT FALSE
+                                    AND COALESCE(is_duplicate, FALSE) = FALSE) AS live,
+                   COUNT(*) FILTER (WHERE is_active IS NOT FALSE
+                                    AND COALESCE(is_duplicate, FALSE) = FALSE
+                                    AND lat IS NULL) AS live_no_coords
+            FROM apartment_listings
+            WHERE lower(trim(complex_name)) = lower(trim($1))
+        """, cname)
+
         # Данные источников (korter/homsters) для блока информации
         cx_sources = {}
         _si = cx["source_info"]
@@ -756,6 +839,9 @@ def make_extras_router(templates) -> APIRouter:
             "stats": [dict(r) for r in stats],
             "rental_stats": [dict(r) for r in rental_stats],
             "obs": dict(obs) if obs else {},
+            "map_points": [dict(r) for r in cx_map_points],
+            "live_cnt": (cx_total["live"] or 0) if cx_total else 0,
+            "live_no_coords": (cx_total["live_no_coords"] or 0) if cx_total else 0,
         })
 
     @router.post("/admin/complex/{complex_id}/contacts")
@@ -777,5 +863,198 @@ def make_extras_router(templates) -> APIRouter:
             (data.get("residents_notes") or "").strip() or None,
         )
         return JSONResponse({"ok": True})
+
+    # ── История цены объявления ───────────────────────────────────────────
+
+    @router.get("/admin/api/price-history/{listing_id}")
+    async def api_price_history(request: Request, listing_id: str):
+        """История цены для карточки/попапа на карте.
+        Публичный (как и сама карта) — ничего чувствительного тут нет."""
+        from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
+        rows = await pg_fetch("""
+            SELECT old_price, new_price, changed_at
+            FROM price_history
+            WHERE listing_id = $1
+            ORDER BY changed_at ASC
+        """, listing_id)
+        cur = await pg_fetchrow(
+            "SELECT price, first_seen FROM apartment_listings WHERE id = $1",
+            listing_id)
+        points = []
+        # стартовая точка — цена при первом появлении в базе
+        if cur and cur["first_seen"]:
+            first_price = rows[0]["old_price"] if rows else cur["price"]
+            points.append({"at": cur["first_seen"].strftime("%d.%m.%Y"),
+                           "price": first_price})
+        for r in rows:
+            points.append({"at": r["changed_at"].strftime("%d.%m.%Y"),
+                           "price": r["new_price"]})
+        return JSONResponse({
+            "points": points,
+            "current": cur["price"] if cur else None,
+            "changes": len(rows),
+        })
+
+    # ── Объявления без привязки к ЖК ──────────────────────────────────────
+
+    @router.get("/admin/unbound", response_class=HTMLResponse)
+    async def unbound_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetchval as pg_fv
+        stats = {
+            "total_active": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings "
+                "WHERE is_active IS NOT FALSE "
+                "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0,
+            "unbound": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings "
+                "WHERE is_active IS NOT FALSE "
+                "AND COALESCE(is_duplicate, FALSE) = FALSE "
+                "AND (complex_name IS NULL OR btrim(complex_name) = '')") or 0,
+            "unbound_coords": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings "
+                "WHERE is_active IS NOT FALSE "
+                "AND COALESCE(is_duplicate, FALSE) = FALSE "
+                "AND (complex_name IS NULL OR btrim(complex_name) = '') "
+                "AND lat IS NOT NULL") or 0,
+        }
+        return templates.TemplateResponse("unbound.html", {
+            "request": request, "stats": stats,
+        })
+
+    @router.get("/admin/api/unbound-points")
+    async def unbound_points(request: Request):
+        """Активные объявления без ЖК. Координаты свои, иначе центроид района."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT id, url, title, price, rooms, area, address, district,
+                   lat, lon, first_seen
+            FROM apartment_listings
+            WHERE is_active IS NOT FALSE
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND (complex_name IS NULL OR btrim(complex_name) = '')
+            ORDER BY first_seen DESC LIMIT 3000
+        """)
+        district_geo = {r2["district"]: (float(r2["lat"]), float(r2["lon"]))
+                        for r2 in await pg_fetch("""
+            SELECT district, AVG(lat) AS lat, AVG(lon) AS lon
+            FROM apartment_listings
+            WHERE lat IS NOT NULL AND district IS NOT NULL AND district != ''
+            GROUP BY district""")}
+        import random as _rnd
+        pts, no_geo = [], 0
+        for r in rows:
+            d = dict(r)
+            if d["lat"] is not None:
+                lat, lon, binding = float(d["lat"]), float(d["lon"]), "точно"
+            else:
+                dg = district_geo.get(d.get("district") or "")
+                if not dg:
+                    no_geo += 1
+                    continue
+                lat, lon, binding = dg[0], dg[1], "район"
+                lat += _rnd.uniform(-0.004, 0.004)
+                lon += _rnd.uniform(-0.006, 0.006)
+            pts.append({
+                "id": d["id"], "url": d["url"] or "",
+                "title": d["title"] or "",
+                "lat": lat, "lon": lon, "binding": binding,
+                "price": d["price"], "rooms": d["rooms"],
+                "area": float(d["area"] or 0),
+                "address": d["address"] or "", "district": d["district"] or "",
+                "found": d["first_seen"].strftime("%d.%m.%Y") if d["first_seen"] else "",
+            })
+        return JSONResponse({"points": pts, "count": len(pts), "no_geo": no_geo})
+
+    @router.post("/admin/rebind")
+    async def rebind_listings(request: Request):
+        """Привязка объявлений без ЖК тремя стадиями:
+        A) по ссылке на карточку ЖК с Крыши (complex_url = complexes.krisha_url)
+        B) по названию ЖК из заголовка/адреса против справочника complexes
+        C) по геопозиции: ближайший ЖК в радиусе ~350 м от точки объявления
+        Возвращает счётчики по каждой стадии."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch, execute as pg_exec, fetchval as pg_fv
+
+        await pg_exec("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS krisha_url TEXT")
+
+        # ── A: точная склейка по ссылке на карточку ЖК ────────────────────
+        by_url = (await pg_exec("""
+            UPDATE apartment_listings al SET complex_name = c.name
+            FROM complexes c
+            WHERE (al.complex_name IS NULL OR btrim(al.complex_name) = '')
+              AND al.complex_url IS NOT NULL AND c.krisha_url IS NOT NULL
+              AND al.complex_url = c.krisha_url
+        """) or "").split()[-1]
+
+        # ── B: название ЖК в заголовке/адресе ─────────────────────────────
+        complexes = await pg_fetch(
+            "SELECT name FROM complexes WHERE name IS NOT NULL AND btrim(name) != ''")
+        import re as _re
+        def _norm(s: str) -> str:
+            s = s.lower()
+            s = _re.sub(r"^\s*(жк|кг)\.?\s+", "", s)
+            s = _re.sub(r"[«»\"']", " ", s)
+            return _re.sub(r"\s+", " ", s).strip()
+
+        norm_map = {}
+        for c in complexes:
+            n = _norm(c["name"])
+            if len(n) >= 3:
+                norm_map[n] = c["name"]
+
+        rows = await pg_fetch("""
+            SELECT id, title, address FROM apartment_listings
+            WHERE complex_name IS NULL OR btrim(complex_name) = ''
+        """)
+        by_text = 0
+        for r in rows:
+            hay = _norm(" ".join([r["title"] or "", r["address"] or ""]))
+            if not hay:
+                continue
+            hit = None
+            for n, canon in norm_map.items():
+                if n in hay:
+                    hit = canon
+                    break
+            if hit:
+                await pg_exec(
+                    "UPDATE apartment_listings SET complex_name = $2 WHERE id = $1",
+                    r["id"], hit)
+                by_text += 1
+
+        # ── C: геопривязка к ближайшему ЖК (у объявления есть координаты) ─
+        # ~0.0045° ≈ 350 м по широте (по долготе в Астане ещё меньше — ок)
+        by_geo = (await pg_exec("""
+            UPDATE apartment_listings al
+            SET complex_name = (
+                SELECT c2.name FROM complexes c2
+                WHERE c2.lat IS NOT NULL AND c2.lon IS NOT NULL
+                ORDER BY (c2.lat - al.lat)^2 + (c2.lon - al.lon)^2
+                LIMIT 1)
+            WHERE (al.complex_name IS NULL OR btrim(al.complex_name) = '')
+              AND al.lat IS NOT NULL AND al.lon IS NOT NULL
+              AND (SELECT min((c.lat - al.lat)^2 + (c.lon - al.lon)^2)
+                   FROM complexes c WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL)
+                  < 2.0e-5
+        """) or "").split()[-1]
+
+        left = await pg_fv("""
+            SELECT COUNT(*) FROM apartment_listings
+            WHERE is_active IS NOT FALSE
+              AND (complex_name IS NULL OR btrim(complex_name) = '')
+        """) or 0
+        logger.info("rebind: by_url=%s by_text=%d by_geo=%s, осталось без ЖК %d",
+                    by_url, by_text, by_geo, left)
+        return JSONResponse({
+            "ok": True,
+            "bound": int(by_url or 0) + by_text + int(by_geo or 0),
+            "by_url": int(by_url or 0), "by_text": by_text,
+            "by_geo": int(by_geo or 0), "left": left,
+        })
 
     return router

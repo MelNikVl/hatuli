@@ -80,6 +80,14 @@ tr:last-child td { border-bottom: none; }
         </select>
       </div>
       <div class="filter-group">
+        <label>Продавец</label>
+        <select name="seller">
+          <option value="" {% if not filters.seller %}selected{% endif %}>Все</option>
+          <option value="owner" {% if filters.seller == 'owner' %}selected{% endif %}>От хозяина</option>
+          <option value="agent" {% if filters.seller == 'agent' %}selected{% endif %}>От агента</option>
+        </select>
+      </div>
+      <div class="filter-group">
         <label>Мин. скор</label>
         <input type="number" name="min_score" value="{{ filters.min_score }}" min="0" max="100" style="width:80px">
       </div>

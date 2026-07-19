@@ -42,11 +42,16 @@ def _extract_photo_uuid(url: str | None) -> str | None:
     return m.group(1) if m else None
 
 
-def find_duplicates(listings: list[dict]) -> dict[str, str]:
-    """Возвращает {duplicate_id: primary_id}. listings — отсортированы по
-    возрасту (старые первыми), primary по умолчанию — более старое."""
+def find_duplicates(listings: list[dict],
+                    ) -> tuple[dict[str, str], dict[str, str]]:
+    """Возвращает ({duplicate_id: primary_id}, {duplicate_id: match_rule}).
+    listings — отсортированы по возрасту (старые первыми), primary по
+    умолчанию — более старое.
+    match_rule: 'photo' (тот же файл фото = точно тот же объект),
+    'addr_area' (адрес+комнаты+площадь), 'addr_price' (адрес+цена+этаж)."""
     by_id = {str(l["id"]): l for l in listings}
     duplicates: dict[str, str] = {}
+    match_rules: dict[str, str] = {}
     photo_idx: dict[str, str] = {}
     addr_idx: dict[tuple, list[str]] = {}
     price_addr_idx: dict[tuple, str] = {}
@@ -54,12 +59,14 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
     def is_owner(l: dict) -> bool:
         return l.get("is_owner") is True
 
-    def mark(dup_id: str, primary_id: str):
+    def mark(dup_id: str, primary_id: str, rule: str = ""):
         # если дубль сам был primary для кого-то — переподвесим тех на нового primary
         for d, p in list(duplicates.items()):
             if p == dup_id:
                 duplicates[d] = primary_id
         duplicates[dup_id] = primary_id
+        if rule:
+            match_rules[dup_id] = rule
 
     for lst in listings:
         lid = str(lst["id"])
@@ -75,10 +82,12 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
         cur_owner = is_owner(lst)
 
         matched_primary: str | None = None
+        matched_rule = ""
 
         # 1. UUID фото
         if uuid and uuid in photo_idx and photo_idx[uuid] != lid:
             matched_primary = photo_idx[uuid]
+            matched_rule = "photo"
 
         # 2. адрес + комнаты + площадь
         if matched_primary is None and addr and rooms is not None and area > 0:
@@ -87,6 +96,7 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
                 ex = by_id.get(ex_id)
                 if ex and abs(float(ex.get("area") or 0) - area) <= 3:
                     matched_primary = ex_id
+                    matched_rule = "addr_area"
                     break
 
         # 3. адрес + цена + этаж (запасной)
@@ -94,16 +104,17 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
             key2 = (addr, round(price / 100_000) * 100_000, floor)
             if key2 in price_addr_idx and price_addr_idx[key2] != lid:
                 matched_primary = price_addr_idx[key2]
+                matched_rule = "addr_price"
 
         if matched_primary:
             ex = by_id.get(matched_primary)
             # приоритет хозяина: текущее от хозяина, существующий primary — нет
             if cur_owner and ex is not None and not is_owner(ex):
-                mark(matched_primary, lid)
+                mark(matched_primary, lid, matched_rule)
                 if uuid:
                     photo_idx[uuid] = lid
             else:
-                mark(lid, matched_primary)
+                mark(lid, matched_primary, matched_rule)
                 continue  # дубль не индексируем
 
         # индексируем как потенциальный primary
@@ -115,7 +126,7 @@ def find_duplicates(listings: list[dict]) -> dict[str, str]:
             price_addr_idx.setdefault(
                 (addr, round(price / 100_000) * 100_000, floor), lid)
 
-    return duplicates
+    return duplicates, match_rules
 
 
 async def _table_columns(table: str) -> set[str]:
@@ -134,6 +145,8 @@ async def _dedup_table(table: str, order_col: str) -> int:
     # когда именно объявление было помечено дублем — для статистики
     # «сколько дублей нашли и убрали с карты сегодня» на дашборде
     await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS dup_marked_at TIMESTAMPTZ")
+    # по какому правилу признан дублем: photo / addr_area / addr_price
+    await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS dup_match TEXT")
 
     have = await _table_columns(table)
     want = ["id", "url", "address", "rooms", "area", "price", "floor", "is_owner"]
@@ -144,14 +157,15 @@ async def _dedup_table(table: str, order_col: str) -> int:
         WHERE COALESCE(is_duplicate, FALSE) = FALSE
         ORDER BY {order_col} ASC
     """)
-    duplicates = find_duplicates([dict(r) for r in rows])
+    duplicates, match_rules = find_duplicates([dict(r) for r in rows])
     logger.info("%s: found %d duplicates", table, len(duplicates))
 
     for dup_id, primary_id in duplicates.items():
         await execute(
             f"UPDATE {table} SET is_duplicate=TRUE, duplicate_of=$1, "
-            f"dup_marked_at=COALESCE(dup_marked_at, NOW()) WHERE id=$2",
-            primary_id, dup_id)
+            f"dup_marked_at=COALESCE(dup_marked_at, NOW()), "
+            f"dup_match=COALESCE(dup_match, $3) WHERE id=$2",
+            primary_id, dup_id, match_rules.get(dup_id) or None)
     # ВАЖНО: is_active НЕ трогаем — иначе затирался бы архив.
     return len(duplicates)
 

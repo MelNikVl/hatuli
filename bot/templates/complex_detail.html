@@ -9,12 +9,28 @@
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
     {% if geo %}
     <div id="cx-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
+    <div style="font-size:11px;color:#888;margin-top:6px;">
+      живых объявлений: <b>{{ live_cnt }}</b> · на карте: <b>{{ map_points | selectattr('lat') | list | length }}</b>
+      {% if live_no_coords %} · <span style="color:#f59e0b;">{{ live_no_coords }} ждут докачки координат</span>{% endif %}
+    </div>
     <script>
     document.addEventListener('DOMContentLoaded', function() {
       const map = L.map('cx-map').setView([{{ geo.lat }}, {{ geo.lon }}], 15);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
-      L.marker([{{ geo.lat }}, {{ geo.lon }}]).addTo(map)
-        .bindPopup('{{ cx.name | e }}{% if cx_address %}<br>{{ cx_address | e }}{% endif %}');
+      const pts = {{ map_points | tojson }};
+      const bounds = [];
+      pts.forEach(p => {
+        if (!p.lat) return;
+        const col = p.is_active === false ? '#9ca3af' : (p.is_dup ? '#f59e0b' : '#22c55e');
+        const m = L.circleMarker([p.lat, p.lon], {radius:6, fillColor:col, color:'#fff', weight:1, fillOpacity:.9}).addTo(map);
+        m.bindPopup(`<b>${(p.price/1e6).toFixed(1)} млн ₸</b> · ${p.rooms || '?'}-комн${p.area ? ', ' + p.area + ' м²' : ''}` +
+          `${p.is_active === false ? '<br><span style="color:#888;">архив</span>' : ''}` +
+          `${p.is_dup ? '<br><span style="color:#f59e0b;">дубль</span>' : ''}` +
+          `<br><a href="/admin/analytics/${p.id}">Карточка</a>` +
+          (p.url ? ` · <a href="${p.url}" target="_blank">Крыша ↗</a>` : ''));
+        bounds.push([p.lat, p.lon]);
+      });
+      if (bounds.length > 1) map.fitBounds(bounds, {padding: [24, 24]});
       setTimeout(() => map.invalidateSize(), 200);
     });
     </script>
