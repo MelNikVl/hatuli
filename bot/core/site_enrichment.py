@@ -31,16 +31,28 @@ async def save_enrichment(found: dict[str, dict], source_key: str,
     обновляются через COALESCE только если set_housing_class=True (чтобы
     не путать источники разного качества).
     """
-    from bot.db.pg import fetch, execute, fetchrow
+    from bot.db.pg import fetchval, fetch, execute, fetchrow
 
     ours = await fetch("SELECT id, name FROM complexes")
     by_norm = {norm_name(r["name"]): r["id"] for r in ours if r["name"]}
 
     matched = 0
+    created = 0
     for key, data in found.items():
         cid = by_norm.get(key)
         if not cid:
-            continue
+            # ЖК из каталога источника, которого у нас ещё нет — создаём:
+            # иначе весь каталог korter/homsters по ЖК без наших объявлений
+            # (новостройки без вторички, дорогие ЖК) просто отбрасывался.
+            try:
+                cid = await fetchval(
+                    "INSERT INTO complexes (name, district) VALUES ($1, $2) RETURNING id",
+                    data.get("name") or key, data.get("district"))
+                by_norm[key] = cid
+                created += 1
+            except Exception as e:
+                logger.warning("create complex %s failed: %s", key, e)
+                continue
         matched += 1
         row = await fetchrow("SELECT source_info FROM complexes WHERE id=$1", cid)
         existing = {}

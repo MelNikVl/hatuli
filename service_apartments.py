@@ -460,6 +460,20 @@ async def run_cycle():
             ) s
             WHERE lower(c.name) = lower(s.complex_name)
         """)
+        # Координаты ЖК из центроидов объявлений (только пустые)
+        await pg_exec("""
+            UPDATE complexes c SET lat = s.lat, lon = s.lon, coords_source = 'listings'
+            FROM (
+                SELECT lower(trim(regexp_replace(complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i'))) AS n,
+                       AVG(lat) AS lat, AVG(lon) AS lon
+                FROM apartment_listings
+                WHERE lat IS NOT NULL AND complex_name IS NOT NULL AND complex_name != ''
+                GROUP BY 1
+            ) s
+            WHERE c.lat IS NULL
+              AND lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i'))) = s.n
+        """)
+
         # Фото ЖК = первое фото любого его объявления
         await pg_exec("""
             UPDATE complexes c SET photo_url = s.photo

@@ -388,19 +388,22 @@ def make_extras_router(templates) -> APIRouter:
                    COALESCE(d.name,
                             c.source_info->'korter'->>'developer',
                             c.source_info->'homsters'->>'developer') AS developer,
-                   c.avg_price_m2,
+                   c.avg_price_m2, c.lat AS c_lat, c.lon AS c_lon,
                    g.lat, g.lon, g.avg_score
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
-            JOIN LATERAL (
+            LEFT JOIN LATERAL (
                 SELECT AVG(lat) AS lat, AVG(lon) AS lon,
                        AVG(COALESCE(score_total,0) + COALESCE(zone_bonus,0)
                            + COALESCE(layer_bonus,0))
                          FILTER (WHERE is_active IS NOT FALSE) AS avg_score
                 FROM apartment_listings al
-                WHERE lower(trim(al.complex_name)) = lower(trim(c.name)) AND al.lat IS NOT NULL
-            ) g ON g.lat IS NOT NULL
-            LIMIT 1500
+                WHERE lower(trim(regexp_replace(al.complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
+                      = lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
+                  AND al.lat IS NOT NULL
+            ) g ON TRUE
+            WHERE COALESCE(c.lat, g.lat) IS NOT NULL
+            LIMIT 2500
         """)
         return JSONResponse({"complexes": [{
             "id": r["id"], "name": r["name"],
@@ -409,7 +412,8 @@ def make_extras_router(templates) -> APIRouter:
             "developer": r["developer"] or "—",
             "avg_score": round(float(r["avg_score"])) if r["avg_score"] else None,
             "price_m2": round(float(r["avg_price_m2"])) if r["avg_price_m2"] else None,
-            "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "lat": float(r["c_lat"] if r["c_lat"] is not None else r["lat"]),
+            "lon": float(r["c_lon"] if r["c_lon"] is not None else r["lon"]),
         } for r in rows]})
 
     @router.get("/admin/api/deep-sweep-status")
@@ -524,7 +528,8 @@ def make_extras_router(templates) -> APIRouter:
         """, *params)
         pts = [{
             "id": r["id"],
-            "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "lat": float(r["c_lat"] if r["c_lat"] is not None else r["lat"]),
+            "lon": float(r["c_lon"] if r["c_lon"] is not None else r["lon"]),
             "score": int(r["eff_score"] or 0),
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
             "address": r["address"] or "", "complex": r["complex_name"] or "",
