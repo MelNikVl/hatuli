@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 
 async def load_zones() -> list[dict]:
-    """Загрузить все зоны из БД. Возвращает [] если таблицы нет."""
+    """Загрузить все зоны из БД. Возвращает [] если таблицы нет.
+    Зона может храниться как один полигон (legacy) или как набор колец
+    (гексагоны): polygon = [[lon,lat],...] ИЛИ [[[lon,lat],...], ...]."""
     try:
         rows = await fetch("SELECT id, name, bonus, polygon FROM priority_zones")
     except Exception as exc:
@@ -31,10 +33,17 @@ async def load_zones() -> list[dict]:
         poly = r["polygon"]
         if isinstance(poly, str):
             poly = json.loads(poly)
-        # poly: [[lon,lat], [lon,lat], ...] (GeoJSON ring)
-        if poly and isinstance(poly[0][0], list):  # вложенный ring [[[..]]]
-            poly = poly[0]
-        zones.append({"id": r["id"], "name": r["name"], "bonus": r["bonus"], "ring": poly})
+        if not poly:
+            continue
+        # нормализуем к списку колец
+        if isinstance(poly[0][0], (int, float)):      # одно кольцо [[lon,lat],...]
+            rings = [poly]
+        elif isinstance(poly[0][0][0], (int, float)):  # список колец (гексы)
+            rings = poly
+        else:                                          # вложенный GeoJSON ring [[[..]]]
+            rings = poly[0] if poly and poly[0] else []
+        zones.append({"id": r["id"], "name": r["name"], "bonus": r["bonus"],
+                      "rings": rings})
     return zones
 
 
@@ -66,7 +75,8 @@ def zone_bonus_for(lat: float | None, lon: float | None,
     best_bonus, best_name = 0, None
     for z in zones:
         try:
-            if _point_in_ring(lat, lon, z["ring"]) and abs(z["bonus"]) > abs(best_bonus):
+            hit = any(_point_in_ring(lat, lon, ring) for ring in z["rings"])
+            if hit and abs(z["bonus"]) > abs(best_bonus):
                 best_bonus, best_name = z["bonus"], z["name"]
         except Exception:
             continue

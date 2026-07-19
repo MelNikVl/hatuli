@@ -223,6 +223,22 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
             logger.info("  complex: %s → %s", listing_id, name)
         await asyncio.sleep(2)
 
+    # Отсев ЖК-улиц (аудит продажи помечает улицы — для аренды те же)
+    if complex_map:
+        try:
+            from bot.core.complex_audit import street_names
+            streets = await street_names()
+            if streets:
+                complex_map = {
+                    k: v for k, v in complex_map.items()
+                    if re.sub(r"\s+", " ",
+                              re.sub(r"[«»\"'()]", " ",
+                                     re.sub(r"^\s*(жк|кг)\.?\s+", "",
+                                            v.lower()))).strip() not in streets
+                }
+        except Exception:
+            pass
+
     for l in listings:
         complex_name = complex_map.get(l.id) or l.complex_name
         try:
@@ -407,3 +423,78 @@ async def run_rental_cycle() -> None:
         await asyncio.sleep(15)
     await rebuild_rental_index()
     logger.info("=== Rental cycle done: %d total ===", total)
+
+
+# ── Бэкфилл привязки аренды: ЖК (офиц. блок Крыши) + координаты + адрес ──
+
+async def backfill_rental_details(batch: int = 8) -> dict:
+    """Докачивает детальные страницы аренды: у каждого объявления должна
+    быть привязка — ЖК (официальный блок map.complex), координаты
+    (JS-блоб страницы) или хотя бы адрес. Берёт только живые объявления."""
+    import random as _rnd
+    from bot.db.pg import fetch, execute
+
+    await execute("ALTER TABLE rental_listings ADD COLUMN IF NOT EXISTS complex_url TEXT")
+    await execute("ALTER TABLE rental_listings ADD COLUMN IF NOT EXISTS coord_fetch_attempted_at TIMESTAMPTZ")
+
+    rows = await fetch("""
+        SELECT id, url FROM rental_listings
+        WHERE (lat IS NULL OR complex_name IS NULL OR btrim(complex_name) = '')
+          AND url IS NOT NULL
+          AND last_seen > now() - interval '7 days'
+          AND (coord_fetch_attempted_at IS NULL
+               OR coord_fetch_attempted_at < now() - interval '3 days')
+        ORDER BY coord_fetch_attempted_at ASC NULLS FIRST, found_at DESC
+        LIMIT $1
+    """, batch)
+    if not rows:
+        return {"checked": 0, "coords": 0, "complex": 0}
+
+    from bot.core.apartment_details import fetch_apartment_details
+    from bot.core.complex_audit import street_names
+    streets = await street_names()
+
+    got_geo = got_cx = 0
+    for r in rows:
+        await asyncio.sleep(_rnd.uniform(8.0, 15.0))
+        try:
+            details = await fetch_apartment_details(r["url"])
+        except Exception as e:
+            logger.warning("rental backfill fetch failed %s: %s", r["id"], e)
+            details = None
+        if not details:
+            await execute(
+                "UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1",
+                r["id"])
+            continue
+
+        cx = details.get("complex_name")
+        if cx:
+            n = re.sub(r"^\s*(жк|кг)\.?\s+", "", cx.lower())
+            n = re.sub(r"[«»\"'()]", " ", n)
+            n = re.sub(r"\s+", " ", n).strip()
+            if n in streets:
+                cx = None  # ЖК-улица — не привязываем
+
+        sets, params, i = ["coord_fetch_attempted_at=now()"], [], 1
+        if details.get("lat") and details.get("lon"):
+            sets.append(f"lat=${i}"); params.append(details["lat"]); i += 1
+            sets.append(f"lon=${i}"); params.append(details["lon"]); i += 1
+            got_geo += 1
+        if cx:
+            sets.append(f"complex_name=${i}"); params.append(cx); i += 1
+            if details.get("complex_url"):
+                sets.append(f"complex_url=COALESCE(${i}, complex_url)")
+                params.append(details["complex_url"]); i += 1
+            got_cx += 1
+        if details.get("address_full"):
+            sets.append(f"address=CASE WHEN address IS NULL OR btrim(address)='' "
+                        f"THEN ${i} ELSE address END")
+            params.append(details["address_full"]); i += 1
+        params.append(r["id"])
+        await execute(
+            f"UPDATE rental_listings SET {', '.join(sets)} WHERE id=${i}", *params)
+
+    logger.info("rental backfill: %d checked, координаты %d, ЖК %d",
+                len(rows), got_geo, got_cx)
+    return {"checked": len(rows), "coords": got_geo, "complex": got_cx}

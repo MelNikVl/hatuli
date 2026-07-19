@@ -4,6 +4,28 @@
   Рейтинг ЖК
   <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} жилых комплексов</small>
 </div>
+<div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+  <button onclick="auditCx(false)" style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">🔍 Найти ЖК-улицы</button>
+  <button onclick="auditCx(true)" style="padding:8px 14px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">🧹 Отвязать улицы от ЖК</button>
+  <span id="audit-status" style="font-size:13px;color:#888;"></span>
+</div>
+<script>
+async function auditCx(apply) {
+  const st = document.getElementById('audit-status');
+  st.textContent = 'проверяю…';
+  if (!apply) {
+    const d = await (await fetch('/admin/complexes/audit')).json();
+    st.textContent = d.count
+      ? 'Подозрительные: ' + d.suspects.map(s => `${s.name} (${s.street_hits}/${s.listings})`).join(', ')
+      : 'псевдо-ЖК не найдены ✓';
+  } else {
+    if (!confirm('Пометить псевдо-ЖК улицами и отвязать их объявления?')) { st.textContent=''; return; }
+    const d = await (await fetch('/admin/complexes/audit/apply', {method:'POST'})).json();
+    st.textContent = `помечено улиц: ${d.flagged}, отвязано объявлений: ${d.unbound}`;
+    setTimeout(() => location.reload(), 1500);
+  }
+}
+</script>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

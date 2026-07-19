@@ -311,7 +311,10 @@ def make_extras_router(templates) -> APIRouter:
         """Страница дублей: кто чей дубль, со ссылками."""
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
-        from bot.db.pg import fetch as pg_fetch
+        from bot.db.pg import fetch as pg_fetch, execute as pg_exec2
+        # колонка появляется после первого прогона дедупа — создаём сами,
+        # чтобы страница не падала на свежей базе
+        await pg_exec2("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS dup_match TEXT")
         rows = await pg_fetch("""
             SELECT p.id, p.address, p.price, p.rooms, p.area, p.is_owner,
                    p.lat, p.lon, p.complex_name, COUNT(d.id) AS dup_cnt,
@@ -443,6 +446,7 @@ def make_extras_router(templates) -> APIRouter:
                   AND al.lat IS NOT NULL
             ) g ON TRUE
             WHERE COALESCE(c.lat, g.lat) IS NOT NULL
+              AND COALESCE(c.is_street, FALSE) = FALSE
             LIMIT 2500
         """)
         return JSONResponse({"complexes": [{
@@ -486,6 +490,7 @@ def make_extras_router(templates) -> APIRouter:
                 conds.append(f"r.price <= ${i}"); params.append(int(price_max)); i += 1
             rows = await pg_fetch(f"""
                 SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.district, r.found_at,
+                       r.lat AS own_lat, r.lon AS own_lon,
                        g.lat, g.lon
                 FROM rental_listings r
                 LEFT JOIN LATERAL (
@@ -510,7 +515,10 @@ def make_extras_router(templates) -> APIRouter:
             import random as _rnd
             for r in rows:
                 d = dict(r)
-                if d["lat"] is not None:
+                if d.get("own_lat") is not None:
+                    # свои координаты с детальной страницы — самая точная привязка
+                    lat, lon, binding, jit = float(d["own_lat"]), float(d["own_lon"]), "точно", 0.0
+                elif d["lat"] is not None:
                     lat, lon, binding, jit = float(d["lat"]), float(d["lon"]), "ЖК", 0.0005
                 else:
                     dg = district_geo.get(d.get("district") or "")
@@ -661,10 +669,16 @@ def make_extras_router(templates) -> APIRouter:
         bonus = max(-50, min(50, int(data.get("bonus", 10))))
         color = "#ef4444" if bonus < 0 else data.get("color", "#2563eb")
         polygon = data.get("polygon")  # [[lon,lat], ...] или None при апдейте только баллов
+        hexes = data.get("hexes")      # [[[lon,lat]x6], ...] — зона из гексагонов
+        if hexes:
+            if len(hexes) > 2000:
+                return JSONResponse({"error": "слишком много гексов (макс 2000)"},
+                                    status_code=400)
+            polygon = hexes            # храним зону как набор колец
 
         from bot.db.pg import fetchval, execute
         if zone_id:  # обновление существующей
-            if polygon and len(polygon) >= 3:
+            if polygon and (hexes or len(polygon) >= 3):
                 await execute(
                     "UPDATE priority_zones SET name=$2, bonus=$3, color=$4, polygon=$5::jsonb WHERE id=$1",
                     int(zone_id), name, bonus, color, _json.dumps(polygon))
@@ -675,7 +689,8 @@ def make_extras_router(templates) -> APIRouter:
             logger.info("zone updated: #%s %s (%+d)", zone_id, name, bonus)
             return JSONResponse({"ok": True, "id": int(zone_id)})
 
-        if not polygon or len(polygon) < 3:
+        min_ok = len(polygon) >= 1 if hexes else (polygon and len(polygon) >= 3)
+        if not polygon or not min_ok:
             return JSONResponse({"error": "polygon too small"}, status_code=400)
         zone_id = await fetchval(
             "INSERT INTO priority_zones (name, bonus, color, polygon) "
@@ -982,6 +997,29 @@ def make_extras_router(templates) -> APIRouter:
 
         await pg_exec("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS krisha_url TEXT")
 
+        # ── A0: адрес из заголовка (старые дома: «…2/5 этаж, Сатпаева 19 — Майлина») ──
+        import re as _re0
+        addr_rows = await pg_fetch("""
+            SELECT id, title FROM apartment_listings
+            WHERE (address IS NULL OR btrim(address) = '') AND title IS NOT NULL
+        """)
+        addr_filled = 0
+        _addr_re = _re0.compile(r",\s*([^,]{2,40}?\d[^,]{0,20}?)\s*(?=,|—|–|$)")
+        _letters = _re0.compile(r"[А-Яа-яЁёA-Za-z]{2}")
+        for r in addr_rows:
+            hit = None
+            for m in _addr_re.finditer(r["title"] or ""):
+                cand = m.group(1).strip()
+                # адрес — это улица + номер: обязаны быть буквы, а не «40 м²»
+                if _letters.search(cand) and not cand.lower().startswith(("м²", "м2")):
+                    hit = cand
+                    break
+            if hit:
+                await pg_exec(
+                    "UPDATE apartment_listings SET address = $2 WHERE id = $1",
+                    r["id"], hit)
+                addr_filled += 1
+
         # ── A: точная склейка по ссылке на карточку ЖК ────────────────────
         by_url = (await pg_exec("""
             UPDATE apartment_listings al SET complex_name = c.name
@@ -991,9 +1029,11 @@ def make_extras_router(templates) -> APIRouter:
               AND al.complex_url = c.krisha_url
         """) or "").split()[-1]
 
-        # ── B: название ЖК в заголовке/адресе ─────────────────────────────
+        # ── B: название ЖК в заголовке (адрес НЕ используем — там улицы,
+        #     и «Бухар Жырау» в адресе ≠ ЖК «Бухар Жырау») ────────────────
         complexes = await pg_fetch(
-            "SELECT name FROM complexes WHERE name IS NOT NULL AND btrim(name) != ''")
+            "SELECT name FROM complexes WHERE name IS NOT NULL AND btrim(name) != ''"
+            " AND COALESCE(is_street, FALSE) = FALSE")
         import re as _re
         def _norm(s: str) -> str:
             s = s.lower()
@@ -1008,17 +1048,18 @@ def make_extras_router(templates) -> APIRouter:
                 norm_map[n] = c["name"]
 
         rows = await pg_fetch("""
-            SELECT id, title, address FROM apartment_listings
+            SELECT id, title FROM apartment_listings
             WHERE complex_name IS NULL OR btrim(complex_name) = ''
         """)
         by_text = 0
         for r in rows:
-            hay = _norm(" ".join([r["title"] or "", r["address"] or ""]))
+            hay = _norm(r["title"] or "")
             if not hay:
                 continue
             hit = None
             for n, canon in norm_map.items():
-                if n in hay:
+                # название должно идти после «жк» или быть отдельным словосочетанием в заголовке
+                if f"жк {n}" in hay or _re.search(rf"(?<![а-яёa-z]){_re.escape(n)}(?![а-яёa-z])", hay):
                     hit = canon
                     break
             if hit:
@@ -1034,12 +1075,14 @@ def make_extras_router(templates) -> APIRouter:
             SET complex_name = (
                 SELECT c2.name FROM complexes c2
                 WHERE c2.lat IS NOT NULL AND c2.lon IS NOT NULL
+                  AND COALESCE(c2.is_street, FALSE) = FALSE
                 ORDER BY (c2.lat - al.lat)^2 + (c2.lon - al.lon)^2
                 LIMIT 1)
             WHERE (al.complex_name IS NULL OR btrim(al.complex_name) = '')
               AND al.lat IS NOT NULL AND al.lon IS NOT NULL
               AND (SELECT min((c.lat - al.lat)^2 + (c.lon - al.lon)^2)
-                   FROM complexes c WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL)
+                   FROM complexes c WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL
+                     AND COALESCE(c.is_street, FALSE) = FALSE)
                   < 2.0e-5
         """) or "").split()[-1]
 
@@ -1055,6 +1098,27 @@ def make_extras_router(templates) -> APIRouter:
             "bound": int(by_url or 0) + by_text + int(by_geo or 0),
             "by_url": int(by_url or 0), "by_text": by_text,
             "by_geo": int(by_geo or 0), "left": left,
+            "addr_filled": addr_filled,
         })
+
+    # ── Аудит «ЖК-улиц» ───────────────────────────────────────────────────
+
+    @router.get("/admin/complexes/audit")
+    async def complexes_audit(request: Request):
+        """Превью: какие 'ЖК' на самом деле улицы (название в адресах ≥60% объявлений)."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.complex_audit import audit_complexes
+        suspects = await audit_complexes()
+        return JSONResponse({"suspects": suspects, "count": len(suspects)})
+
+    @router.post("/admin/complexes/audit/apply")
+    async def complexes_audit_apply(request: Request):
+        """Применить: пометить псевдо-ЖК улицами и отвязать их объявления."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.complex_audit import purge_street_complexes
+        res = await purge_street_complexes()
+        return JSONResponse({"ok": True, **res})
 
     return router

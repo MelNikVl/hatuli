@@ -96,6 +96,40 @@ async def main():
         except Exception as e:
             log.warning("Rental deduplication failed: %s", e)
 
+        # === Бэкфилл привязки аренды: ЖК (офиц. блок Крыши) / координаты / адрес ===
+        try:
+            from bot.db import settings as _st_r
+            from bot.core.rental_parser import backfill_rental_details
+            await _st_r.load()
+            rb = _st_r.get_int("RENTAL_BACKFILL_BATCH", 8)
+            if rb > 0:
+                res = await backfill_rental_details(rb)
+                if res.get("checked"):
+                    log.info("Rental backfill: %s", res)
+        except Exception as e:
+            log.warning("Rental backfill failed: %s", e)
+
+        # === Геопривязка аренды к ближайшему ЖК (≤ ~350 м, без ЖК-улиц) ===
+        try:
+            from bot.db.pg import execute as _pex_geo
+            await _pex_geo("""
+                UPDATE rental_listings r
+                SET complex_name = (
+                    SELECT c2.name FROM complexes c2
+                    WHERE c2.lat IS NOT NULL AND c2.lon IS NOT NULL
+                      AND COALESCE(c2.is_street, FALSE) = FALSE
+                    ORDER BY (c2.lat - r.lat)^2 + (c2.lon - r.lon)^2
+                    LIMIT 1)
+                WHERE (r.complex_name IS NULL OR btrim(r.complex_name) = '')
+                  AND r.lat IS NOT NULL AND r.lon IS NOT NULL
+                  AND (SELECT min((c.lat - r.lat)^2 + (c.lon - r.lon)^2)
+                       FROM complexes c
+                       WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL
+                         AND COALESCE(c.is_street, FALSE) = FALSE) < 2.0e-5
+            """)
+        except Exception as e:
+            log.warning("Rental geo-bind failed: %s", e)
+
 
         sleep_sec = random.uniform(5 * 60, 15 * 60)
         log.info("Sleeping %.0f min...\n", sleep_sec / 60)

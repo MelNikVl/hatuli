@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-title">🏢 {{ cx.name }} <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% endif %}</small></div>
+{% if cx.is_street %}
+<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:14px;">
+  ⚠️ <b>Это улица, а не ЖК.</b> Аудит определил, что под этим названием Крыша группирует дома по улице. Объявления отвязаны, из карт и подборок запись исключена.
+</div>
+{% endif %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
@@ -43,16 +48,36 @@
     {% if cx.photo_url %}<img src="{{ cx.photo_url }}" loading="lazy" style="width:100%;max-height:220px;object-fit:cover;border-radius:8px;margin-bottom:10px;">{% endif %}
     <b style="font-size:15px;">Основная информация</b>
     <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">
-      <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx_address or 'не определён' }}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx.address or cx_address or 'не определён' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{{ developer or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Год постройки/сдачи</td><td><b>{{ cx.year_built or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Район</td><td><b>{{ cx.district or '—' }}</b></td></tr>
+      {% if cx_sources.krisha %}
+      {% if cx_sources.krisha.status %}
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Статус (Крыша)</td><td><b>{{ cx_sources.krisha.status }}</b></td></tr>
+      {% endif %}
+      {% if cx_sources.krisha.deadline %}
+      <tr><td style="padding:5px 14px 5px 0;color:#888;vertical-align:top;">Срок сдачи</td><td style="font-size:12px;">{{ cx_sources.krisha.deadline }}</td></tr>
+      {% endif %}
+      {% if cx_sources.krisha.rating %}
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Рейтинг на Крыше</td><td><b>⭐ {{ cx_sources.krisha.rating }}</b> <span style="color:#888;font-size:12px;">· {{ cx_sources.krisha.reviews_cnt or 0 }} отзывов</span></td></tr>
+      {% endif %}
+      {% endif %}
       {% if cx_sources.homsters and cx_sources.homsters.price_from %}
-      <tr><td style="padding:5px 14px 5px 0;color:#888;">Цена от (первичка)</td><td><b>{{ '{:,.0f}'.format(cx_sources.homsters.price_from).replace(',', ' ') }} ₸</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Цена от (первичка)</td><td><b>{{ '{:,.0f}'.format(cx_sources.homsters.price_from).replace(',', ' ') }} ₸</b>
+        {% if cx_sources.homsters.stage_badge %}<span style="font-size:11px;background:#fef3c7;color:#92400e;border-radius:8px;padding:1px 8px;margin-left:6px;">{{ cx_sources.homsters.stage_badge }}</span>{% endif %}</td></tr>
+      {% endif %}
+      {% if cx_sources.homsters and (cx_sources.homsters.area_min or cx_sources.homsters.rooms_min) %}
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Планировки (homsters)</td><td style="font-size:13px;">
+        {% if cx_sources.homsters.area_min %}{{ cx_sources.homsters.area_min }}–{{ cx_sources.homsters.area_max }} м²{% endif %}
+        {% if cx_sources.homsters.rooms_min %} · {{ cx_sources.homsters.rooms_min }}–{{ cx_sources.homsters.rooms_max }} комн{% endif %}</td></tr>
       {% endif %}
       {% if cx_sources.korter and cx_sources.korter.price_m2 %}
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Цена/м² (Korter)</td><td><b>{{ '{:,.0f}'.format(cx_sources.korter.price_m2).replace(',', ' ') }} ₸</b></td></tr>
+      {% endif %}
+      {% if cx_sources.korter and cx_sources.korter.price_from %}
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Цена от (Korter)</td><td><b>{{ '{:,.0f}'.format(cx_sources.korter.price_from).replace(',', ' ') }} ₸</b></td></tr>
       {% endif %}
     </table>
   </div>
@@ -68,6 +93,7 @@
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;">
     <b style="font-size:14px;">🔎 Где искать инфу по этому ЖК</b>
     <ul style="font-size:13px;margin:8px 0 0;padding-left:18px;">
+      {% if cx.krisha_url %}<li><a href="{{ cx.krisha_url }}" target="_blank">Страница ЖК на krisha.kz →</a></li>{% endif %}
       {% if cx.korter_url %}<li><a href="{{ cx.korter_url }}" target="_blank">Страница ЖК на korter.kz →</a></li>{% endif %}
       {% if cx_sources.korter and cx_sources.korter.url %}<li><a href="{{ cx_sources.korter.url }}" target="_blank">korter.kz (данные класса/цен) →</a></li>{% endif %}
       {% if cx_sources.homsters and cx_sources.homsters.url %}<li><a href="{{ cx_sources.homsters.url }}" target="_blank">homsters.kz (первичка{% if cx_sources.homsters.stage_badge %}, {{ cx_sources.homsters.stage_badge }}{% endif %}) →</a></li>{% endif %}

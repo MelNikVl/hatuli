@@ -108,6 +108,28 @@ async def run_cycle():
 
     log.info("Parsed %d listings total", len(results))
 
+    # ── Отсев «ЖК-улиц»: названия, помеченные аудитом как улицы, не принимаем ──
+    try:
+        from bot.core.complex_audit import street_names as _street_names
+        import re as _re_s
+        _streets = await _street_names()
+        if _streets:
+            def _norm_s(s):
+                s = (s or "").lower()
+                s = _re_s.sub(r"^\s*(жк|кг)\.?\s+", "", s)
+                s = _re_s.sub(r"[«»\"'()]", " ", s)
+                return _re_s.sub(r"\s+", " ", s).strip()
+            cleared = 0
+            for r in results:
+                if r.get("complex_name") and _norm_s(r["complex_name"]) in _streets:
+                    r["complex_name"] = None
+                    r["complex_url"] = None
+                    cleared += 1
+            if cleared:
+                log.info("street filter: убрано %d привязок к ЖК-улицам", cleared)
+    except Exception as e:
+        log.warning("street filter failed: %s", e)
+
     new_cnt = upd_cnt = 0
 
     for r in results:
@@ -306,6 +328,21 @@ async def run_cycle():
                             "UPDATE apartment_listings SET coord_fetch_attempted_at=now() WHERE id=$1",
                             m["id"],
                         )
+                    if details.get("complex_name"):
+                        # не принимаем названия, помеченные аудитом как улицы
+                        try:
+                            from bot.core.complex_audit import street_names as _sn2
+                            import re as _re_b
+                            _st2 = await _sn2()
+                            _n = (details["complex_name"] or "").lower()
+                            _n = _re_b.sub(r"^\s*(жк|кг)\.?\s+", "", _n)
+                            _n = _re_b.sub(r"[«»\"'()]", " ", _n)
+                            _n = _re_b.sub(r"\s+", " ", _n).strip()
+                            if _n in _st2:
+                                details.pop("complex_name", None)
+                                details.pop("complex_url", None)
+                        except Exception:
+                            pass
                     if details.get("complex_name"):
                         await pg_exec(
                             "UPDATE apartment_listings SET complex_name=$2, "

@@ -3,13 +3,11 @@
 <div class="page-title">🗺 Зоны приоритета</div>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
 
 <style>
-.zones-layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
-#map { height: 620px; border-radius: 12px; border: 1px solid var(--border); }
+.zones-layout { display: grid; grid-template-columns: 1fr 330px; gap: 16px; }
+#map { height: 640px; border-radius: 12px; border: 1px solid var(--border); }
 .zone-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
 .zone-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; font-size: 13px; }
 .zone-item .del { cursor: pointer; color: #ef4444; font-weight: 700; border: none; background: none; font-size: 15px; }
@@ -17,15 +15,17 @@
 .hint { font-size: 12px; color: #888; margin-bottom: 12px; line-height: 1.5; }
 .btn-zone-save { width: 100%; padding: 10px; border: none; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 700; cursor: pointer; }
 .btn-zone-save:disabled { opacity: .4; cursor: default; }
-.zbadge { padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 700; color: #fff; }
+#hex-counter { font-size: 13px; font-weight: 700; color: #2563eb; margin-bottom: 8px; }
+#grid-hint { font-size: 12px; color: #b45309; margin-bottom: 8px; display: none; }
 </style>
 
 <div class="hint">
-  Нарисуй область мышкой (кнопка ⬠ слева на карте), дай имя и баллы — любые от −50 до +50,
-  минусовые делают анти-зону (промзона, неликвидная окраина: штраф к скору).
-  <b>Редактирование:</b> кнопка ✏ на карте — двигай вершины существующих зон, затем «Save».
-  Баллы и имя меняются в списке справа. Если несколько зон пересекаются — действует
-  сильнейшая по модулю. Пересчёт объявлений — в следующем цикле парсера.
+  Зоны собираются <b>из гексагонов</b>: включи сетку, выбери размер ребра и кликай по гексам —
+  они закрашиваются (зелёным для плюс-зоны, красным для анти-зоны). Клик по выбранному гексу убирает его.
+  Баллы: от −50 до +50 (минус = анти-зона: промзона, неликвидная окраина). При пересечении зон действует сильнейшая по модулю.
+  Пересчёт объявлений — в следующем цикле парсера.<br>
+  <b>Какой размер ребра выбрать:</b> 50 м — ювелирно вокруг парка/школы; <b>100 м — оптимум по умолчанию</b>
+  (улица-две, совпадает с сеткой карты на дашборде); 150–300 м — для крупных районов и анти-зон.
 </div>
 
 <div class="zones-layout">
@@ -33,11 +33,22 @@
   <div class="zone-panel">
     <h3 style="margin-top:0;">Новая зона</h3>
     <div class="zone-form">
+      <label style="font-size:11px;color:#888;">Ребро гексагона</label>
+      <select id="z-edge">
+        <option value="50">50 м — ювелирно</option>
+        <option value="100" selected>100 м — оптимум</option>
+        <option value="150">150 м</option>
+        <option value="200">200 м — крупные районы</option>
+        <option value="300">300 м — анти-зоны</option>
+      </select>
+      <label style="font-size:11px;color:#888;"><input type="checkbox" id="z-grid" checked> показывать гексагонную сетку</label>
+      <div id="grid-hint">Приблизь карту — сетка рисуется при достаточном зуме (чтобы не рисовать тысячи гексов).</div>
+      <div id="hex-counter">Выбрано гексов: 0</div>
       <input id="z-name" placeholder="Название (напр. Ботанический парк)">
       <input id="z-bonus" type="number" value="10" min="-50" max="50" step="1"
-             title="Баллы от −50 до +50. Минус = анти-зона (промзона, неликвидная окраина)">
-      <div style="font-size:11px;color:#888;margin:-4px 0 8px;">Баллы: от −50 до +50. Отрицательные = анти-зона (штраф к скору).</div>
-      <button class="btn-zone-save" id="z-save" disabled onclick="saveZone()">Сначала нарисуй полигон</button>
+             title="Баллы от −50 до +50. Минус = анти-зона">
+      <button class="btn-zone-save" id="z-save" disabled onclick="saveZone()">Сначала выбери гексы на карте</button>
+      <button class="btn-zone-save" style="background:transparent;color:#888;border:1px solid var(--border);margin-top:6px;" onclick="clearSelection()">Очистить выбор</button>
     </div>
     <h3>Существующие зоны</h3>
     <div id="zone-list"><em style="color:#888;font-size:13px;">загрузка…</em></div>
@@ -45,65 +56,131 @@
 </div>
 
 <script>
-const map = L.map('map').setView([51.128, 71.43], 12);  // Астана
+const map = L.map('map').setView([51.128, 71.43], 13);  // Астана
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap', maxZoom: 19,
 }).addTo(map);
 
-const drawnItems = new L.FeatureGroup().addTo(map);
+// ── Гексагональная математика (та же система, что на дашборде) ──────────
+const SQ3 = Math.sqrt(3);
+const MLAT = 111320, MLON = 70098;
+const LAT0 = 51.128207, LON0 = 71.430411;
+const D2R = Math.PI / 180;
 
-map.addControl(new L.Control.Draw({
-  draw: { polygon: { shapeOptions: { color: '#2563eb' } },
-          polyline: false, rectangle: true, circle: false, marker: false, circlemarker: false },
-  edit: { featureGroup: drawnItems }
-}));
-
-let pendingPolygon = null;
-
-// Редактирование вершин существующих зон: кнопка ✏ (edit) на карте
-map.on(L.Draw.Event.EDITED, async e => {
-  const updates = [];
-  e.layers.eachLayer(l => {
-    if (l._zoneId) {
-      const ring = l.toGeoJSON().geometry.coordinates[0];
-      updates.push({id: l._zoneId, name: l._zoneName, bonus: l._zoneBonus, polygon: ring});
-    }
-  });
-  for (const u of updates) {
-    await fetch('/admin/zones/save', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(u),
-    });
+const hexW = e => 2 * e, hexH = e => SQ3 * e;
+const hexCx = (q, r, e) => e * SQ3 * (q + r / 2);
+const hexCy = (q, r, e) => e * 1.5 * r;
+function hexCenter(q, r, e) {
+  return { lon: LON0 + hexCx(q, r, e) / MLON, lat: LAT0 + hexCy(q, r, e) / MLAT };
+}
+function hexAxialF(lon, lat, e) {
+  const x = (lon - LON0) * MLON, y = (lat - LAT0) * MLAT;
+  return { q: (SQ3 / 3 * x - y / 3) / e, r: (2 / 3 * y) / e };
+}
+function hexRound(q, r) {
+  const s = -q - r;
+  let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+  const dq = Math.abs(rq - q), dr = Math.abs(rr - r), ds = Math.abs(rs - s);
+  if (dq > dr && dq > ds) rq = -rr - rs;
+  else if (dr > ds) rr = -rq - rs;
+  return [rq, rr];
+}
+function hexCorners(lon, lat, e) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (60 * i) * D2R;
+    pts.push([lat + e * Math.sin(a) / MLAT, lon + e * Math.cos(a) / MLON]);
   }
-  if (updates.length) loadZones();
-});
+  return pts;
+}
+function hexRingLonLat(lon, lat, e) {  // для сохранения: [lon,lat]
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (60 * i) * D2R;
+    pts.push([lon + e * Math.cos(a) / MLON, lat + e * Math.sin(a) / MLAT]);
+  }
+  pts.push(pts[0]);
+  return pts;
+}
 
-map.on(L.Draw.Event.CREATED, e => {
-  drawnItems.clearLayers();
-  drawnItems.addLayer(e.layer);
-  // GeoJSON ring: [[lon,lat],...]
-  const gj = e.layer.toGeoJSON();
-  pendingPolygon = gj.geometry.coordinates[0];
+// ── Состояние ────────────────────────────────────────────────────────────
+const gridLayer = L.layerGroup().addTo(map);
+const zonesLayer = L.layerGroup().addTo(map);
+const selLayer = L.layerGroup().addTo(map);
+const selected = new Map();  // "q,r" -> {q, r, layer}
+
+function curEdge() { return parseInt(document.getElementById('z-edge').value); }
+
+// ── Сетка ────────────────────────────────────────────────────────────────
+function drawGrid() {
+  gridLayer.clearLayers();
+  document.getElementById('grid-hint').style.display = 'none';
+  if (!document.getElementById('z-grid').checked) return;
+  const e = curEdge();
+  const b = map.getBounds().pad(0.05);
+  const corners = [
+    [b.getWest(), b.getSouth()], [b.getEast(), b.getSouth()],
+    [b.getWest(), b.getNorth()], [b.getEast(), b.getNorth()],
+  ].map(([lo, la]) => hexAxialF(lo, la, e));
+  const qmin = Math.floor(Math.min(...corners.map(c => c.q))) - 1;
+  const qmax = Math.ceil(Math.max(...corners.map(c => c.q))) + 1;
+  const rmin = Math.floor(Math.min(...corners.map(c => c.r))) - 1;
+  const rmax = Math.ceil(Math.max(...corners.map(c => c.r))) + 1;
+  const total = (qmax - qmin + 1) * (rmax - rmin + 1);
+  if (total > 6000) {
+    document.getElementById('grid-hint').style.display = 'block';
+    return;
+  }
+  for (let q = qmin; q <= qmax; q++) {
+    for (let r = rmin; r <= rmax; r++) {
+      const c = hexCenter(q, r, e);
+      if (c.lon < b.getWest() || c.lon > b.getEast() || c.lat < b.getSouth() || c.lat > b.getNorth()) continue;
+      const key = q + ',' + r;
+      const isSel = selected.has(key);
+      const poly = L.polygon(hexCorners(c.lon, c.lat, e), {
+        color: isSel ? '#16a34a' : '#94a3b8',
+        weight: isSel ? 2 : 0.8,
+        fillColor: isSel ? '#16a34a' : '#3b82f6',
+        fillOpacity: isSel ? 0.45 : 0.06,
+      }).addTo(gridLayer);
+      poly.on('click', () => toggleHex(q, r));
+    }
+  }
+}
+
+function toggleHex(q, r) {
+  const key = q + ',' + r;
+  if (selected.has(key)) selected.delete(key);
+  else selected.set(key, {q, r});
+  drawGrid();
+  updateCounter();
+}
+
+function updateCounter() {
+  document.getElementById('hex-counter').textContent = 'Выбрано гексов: ' + selected.size;
   const btn = document.getElementById('z-save');
-  btn.disabled = false;
-  btn.textContent = '💾 Сохранить зону';
-});
+  btn.disabled = selected.size === 0;
+  btn.textContent = selected.size === 0 ? 'Сначала выбери гексы на карте' : `💾 Сохранить зону (${selected.size} гексов)`;
+}
+
+function clearSelection() { selected.clear(); drawGrid(); updateCounter(); }
 
 async function saveZone() {
   const name = document.getElementById('z-name').value.trim() || 'Зона';
   const bonus = parseInt(document.getElementById('z-bonus').value);
-  if (!pendingPolygon) return;
+  const e = curEdge();
+  const hexes = [...selected.values()].map(({q, r}) => {
+    const c = hexCenter(q, r, e);
+    return hexRingLonLat(c.lon, c.lat, e);
+  });
   const r = await fetch('/admin/zones/save', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name, bonus, color: '#2563eb', polygon: pendingPolygon}),
+    body: JSON.stringify({name, bonus, hexes}),
   });
   if (r.ok) {
-    pendingPolygon = null;
-    drawnItems.clearLayers();
+    selected.clear();
     document.getElementById('z-name').value = '';
-    const btn = document.getElementById('z-save');
-    btn.disabled = true; btn.textContent = 'Сначала нарисуй полигон';
-    loadZones();
+    updateCounter(); drawGrid(); loadZones();
   } else {
     alert('Ошибка сохранения: ' + await r.text());
   }
@@ -123,14 +200,13 @@ async function updateZoneMeta(id) {
   const bonus = parseInt(document.getElementById(`zb-${id}`).value) || 0;
   await fetch('/admin/zones/save', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({id, name, bonus}),   // без polygon = меняем только имя/баллы
+    body: JSON.stringify({id, name, bonus}),
   });
   loadZones();
 }
 
 async function loadZones() {
-  // чистим только сохранённые зоны, не текущий незаконченный рисунок
-  drawnItems.eachLayer(l => { if (l._zoneId) drawnItems.removeLayer(l); });
+  zonesLayer.clearLayers();
   const r = await fetch('/admin/zones/list');
   const d = await r.json();
   const list = document.getElementById('zone-list');
@@ -140,25 +216,35 @@ async function loadZones() {
   }
   list.innerHTML = d.zones.map(z => {
     const neg = z.bonus < 0;
+    const hexInfo = Array.isArray(z.polygon[0]) && Array.isArray(z.polygon[0][0]) ? ` · ${z.polygon.length} гекс.` : '';
     return `<div class="zone-item" style="flex-wrap:wrap;gap:4px;">
        <input id="zn-${z.id}" value="${z.name}" style="flex:1;min-width:100px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12px;">
        <input id="zb-${z.id}" type="number" value="${z.bonus}" min="-50" max="50" style="width:60px;padding:4px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:${neg ? '#ef4444' : '#16a34a'};font-weight:700;font-size:12px;">
+       <span style="font-size:10px;color:#aaa;width:100%;">${hexInfo}</span>
        <button class="del" style="background:#2563eb;" title="Сохранить имя/баллы" onclick="updateZoneMeta(${z.id})">💾</button>
        <button class="del" onclick="deleteZone(${z.id})">✕</button>
      </div>`;
   }).join('');
   d.zones.forEach(z => {
-    let ring = z.polygon;
-    if (ring.length && Array.isArray(ring[0][0])) ring = ring[0];
-    const latlngs = ring.map(p => [p[1], p[0]]);  // [lon,lat] -> [lat,lon]
     const neg = z.bonus < 0;
-    const poly = L.polygon(latlngs, {color: neg ? '#ef4444' : (z.color || '#2563eb'), fillOpacity: 0.15})
-      .bindTooltip(`${z.name} (${z.bonus > 0 ? '+' : ''}${z.bonus})`);
-    poly._zoneId = z.id; poly._zoneName = z.name; poly._zoneBonus = z.bonus;
-    drawnItems.addLayer(poly);   // в редактируемый слой — теперь ✏ работает и для них
+    const col = neg ? '#ef4444' : (z.color || '#2563eb');
+    // polygon: одно кольцо (legacy) или список колец (гексы)
+    let rings = z.polygon;
+    if (rings.length && !Array.isArray(rings[0][0])) rings = [rings];
+    rings.forEach(ring => {
+      const latlngs = ring.map(p => [p[1], p[0]]);
+      L.polygon(latlngs, {color: col, weight: 1.5, fillColor: col, fillOpacity: 0.12})
+        .bindTooltip(`${z.name} (${z.bonus > 0 ? '+' : ''}${z.bonus})`)
+        .addTo(zonesLayer);
+    });
   });
 }
 
+map.on('moveend zoomend', drawGrid);
+document.getElementById('z-edge').addEventListener('change', () => { clearSelection(); });
+document.getElementById('z-grid').addEventListener('change', drawGrid);
+
 loadZones();
+drawGrid();
 </script>
 {% endblock %}

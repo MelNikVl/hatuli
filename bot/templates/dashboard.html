@@ -12,7 +12,7 @@
 <!-- Статистика (админ) -->
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
 <!-- Фильтры справа: порядок в flex через order -->
-<div style="order:2;flex:0 0 240px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;">
+<div style="order:2;flex:0 0 340px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;">
   <div><label style="font-size:11px;color:#888;display:block;">Тип</label>
     <select id="f-type" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="sale">Продажа</option><option value="rental">Аренда</option>
@@ -25,16 +25,19 @@
     <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
     </select></div>
-  <div><label style="font-size:11px;color:#888;display:block;" id="f-price-label">Цена, млн ₸</label>
+  <div><label style="font-size:11px;color:#888;display:block;" id="f-price-label">Цена (млн ₸ или ₸)</label>
     <div style="display:flex;gap:6px;align-items:center;">
-      <input id="f-pmin" type="number" min="0" step="1" placeholder="от" style="width:50%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+      <input id="f-pmin" type="number" min="0" step="1" placeholder="от" style="width:50%;padding:9px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <span style="color:#888;">—</span>
-      <input id="f-pmax" type="number" min="0" step="1" placeholder="до" style="width:50%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+      <input id="f-pmax" type="number" min="0" step="1" placeholder="до" style="width:50%;padding:9px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
+      <span style="font-size:10.5px;color:#aaa;">можно 25 или 25000000</span>
+      <button type="button" onclick="document.getElementById('f-pmin').value='';document.getElementById('f-pmax').value='';applyFilters();" style="padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:#888;font-size:11px;cursor:pointer;">✕ сбросить цену</button>
     </div></div>
   <div id="f-score-wrap"><label style="font-size:11px;color:#888;display:block;">Мин. скор</label>
     <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
   {% if admin %}
-  <label style="font-size:13px;cursor:pointer;"><input type="checkbox" id="cx-toggle"> 🏢 все ЖК из каталога</label>
   <label style="font-size:13px;cursor:pointer;padding-bottom:8px;"><input type="checkbox" id="poi-toggle"> 🏫 школы/садики</label>
   {% endif %}
   <button onclick="applyFilters()" style="padding:11px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;">Показать</button>
@@ -48,10 +51,10 @@
      РАЗМЕР КАРТЫ меняется здесь:
        - ширина: flex-basis/max-width у контейнера ниже (сейчас flex:1 1 720px, без max-width = растягивается)
        - высота: aspect-ratio у #objects-map (16/10, 1/1, 4/3...) или задай фикс. height, напр. height:75vh -->
-<div style="order:1;flex:1 1 720px;min-width:320px;">
+<div style="order:1;flex:1 1 600px;min-width:320px;">
 
 <div id="map-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
-  <div id="objects-map" style="aspect-ratio:16/10;width:100%;min-height:420px;border-radius:8px;"></div>
+  <div id="objects-map" style="aspect-ratio:3/2;width:100%;min-height:380px;border-radius:8px;"></div>
 </div>
 
 </div><!-- /левая колонка -->
@@ -77,9 +80,14 @@ function applyFilters() {
   const type = document.getElementById('f-type').value;
   const p = new URLSearchParams({type});
   const rooms = document.getElementById('f-rooms').value;
-  const priceMul = type === 'rental' ? 1e3 : 1e6;   // аренда: тыс ₸/мес
-  const pmin = parseFloat(document.getElementById('f-pmin').value || 0) * priceMul;
-  const pmax = parseFloat(document.getElementById('f-pmax').value || 0) * priceMul;
+  // цена: принимаем и "25" (млн), и "25000000" (тенге); аренда — "300" (тыс) или "300000"
+  const toTenge = v => {
+    if (!(v > 0)) return 0;
+    if (type === 'rental') return v >= 10000 ? Math.round(v) : Math.round(v * 1e3);
+    return v >= 10000 ? Math.round(v) : Math.round(v * 1e6);
+  };
+  const pmin = toTenge(parseFloat(document.getElementById('f-pmin').value || 0));
+  const pmax = toTenge(parseFloat(document.getElementById('f-pmax').value || 0));
   const ms = document.getElementById('f-score').value;
   if (rooms) p.set('rooms', rooms);
   if (pmin > 0) p.set('price_min', pmin);
@@ -89,7 +97,7 @@ function applyFilters() {
   if (seller && type === 'sale') p.set('seller', seller);
 
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
-  document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена, тыс ₸/мес' : 'Цена, млн ₸';
+  document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
   fetch('/admin/api/map-points?' + p.toString()).then(r => r.json()).then(d => {
     if (type === 'rental') {
@@ -114,15 +122,38 @@ function applyFilters() {
       } else {
         m = L.circleMarker([pt.lat, pt.lon], {radius:6, fillColor:scoreColor(pt.score,p10,p90), color:'#fff', weight:1, fillOpacity:.85}).addTo(pointsLayer);
       }
-      const priceM = pt.price ? (pt.price/1e6).toFixed(1) + ' млн ₸' : '—';
+      const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
+      const areaTxt = pt.area ? Math.round(pt.area) : '?';
+      const ppm = (pt.price && pt.area) ? ' · ' + Math.round(pt.price/pt.area/1000) + ' тыс ₸/м²' : '';
       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
       let priceTrend = '';
       if (pt.prev_price && pt.prev_price !== pt.price) {
         const dp = (pt.price - pt.prev_price) / 1e6;
         const dir = dp > 0;
-        priceTrend = `<br><span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:600;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(1)} млн ${pt.price_changed ? '· ' + pt.price_changed : ''}</span>`;
+        priceTrend = ` · <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(1)} млн${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
       }
-      m.bindPopup(`<b>Скор: ${pt.score}</b> · ${pt.rooms || '?'}-комн, ${pt.area || '?'} м²<br>${priceM} · на рынке ${ageText}${priceTrend}<br>${pt.complex ? '🏢 <a href="/admin/complex/find?name=' + encodeURIComponent(pt.complex) + '">' + pt.complex + '</a>' : '🏢 ЖК не определён'}<br>${pt.address ? '📍 ' + pt.address + '<br>' : ''}<div id="ph-${pt.id}" style="margin:6px 0;min-width:220px;">📈 история цены…</div><a href="/admin/analytics/${pt.id}">Карточка</a> · <a href="${pt.url}" target="_blank">Крыша</a>`);
+      const sc = scoreColor(pt.score, p10, p90);
+      const cxLine = pt.complex
+        ? `<div style="font-size:12.5px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${pt.complex}</a></div>`
+        : '<div style="font-size:12px;color:#b45309;margin-top:7px;">🏢 ЖК не определён</div>';
+      m.bindPopup(`
+<div style="min-width:255px;max-width:290px;font-family:inherit;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+    <div>
+      <div style="font-size:21px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:14px;font-weight:700;">млн ₸</span></div>
+      <div style="font-size:14px;color:#374151;margin-top:3px;">${pt.rooms || '?'}-комн · <b style="font-size:15px;">${areaTxt}</b> м²<span style="font-size:11.5px;color:#888;">${ppm}</span></div>
+    </div>
+    <div style="background:${sc};color:#fff;border-radius:9px;padding:5px 10px;font-weight:800;font-size:16px;box-shadow:0 1px 3px rgba(0,0,0,.25);" title="Скор">${pt.score}</div>
+  </div>
+  <div style="font-size:11.5px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}</div>
+  <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
+  ${cxLine}
+  ${pt.address ? `<div style="font-size:11.5px;color:#666;margin-top:2px;">📍 ${pt.address}</div>` : ''}
+  <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:14px;font-size:13px;">
+    <a href="/admin/analytics/${pt.id}" style="font-weight:700;">Карточка →</a>
+    <a href="${pt.url}" target="_blank" style="color:#2563eb;">Крыша ↗</a>
+  </div>
+</div>`);
       m.on('popupopen', () => loadPriceHistory(pt.id));
     });
     document.getElementById('result-count').textContent = d.count + ' объектов';
@@ -222,25 +253,6 @@ function toggleHexGrid() {
 applyFilters();
 
 {% if admin %}
-// Слой всех ЖК каталога (не только те, что сейчас в фильтре)
-const cxLayer = L.layerGroup();
-let cxLoaded = false;
-document.getElementById('cx-toggle').addEventListener('change', function() {
-  if (this.checked) {
-    if (!cxLoaded) {
-      fetch('/admin/api/complexes-map').then(r => r.json()).then(d => {
-        d.complexes.forEach(c => {
-          L.circleMarker([c.lat, c.lon], {radius:5, fillColor:'#f59e0b', color:'#fff', weight:1, fillOpacity:.9})
-            .bindPopup(`<b>🏢 ${c.name}</b>${c.developer && c.developer !== '—' ? '<br>🏗 ' + c.developer : ''}${c.class ? '<br>Класс: ' + c.class : ''}${c.year ? '<br>Год: ' + c.year : ''}<br>Активных: ${c.active} · архив: ${c.sold}${c.price_m2 ? '<br>~' + Math.round(c.price_m2/1000) + ' тыс ₸/м²' : ''}<br><a href="/admin/complex/${c.id}">Карточка ЖК</a>`)
-            .addTo(cxLayer);
-        });
-        cxLoaded = true;
-      });
-    }
-    cxLayer.addTo(map);
-  } else { map.removeLayer(cxLayer); }
-});
-
 const poiLayer = L.layerGroup();
 let poiLoaded = false;
 document.getElementById('poi-toggle').addEventListener('change', function() {
