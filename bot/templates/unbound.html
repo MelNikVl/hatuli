@@ -56,16 +56,41 @@ function loadPoints() {
 async function rebind() {
   const btn = document.getElementById('rebind-btn');
   const st = document.getElementById('rebind-status');
-  btn.disabled = true; st.textContent = 'привязываем…';
+  btn.disabled = true;
+  st.textContent = 'запускаю…';
   try {
-    const r = await fetch('/admin/rebind', {method: 'POST'});
-    const d = await r.json();
-    st.textContent = `привязано ${d.bound} (по ссылке: ${d.by_url}, по тексту: ${d.by_text}, по гео: ${d.by_geo}) · осталось: ${d.left}`;
-    loadPoints();
-  } catch (e) { st.textContent = 'ошибка'; }
-  btn.disabled = false;
-  setTimeout(() => st.textContent = '', 6000);
+    await fetch('/admin/rebind', {method: 'POST'});
+    // поллим статус — привязка идёт в фоне, веб не блокируется
+    const timer = setInterval(async () => {
+      const d = await (await fetch('/admin/rebind/status')).json();
+      if (d.running) {
+        st.textContent = '⏳ ' + d.stage;
+        return;
+      }
+      clearInterval(timer);
+      btn.disabled = false;
+      if (d.result) {
+        const r = d.result;
+        st.textContent = `✅ привязано ${r.bound} (по ссылке: ${r.by_url}, по тексту: ${r.by_text}, по гео: ${r.by_geo}) · адресов из заголовков: ${r.addr_filled} · осталось: ${r.left}`;
+        loadPoints();
+      } else {
+        st.textContent = d.stage || 'готово';
+      }
+      setTimeout(() => { if (!btn.disabled) st.textContent = ''; }, 15000);
+    }, 2500);
+  } catch (e) { st.textContent = 'ошибка'; btn.disabled = false; }
 }
+
+// если привязка уже идёт (запущена ранее) — показываем прогресс
+(async () => {
+  try {
+    const d = await (await fetch('/admin/rebind/status')).json();
+    if (d.running) {
+      document.getElementById('rebind-btn').disabled = true;
+      document.getElementById('rebind-status').textContent = '⏳ ' + d.stage;
+    }
+  } catch (e) {}
+})();
 
 loadPoints();
 </script>

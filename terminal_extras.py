@@ -984,43 +984,43 @@ def make_extras_router(templates) -> APIRouter:
             })
         return JSONResponse({"points": pts, "count": len(pts), "no_geo": no_geo})
 
-    @router.post("/admin/rebind")
-    async def rebind_listings(request: Request):
-        """Привязка объявлений без ЖК тремя стадиями:
-        A) по ссылке на карточку ЖК с Крыши (complex_url = complexes.krisha_url)
-        B) по названию ЖК из заголовка/адреса против справочника complexes
-        C) по геопозиции: ближайший ЖК в радиусе ~350 м от точки объявления
-        Возвращает счётчики по каждой стадии."""
-        if not is_authed(request):
-            return JSONResponse({"error": "auth"}, status_code=401)
+    # ── Привязка к ЖК: фоновая задача (не блокирует веб) + поллинг статуса ──
+
+    rebind_state = {"running": False, "stage": "", "result": None}
+
+    async def _do_rebind() -> dict:
+        import asyncio as _aio
+        import re as _re
         from bot.db.pg import fetch as pg_fetch, execute as pg_exec, fetchval as pg_fv
 
         await pg_exec("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS krisha_url TEXT")
 
-        # ── A0: адрес из заголовка (старые дома: «…2/5 этаж, Сатпаева 19 — Майлина») ──
-        import re as _re0
+        # ── A0: адрес из заголовка («…2/5 этаж, Сатпаева 19 — Майлина») ──
+        rebind_state["stage"] = "адреса из заголовков…"
         addr_rows = await pg_fetch("""
             SELECT id, title FROM apartment_listings
             WHERE (address IS NULL OR btrim(address) = '') AND title IS NOT NULL
         """)
         addr_filled = 0
-        _addr_re = _re0.compile(r",\s*([^,]{2,40}?\d[^,]{0,20}?)\s*(?=,|—|–|$)")
-        _letters = _re0.compile(r"[А-Яа-яЁёA-Za-z]{2}")
+        _addr_re = _re.compile(r",\s*([^,]{2,40}?\d[^,]{0,20}?)\s*(?=,|—|–|$)")
+        _letters = _re.compile(r"[А-Яа-яЁёA-Za-z]{2}")
+        addr_updates = []
         for r in addr_rows:
             hit = None
             for m in _addr_re.finditer(r["title"] or ""):
                 cand = m.group(1).strip()
-                # адрес — это улица + номер: обязаны быть буквы, а не «40 м²»
                 if _letters.search(cand) and not cand.lower().startswith(("м²", "м2")):
                     hit = cand
                     break
             if hit:
-                await pg_exec(
-                    "UPDATE apartment_listings SET address = $2 WHERE id = $1",
-                    r["id"], hit)
-                addr_filled += 1
+                addr_updates.append((r["id"], hit))
+        for lid, addr in addr_updates:
+            await pg_exec(
+                "UPDATE apartment_listings SET address = $2 WHERE id = $1", lid, addr)
+        addr_filled = len(addr_updates)
 
-        # ── A: точная склейка по ссылке на карточку ЖК ────────────────────
+        # ── A: склейка по ссылке на карточку ЖК ────────────────────────────
+        rebind_state["stage"] = "по ссылке на карточку ЖК…"
         by_url = (await pg_exec("""
             UPDATE apartment_listings al SET complex_name = c.name
             FROM complexes c
@@ -1029,12 +1029,12 @@ def make_extras_router(templates) -> APIRouter:
               AND al.complex_url = c.krisha_url
         """) or "").split()[-1]
 
-        # ── B: название ЖК в заголовке (адрес НЕ используем — там улицы,
-        #     и «Бухар Жырау» в адресе ≠ ЖК «Бухар Жырау») ────────────────
+        # ── B: название ЖК в заголовке (НЕ в адресе — там улицы) ───────────
+        rebind_state["stage"] = "по названию из заголовков…"
         complexes = await pg_fetch(
             "SELECT name FROM complexes WHERE name IS NOT NULL AND btrim(name) != ''"
             " AND COALESCE(is_street, FALSE) = FALSE")
-        import re as _re
+
         def _norm(s: str) -> str:
             s = s.lower()
             s = _re.sub(r"^\s*(жк|кг)\.?\s+", "", s)
@@ -1046,30 +1046,40 @@ def make_extras_router(templates) -> APIRouter:
             n = _norm(c["name"])
             if len(n) >= 3:
                 norm_map[n] = c["name"]
+        norm_items = sorted(norm_map.items(), key=lambda kv: -len(kv[0]))
+        norm_items = [
+            (n, canon, _re.compile(rf"(?<![а-яёa-z0-9]){_re.escape(n)}(?![а-яёa-z0-9])"))
+            for n, canon in norm_items
+        ]
 
         rows = await pg_fetch("""
             SELECT id, title FROM apartment_listings
             WHERE complex_name IS NULL OR btrim(complex_name) = ''
         """)
-        by_text = 0
-        for r in rows:
+        updates = []
+        for i, r in enumerate(rows):
+            if i % 500 == 0:
+                rebind_state["stage"] = f"по заголовкам… {i}/{len(rows)}"
+                await _aio.sleep(0)  # отдаём event loop — веб остаётся живым
             hay = _norm(r["title"] or "")
             if not hay:
                 continue
             hit = None
-            for n, canon in norm_map.items():
-                # название должно идти после «жк» или быть отдельным словосочетанием в заголовке
-                if f"жк {n}" in hay or _re.search(rf"(?<![а-яёa-z]){_re.escape(n)}(?![а-яёa-z])", hay):
+            for n, canon, rx in norm_items:
+                if n in hay and (f"жк {n}" in hay or rx.search(hay)):
                     hit = canon
                     break
             if hit:
-                await pg_exec(
-                    "UPDATE apartment_listings SET complex_name = $2 WHERE id = $1",
-                    r["id"], hit)
-                by_text += 1
+                updates.append((r["id"], hit))
+        rebind_state["stage"] = f"запись {len(updates)} привязок…"
+        for lid, canon in updates:
+            await pg_exec(
+                "UPDATE apartment_listings SET complex_name = $2 WHERE id = $1",
+                lid, canon)
+        by_text = len(updates)
 
-        # ── C: геопривязка к ближайшему ЖК (у объявления есть координаты) ─
-        # ~0.0045° ≈ 350 м по широте (по долготе в Астане ещё меньше — ок)
+        # ── C: геопривязка к ближайшему ЖК (≤ ~350 м) ──────────────────────
+        rebind_state["stage"] = "геопривязка…"
         by_geo = (await pg_exec("""
             UPDATE apartment_listings al
             SET complex_name = (
@@ -1093,13 +1103,44 @@ def make_extras_router(templates) -> APIRouter:
         """) or 0
         logger.info("rebind: by_url=%s by_text=%d by_geo=%s, осталось без ЖК %d",
                     by_url, by_text, by_geo, left)
-        return JSONResponse({
+        return {
             "ok": True,
             "bound": int(by_url or 0) + by_text + int(by_geo or 0),
             "by_url": int(by_url or 0), "by_text": by_text,
             "by_geo": int(by_geo or 0), "left": left,
             "addr_filled": addr_filled,
-        })
+        }
+
+    @router.get("/admin/rebind/status")
+    async def rebind_status(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        return JSONResponse(rebind_state)
+
+    @router.post("/admin/rebind")
+    async def rebind_listings(request: Request):
+        """Запуск привязки в ФОНЕ — ответ мгновенный, прогресс через
+        GET /admin/rebind/status. Идемпотентно, можно запускать повторно."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        if rebind_state["running"]:
+            return JSONResponse({"ok": True, "already_running": True,
+                                 "stage": rebind_state["stage"]})
+        import asyncio as _aio
+        rebind_state.update(running=True, stage="запуск…", result=None)
+
+        async def _runner():
+            try:
+                rebind_state["result"] = await _do_rebind()
+                rebind_state["stage"] = "готово"
+            except Exception as e:
+                logger.exception("rebind failed")
+                rebind_state["stage"] = f"ошибка: {e}"
+            finally:
+                rebind_state["running"] = False
+
+        _aio.create_task(_runner())
+        return JSONResponse({"ok": True, "started": True})
 
     # ── Аудит «ЖК-улиц» ───────────────────────────────────────────────────
 
