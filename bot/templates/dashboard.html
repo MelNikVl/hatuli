@@ -21,10 +21,6 @@
     <select id="f-rooms" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">любые</option><option>1</option><option>2</option><option>3</option><option>4</option>
     </select></div>
-  <div id="f-market-wrap"><label style="font-size:11px;color:#888;display:block;">Рынок</label>
-    <select id="f-market" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
-      <option value="">весь</option><option value="secondary">вторичка</option><option value="primary">первичка (в стройке)</option>
-    </select></div>
   <div><label style="font-size:11px;color:#888;display:block;">Продавец</label>
     <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
@@ -112,21 +108,54 @@ function applyFilters() {
   if (ms && type === 'sale') p.set('min_score', ms);
   const seller = document.getElementById('f-seller').value;
   if (seller && type === 'sale') p.set('seller', seller);
-  const market = document.getElementById('f-market').value;
-  if (market && type === 'sale') p.set('market', market);
 
-  document.getElementById('f-market-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
   fetch('/admin/api/map-points?' + p.toString()).then(r => r.json()).then(d => {
+    // яркость/контраст фото квартир (настраивается в /admin/settings)
+    if (d.photo) {
+      let st = document.getElementById('apt-photo-style');
+      if (!st) { st = document.createElement('style'); st.id = 'apt-photo-style'; document.head.appendChild(st); }
+      st.textContent = `.apt-photo{filter:brightness(${d.photo.b}%) contrast(${d.photo.c}%);}`;
+    }
     if (type === 'rental') {
       pointsLayer.clearLayers();
       lastPoints = d.points || [];
       lastPoints.forEach(pt => {
-        const m = L.circleMarker([pt.lat, pt.lon], {radius:6, fillColor:'#3b82f6', color:'#fff', weight:1, fillOpacity:.85}).addTo(pointsLayer);
+        // Zillow-стиль: цена белыми цифрами на синем чипе + стрелка изменения
+        const chipPrice = pt.price ? (pt.price/1000).toFixed(0) + 'т' : '?';
+        let chipArrow = '';
+        if (pt.prev_price && pt.prev_price !== pt.price) {
+          const up = pt.price > pt.prev_price;
+          chipArrow = `<span style="background:#fff;color:${up ? '#dc2626' : '#16a34a'};border-radius:6px;padding:2px 5px;margin-left:3px;font-size:12px;font-weight:800;line-height:1;box-shadow:0 1px 2px rgba(0,0,0,.3);">${up ? '▲' : '▼'}</span>`;
+        }
+        const chipHtml = `<div style="display:flex;align-items:center;transform:translateX(-50%);">` +
+          `<span style="background:#2563eb;color:#fff;border-radius:8px;padding:3px 8px;font-size:13px;font-weight:800;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.35);border:1.5px solid #fff;">${chipPrice}</span>${chipArrow}</div>`;
+        const m = L.marker([pt.lat, pt.lon], {icon: L.divIcon({className:'', html:chipHtml, iconSize:null, iconAnchor:[0,14]})}).addTo(pointsLayer);
         const cx = pt.complex ? `<a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}">${pt.complex}</a>` : 'ЖК не определён';
-        m.bindPopup(`<b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}`);
+        let rentTrend = '';
+        if (pt.prev_price && pt.prev_price !== pt.price) {
+          const dp = (pt.price - pt.prev_price) / 1000;
+          const up = dp > 0;
+          rentTrend = `<div style="font-size:11.5px;margin-top:4px;color:${up ? '#dc2626' : '#16a34a'};font-weight:700;">${up ? '▲' : '▼'} ${Math.abs(dp).toFixed(0)} тыс ₸${pt.price_changed ? ' · ' + pt.price_changed : ''} (было ${(pt.prev_price/1000).toFixed(0)} тыс)</div>`;
+        }
+        let photoHtml = '';
+        if (pt.photos && pt.photos.length) {
+          ptPhotos['r' + pt.id] = pt.photos; carIdx['r' + pt.id] = 0;
+          photoHtml = `<div style="position:relative;margin-bottom:6px;border-radius:8px;overflow:hidden;">
+            <img id="car-r${pt.id}" src="${pt.photos[0]}" class="apt-photo" style="width:100%;height:130px;object-fit:cover;display:block;" onerror="this.parentNode.style.display='none'">
+            ${pt.photos.length > 1 ? `
+            <button onclick="carNav('r${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:15px;line-height:1;">‹</button>
+            <button onclick="carNav('r${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:15px;line-height:1;">›</button>` : ''}
+          </div>`;
+        }
+        m.bindPopup(`<div style="min-width:250px;max-width:280px;font-family:inherit;">${photoHtml}
+          <div style="font-size:19px;font-weight:800;">${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'} <span style="font-size:13px;font-weight:400;color:#666;">· ${pt.rooms || '?'}-комн</span></div>
+          ${rentTrend}
+          <div style="font-size:12.5px;margin-top:5px;">🏢 ${cx}</div>
+          <div style="font-size:11px;color:#888;margin-top:4px;">привязка: ${pt.binding} · найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша ↗</a>' : ''}</div>
+        </div>`);
       });
       document.getElementById('result-count').textContent = d.count + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без привязки)` : '');
       if (hexOn) drawHexGrid();
@@ -136,12 +165,20 @@ function applyFilters() {
     const scores = d.points.map(pt => pt.score);
     const p10 = percentile(scores, 0.10), p90 = percentile(scores, 0.90);
     d.points.forEach(pt => {
-      let m;
-      if (pt.top) {
-        m = L.marker([pt.lat, pt.lon], {icon: L.divIcon({className:'', html:'<div style="font-size:22px;line-height:22px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));">❤️</div>', iconSize:[22,22], iconAnchor:[11,11]}), zIndexOffset:1000}).addTo(pointsLayer);
-      } else {
-        m = L.circleMarker([pt.lat, pt.lon], {radius:6, fillColor:scoreColor(pt.score,p10,p90), color:'#fff', weight:1, fillOpacity:.85}).addTo(pointsLayer);
+      // Zillow-стиль: цена белыми цифрами на синем чипе; топ-10 по скору — на красном
+      const chipPrice = pt.price ? (pt.price/1e6).toFixed(1) : '?';
+      const chipBg = pt.top ? '#dc2626' : '#2563eb';
+      let chipArrow = '';
+      if (pt.prev_price && pt.prev_price !== pt.price) {
+        const up = pt.price > pt.prev_price;
+        chipArrow = `<span style="background:#fff;color:${up ? '#dc2626' : '#16a34a'};border-radius:6px;padding:2px 5px;margin-left:3px;font-size:12px;font-weight:800;line-height:1;box-shadow:0 1px 2px rgba(0,0,0,.3);">${up ? '▲' : '▼'}</span>`;
       }
+      const chipHtml = `<div style="display:flex;align-items:center;transform:translateX(-50%);">` +
+        `<span style="background:${chipBg};color:#fff;border-radius:8px;padding:3px 8px;font-size:13px;font-weight:800;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.35);border:1.5px solid #fff;">${chipPrice}</span>${chipArrow}</div>`;
+      const m = L.marker([pt.lat, pt.lon], {
+        icon: L.divIcon({className:'', html:chipHtml, iconSize:null, iconAnchor:[0,14]}),
+        zIndexOffset: pt.top ? 1000 : 0,
+      }).addTo(pointsLayer);
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
       const areaTxt = pt.area ? Math.round(pt.area) : '?';
       const ppm = (pt.price && pt.area) ? ' · ' + Math.round(pt.price/pt.area/1000) + ' тыс ₸/м²' : '';
@@ -156,7 +193,7 @@ function applyFilters() {
       if (pt.photos && pt.photos.length) { ptPhotos[pt.id] = pt.photos; carIdx[pt.id] = 0; }
       const carHtml = pt.photos && pt.photos.length ? `
 <div style="position:relative;margin-bottom:7px;border-radius:8px;overflow:hidden;">
-  <img id="car-${pt.id}" src="${pt.photos[0]}" style="width:100%;height:135px;object-fit:cover;display:block;" onerror="this.parentNode.style.display='none'">
+  <img id="car-${pt.id}" src="${pt.photos[0]}" class="apt-photo" style="width:100%;height:135px;object-fit:cover;display:block;" onerror="this.parentNode.style.display='none'">
   ${pt.photos.length > 1 ? `
   <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:15px;line-height:1;">‹</button>
   <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:15px;line-height:1;">›</button>
@@ -175,8 +212,7 @@ function applyFilters() {
     </div>
     <a href="/admin/analytics/${pt.id}" title="Скор — нажми, чтобы увидеть из чего он складывается" style="background:${sc};color:#fff;border-radius:9px;padding:5px 10px;font-weight:800;font-size:16px;box-shadow:0 1px 3px rgba(0,0,0,.25);text-decoration:none;display:block;">${pt.score}</a>
   </div>
-  ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
-  <div style="font-size:11.5px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}${pt.geo === 'address' ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}</div>
+  <div style="font-size:11.5px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}</div>
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
   ${pt.address ? `<div style="font-size:11.5px;color:#666;margin-top:2px;">📍 ${pt.address}</div>` : ''}
@@ -200,6 +236,8 @@ function applyFilters() {
         [`${d.coverage.with_coords.toLocaleString('ru')} · ${pct}%`, 'с координатами'],
         [d.coverage.dups.toLocaleString('ru'), 'дублей среди активных'],
         [`<a href="/admin/unbound" style="color:inherit;">${(d.coverage.unbound || 0).toLocaleString('ru')}</a>`, 'без привязки к ЖК'],
+        [`<span style="color:#16a34a;">▼ ${(d.coverage.price_down_today || 0).toLocaleString('ru')}</span>`, 'цена снизилась за сегодня'],
+        [`<span style="color:#dc2626;">▲ ${(d.coverage.price_up_today || 0).toLocaleString('ru')}</span>`, 'цена выросла за сегодня'],
         [kr ? kr.toLocaleString('ru') : '—', 'всего на Крыше (≤ потолка цены)'],
       ]);
       if (hexOn) drawHexGrid();
@@ -270,8 +308,7 @@ function drawHexGrid() {
     const key = q + ':' + r;
     if (seen.has(key)) return;
     seen.add(key);
-    // interactive:false — сетка чисто визуальная, клики проходят сквозь неё к маркерам
-    L.polygon(hexCorners(q, r, hexEdge), {color:'#8b5cf6', weight:1, fillOpacity:0.06, interactive:false}).addTo(hexLayer);
+    L.polygon(hexCorners(q, r, hexEdge), {color:'#8b5cf6', weight:1, fillOpacity:0.06}).addTo(hexLayer);
   });
   hexLayer.addTo(map);
 }

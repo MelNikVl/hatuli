@@ -239,9 +239,36 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
         except Exception:
             pass
 
+    # История цен аренды
+    try:
+        await execute("""
+            CREATE TABLE IF NOT EXISTS rental_price_history (
+                id SERIAL PRIMARY KEY,
+                listing_id TEXT NOT NULL,
+                old_price INT,
+                new_price INT,
+                changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+        """)
+        await execute(
+            "CREATE INDEX IF NOT EXISTS idx_rental_ph_listing "
+            "ON rental_price_history (listing_id, changed_at)")
+    except Exception:
+        pass
+
     for l in listings:
         complex_name = complex_map.get(l.id) or l.complex_name
         try:
+            old_price = await fetchval(
+                "SELECT price FROM rental_listings WHERE id=$1", l.id)
+            if old_price and l.price and old_price != l.price:
+                try:
+                    await execute(
+                        "INSERT INTO rental_price_history (listing_id, old_price, new_price) "
+                        "VALUES ($1,$2,$3)", l.id, old_price, l.price)
+                    logger.info("  rent price: %s → %s (%s)", old_price, l.price, l.id)
+                except Exception as e:
+                    logger.warning("rental_price_history failed %s: %s", l.id, e)
             await execute(
                 """
                 INSERT INTO rental_listings
@@ -436,6 +463,7 @@ async def backfill_rental_details(batch: int = 8) -> dict:
 
     await execute("ALTER TABLE rental_listings ADD COLUMN IF NOT EXISTS complex_url TEXT")
     await execute("ALTER TABLE rental_listings ADD COLUMN IF NOT EXISTS coord_fetch_attempted_at TIMESTAMPTZ")
+    await execute("ALTER TABLE rental_listings ADD COLUMN IF NOT EXISTS photos JSONB")
 
     rows = await fetch("""
         SELECT id, url FROM rental_listings
@@ -492,6 +520,10 @@ async def backfill_rental_details(batch: int = 8) -> dict:
             sets.append(f"address=CASE WHEN address IS NULL OR btrim(address)='' "
                         f"THEN ${i} ELSE address END")
             params.append(details["address_full"]); i += 1
+        if details.get("photos"):
+            import json as _json
+            sets.append(f"photos=${i}::jsonb")
+            params.append(_json.dumps(details["photos"][:10])); i += 1
         params.append(r["id"])
         await execute(
             f"UPDATE rental_listings SET {', '.join(sets)} WHERE id=${i}", *params)

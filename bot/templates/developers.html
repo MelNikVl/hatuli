@@ -1,31 +1,50 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-title">
-  🏗 Застройщики
-  <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} в базе · данные homsters.kz</small>
+  Застройщики
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} компаний</small>
 </div>
+
+<form method="get" action="/admin/developers" style="margin-bottom:16px;display:flex;gap:8px;">
+  <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию..."
+         style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;width:280px;">
+  <button type="submit" style="padding:8px 16px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">Найти</button>
+</form>
+
 <style>
-table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);font-size:13px}
-th{background:#1a1a2e;color:#fff;padding:10px 8px;text-align:left;font-weight:500;font-size:12px;white-space:nowrap}
-td{padding:9px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
-tr:hover td{background:rgba(255,255,255,0.03)}
-tr:last-child td{border-bottom:none}
+.dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;}
+.dev-card{display:block;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;text-decoration:none;color:inherit;transition:box-shadow .15s,transform .15s;}
+.dev-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.12);transform:translateY(-2px);}
+.dev-photo{width:100%;height:130px;object-fit:cover;display:block;background:#e2e8f0;}
+.dev-no-photo{width:100%;height:130px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;font-size:38px;font-weight:800;}
+.dev-body{padding:12px 14px;}
+.dev-name{font-weight:700;font-size:14.5px;line-height:1.25;margin-bottom:6px;}
+.dev-stats{display:flex;flex-wrap:wrap;gap:5px;font-size:11px;color:#666;}
+.dev-chip{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:2px 8px;}
 </style>
-<table>
-  <tr>
-    <th>Застройщик</th><th>Основан</th><th>Объектов (homsters)</th>
-    <th>ЖК в базе</th><th>В продаже</th><th>Ушло в архив</th><th></th>
-  </tr>
+
+<div class="dev-grid">
   {% for d in developers %}
-  <tr>
-    <td><a href="/admin/developer/{{ d.id }}" style="color:inherit;"><b>{{ d.name }}</b></a></td>
-    <td>{{ d.founded_year or '—' }}</td>
-    <td>{{ d.projects_active or '—' }}{% if d.projects_total %}<span style="color:#888;font-size:11px;"> · {{ d.projects_total }} ЖК в продаже</span>{% endif %}</td>
-    <td>{{ d.cx_cnt }}</td>
-    <td>{{ d.active_cnt }}</td>
-    <td>{{ d.sold_cnt }}</td>
-    <td>{% if d.homsters_slug %}<a href="https://homsters.kz/{{ d.homsters_slug }}" target="_blank" title="Страница на homsters.kz">↗</a>{% endif %}</td>
-  </tr>
+  <a class="dev-card" href="/admin/developer/{{ d.id }}">
+    {% if d.photo %}
+      <img class="dev-photo" src="{{ d.photo }}" loading="lazy" onerror="this.outerHTML='<div class=dev-no-photo>{{ d.name[:1] }}</div>'">
+    {% else %}
+      <div class="dev-no-photo">{{ d.name[:1] }}</div>
+    {% endif %}
+    <div class="dev-body">
+      <div class="dev-name">{{ d.name }}</div>
+      <div class="dev-stats">
+        <span class="dev-chip">🏢 {{ d.projects }} ЖК</span>
+        {% if d.listings %}<span class="dev-chip">📋 {{ d.listings }} объявл.</span>{% endif %}
+        {% if d.years %}<span class="dev-chip">📅 {{ d.years }}</span>{% endif %}
+        {% if d.price_m2 %}<span class="dev-chip">💰 {{ (d.price_m2/1000)|round|int }} тыс ₸/м²</span>{% endif %}
+        {% if d.yield_pct %}<span class="dev-chip">📈 {{ d.yield_pct }}%</span>{% endif %}
+      </div>
+    </div>
+  </a>
   {% endfor %}
-</table>
+</div>
+{% if not developers %}
+<p style="padding:30px;text-align:center;color:#888;">Застройщики не найдены{% if search %} по запросу «{{ search }}»{% endif %}.</p>
+{% endif %}
 {% endblock %}

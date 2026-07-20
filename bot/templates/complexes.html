@@ -62,8 +62,7 @@ document.addEventListener('DOMContentLoaded', function() {
         `<b>${c.name}</b>${c.class ? ' · ' + c.class : ''}<br>` +
         `${c.avg_score ? 'Средний скор: <b>' + c.avg_score + '</b> · ' : ''}Год: ${c.year || '?'}<br>` +
         `В продаже: ${c.active} · продано: ${c.sold}${c.price_m2 ? ' · ' + Math.round(c.price_m2/1000) + ' тыс ₸/м²' : ''}<br>` +
-        (c.days_to_sell ? `Ликвидность: ~${c.days_to_sell} дн до продажи · за 30 дн ушло: ${c.sold_30d}<br>` : '') +
-        (c.developer_id ? `Застройщик: <a href="/admin/developer/${c.developer_id}">${c.developer}</a>` : `Застройщик: ${c.developer}`),
+        `Застройщик: ${c.developer}`,
         {sticky: true}
       );
       m.on('click', () => location.href = '/admin/complex/' + c.id);
@@ -124,7 +123,43 @@ tr:last-child td{border-bottom:none}
 </form>
 </div><!-- /flex -->
 
-<p style="font-size:12.5px;color:#888;">Список скрыт — вся информация на карте: наведи курсор на точку (скор, продажи, класс, застройщик), клик — карточка ЖК.</p>
+<div style="overflow-x:auto;margin-top:14px;">
+<table>
+  <thead>
+    <tr>
+      <th></th><th>ЖК</th><th>Застройщик</th><th>Район</th><th>Год</th><th>Класс</th>
+      <th>Объявл.</th><th>₸/м²</th><th>Yield</th><th>Скор</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in complexes %}
+    <tr>
+      <td style="width:46px;">
+        {% if c.photo_url %}<img src="{{ c.photo_url }}" style="width:44px;height:30px;object-fit:cover;border-radius:5px;" onerror="this.style.display='none'">{% endif %}
+      </td>
+      <td><a href="/admin/complex/{{ c.id }}" style="font-weight:600;">{{ c.name }}</a></td>
+      <td>{% if c.developer_name %}<span class="dev-badge">{{ c.developer_name }}</span>{% else %}—{% endif %}</td>
+      <td>{{ c.district or '—' }}</td>
+      <td>{{ c.year_built or '—' }}</td>
+      <td>{{ c.comfort_class or '—' }}</td>
+      <td>{{ c.listings_count or 0 }}</td>
+      <td>{% if c.avg_price_m2 %}{{ (c.avg_price_m2/1000)|round|int }} тыс{% else %}—{% endif %}</td>
+      <td>
+        {% if c.avg_yield %}
+          {% set y = c.avg_yield %}
+          <span class="yield-tag {% if y >= 12 %}yield-hi{% elif y >= 8 %}yield-md{% else %}yield-lo{% endif %}">{{ y|round(1) }}%</span>
+        {% else %}<span class="yield-tag yield-na">—</span>{% endif %}
+      </td>
+      <td>{% if c.avg_score %}<b>{{ c.avg_score|round|int }}</b>{% else %}—{% endif %}</td>
+      <td><button class="edit-btn" onclick='openEdit({{ c | tojson }})'>✏️</button></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if not complexes %}
+<p style="padding:20px;text-align:center;color:#888;">Ничего не найдено — попробуйте сбросить фильтры.</p>
+{% endif %}
+</div>
 
 
 <div class="modal-overlay" id="modal">

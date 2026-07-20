@@ -22,7 +22,6 @@
 <div class="hint">
   Зоны собираются <b>из гексагонов</b>: включи сетку, выбери размер ребра и кликай по гексам —
   они закрашиваются (зелёным для плюс-зоны, красным для анти-зоны). Клик по выбранному гексу убирает его.
-  <b>Массовое выделение: зажми Ctrl (или Shift) и растяни рамку</b> — все гексы под ней добавятся к выбору.
   Баллы: от −50 до +50 (минус = анти-зона: промзона, неликвидная окраина). При пересечении зон действует сильнейшая по модулю.
   Пересчёт объявлений — в следующем цикле парсера.<br>
   <b>Какой размер ребра выбрать:</b> 50 м — ювелирно вокруг парка/школы; <b>100 м — оптимум по умолчанию</b>
@@ -112,6 +111,20 @@ const selLayer = L.layerGroup().addTo(map);
 const selected = new Map();   // "q,r" -> {q, r}
 const gridHexes = new Map();  // "q,r" -> {q, r, lon, lat} — видимая сетка
 let zonesData = [];           // существующие зоны (для контекстного меню)
+const takenCenters = new Map(); // "lon,lat" (округл.) -> имя зоны — занятые гексы
+function rebuildTaken() {
+  takenCenters.clear();
+  zonesData.forEach(z => {
+    let poly = z.polygon || [];
+    if (poly.length && !Array.isArray(poly[0][0])) poly = [poly];
+    poly.forEach(ring => {
+      if (!ring || !ring.length) return;
+      const cx = ring.reduce((s, p) => s + p[0], 0) / ring.length;
+      const cy = ring.reduce((s, p) => s + p[1], 0) / ring.length;
+      takenCenters.set(cx.toFixed(5) + ',' + cy.toFixed(5), z.name);
+    });
+  });
+}
 
 function curEdge() { return parseInt(document.getElementById('z-edge').value); }
 
@@ -143,13 +156,18 @@ function drawGrid() {
       const key = q + ',' + r;
       gridHexes.set(key, {q, r, lon: c.lon, lat: c.lat});
       const isSel = selected.has(key);
+      const takenBy = takenCenters.get(c.lon.toFixed(5) + ',' + c.lat.toFixed(5));
       const poly = L.polygon(hexCorners(c.lon, c.lat, e), {
-        color: isSel ? '#16a34a' : '#94a3b8',
+        color: isSel ? '#16a34a' : takenBy ? '#ef4444' : '#94a3b8',
         weight: isSel ? 2 : 0.8,
-        fillColor: isSel ? '#16a34a' : '#3b82f6',
-        fillOpacity: isSel ? 0.45 : 0.06,
+        fillColor: isSel ? '#16a34a' : takenBy ? '#ef4444' : '#3b82f6',
+        fillOpacity: isSel ? 0.45 : takenBy ? 0.18 : 0.06,
       }).addTo(gridLayer);
-      poly.on('click', () => toggleHex(q, r));
+      if (takenBy) {
+        poly.bindTooltip('🔒 занято зоной «' + takenBy + '»', {sticky: true});
+      } else {
+        poly.on('click', () => toggleHex(q, r));
+      }
     }
   }
 }
@@ -171,10 +189,10 @@ function updateCounter() {
 
 function clearSelection() { selected.clear(); drawGrid(); updateCounter(); }
 
-// ── Групповое выделение рамкой: Ctrl + drag (или Shift + drag) ───────────
+// ── Групповое выделение рамкой: Shift + drag ─────────────────────────────
 let boxStart = null, boxRect = null;
 map.on('mousedown', e => {
-  if (!e.originalEvent.ctrlKey && !e.originalEvent.metaKey && !e.originalEvent.shiftKey) return;
+  if (!e.originalEvent.shiftKey) return;
   map.dragging.disable();
   boxStart = e.latlng;
 });
@@ -192,6 +210,7 @@ map.on('mouseup', e => {
   map.dragging.enable();
   let added = 0;
   gridHexes.forEach((h, key) => {
+    if (takenCenters.has(h.lon.toFixed(5) + ',' + h.lat.toFixed(5))) return;  // занято другой зоной
     if (!selected.has(key) && bounds.contains([h.lat, h.lon])) {
       selected.set(key, {q: h.q, r: h.r});
       added++;
@@ -242,7 +261,11 @@ async function addToZone(z) {
     body: JSON.stringify({id: z.id, name: z.name, bonus: z.bonus, hexes}),
   });
   if (r.ok) { clearSelection(); loadZones(); }
-  else alert('Ошибка: ' + await r.text());
+  else {
+    let msg = await r.text();
+    try { msg = JSON.parse(msg).error || msg; } catch(e) {}
+    alert(msg);
+  }
 }
 
 async function saveZone() {
@@ -262,7 +285,11 @@ async function saveZone() {
     document.getElementById('z-name').value = '';
     updateCounter(); drawGrid(); loadZones();
   } else {
-    alert('Ошибка сохранения: ' + await r.text());
+    {
+      let msg = await r.text();
+      try { msg = JSON.parse(msg).error || msg; } catch(e) {}
+      alert(msg);
+    }
   }
 }
 
@@ -290,6 +317,8 @@ async function loadZones() {
   const r = await fetch('/admin/zones/list');
   const d = await r.json();
   zonesData = d.zones || [];
+  rebuildTaken();
+  drawGrid();
   const list = document.getElementById('zone-list');
   if (!d.zones.length) {
     list.innerHTML = '<em style="color:#888;font-size:13px;">пока нет зон</em>';

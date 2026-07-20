@@ -1,51 +1,71 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-title">🏗 {{ dev.name }}
-  <small style="font-size:13px;color:#888;font-weight:400;">
-    {% if dev.founded_year %}основан {{ dev.founded_year }} · {% endif %}{{ complexes|length }} ЖК в базе
-  </small>
+<div class="page-title">
+  <a href="/admin/developers" style="color:#888;text-decoration:none;font-size:14px;font-weight:400;">← все застройщики</a><br>
+  🏗 {{ dev.name }}
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ projects|length }} проектов · {{ listings|length }} активных объявлений</small>
 </div>
+
+<h3 style="margin:18px 0 10px;">Проекты</h3>
 <style>
-.dev-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-bottom:16px;}
-table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);font-size:13px}
-th{background:#1a1a2e;color:#fff;padding:10px 8px;text-align:left;font-weight:500;font-size:12px;white-space:nowrap}
-td{padding:9px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
-tr:hover td{background:rgba(255,255,255,0.03)}
+.proj-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:14px;margin-bottom:24px;}
+.proj-card{display:block;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;text-decoration:none;color:inherit;transition:box-shadow .15s;}
+.proj-card:hover{box-shadow:0 4px 14px rgba(0,0,0,.12);}
+.proj-photo{width:100%;height:120px;object-fit:cover;display:block;background:#e2e8f0;}
+.proj-body{padding:10px 12px;}
+.proj-name{font-weight:700;font-size:13.5px;margin-bottom:4px;}
+.proj-meta{font-size:11.5px;color:#777;line-height:1.5;}
+table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);font-size:13px;}
+th{background:#1a1a2e;color:#fff;padding:9px 8px;text-align:left;font-weight:500;font-size:12px;white-space:nowrap}
+td{padding:8px;border-bottom:1px solid var(--border);vertical-align:middle}
 tr:last-child td{border-bottom:none}
+.score-badge{display:inline-block;min-width:30px;text-align:center;padding:3px 8px;border-radius:8px;color:#fff;font-weight:800;font-size:13px;}
 </style>
 
-<div class="dev-card">
-  <table style="font-size:14px;border-collapse:collapse;box-shadow:none;background:none;">
-    {% if dev.founded_year %}<tr><td style="padding:5px 14px 5px 0;color:#888;width:200px;border:none;">Год основания</td><td style="border:none;"><b>{{ dev.founded_year }}</b></td></tr>{% endif %}
-    {% if dev.projects_active %}<tr><td style="padding:5px 14px 5px 0;color:#888;border:none;">Доступных объектов</td><td style="border:none;"><b>{{ dev.projects_active }}</b>{% if dev.projects_total %}<span style="color:#888;font-size:12px;"> · {{ dev.projects_total }} ЖК в продаже по Казахстану</span>{% endif %}</td></tr>{% endif %}
-    {% if dev.website %}<tr><td style="padding:5px 14px 5px 0;color:#888;border:none;">Сайт</td><td style="border:none;"><a href="{{ dev.website }}" target="_blank">{{ dev.website }}</a></td></tr>{% endif %}
-    {% if dev.homsters_slug %}<tr><td style="padding:5px 14px 5px 0;color:#888;border:none;">homsters.kz</td><td style="border:none;"><a href="https://homsters.kz/{{ dev.homsters_slug }}" target="_blank">Страница застройщика ↗</a></td></tr>{% endif %}
-  </table>
-  {% if dev.description %}<p style="font-size:13px;color:#888;margin:10px 0 0;line-height:1.55;">{{ dev.description }}</p>{% endif %}
-</div>
-
-<div class="page-title" style="font-size:16px;">ЖК застройщика в нашей базе</div>
-{% if complexes %}
-<table>
-  <tr>
-    <th>ЖК</th><th>Район</th><th>Год</th><th>Класс</th>
-    <th>В продаже</th><th>Ушло в архив</th><th>Ср. дней до продажи</th><th>₸/м²</th>
-  </tr>
-  {% for c in complexes %}
-  <tr>
-    <td><a href="/admin/complex/{{ c.id }}" style="color:inherit;"><b>{{ c.name }}</b></a></td>
-    <td>{{ c.district or '—' }}</td>
-    <td>{{ c.year_built or '—' }}</td>
-    <td>{{ c.housing_class or '—' }}</td>
-    <td>{{ c.active_cnt }}</td>
-    <td>{{ c.sold_cnt }}</td>
-    <td>{{ '%.0f'|format(c.avg_days_to_sell) if c.avg_days_to_sell else '—' }}</td>
-    <td>{{ '{:,.0f}'.format(c.avg_price_m2 or 0).replace(',', ' ') if c.avg_price_m2 else '—' }}</td>
-  </tr>
+<div class="proj-grid">
+  {% for p in projects %}
+  <a class="proj-card" href="/admin/complex/{{ p.id }}">
+    {% if p.photo_url %}<img class="proj-photo" src="{{ p.photo_url }}" loading="lazy" onerror="this.style.display='none'">{% endif %}
+    <div class="proj-body">
+      <div class="proj-name">{{ p.name }}</div>
+      <div class="proj-meta">
+        {{ p.district or '' }}{% if p.year_built %} · {{ p.year_built }}{% endif %}{% if p.comfort_class %} · {{ p.comfort_class }}{% endif %}<br>
+        📋 {{ p.listings_count or 0 }} объявл.
+        {% if p.avg_price_m2 %} · {{ (p.avg_price_m2/1000)|round|int }} тыс ₸/м²{% endif %}
+        {% if p.avg_yield %} · yield {{ p.avg_yield|round(1) }}%{% endif %}
+        {% if p.address %}<br>📍 {{ p.address }}{% endif %}
+      </div>
+    </div>
+  </a>
   {% endfor %}
+</div>
+{% if not projects %}
+<p style="color:#888;font-size:13px;">Привязанных ЖК пока нет — запустите krisha_complex_import.py для обогащения.</p>
+{% endif %}
+
+{% if listings %}
+<h3 style="margin:18px 0 10px;">Активные объявления (топ по скору)</h3>
+<div style="overflow-x:auto;">
+<table>
+  <thead><tr><th>Скор</th><th>Объявление</th><th>ЖК</th><th>Комн.</th><th>М²</th><th>Цена</th><th>₸/м²</th><th></th></tr></thead>
+  <tbody>
+    {% for l in listings %}
+    <tr>
+      <td>
+        {% set s = l.score_total or 0 %}
+        <span class="score-badge" style="background:{% if s >= 65 %}#16a34a{% elif s >= 45 %}#d97706{% else %}#94a3b8{% endif %};">{{ s }}</span>
+      </td>
+      <td><a href="/admin/analytics/{{ l.id }}" style="font-weight:600;">{{ l.title[:70] }}</a></td>
+      <td>{{ l.complex_name }}</td>
+      <td>{{ l.rooms or '—' }}</td>
+      <td>{{ l.area|round|int if l.area else '—' }}</td>
+      <td style="white-space:nowrap;font-weight:600;">{{ (l.price/1e6)|round(1) }} млн ₸</td>
+      <td style="white-space:nowrap;">{% if l.area %}{{ (l.price/l.area/1000)|round|int }} тыс{% else %}—{% endif %}</td>
+      <td><a href="{{ l.url }}" target="_blank" style="color:#2563eb;">↗</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
 </table>
-<p style="font-size:12px;color:#888;margin-top:8px;">«Ср. дней до продажи» — от первого появления объявления в базе до ухода в архив (проверка архива работает с 12.07.2026): чем меньше, тем быстрее продаются квартиры.</p>
-{% else %}
-<p style="color:#888;font-size:14px;">Ни один ЖК в базе пока не сопоставлен с этим застройщиком. Сопоставление происходит при импорте с homsters.kz по названию ЖК.</p>
+</div>
 {% endif %}
 {% endblock %}
