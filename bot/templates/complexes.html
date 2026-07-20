@@ -62,7 +62,8 @@ document.addEventListener('DOMContentLoaded', function() {
         `<b>${c.name}</b>${c.class ? ' · ' + c.class : ''}<br>` +
         `${c.avg_score ? 'Средний скор: <b>' + c.avg_score + '</b> · ' : ''}Год: ${c.year || '?'}<br>` +
         `В продаже: ${c.active} · продано: ${c.sold}${c.price_m2 ? ' · ' + Math.round(c.price_m2/1000) + ' тыс ₸/м²' : ''}<br>` +
-        `Застройщик: ${c.developer}`,
+        (c.days_to_sell ? `Ликвидность: ~${c.days_to_sell} дн до продажи · за 30 дн ушло: ${c.sold_30d}<br>` : '') +
+        (c.developer_id ? `Застройщик: <a href="/admin/developer/${c.developer_id}">${c.developer}</a>` : `Застройщик: ${c.developer}`),
         {sticky: true}
       );
       m.on('click', () => location.href = '/admin/complex/' + c.id);

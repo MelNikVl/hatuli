@@ -125,6 +125,7 @@
     <a href="/admin"             class="{% if request.url.path == '/admin' %}active{% endif %}"><span class="ico">🗺</span> Карта</a>
     <a href="/admin/analytics"   class="{% if 'analytics' in request.url.path %}active{% endif %}"><span class="ico">📊</span> Аналитика</a>
     <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}"><span class="ico">🏢</span> Рейтинг ЖК</a>
+    <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}"><span class="ico">🏗</span> Застройщики</a>
     {% if admin %}
     <div class="nav-section">ПАРСЕРЫ</div>
     <a href="/admin/parser/sales"  class="{% if 'parser/sales' in request.url.path %}active{% endif %}"><span class="ico">🏠</span> Продажи</a>

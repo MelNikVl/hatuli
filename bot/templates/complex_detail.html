@@ -9,8 +9,12 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-<!-- Карта (квадрат) слева · основная информация справа -->
-<div style="display:grid;grid-template-columns:minmax(280px,420px) 1fr;gap:16px;margin-bottom:16px;align-items:start;">
+<!-- Карта (квадрат) слева · основная информация · продажи: статистика -->
+<style>
+.cx-top { display:grid; grid-template-columns:minmax(280px,380px) 1fr 1fr; gap:16px; margin-bottom:16px; align-items:start; }
+@media (max-width:1100px) { .cx-top { grid-template-columns:1fr; } }
+</style>
+<div class="cx-top">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
     {% if geo %}
     <div id="cx-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
@@ -49,7 +53,7 @@
     <b style="font-size:15px;">Основная информация</b>
     <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">
       <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx.address or cx_address or 'не определён' }}</b></td></tr>
-      <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{{ developer or '—' }}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:inherit;">{{ developer }}</a>{% else %}{{ developer or '—' }}{% endif %}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Год постройки/сдачи</td><td><b>{{ cx.year_built or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Район</td><td><b>{{ cx.district or '—' }}</b></td></tr>
@@ -81,13 +85,46 @@
       {% endif %}
     </table>
   </div>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;">
+    <b style="font-size:15px;">📊 Продажи: статистика по комнатности</b>
+    {% if obs.since %}<div style="font-weight:400;color:#888;font-size:11px;margin-top:2px;">наблюдаем с {{ obs.since.strftime('%d.%m.%Y') }} по {{ obs.until.strftime('%d.%m.%Y') if obs.until else '—' }}</div>{% endif %}
+    {% if pace %}
+    <div style="font-size:13px;margin-top:8px;padding:8px 10px;background:var(--bg);border-radius:8px;">
+      Ушло в архив: <b>{{ pace.archived_total or 0 }}</b> · за 30 дней: <b>{{ pace.archived_30d or 0 }}</b>{% if pace.avg_days_to_sell %} · в среднем продаются за <b>~{{ '%.0f'|format(pace.avg_days_to_sell) }} дн</b>{% endif %}
+    </div>
+    {% endif %}
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;">
+      <tr>
+        <th style="text-align:left;color:#888;font-weight:600;padding:5px 6px;border-bottom:1px solid var(--border);">Комнат</th>
+        <th style="text-align:left;color:#888;font-weight:600;padding:5px 6px;border-bottom:1px solid var(--border);">Объявл.</th>
+        <th style="text-align:left;color:#888;font-weight:600;padding:5px 6px;border-bottom:1px solid var(--border);">Медиана</th>
+        <th style="text-align:left;color:#888;font-weight:600;padding:5px 6px;border-bottom:1px solid var(--border);">₸/м²</th>
+        <th style="text-align:left;color:#888;font-weight:600;padding:5px 6px;border-bottom:1px solid var(--border);">Архив</th>
+        <th style="text-align:left;color:#888;font-weight:600;padding:5px 6px;border-bottom:1px solid var(--border);">Дней</th>
+        <th style="text-align:left;color:#888;font-weight:600;padding:5px 6px;border-bottom:1px solid var(--border);">Период</th>
+      </tr>
+      {% for s in stats %}
+      <tr>
+        <td style="padding:6px;border-bottom:1px solid var(--border);"><b>{{ s.rooms or '?' }}к</b></td>
+        <td style="padding:6px;border-bottom:1px solid var(--border);">{{ s.cnt }}</td>
+        <td style="padding:6px;border-bottom:1px solid var(--border);">{{ '{:,.0f}'.format(s.median_price or 0).replace(',', ' ') }} ₸</td>
+        <td style="padding:6px;border-bottom:1px solid var(--border);">{{ '{:,.0f}'.format(s.median_m2 or 0).replace(',', ' ') }}</td>
+        <td style="padding:6px;border-bottom:1px solid var(--border);">{{ s.sold_cnt }}</td>
+        <td style="padding:6px;border-bottom:1px solid var(--border);" title="Среднее число дней от первого появления объявления до архивации">{{ '%.0f'|format(s.avg_days_to_sell) if s.avg_days_to_sell else '—' }}</td>
+        <td style="padding:6px;border-bottom:1px solid var(--border);font-size:11px;color:#888;" title="Первая и последняя архивации">{% if s.first_archived %}{{ s.first_archived.strftime('%d.%m') }}—{{ s.last_archived.strftime('%d.%m') }}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p style="font-size:11px;color:#888;margin:8px 0 0;">«Архив» ≈ продано или снято с продажи (проверка работает с 12.07.2026). «Дней» — от первого появления объявления в базе до архивации: чем меньше, тем быстрее «уходят» квартиры в этом ЖК.</p>
+  </div>
 </div>
 
 <!-- Снизу: люди/контакты и где искать инфу -->
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;">
     <b style="font-size:14px;">👥 Люди и контакты</b>
-    <p style="font-size:13px;margin:8px 0 4px;">Застройщик: <b>{{ developer or 'не определён' }}</b></p>
+    <p style="font-size:13px;margin:8px 0 4px;">Застройщик: <b>{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:inherit;">{{ developer }}</a>{% else %}{{ developer or 'не определён' }}{% endif %}</b></p>
     <p style="font-size:12px;color:#888;margin:4px 0 0;">Прямые телефоны агрегаторы не публикуют — контакты отдела продаж ищи на странице ЖК по ссылкам справа или на сайте застройщика. Парс сайтов застройщиков — в планах.</p>
   </div>
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;">
@@ -123,27 +160,6 @@
 
 <div class="cx-grid">
 <div>
-
-  <div class="cx-card">
-    <h3>📊 Продажи: статистика по комнатности
-      {% if obs.since %}<small style="font-weight:400;color:#888;font-size:11px;">наблюдаем с {{ obs.since.strftime('%d.%m.%Y') }} по {{ obs.until.strftime('%d.%m.%Y') if obs.until else '—' }}</small>{% endif %}
-    </h3>
-    <table class="cx-table">
-      <tr><th>Комнат</th><th>Объявл.</th><th>Медиана цены</th><th>₸/м²</th><th>Ушло в архив</th><th>Ср. дней до архива</th><th>Архивации (период)</th></tr>
-      {% for s in stats %}
-      <tr>
-        <td><b>{{ s.rooms or '?' }}к</b></td>
-        <td>{{ s.cnt }}</td>
-        <td>{{ '{:,.0f}'.format(s.median_price or 0).replace(',', ' ') }} ₸</td>
-        <td>{{ '{:,.0f}'.format(s.median_m2 or 0).replace(',', ' ') }}</td>
-        <td>{{ s.sold_cnt }}</td>
-        <td>{{ '%.0f'|format(s.avg_days_to_sell) if s.avg_days_to_sell else '—' }}</td>
-        <td style="font-size:11px;color:#888;">{% if s.first_archived %}{{ s.first_archived.strftime('%d.%m') }} — {{ s.last_archived.strftime('%d.%m') }}{% else %}—{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    <p style="font-size:12px;color:#888;">«Ушло в архив» ≈ продано или снято с продажи (проверка запущена 12.07.2026 — данные копятся с этой даты). «Ср. дней до архива» — время от первого появления объявления в базе до архивации: чем меньше, тем быстрее «уходят» квартиры в этом ЖК. Эта метрика ликвидности будет добавлена в скор ЖК, когда накопится статистика.</p>
-  </div>
 
   <div class="cx-card">
     <h3>🔑 Аренда: скорость ухода</h3>

@@ -44,6 +44,16 @@ async def run_cycle():
     except Exception as e:
         log.error("Homsters cycle failed: %s", e, exc_info=True)
 
+    # Застройщики: карточки + привязка ЖК к developers (тот же 5-дневный цикл)
+    try:
+        from homsters_developers_import import fetch_developers, save_to_db as save_devs
+        devs = await fetch_developers()
+        if devs:
+            await save_devs(devs)
+            log.info("=== Developers import done: %d застройщиков ===", len(devs))
+    except Exception as e:
+        log.error("Developers import failed: %s", e, exc_info=True)
+
 
 async def main():
     from bot.db.pg import init_pool

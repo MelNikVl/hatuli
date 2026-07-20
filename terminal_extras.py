@@ -428,23 +428,27 @@ def make_extras_router(templates) -> APIRouter:
             SELECT c.id, c.name, c.year_built, c.housing_class,
                    COALESCE(c.listings_count, 0) AS active_cnt,
                    COALESCE(c.sold_count, 0) AS sold_cnt,
+                   c.developer_id,
                    COALESCE(d.name,
                             c.source_info->'korter'->>'developer',
                             c.source_info->'homsters'->>'developer') AS developer,
                    c.avg_price_m2, c.lat AS c_lat, c.lon AS c_lon,
                    c.photo_url,
-                   g.lat, g.lon, g.avg_score
+                   g.lat, g.lon, g.avg_score, g.avg_days_to_sell, g.sold_30d
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
             LEFT JOIN LATERAL (
-                SELECT AVG(lat) AS lat, AVG(lon) AS lon,
+                SELECT AVG(al.lat) AS lat, AVG(al.lon) AS lon,
                        AVG(COALESCE(score_total,0) + COALESCE(zone_bonus,0)
                            + COALESCE(layer_bonus,0))
-                         FILTER (WHERE is_active IS NOT FALSE) AS avg_score
+                         FILTER (WHERE is_active IS NOT FALSE) AS avg_score,
+                       AVG(EXTRACT(EPOCH FROM (al.archived_at - al.first_seen))/86400)
+                         FILTER (WHERE al.archived_at IS NOT NULL) AS avg_days_to_sell,
+                       COUNT(*) FILTER (WHERE al.archived_at >= now() - interval '30 days')
+                         AS sold_30d
                 FROM apartment_listings al
                 WHERE lower(trim(regexp_replace(al.complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
                       = lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
-                  AND al.lat IS NOT NULL
             ) g ON TRUE
             WHERE COALESCE(c.lat, g.lat) IS NOT NULL
               AND COALESCE(c.is_street, FALSE) = FALSE
@@ -455,8 +459,11 @@ def make_extras_router(templates) -> APIRouter:
             "year": r["year_built"], "class": r["housing_class"],
             "active": r["active_cnt"], "sold": r["sold_cnt"],
             "developer": r["developer"] or "—",
+            "developer_id": r["developer_id"],
             "avg_score": round(float(r["avg_score"])) if r["avg_score"] else None,
             "price_m2": round(float(r["avg_price_m2"])) if r["avg_price_m2"] else None,
+            "days_to_sell": round(float(r["avg_days_to_sell"])) if r["avg_days_to_sell"] else None,
+            "sold_30d": r["sold_30d"] or 0,
             "photo": r["photo_url"],
             "lat": float(r["c_lat"] if r["c_lat"] is not None else r["lat"]),
             "lon": float(r["c_lon"] if r["c_lon"] is not None else r["lon"]),
@@ -831,6 +838,17 @@ def make_extras_router(templates) -> APIRouter:
             WHERE lower(trim(complex_name)) = lower(trim($1))
         """, cname)
 
+        # Темп продаж по ЖК: ушло в архив всего / за 30 дней, ср. дней до архива
+        pace = await _fetchrow("""
+            SELECT COUNT(*) FILTER (WHERE is_active IS FALSE) AS archived_total,
+                   COUNT(*) FILTER (WHERE archived_at >= now() - interval '30 days') AS archived_30d,
+                   AVG(EXTRACT(EPOCH FROM (archived_at - first_seen))/86400)
+                       FILTER (WHERE archived_at IS NOT NULL) AS avg_days_to_sell
+            FROM apartment_listings
+            WHERE lower(trim(complex_name)) = lower(trim($1))
+              AND COALESCE(is_duplicate, FALSE) = FALSE AND price > 500000
+        """, cname)
+
         # Аренда: скорость ухода. "Ушло" = не видели парсером > 3 дней.
         rental_stats = await fetch("""
             SELECT rooms,
@@ -889,6 +907,7 @@ def make_extras_router(templates) -> APIRouter:
             "stats": [dict(r) for r in stats],
             "rental_stats": [dict(r) for r in rental_stats],
             "obs": dict(obs) if obs else {},
+            "pace": dict(pace) if pace else {},
             "map_points": [dict(r) for r in cx_map_points],
             "live_cnt": (cx_total["live"] or 0) if cx_total else 0,
             "live_no_coords": (cx_total["live_no_coords"] or 0) if cx_total else 0,
@@ -913,6 +932,64 @@ def make_extras_router(templates) -> APIRouter:
             (data.get("residents_notes") or "").strip() or None,
         )
         return JSONResponse({"ok": True})
+
+    # ── Застройщики: список и карточка ────────────────────────────────────
+
+    @router.get("/admin/developers", response_class=HTMLResponse)
+    async def developers_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT d.id, d.name, d.founded_year, d.projects_active,
+                   d.projects_total, d.homsters_slug,
+                   COUNT(c.id) AS cx_cnt,
+                   COALESCE(SUM(c.listings_count), 0) AS active_cnt,
+                   COALESCE(SUM(c.sold_count), 0) AS sold_cnt
+            FROM developers d
+            LEFT JOIN complexes c ON c.developer_id = d.id
+                                 AND COALESCE(c.is_street, FALSE) = FALSE
+            GROUP BY d.id
+            ORDER BY cx_cnt DESC, active_cnt DESC, d.name
+            LIMIT 500
+        """)
+        return templates.TemplateResponse("developers.html", {
+            "request": request,
+            "developers": [dict(r) for r in rows],
+            "total": len(rows),
+        })
+
+    @router.get("/admin/developer/{dev_id}", response_class=HTMLResponse)
+    async def developer_detail(request: Request, dev_id: int):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch, fetchrow
+        dev = await fetchrow("SELECT * FROM developers WHERE id = $1", dev_id)
+        if not dev:
+            return HTMLResponse("<h2>Застройщик не найден</h2>", status_code=404)
+        complexes = await fetch("""
+            SELECT c.id, c.name, c.district, c.year_built, c.housing_class,
+                   COALESCE(c.listings_count, 0) AS active_cnt,
+                   COALESCE(c.sold_count, 0) AS sold_cnt,
+                   c.avg_price_m2,
+                   g.avg_days_to_sell
+            FROM complexes c
+            LEFT JOIN LATERAL (
+                SELECT AVG(EXTRACT(EPOCH FROM (al.archived_at - al.first_seen))/86400)
+                         FILTER (WHERE al.archived_at IS NOT NULL) AS avg_days_to_sell
+                FROM apartment_listings al
+                WHERE lower(trim(al.complex_name)) = lower(trim(c.name))
+                  AND COALESCE(al.is_duplicate, FALSE) = FALSE
+            ) g ON TRUE
+            WHERE c.developer_id = $1
+              AND COALESCE(c.is_street, FALSE) = FALSE
+            ORDER BY active_cnt DESC, sold_cnt DESC
+        """, dev_id)
+        return templates.TemplateResponse("developer_detail.html", {
+            "request": request,
+            "dev": dict(dev),
+            "complexes": [dict(r) for r in complexes],
+        })
 
     # ── История цены объявления ───────────────────────────────────────────
 

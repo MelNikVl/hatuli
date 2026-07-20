@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">
+  🏗 Застройщики
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} в базе · данные homsters.kz</small>
+</div>
+<style>
+table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);font-size:13px}
+th{background:#1a1a2e;color:#fff;padding:10px 8px;text-align:left;font-weight:500;font-size:12px;white-space:nowrap}
+td{padding:9px 8px;border-bottom:1px solid var(--border);vertical-align:middle}
+tr:hover td{background:rgba(255,255,255,0.03)}
+tr:last-child td{border-bottom:none}
+</style>
+<table>
+  <tr>
+    <th>Застройщик</th><th>Основан</th><th>Объектов (homsters)</th>
+    <th>ЖК в базе</th><th>В продаже</th><th>Ушло в архив</th><th></th>
+  </tr>
+  {% for d in developers %}
+  <tr>
+    <td><a href="/admin/developer/{{ d.id }}" style="color:inherit;"><b>{{ d.name }}</b></a></td>
+    <td>{{ d.founded_year or '—' }}</td>
+    <td>{{ d.projects_active or '—' }}{% if d.projects_total %}<span style="color:#888;font-size:11px;"> · {{ d.projects_total }} ЖК в продаже</span>{% endif %}</td>
+    <td>{{ d.cx_cnt }}</td>
+    <td>{{ d.active_cnt }}</td>
+    <td>{{ d.sold_cnt }}</td>
+    <td>{% if d.homsters_slug %}<a href="https://homsters.kz/{{ d.homsters_slug }}" target="_blank" title="Страница на homsters.kz">↗</a>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}
