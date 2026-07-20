@@ -21,6 +21,10 @@
     <select id="f-rooms" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">любые</option><option>1</option><option>2</option><option>3</option><option>4</option>
     </select></div>
+  <div id="f-market-wrap"><label style="font-size:11px;color:#888;display:block;">Рынок</label>
+    <select id="f-market" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+      <option value="">весь</option><option value="secondary">вторичка</option><option value="primary">первичка (в стройке)</option>
+    </select></div>
   <div><label style="font-size:11px;color:#888;display:block;">Продавец</label>
     <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
@@ -62,7 +66,7 @@
 </div><!-- /flex -->
 
 <script>
-const map = L.map('objects-map').setView([51.128, 71.43], 12);
+const map = L.map('objects-map').setView([51.128, 71.43], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
 const pointsLayer = L.layerGroup().addTo(map);
 
@@ -77,6 +81,50 @@ function carNav(id, dir, ev) {
   const n = document.getElementById('car-n-' + id);
   if (n) n.textContent = (carIdx[id] + 1) + '/' + ph.length;
 }
+
+// Лайтбокс: клик по фото в попапе открывает полноразмерный просмотр
+// с каруселью миниатюр снизу — видно сразу, сколько всего фото у объявления.
+let lbId = null, lbIdx = 0;
+function openLightbox(id, ev) {
+  if (ev) ev.stopPropagation();
+  const ph = ptPhotos[id]; if (!ph || !ph.length) return;
+  lbId = id; lbIdx = carIdx[id] || 0;
+  renderLightbox();
+}
+function renderLightbox() {
+  const ph = ptPhotos[lbId];
+  let box = document.getElementById('lightbox-overlay');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'lightbox-overlay';
+    box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;';
+    box.onclick = (e) => { if (e.target === box) closeLightbox(); };
+    document.body.appendChild(box);
+  }
+  const thumbs = ph.map((p, i) => `<img src="${p}" onclick="lbIdx=${i};renderLightbox();" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === lbIdx ? '1' : '.5'};border:2px solid ${i === lbIdx ? '#fff' : 'transparent'};">`).join('');
+  box.innerHTML = `
+    <div style="position:relative;max-width:92vw;max-height:78vh;display:flex;align-items:center;justify-content:center;">
+      <img src="${ph[lbIdx]}" style="max-width:92vw;max-height:78vh;border-radius:8px;object-fit:contain;">
+      ${ph.length > 1 ? `
+      <button onclick="lbIdx=(lbIdx-1+${ph.length})%${ph.length};renderLightbox();" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">‹</button>
+      <button onclick="lbIdx=(lbIdx+1)%${ph.length};renderLightbox();" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">›</button>` : ''}
+    </div>
+    <div style="display:flex;gap:6px;margin-top:14px;max-width:92vw;overflow-x:auto;padding:4px;">${thumbs}</div>
+    <div style="color:#ccc;font-size:13px;margin-top:6px;">${lbIdx + 1} / ${ph.length}</div>
+    <button onclick="closeLightbox()" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:30px;cursor:pointer;line-height:1;">×</button>
+  `;
+}
+function closeLightbox() {
+  const box = document.getElementById('lightbox-overlay');
+  if (box) box.remove();
+  lbId = null;
+}
+document.addEventListener('keydown', (e) => {
+  if (!lbId) return;
+  if (e.key === 'Escape') closeLightbox();
+  if (e.key === 'ArrowLeft') { const ph = ptPhotos[lbId]; lbIdx = (lbIdx - 1 + ph.length) % ph.length; renderLightbox(); }
+  if (e.key === 'ArrowRight') { const ph = ptPhotos[lbId]; lbIdx = (lbIdx + 1) % ph.length; renderLightbox(); }
+});
 
 function scoreColor(s, p10, p90) {
   const t = p90 > p10 ? Math.max(0, Math.min(1, (s - p10) / (p90 - p10))) : 0.5;
@@ -108,54 +156,21 @@ function applyFilters() {
   if (ms && type === 'sale') p.set('min_score', ms);
   const seller = document.getElementById('f-seller').value;
   if (seller && type === 'sale') p.set('seller', seller);
+  const market = document.getElementById('f-market').value;
+  if (market && type === 'sale') p.set('market', market);
 
+  document.getElementById('f-market-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
   fetch('/admin/api/map-points?' + p.toString()).then(r => r.json()).then(d => {
-    // яркость/контраст фото квартир (настраивается в /admin/settings)
-    if (d.photo) {
-      let st = document.getElementById('apt-photo-style');
-      if (!st) { st = document.createElement('style'); st.id = 'apt-photo-style'; document.head.appendChild(st); }
-      st.textContent = `.apt-photo{filter:brightness(${d.photo.b}%) contrast(${d.photo.c}%);}`;
-    }
     if (type === 'rental') {
       pointsLayer.clearLayers();
       lastPoints = d.points || [];
       lastPoints.forEach(pt => {
-        // Zillow-стиль: цена белыми цифрами на синем чипе + стрелка изменения
-        const chipPrice = pt.price ? (pt.price/1000).toFixed(0) + 'т' : '?';
-        let chipArrow = '';
-        if (pt.prev_price && pt.prev_price !== pt.price) {
-          const up = pt.price > pt.prev_price;
-          chipArrow = `<span style="background:#fff;color:${up ? '#dc2626' : '#16a34a'};border-radius:6px;padding:2px 5px;margin-left:3px;font-size:12px;font-weight:800;line-height:1;box-shadow:0 1px 2px rgba(0,0,0,.3);">${up ? '▲' : '▼'}</span>`;
-        }
-        const chipHtml = `<div style="display:flex;align-items:center;transform:translateX(-50%);">` +
-          `<span style="background:#2563eb;color:#fff;border-radius:8px;padding:3px 8px;font-size:13px;font-weight:800;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.35);border:1.5px solid #fff;">${chipPrice}</span>${chipArrow}</div>`;
-        const m = L.marker([pt.lat, pt.lon], {icon: L.divIcon({className:'', html:chipHtml, iconSize:null, iconAnchor:[0,14]})}).addTo(pointsLayer);
+        const m = L.circleMarker([pt.lat, pt.lon], {radius:6, fillColor:'#3b82f6', color:'#fff', weight:1, fillOpacity:.85}).addTo(pointsLayer);
         const cx = pt.complex ? `<a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}">${pt.complex}</a>` : 'ЖК не определён';
-        let rentTrend = '';
-        if (pt.prev_price && pt.prev_price !== pt.price) {
-          const dp = (pt.price - pt.prev_price) / 1000;
-          const up = dp > 0;
-          rentTrend = `<div style="font-size:11.5px;margin-top:4px;color:${up ? '#dc2626' : '#16a34a'};font-weight:700;">${up ? '▲' : '▼'} ${Math.abs(dp).toFixed(0)} тыс ₸${pt.price_changed ? ' · ' + pt.price_changed : ''} (было ${(pt.prev_price/1000).toFixed(0)} тыс)</div>`;
-        }
-        let photoHtml = '';
-        if (pt.photos && pt.photos.length) {
-          ptPhotos['r' + pt.id] = pt.photos; carIdx['r' + pt.id] = 0;
-          photoHtml = `<div style="position:relative;margin-bottom:6px;border-radius:8px;overflow:hidden;">
-            <img id="car-r${pt.id}" src="${pt.photos[0]}" class="apt-photo" style="width:100%;height:130px;object-fit:cover;display:block;" onerror="this.parentNode.style.display='none'">
-            ${pt.photos.length > 1 ? `
-            <button onclick="carNav('r${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:15px;line-height:1;">‹</button>
-            <button onclick="carNav('r${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:15px;line-height:1;">›</button>` : ''}
-          </div>`;
-        }
-        m.bindPopup(`<div style="min-width:250px;max-width:280px;font-family:inherit;">${photoHtml}
-          <div style="font-size:19px;font-weight:800;">${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'} <span style="font-size:13px;font-weight:400;color:#666;">· ${pt.rooms || '?'}-комн</span></div>
-          ${rentTrend}
-          <div style="font-size:12.5px;margin-top:5px;">🏢 ${cx}</div>
-          <div style="font-size:11px;color:#888;margin-top:4px;">привязка: ${pt.binding} · найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша ↗</a>' : ''}</div>
-        </div>`);
+        m.bindPopup(`<b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}`);
       });
       document.getElementById('result-count').textContent = d.count + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без привязки)` : '');
       if (hexOn) drawHexGrid();
@@ -165,20 +180,12 @@ function applyFilters() {
     const scores = d.points.map(pt => pt.score);
     const p10 = percentile(scores, 0.10), p90 = percentile(scores, 0.90);
     d.points.forEach(pt => {
-      // Zillow-стиль: цена белыми цифрами на синем чипе; топ-10 по скору — на красном
-      const chipPrice = pt.price ? (pt.price/1e6).toFixed(1) : '?';
-      const chipBg = pt.top ? '#dc2626' : '#2563eb';
-      let chipArrow = '';
-      if (pt.prev_price && pt.prev_price !== pt.price) {
-        const up = pt.price > pt.prev_price;
-        chipArrow = `<span style="background:#fff;color:${up ? '#dc2626' : '#16a34a'};border-radius:6px;padding:2px 5px;margin-left:3px;font-size:12px;font-weight:800;line-height:1;box-shadow:0 1px 2px rgba(0,0,0,.3);">${up ? '▲' : '▼'}</span>`;
+      let m;
+      if (pt.top) {
+        m = L.marker([pt.lat, pt.lon], {icon: L.divIcon({className:'', html:'<div style="font-size:22px;line-height:22px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));">❤️</div>', iconSize:[22,22], iconAnchor:[11,11]}), zIndexOffset:1000}).addTo(pointsLayer);
+      } else {
+        m = L.circleMarker([pt.lat, pt.lon], {radius:6, fillColor:scoreColor(pt.score,p10,p90), color:'#fff', weight:1, fillOpacity:.85}).addTo(pointsLayer);
       }
-      const chipHtml = `<div style="display:flex;align-items:center;transform:translateX(-50%);">` +
-        `<span style="background:${chipBg};color:#fff;border-radius:8px;padding:3px 8px;font-size:13px;font-weight:800;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.35);border:1.5px solid #fff;">${chipPrice}</span>${chipArrow}</div>`;
-      const m = L.marker([pt.lat, pt.lon], {
-        icon: L.divIcon({className:'', html:chipHtml, iconSize:null, iconAnchor:[0,14]}),
-        zIndexOffset: pt.top ? 1000 : 0,
-      }).addTo(pointsLayer);
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
       const areaTxt = pt.area ? Math.round(pt.area) : '?';
       const ppm = (pt.price && pt.area) ? ' · ' + Math.round(pt.price/pt.area/1000) + ' тыс ₸/м²' : '';
@@ -192,33 +199,39 @@ function applyFilters() {
       const sc = scoreColor(pt.score, p10, p90);
       if (pt.photos && pt.photos.length) { ptPhotos[pt.id] = pt.photos; carIdx[pt.id] = 0; }
       const carHtml = pt.photos && pt.photos.length ? `
-<div style="position:relative;margin-bottom:7px;border-radius:8px;overflow:hidden;">
-  <img id="car-${pt.id}" src="${pt.photos[0]}" class="apt-photo" style="width:100%;height:135px;object-fit:cover;display:block;" onerror="this.parentNode.style.display='none'">
+<div style="position:relative;margin-bottom:8px;border-radius:11px 11px 0 0;overflow:hidden;cursor:pointer;" onclick="openLightbox('${pt.id}', event)">
+  <img id="car-${pt.id}" src="${pt.photos[0]}" style="width:100%;height:155px;object-fit:cover;display:block;" onerror="this.parentNode.style.display='none'">
   ${pt.photos.length > 1 ? `
-  <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:15px;line-height:1;">‹</button>
-  <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:15px;line-height:1;">›</button>
-  <span id="car-n-${pt.id}" style="position:absolute;right:6px;bottom:4px;background:rgba(0,0,0,.5);color:#fff;font-size:10px;border-radius:6px;padding:1px 7px;">1/${pt.photos.length}</span>` : ''}
+  <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">‹</button>
+  <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">›</button>
+  <span id="car-n-${pt.id}" style="position:absolute;right:6px;bottom:5px;background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;border-radius:6px;padding:1px 7px;">1/${pt.photos.length}</span>` : ''}
 </div>` : '';
+      const sellerHtml = pt.is_owner
+        ? '<b style="color:#16a34a;">👤 от собственника</b>'
+        : (pt.seller_name ? `<b style="color:#2563eb;">🏢 ${pt.seller_name}</b>` : '<b style="color:#2563eb;">🏢 риелтор</b>');
       const cxLine = pt.complex
-        ? `<div style="font-size:12.5px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${pt.complex}</a></div>`
-        : '<div style="font-size:12px;color:#b45309;margin-top:7px;">🏢 ЖК не определён</div>';
+        ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${pt.complex}</a></div>`
+        : '<div style="font-size:12.5px;color:#b45309;margin-top:7px;">🏢 ЖК не определён</div>';
       m.bindPopup(`
 <div style="min-width:255px;max-width:290px;font-family:inherit;">
   ${carHtml}
+  <div style="${carHtml ? 'padding:9px 2px 0;' : ''}">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
     <div>
-      <div style="font-size:21px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:14px;font-weight:700;">млн ₸</span></div>
-      <div style="font-size:14px;color:#374151;margin-top:3px;">${pt.rooms || '?'}-комн · <b style="font-size:15px;">${areaTxt}</b> м²<span style="font-size:11.5px;color:#888;">${ppm}</span></div>
+      <div style="font-size:22px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:15px;font-weight:700;">млн ₸</span></div>
+      <div style="font-size:15px;color:#374151;margin-top:3px;">${pt.rooms || '?'}-комн · <b style="font-size:16px;">${areaTxt}</b> м²<span style="font-size:12px;color:#888;">${ppm}</span></div>
     </div>
     <a href="/admin/analytics/${pt.id}" title="Скор — нажми, чтобы увидеть из чего он складывается" style="background:${sc};color:#fff;border-radius:9px;padding:5px 10px;font-weight:800;font-size:16px;box-shadow:0 1px 3px rgba(0,0,0,.25);text-decoration:none;display:block;">${pt.score}</a>
   </div>
-  <div style="font-size:11.5px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}</div>
+  <div style="font-size:13px;margin-top:6px;">${sellerHtml}</div>
+  ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
+  <div style="font-size:12px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}${pt.geo === 'address' ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}</div>
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
-  ${pt.address ? `<div style="font-size:11.5px;color:#666;margin-top:2px;">📍 ${pt.address}</div>` : ''}
-  <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:14px;font-size:13px;">
+  <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:14px;font-size:13.5px;">
     <a href="/admin/analytics/${pt.id}" style="font-weight:700;">Карточка →</a>
     <a href="${pt.url}" target="_blank" style="color:#2563eb;">Крыша ↗</a>
+  </div>
   </div>
 </div>`);
       m.on('popupopen', () => loadPriceHistory(pt.id));
@@ -236,8 +249,6 @@ function applyFilters() {
         [`${d.coverage.with_coords.toLocaleString('ru')} · ${pct}%`, 'с координатами'],
         [d.coverage.dups.toLocaleString('ru'), 'дублей среди активных'],
         [`<a href="/admin/unbound" style="color:inherit;">${(d.coverage.unbound || 0).toLocaleString('ru')}</a>`, 'без привязки к ЖК'],
-        [`<span style="color:#16a34a;">▼ ${(d.coverage.price_down_today || 0).toLocaleString('ru')}</span>`, 'цена снизилась за сегодня'],
-        [`<span style="color:#dc2626;">▲ ${(d.coverage.price_up_today || 0).toLocaleString('ru')}</span>`, 'цена выросла за сегодня'],
         [kr ? kr.toLocaleString('ru') : '—', 'всего на Крыше (≤ потолка цены)'],
       ]);
       if (hexOn) drawHexGrid();
@@ -308,7 +319,8 @@ function drawHexGrid() {
     const key = q + ':' + r;
     if (seen.has(key)) return;
     seen.add(key);
-    L.polygon(hexCorners(q, r, hexEdge), {color:'#8b5cf6', weight:1, fillOpacity:0.06}).addTo(hexLayer);
+    // interactive:false — сетка чисто визуальная, клики проходят сквозь неё к маркерам
+    L.polygon(hexCorners(q, r, hexEdge), {color:'#8b5cf6', weight:1, fillOpacity:0.06, interactive:false}).addTo(hexLayer);
   });
   hexLayer.addTo(map);
 }

@@ -1,366 +1,314 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-
-
-
-
-
-.container { padding: 20px; max-width: 1200px; margin: 0 auto; }
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-.card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-.card h2 { font-size: 15px; margin-bottom: 16px; color: #1a1a2e; border-bottom: 2px solid #f0f0f0; padding-bottom: 8px; }
-.row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid #f8f8f8; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+.card h2 { font-size: 15px; margin-bottom: 14px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.row { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid var(--border); gap: 10px; }
 .row:last-child { border-bottom: none; }
-.row .key { color: #666; font-size: 12px; }
-.row .val { font-weight: 500; font-size: 13px; text-align: right; }
-.score-big { font-size: 48px; font-weight: 700; color: #1a1a2e; }
-.score-sub { font-size: 13px; color: #888; }
+.row .key { color: #888; font-size: 12.5px; flex-shrink: 0; }
+.row .val { font-weight: 600; font-size: 13.5px; text-align: right; }
+.score-big { font-size: 46px; font-weight: 800; color: var(--text); line-height: 1; }
+.score-sub { font-size: 12.5px; color: #888; margin-top: 4px; }
 .breakdown { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .brow { display: flex; align-items: center; gap: 8px; }
-.brow .blabel { font-size: 12px; color: #555; width: 100px; flex-shrink: 0; }
-.brow .bbar { flex: 1; background: #f0f0f0; border-radius: 4px; height: 20px; overflow: hidden; }
-.brow .bfill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 6px; font-size: 11px; font-weight: 600; color: #fff; }
-.brow .bval { font-size: 12px; font-weight: 600; width: 30px; text-align: right; }
-.reasons { margin-top: 12px; }
-.reason-item { font-size: 12px; color: #555; padding: 4px 0; border-bottom: 1px solid #f5f5f5; }
-.reason-item::before { content: "→ "; color: #1a1a2e; font-weight: 600; }
-.comps-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.comps-table th { background: #f5f5f5; padding: 8px; text-align: left; font-weight: 500; color: #555; }
-.comps-table td { padding: 7px 8px; border-bottom: 1px solid #f5f5f5; }
+.brow .blabel { font-size: 12px; color: #999; width: 100px; flex-shrink: 0; }
+.brow .bbar { flex: 1; background: var(--bg); border-radius: 4px; height: 18px; overflow: hidden; }
+.brow .bfill { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 6px; font-size: 10.5px; font-weight: 700; color: #fff; }
+.brow .bval { font-size: 12px; font-weight: 700; width: 28px; text-align: right; }
+.comps-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.comps-table th { background: var(--bg); padding: 8px; text-align: left; font-weight: 600; color: #999; }
+.comps-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
 .comps-table tr:last-child td { border-bottom: none; }
-.highlight { background: #fffde7 !important; }
-.tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
-.tag-hot { background: #fde8e8; color: #8b1a1a; }
-.tag-normal { background: #fff3cd; color: #856404; }
-.tag-cold { background: #d4f5d4; color: #1a6b1a; }
-.back-btn { display: inline-flex; align-items: center; gap: 6px; color: #1a1a2e; text-decoration: none; font-size: 13px; margin-bottom: 16px; }
-.back-btn:hover { text-decoration: underline; }
-.full-width { grid-column: 1 / -1; }
+.tag { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+.tag-hot { background: #4c1d1d; color: #fca5a5; }
+.tag-normal { background: #4a3a12; color: #fde68a; }
+.tag-cold { background: #14392a; color: #86efac; }
+.back-btn { display: inline-flex; align-items: center; gap: 6px; color: var(--text); text-decoration: none; font-size: 13px; margin-bottom: 14px; opacity: .8; }
+.back-btn:hover { opacity: 1; text-decoration: underline; }
 
-.container { max-width: 100%; padding: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 16px; }
+.tile summary { cursor: pointer; font-size: 15px; font-weight: 700; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 12px; list-style: none; }
+.tile summary::-webkit-details-marker { display: none; }
+.tile summary::before { content: '▸ '; color: #888; }
+.tile[open] summary::before { content: '▾ '; }
+.tile.full-width { grid-column: 1 / -1; }
+
+#photo-lb { position: fixed; inset: 0; background: rgba(0,0,0,.92); z-index: 9999; display: none; align-items: center; justify-content: center; flex-direction: column; padding: 20px; }
+#photo-lb.open { display: flex; }
 </style>
-<nav class="nav">
-  <span class="brand">Hatuli</span>
-  <a href="/admin">Dashboard</a>
-  <a href="/admin/analytics">Аналитика</a>
-  <a href="/admin/logout">Выйти</a>
-</nav>
-<div class="container">
-  <a href="/admin/analytics" class="back-btn">← Назад к списку</a>
 
-  <div class="grid">
-    <!-- Скор -->
-    <div class="card">
-      <h2>Скоринг</h2>
-      {% set zb = listing.zone_bonus or 0 %}
-      {% set lb = listing.layer_bonus or 0 %}
-      {% set base = listing.score_total or 0 %}
-      {% set eff = base + zb + lb %}
-      <div style="text-align:center;margin-bottom:16px;">
-        <div class="score-big">{{ eff }}</div>
-        <div class="score-sub">
-          эффективный скор — тот же, что на карте<br>
-          = {{ base }} база (из 100)
-          {% if zb %} <span style="color:{{ '#16a34a' if zb > 0 else '#ef4444' }};font-weight:600;">{{ '+' if zb > 0 }}{{ zb }} зона{% if listing.zone_name %} «{{ listing.zone_name }}»{% endif %}</span>{% endif %}
-          {% if lb %} <span style="color:{{ '#16a34a' if lb > 0 else '#ef4444' }};font-weight:600;">{{ '+' if lb > 0 }}{{ lb }} слои</span>{% endif %}
-          {% if not zb and not lb %} · бонусов зон/слоёв нет{% endif %}
-        </div>
-      </div>
-      <div class="breakdown">
-        {% set breakdown = [
-          ('Yield', listing.score_yield, '#2196f3', 20),
-          ('Цена/рынок', listing.score_price_market, '#4caf50', 15),
-          ('Локация', listing.score_location, '#ff9800', 20),
-          ('Тип квартиры', listing.score_apt_type, '#9c27b0', 15),
-          ('Этаж', listing.score_floor, '#00bcd4', 8),
-          ('Скор ЖК', listing.score_complex, '#795548', 15),
-          ('Supply', listing.score_supply, '#607d8b', 7),
-        ] %}
-        {% for name, val, color, max_val in breakdown %}
-        <div class="brow">
-          <span class="blabel">{{ name }}</span>
-          <div class="bbar">
-            <div class="bfill" style="width:{{ ((val or 0) / max_val * 100) | round }}%;background:{{ color }};">
-              {% if (val or 0) > 0 %}{{ val }}/{{ max_val }}{% endif %}
-            </div>
-          </div>
-          <span class="bval" style="color:{{ color }}">{{ val or 0 }}</span>
-        </div>
-        {% endfor %}
-      </div>
-      {% if listing.reasons %}
-      <div class="reasons" style="margin-top:16px;">
-        <div style="font-size:12px;font-weight:600;color:#1a1a2e;margin-bottom:6px;">Причины:</div>
-        {% for r in reasons_list %}
-        <div class="reason-item">{{ r }}</div>
-        {% endfor %}
-      </div>
+<a href="/admin/analytics" class="back-btn">← Назад к списку</a>
+
+<div style="display:grid;grid-template-columns:minmax(320px,42%) 1fr;gap:18px;align-items:start;">
+  <div class="card" style="padding:10px;position:sticky;top:14px;">
+    {% if photos %}
+    <div style="position:relative;border-radius:10px;overflow:hidden;">
+      <img id="main-photo" src="{{ photos[0] }}" style="width:100%;aspect-ratio:4/3;object-fit:cover;display:block;cursor:zoom-in;" onclick="openPhotoLb(0)">
+      {% if photos|length > 1 %}
+      <button onclick="photoNav(-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">‹</button>
+      <button onclick="photoNav(1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">›</button>
+      <span id="photo-counter" style="position:absolute;right:8px;bottom:8px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;border-radius:8px;padding:2px 9px;">1/{{ photos|length }}</span>
       {% endif %}
     </div>
+    {% if photos|length > 1 %}
+    <div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto;padding:2px;">
+      {% for p in photos %}
+      <img src="{{ p }}" loading="lazy" onclick="setPhoto({{ loop.index0 }})" id="thumb-{{ loop.index0 }}"
+           style="width:64px;height:48px;object-fit:cover;border-radius:6px;cursor:pointer;flex-shrink:0;border:2px solid {{ 'var(--accent2, #60a5fa)' if loop.first else 'transparent' }};opacity:{{ '1' if loop.first else '.6' }};">
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% else %}
+    <div style="aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;color:#555;font-size:15px;background:var(--bg);border-radius:10px;">нет фото</div>
+    {% endif %}
+    <a href="{{ listing.url }}" target="_blank" style="display:block;text-align:center;margin-top:10px;font-size:13px;color:var(--accent2, #60a5fa);">открыть на Krisha ↗</a>
+  </div>
 
-    <!-- Основная информация -->
-    <div class="card">
-      <h2>Объект
-        <a href="{{ listing.url }}" target="_blank" style="font-size:12px;color:#1a1a2e;margin-left:8px;">открыть на Krisha ↗</a>
-      </h2>
-      {% if photos %}
-      <div style="display:flex;gap:8px;overflow-x:auto;margin-bottom:12px;">
-        {% for p in photos[:10] %}
-        <a href="{{ p }}" target="_blank"><img src="{{ p }}" loading="lazy" style="height:120px;border-radius:8px;"></a>
-        {% endfor %}
+  <div class="card">
+    {% set zb = listing.zone_bonus or 0 %}
+    {% set lb = listing.layer_bonus or 0 %}
+    {% set base = listing.score_total or 0 %}
+    {% set eff = base + zb + lb %}
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;">
+      <div class="score-big">{{ eff }}</div>
+      <div class="score-sub">
+        эффективный скор — тот же, что на карте<br>
+        = {{ base }} база (из 100)
+        {% if zb %} <span style="color:{{ '#16a34a' if zb > 0 else '#ef4444' }};font-weight:700;">{{ '+' if zb > 0 }}{{ zb }} зона{% if listing.zone_name %} «{{ listing.zone_name }}»{% endif %}</span>{% endif %}
+        {% if lb %} <span style="color:{{ '#16a34a' if lb > 0 else '#ef4444' }};font-weight:700;">{{ '+' if lb > 0 }}{{ lb }} слои</span>{% endif %}
       </div>
-      {% endif %}
-      <div class="row"><span class="key">🗺 Привязка к карте</span><span class="val">{% if listing.lat %}точные координаты (с детальной страницы Крыши){% else %}<span style="color:#f59e0b;">нет координат — в очереди докачки деталей</span>{% endif %}</span></div>
-      <div class="row"><span class="key">📍 Адрес</span><span class="val"><b>{{ listing.address or '—' }}</b></span></div>
-      {% if listing.zone_name %}
-      <div class="row"><span class="key">📌 Зона</span><span class="val"><b style="color:{{ '#ef4444' if listing.zone_bonus and listing.zone_bonus < 0 else '#16a34a' }};">{{ listing.zone_name }} ({{ '%+d'|format(listing.zone_bonus or 0) }} к скору)</b></span></div>
-      {% endif %}
-      <div class="row"><span class="key">Комнат</span><span class="val">{{ listing.rooms or '?' }}</span></div>
-      <div class="row"><span class="key">Площадь</span><span class="val">{{ (listing.area or 0) | round(1) }}м²</span></div>
-      <div class="row"><span class="key">Этаж</span><span class="val">
-        {{ listing.floor or '?' }}/{{ listing.floors_total or '?' }}
-        {% if listing.floor == 1 %}<span style="color:#e53e3e;font-size:11px;"> ⚠ 1й этаж</span>
-        {% elif listing.floor == listing.floors_total %}<span style="color:#e53e3e;font-size:11px;"> ⚠ последний</span>{% endif %}
-      </span></div>
-      <div class="row"><span class="key">ЖК</span><span class="val">{% if listing.complex_name %}<a href="/admin/complex/find?name={{ listing.complex_name | urlencode }}"><b>{{ listing.complex_name }}</b></a>{% else %}—{% endif %}</span></div>
-      <div class="row"><span class="key">Район</span><span class="val">{{ listing.district or '—' }}</span></div>
-      <div class="row"><span class="key">Год постройки</span><span class="val">{{ listing.year_built or '—' }}</span></div>
-      <div class="row"><span class="key">Новостройка</span><span class="val">{{ 'да' if listing.is_new_build else 'нет' }}</span></div>
-      <div class="row"><span class="key">Продавец</span><span class="val">
-        {% if listing.is_owner %}хозяин{% elif listing.is_owner == false %}риелтор{% else %}?{% endif %}
-      </span></div>
-      <div class="row"><span class="key">Цена</span><span class="val" style="font-size:16px;color:#1a1a2e;">{{ "{:,.0f}".format(listing.price or 0) }} ₸</span></div>
-      <div class="row"><span class="key">Аренда (оценка)</span><span class="val" style="color:#1a6b1a;">{{ "{:,.0f}".format(listing.est_rent or 0) }} ₸/мес</span></div>
-      <div class="row"><span class="key">Источник аренды</span><span class="val" style="font-size:11px;color:#888;">{{ listing.rent_source or '—' }}</span></div>
-      <div class="row"><span class="key">Yield</span><span class="val" style="color:#1a6b1a;font-size:16px;font-weight:700;">{{ listing.yield_pct or 0 }}%</span></div>
-      <div class="row"><span class="key">Окупаемость</span><span class="val">{{ listing.payback_years or '—' }} лет</span></div>
     </div>
 
-    <!-- Анализ торга -->
-    <div class="card">
-      <h2>Анализ торга</h2>
-      {% if bargain.comparables_cnt > 0 %}
+    <div class="row"><span class="key">🗺 Привязка к карте</span><span class="val">{% if listing.lat %}точные координаты (с детальной страницы Крыши){% else %}<span style="color:#f59e0b;">нет координат — в очереди докачки деталей</span>{% endif %}</span></div>
+    <div class="row"><span class="key">📍 Адрес</span><span class="val">{{ listing.address or '—' }}</span></div>
+    {% if listing.zone_name %}
+    <div class="row"><span class="key">📌 Зона</span><span class="val" style="color:{{ '#ef4444' if listing.zone_bonus and listing.zone_bonus < 0 else '#16a34a' }};">{{ listing.zone_name }} ({{ '%+d'|format(listing.zone_bonus or 0) }} к скору)</span></div>
+    {% endif %}
+    <div class="row"><span class="key">Комнат</span><span class="val">{{ listing.rooms or '?' }}</span></div>
+    <div class="row"><span class="key">Площадь</span><span class="val">{{ (listing.area or 0) | round(1) }} м²</span></div>
+    <div class="row"><span class="key">Этаж</span><span class="val">
+      {{ listing.floor or '?' }}/{{ listing.floors_total or '?' }}
+      {% if listing.floor == 1 %}<span style="color:#f87171;font-size:11px;"> ⚠ 1й этаж</span>
+      {% elif listing.floor and listing.floor == listing.floors_total %}<span style="color:#f87171;font-size:11px;"> ⚠ последний</span>{% endif %}
+    </span></div>
+    <div class="row"><span class="key">ЖК</span><span class="val">{% if listing.complex_name %}<a href="/admin/complex/find?name={{ listing.complex_name | urlencode }}">{{ listing.complex_name }}</a>{% else %}—{% endif %}</span></div>
+    <div class="row"><span class="key">Район</span><span class="val">{{ listing.district or '—' }}</span></div>
+    <div class="row"><span class="key">Год постройки</span><span class="val">{{ listing.year_built or '—' }}</span></div>
+    <div class="row"><span class="key">Новостройка</span><span class="val">{{ 'да' if listing.is_new_build else 'нет' }}</span></div>
+    <div class="row"><span class="key">Продавец</span><span class="val">
+      {% if listing.is_owner %}<b style="color:#16a34a;">👤 хозяин</b>{% elif listing.is_owner == false %}<b style="color:#60a5fa;">🏢 {{ listing.seller_name or 'риелтор' }}</b>{% else %}?{% endif %}
+    </span></div>
+    <div class="row"><span class="key">Цена</span><span class="val" style="font-size:17px;">{{ "{:,.0f}".format(listing.price or 0) }} ₸</span></div>
+    <div class="row"><span class="key">Аренда (оценка)</span><span class="val" style="color:#4ade80;">{{ "{:,.0f}".format(listing.est_rent or 0) }} ₸/мес</span></div>
+    <div class="row"><span class="key">Источник аренды</span><span class="val" style="font-size:11px;color:#888;">{{ listing.rent_source or '—' }}</span></div>
+    <div class="row"><span class="key">Yield</span><span class="val" style="color:#4ade80;font-size:17px;font-weight:800;">{{ listing.yield_pct or 0 }}%</span></div>
+    <div class="row"><span class="key">Окупаемость</span><span class="val">{{ listing.payback_years or '—' }} лет</span></div>
+
+    {% if bargain.comparables_cnt > 0 %}
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-size:14px;font-weight:700;margin-bottom:8px;">🤝 Анализ торга</div>
       <div class="row"><span class="key">Аналогов в базе</span><span class="val">{{ bargain.comparables_cnt }}</span></div>
       <div class="row"><span class="key">Медиана аналогов</span><span class="val">{{ "{:,.0f}".format(bargain.median_price or 0) }} ₸</span></div>
       <div class="row"><span class="key">Мин. цена</span><span class="val">{{ "{:,.0f}".format(bargain.min_price or 0) }} ₸</span></div>
-      <div class="row"><span class="key">Рынок</span>
-        <span class="val">
-          <span class="tag tag-{{ bargain.market_status or 'normal' }}">
-            {% if bargain.market_status == 'hot' %}Горячий{% elif bargain.market_status == 'cold' %}Холодный{% else %}Нормальный{% endif %}
-          </span>
-        </span>
-      </div>
+      <div class="row"><span class="key">Рынок</span><span class="val"><span class="tag tag-{{ bargain.market_status or 'normal' }}">{% if bargain.market_status == 'hot' %}Горячий{% elif bargain.market_status == 'cold' %}Холодный{% else %}Нормальный{% endif %}</span></span></div>
       <div class="row"><span class="key">Объявл. 30+ дней</span><span class="val">{{ bargain.old_listings_ratio or 0 }}%</span></div>
-      <div class="row"><span class="key">Рек. дисконт</span><span class="val" style="color:#1a6b1a;font-weight:700;">-{{ bargain.discount_pct or 0 }}%</span></div>
-      <div class="row"><span class="key">Целевая цена</span><span class="val" style="font-size:15px;color:#1a1a2e;font-weight:700;">{{ "{:,.0f}".format(bargain.target_price or 0) }} ₸</span></div>
-      <div style="margin-top:12px;padding:10px;background:#f0f7ff;border-radius:6px;font-size:13px;color:#1a1a2e;">
-        {{ bargain.recommendation }}
-      </div>
-      {% else %}
-      <div style="color:#888;font-size:13px;">Аналогов не найдено</div>
-      {% endif %}
+      <div class="row"><span class="key">Рек. дисконт</span><span class="val" style="color:#4ade80;">-{{ bargain.discount_pct or 0 }}%</span></div>
+      <div class="row"><span class="key">Целевая цена</span><span class="val" style="font-size:15px;">{{ "{:,.0f}".format(bargain.target_price or 0) }} ₸</span></div>
+      <div style="margin-top:10px;padding:10px 12px;background:var(--bg);border-radius:8px;font-size:13px;">{{ bargain.recommendation }}</div>
     </div>
-
-    <!-- История цены -->
-    <div class="card">
-      <h2>📈 История цены</h2>
-      {% if price_history and price_history|length > 0 %}
-      <div style="margin-bottom:8px;">
-        <svg viewBox="0 0 {{ price_chart.w }} {{ price_chart.h }}" style="width:100%;height:120px;">
-          <path d="{{ price_chart.path }}" fill="none" stroke="#2563eb" stroke-width="2"/>
-          {% for x, y in price_chart.dots %}
-          <circle cx="{{ '%.1f'|format(x) }}" cy="{{ '%.1f'|format(y) }}" r="4" fill="#2563eb"/>
-          {% endfor %}
-        </svg>
-      </div>
-      <div class="row"><span class="key">Стартовая цена ({{ price_history[0].at.strftime('%d.%m.%Y') }})</span><span class="val">{{ "{:,.0f}".format(price_history[0].price or 0) }} ₸</span></div>
-      {% for p in price_history[1:] %}
-      <div class="row"><span class="key">{{ p.at.strftime('%d.%m.%Y') }}</span><span class="val">{{ "{:,.0f}".format(p.price or 0) }} ₸</span></div>
-      {% endfor %}
-      <div class="row"><span class="key">Изменение за всё время</span>
-        <span class="val" style="font-weight:700;color:{{ '#ef4444' if price_chart.delta > 0 else ('#16a34a' if price_chart.delta < 0 else '#888') }};">
-          {{ '+' if price_chart.delta > 0 else '' }}{{ "{:,.0f}".format(price_chart.delta) }} ₸ ({{ '%+0.1f'|format(price_chart.delta_pct) }}%)
-        </span></div>
-      {% if price_history|length == 1 %}
-      <div style="font-size:12px;color:#888;margin-top:6px;">Изменений цены пока не зафиксировано — история копится с каждым циклом парсера.</div>
-      {% endif %}
-      {% else %}
-      <div style="color:#888;font-size:13px;">История цены пока не накоплена.</div>
-      {% endif %}
-    </div>
-
-    <!-- Аренда рядом -->
-    <div class="card">
-      <h2>Аренда рядом (rental index)</h2>
-      {% if rental_comps %}
-      <table class="comps-table">
-        <tr><th>ЖК</th><th>Район</th><th>Комн</th><th>₸/мес</th></tr>
-        {% for r in rental_comps %}
-        <tr>
-          <td>{% if r.complex_name %}<a href="/admin/complex/find?name={{ r.complex_name | urlencode }}">{{ r.complex_name }}</a>{% else %}—{% endif %}</td>
-          <td>{{ r.district or '—' }}</td>
-          <td>{{ r.rooms or '?' }}к</td>
-          <td><strong>{{ "{:,.0f}".format(r.price) }}</strong></td>
-        </tr>
-        {% endfor %}
-      </table>
-      {% else %}
-      <div style="color:#888;font-size:13px;">Данных аренды нет</div>
-      {% endif %}
-    </div>
-
-    <!-- Аналоги продаж -->
-    <div class="card full-width">
-      <h2>Аналоги продаж (для расчёта торга)</h2>
-      {% if comps %}
-      <table class="comps-table">
-        <tr><th>ЖК</th><th>Адрес</th><th>Площадь</th><th>Этаж</th><th>Цена</th><th>Дней в базе</th></tr>
-        {% for c in comps %}
-        <tr>
-          <td>{% if c.complex_name %}<a href="/admin/complex/find?name={{ c.complex_name | urlencode }}">{{ c.complex_name }}</a>{% else %}—{% endif %}</td>
-          <td style="font-size:11px;color:#666;">{{ c.address or '—' }}</td>
-          <td>{{ c.area | round(1) }}м²</td>
-          <td>{{ c.floor or '?' }}/{{ c.floors_total or '?' }}</td>
-          <td style="font-weight:600;">{{ "{:,.0f}".format(c.price) }} ₸</td>
-          <td>
-            {% if c.first_seen and c.last_seen %}
-              {{ ((c.last_seen - c.first_seen).days) }}
-            {% else %}—{% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </table>
-      {% else %}
-      <div style="color:#888;font-size:13px;">Аналогов не найдено</div>
-      {% endif %}
-    </div>
+    {% endif %}
   </div>
 </div>
 
-    {% if primary_details %}
-    <!-- Скор первички -->
-    <div class="card" style="margin-top:16px;border-left:3px solid #f59e0b;">
-      <h2>🏗 Первичка: отдельная модель скора</h2>
-      <p style="font-size:13px;color:#888;">Обычный yield для первички фиктивен (аренды ещё нет) — вместо него: застройщик, стадия готовности, дисконт к вторичке.</p>
-      <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        {% for key, d in primary_details.items() %}
-        <tr style="border-bottom:1px solid #eee;">
-          <td style="padding:7px 8px;font-weight:700;width:90px;">{{ d.score }}/{{ d.max }}</td>
-          <td style="padding:7px 8px;">{{ d.reason }}</td>
-        </tr>
-        {% endfor %}
-      </table>
-    </div>
-    {% endif %}
+<div class="tiles">
 
-    {% if hexd %}
-    <!-- Гексагон-анализ цены -->
-    <div class="card" style="margin-top:16px;border-left:3px solid #8b5cf6;">
-      <h2>⬡ Гексагон-анализ цены</h2>
-      <p style="font-size:13px;">
-        Deal Index: <b style="font-size:17px;color:{{ '#16a34a' if hexd.di > 1.02 else ('#ef4444' if hexd.di < 0.98 else '#888') }};">{{ hexd.di }}</b>
-        {% if hexd.di > 1.02 %}— дешевле микролокального рынка на {{ ((hexd.di - 1) * 100) | round(0) | int }}%{% elif hexd.di < 0.98 %}— дороже микролокального рынка на {{ ((1 - hexd.di) * 100) | round(0) | int }}%{% else %}— в рынке{% endif %}
-      </p>
-      <table style="font-size:13px;border-collapse:collapse;">
-        <tr><td style="padding:3px 14px 3px 0;color:#888;">Фактическая цена/м²</td><td><b>{{ '{:,.0f}'.format(hexd.actual_m2).replace(',', ' ') }} ₸</b></td></tr>
-        <tr><td style="padding:3px 14px 3px 0;color:#888;">Ожидание локального рынка</td><td><b>{{ '{:,.0f}'.format(hexd.expected_m2).replace(',', ' ') }} ₸/м²</b></td></tr>
-        <tr><td style="padding:3px 14px 3px 0;color:#888;">Источник сравнения</td><td>{{ hexd.sources }} ({{ hexd.segment }}: в гексагоне {{ hexd.hex_n }}, в кольце {{ hexd.ring_n }})</td></tr>
-        <tr><td style="padding:3px 14px 3px 0;color:#888;">Сетка</td><td>ребро {{ hexd.edge_m | int }} м</td></tr>
-      </table>
-    </div>
-    {% endif %}
-
-    {% if hexd and hexd.components %}
-    <!-- Deal Score v3: разбор по компонентам -->
-    {% set comp_meta = [('price', '💰 Цена vs локальное ожидание'),
-                        ('location', '📍 Локация'),
-                        ('quality', '🏗 Качество объекта/ЖК'),
-                        ('market', '📈 Рынок и ликвидность'),
-                        ('risk', '⚠️ Риски')] %}
-    <div class="card" style="margin-top:16px;border-left:3px solid #2563eb;">
-      <h2>🎯 Deal Score: {{ hexd.deal }}/100
-        <span style="font-size:12px;font-weight:400;color:#888;">· уверенность данных {{ hexd.confidence }}%</span>
-      </h2>
-      {% set pluses = [] %}{% set minuses = [] %}
-      {% for key, label in comp_meta %}
-        {% if hexd.components[key].score >= 65 %}{{ pluses.append(hexd.components[key].text) or '' }}{% endif %}
-        {% if hexd.components[key].score <= 40 %}{{ minuses.append(hexd.components[key].text) or '' }}{% endif %}
-      {% endfor %}
-      <p style="font-size:13px;margin:4px 0 10px;line-height:1.5;">
-        {% if hexd.deal >= 75 %}<b style="color:#16a34a;">Отличная сделка.</b>{% elif hexd.deal >= 55 %}<b style="color:#2563eb;">Хороший вариант.</b>{% elif hexd.deal >= 40 %}<b style="color:#b45309;">Средний вариант.</b>{% else %}<b style="color:#ef4444;">Слабый вариант.</b>{% endif %}
-        {% if pluses %}<b>Плюсы:</b> {{ pluses | join('; ') }}.{% endif %}
-        {% if minuses %}<b>Минусы:</b> {{ minuses | join('; ') }}.{% endif %}
-        {% if not pluses and not minuses %}Выраженных плюсов и минусов нет — объект «в рынке».{% endif %}
-      </p>
-      {% for key, label in comp_meta %}
-      {% set c = hexd.components[key] %}
-      <div style="display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;">
-        <div style="width:230px;color:#555;">{{ label }} <span style="color:#aaa;font-size:11px;">({{ (c.weight * 100) | int }}%)</span></div>
-        <div style="flex:1;height:8px;background:#eee;border-radius:4px;overflow:hidden;">
-          <div style="width:{{ c.score }}%;height:100%;background:{{ '#16a34a' if c.score >= 65 else ('#f59e0b' if c.score >= 40 else '#ef4444') }};"></div>
-        </div>
-        <div style="width:30px;text-align:right;font-weight:700;">{{ c.score }}</div>
+  <details class="tile" open>
+    <summary>📊 Скоринг: разбор по компонентам</summary>
+    <div class="breakdown">
+      {% set breakdown = [
+        ('Yield', listing.score_yield, '#3b82f6', 20),
+        ('Цена/рынок', listing.score_price_market, '#22c55e', 15),
+        ('Локация', listing.score_location, '#f97316', 20),
+        ('Тип квартиры', listing.score_apt_type, '#a855f7', 15),
+        ('Этаж', listing.score_floor, '#06b6d4', 8),
+        ('Скор ЖК', listing.score_complex, '#a16207', 15),
+        ('Supply', listing.score_supply, '#64748b', 7),
+      ] %}
+      {% for name, val, color, max_val in breakdown %}
+      <div class="brow">
+        <span class="blabel">{{ name }}</span>
+        <div class="bbar"><div class="bfill" style="width:{{ ((val or 0) / max_val * 100) | round }}%;background:{{ color }};">{% if (val or 0) > 0 %}{{ val }}/{{ max_val }}{% endif %}</div></div>
+        <span class="bval" style="color:{{ color }}">{{ val or 0 }}</span>
       </div>
-      <div style="font-size:11.5px;color:#888;margin:-2px 0 4px 240px;">{{ c.text }}</div>
       {% endfor %}
-      {% if hexd.confidence < 50 %}
-      <div style="font-size:12px;color:#b45309;margin-top:6px;">⚠️ мало данных для точной оценки — скор ориентировочный</div>
-      {% endif %}
+    </div>
+    {% if reasons_list %}
+    <div style="margin-top:14px;">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px;color:#999;">Причины:</div>
+      {% for r in reasons_list %}<div style="font-size:12px;color:#aaa;padding:4px 0;border-bottom:1px solid var(--border);">→ {{ r }}</div>{% endfor %}
     </div>
     {% endif %}
+  </details>
 
-    {% if layers %}
-    <!-- Слой локации: разбор -->
-    <div class="card" style="margin-top:16px;">
-      <h2>📍 Локация: разбор по слоям</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:14px;">
-        {% set icons = {'noise':'🔊','schools':'🏫','transit':'🚌','amenities':'🛒','parks':'🌳','banks':'🏦'} %}
-        {% for name, d in layers.items() %}
-        <tr style="border-bottom:1px solid #eee;">
-          <td style="padding:7px 8px;width:30px;">{{ icons.get(name,'•') }}</td>
-          <td style="padding:7px 8px;font-weight:700;width:60px;color:{{ '#16a34a' if d.adj > 0 else ('#ef4444' if d.adj < 0 else '#888') }};">{{ '%+d'|format(d.adj) }}</td>
-          <td style="padding:7px 8px;">{{ d.reason }}</td>
-        </tr>
-        {% endfor %}
-      </table>
-      {% if listing.zone_name %}<p style="font-size:13px;">📌 Зона приоритета: <b>{{ listing.zone_name }}</b> +{{ listing.zone_bonus }}</p>{% endif %}
-    </div>
-    {% endif %}
+  <details class="tile">
+    <summary>📈 История цены</summary>
+    {% if price_history and price_history|length > 0 %}
+    <svg viewBox="0 0 {{ price_chart.w }} {{ price_chart.h }}" style="width:100%;height:110px;">
+      <path d="{{ price_chart.path }}" fill="none" stroke="#3b82f6" stroke-width="2"/>
+      {% for x, y in price_chart.dots %}<circle cx="{{ '%.1f'|format(x) }}" cy="{{ '%.1f'|format(y) }}" r="4" fill="#3b82f6"/>{% endfor %}
+    </svg>
+    <div class="row"><span class="key">Стартовая цена ({{ price_history[0].at.strftime('%d.%m.%Y') }})</span><span class="val">{{ "{:,.0f}".format(price_history[0].price or 0) }} ₸</span></div>
+    {% for p in price_history[1:] %}<div class="row"><span class="key">{{ p.at.strftime('%d.%m.%Y') }}</span><span class="val">{{ "{:,.0f}".format(p.price or 0) }} ₸</span></div>{% endfor %}
+    <div class="row"><span class="key">Изменение за всё время</span><span class="val" style="color:{{ '#f87171' if price_chart.delta > 0 else ('#4ade80' if price_chart.delta < 0 else '#888') }};">{{ '+' if price_chart.delta > 0 else '' }}{{ "{:,.0f}".format(price_chart.delta) }} ₸ ({{ '%+0.1f'|format(price_chart.delta_pct) }}%)</span></div>
+    {% if price_history|length == 1 %}<div style="font-size:11.5px;color:#888;margin-top:6px;">История копится с каждым циклом парсера.</div>{% endif %}
+    {% else %}<div style="color:#888;font-size:13px;">История цены пока не накоплена.</div>{% endif %}
+  </details>
 
-    {% if ai %}
-    <!-- AI-анализ текста -->
-    <div class="card" style="margin-top:16px;">
-      <h2>🤖 AI-анализ описания</h2>
-      <ul style="font-size:14px;line-height:1.7;padding-left:20px;">
-        {% if ai.urgency and ai.urgency != 'нет' %}<li><b>Срочность продажи: {{ ai.urgency }}</b>{% if ai.urgency_quote %} — «{{ ai.urgency_quote }}»{% endif %}</li>{% endif %}
-        {% if ai.finish %}<li>Отделка (по тексту): {{ ai.finish }}</li>{% endif %}
-        {% if ai.layout %}<li>Планировка: {{ ai.layout }}</li>{% endif %}
-        {% if ai.furniture %}<li>Мебель остаётся</li>{% endif %}
-        {% if ai.exchange %}<li style="color:#f59e0b;">⚠️ Предлагается обмен — обычно не инвест-вариант</li>{% endif %}
-        {% for d in ai.defects or [] %}<li>Дефект: {{ d }}</li>{% endfor %}
-        {% for n in ai.negotiation or [] %}<li>Зацепка для торга: {{ n }}</li>{% endfor %}
-        {% for f in ai.red_flags or [] %}<li style="color:#ef4444;">🚩 {{ f }}</li>{% endfor %}
-      </ul>
-    </div>
-    {% endif %}
+  <details class="tile">
+    <summary>🏠 Аренда рядом (rental index)</summary>
+    {% if rental_comps %}
+    <table class="comps-table">
+      <tr><th>ЖК</th><th>Район</th><th>Комн</th><th>₸/мес</th></tr>
+      {% for r in rental_comps %}
+      <tr><td>{% if r.complex_name %}<a href="/admin/complex/find?name={{ r.complex_name | urlencode }}">{{ r.complex_name }}</a>{% else %}—{% endif %}</td><td>{{ r.district or '—' }}</td><td>{{ r.rooms or '?' }}к</td><td><b>{{ "{:,.0f}".format(r.price) }}</b></td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<div style="color:#888;font-size:13px;">Данных аренды по этому району пока нет в базе.</div>{% endif %}
+  </details>
 
-    <!-- Как торговаться -->
-    <div class="card" style="margin-top:16px;">
-      <h2>🤝 Как торговаться по этому варианту</h2>
-      <ol style="font-size:14px;line-height:1.7;padding-left:20px;">
-        {% for p in negotiation_points %}<li>{{ p }}</li>{% endfor %}
-      </ol>
-    </div>
+  <details class="tile full-width">
+    <summary>🏘 Аналоги продаж (для расчёта торга)</summary>
+    {% if comps %}
+    <table class="comps-table">
+      <tr><th>ЖК</th><th>Адрес</th><th>Площадь</th><th>Этаж</th><th>Цена</th><th>Дней в базе</th></tr>
+      {% for c in comps %}
+      <tr>
+        <td>{% if c.complex_name %}<a href="/admin/complex/find?name={{ c.complex_name | urlencode }}">{{ c.complex_name }}</a>{% else %}—{% endif %}</td>
+        <td style="font-size:11px;color:#999;">{{ c.address or '—' }}</td>
+        <td>{{ c.area | round(1) }} м²</td>
+        <td>{{ c.floor or '?' }}/{{ c.floors_total or '?' }}</td>
+        <td style="font-weight:700;">{{ "{:,.0f}".format(c.price) }} ₸</td>
+        <td>{% if c.first_seen and c.last_seen %}{{ ((c.last_seen - c.first_seen).days) }}{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}<div style="color:#888;font-size:13px;">Аналогов не найдено</div>{% endif %}
+  </details>
 
-    <!-- Вопросы продавцу -->
-    <div class="card" style="margin-top:16px;">
-      <h2>❓ Недостающая информация и вопросы продавцу</h2>
-      <ul style="font-size:14px;line-height:1.7;padding-left:20px;">
-        {% for q in seller_questions %}<li>{{ q }}</li>{% endfor %}
-      </ul>
-      {% if listing.rent_source %}
-      <p style="font-size:12px;color:#888;">Оценка аренды: источник — {{ listing.rent_source }}.</p>
-      {% endif %}
+  {% if primary_details %}
+  <details class="tile">
+    <summary>🏗 Первичка: отдельная модель скора</summary>
+    <p style="font-size:12.5px;color:#888;">Обычный yield для первички фиктивен (аренды ещё нет) — вместо него: застройщик, стадия готовности, дисконт к вторичке.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+      {% for key, d in primary_details.items() %}
+      <tr style="border-bottom:1px solid var(--border);"><td style="padding:7px 8px;font-weight:700;width:80px;">{{ d.score }}/{{ d.max }}</td><td style="padding:7px 8px;">{{ d.reason }}</td></tr>
+      {% endfor %}
+    </table>
+  </details>
+  {% endif %}
+
+  {% if hexd %}
+  <details class="tile">
+    <summary>⬡ Гексагон-анализ цены</summary>
+    <p style="font-size:13px;">Deal Index: <b style="font-size:17px;color:{{ '#4ade80' if hexd.di > 1.02 else ('#f87171' if hexd.di < 0.98 else '#999') }};">{{ hexd.di }}</b>
+      {% if hexd.di > 1.02 %}— дешевле микролокального рынка на {{ ((hexd.di - 1) * 100) | round(0) | int }}%{% elif hexd.di < 0.98 %}— дороже на {{ ((1 - hexd.di) * 100) | round(0) | int }}%{% else %}— в рынке{% endif %}</p>
+    <div class="row"><span class="key">Фактическая цена/м²</span><span class="val">{{ '{:,.0f}'.format(hexd.actual_m2).replace(',', ' ') }} ₸</span></div>
+    <div class="row"><span class="key">Ожидание локального рынка</span><span class="val">{{ '{:,.0f}'.format(hexd.expected_m2).replace(',', ' ') }} ₸/м²</span></div>
+    <div class="row"><span class="key">Источник сравнения</span><span class="val" style="text-align:left;">{{ hexd.sources }} ({{ hexd.segment }}: гекс {{ hexd.hex_n }}, кольцо {{ hexd.ring_n }})</span></div>
+    <div class="row"><span class="key">Сетка</span><span class="val">ребро {{ hexd.edge_m | int }} м</span></div>
+  </details>
+  {% endif %}
+
+  {% if hexd and hexd.components %}
+  {% set comp_meta = [('price', '💰 Цена vs ожидание'), ('location', '📍 Локация'), ('quality', '🏗 Качество'), ('market', '📈 Рынок/ликвидность'), ('risk', '⚠️ Риски')] %}
+  <details class="tile full-width">
+    <summary>🎯 Deal Score: {{ hexd.deal }}/100 <span style="font-size:12px;font-weight:400;color:#888;">· уверенность {{ hexd.confidence }}%</span></summary>
+    {% set pluses = [] %}{% set minuses = [] %}
+    {% for key, label in comp_meta %}
+      {% if hexd.components[key].score >= 65 %}{{ pluses.append(hexd.components[key].text) or '' }}{% endif %}
+      {% if hexd.components[key].score <= 40 %}{{ minuses.append(hexd.components[key].text) or '' }}{% endif %}
+    {% endfor %}
+    <p style="font-size:13px;margin:4px 0 12px;line-height:1.5;">
+      {% if hexd.deal >= 75 %}<b style="color:#4ade80;">Отличная сделка.</b>{% elif hexd.deal >= 55 %}<b style="color:#60a5fa;">Хороший вариант.</b>{% elif hexd.deal >= 40 %}<b style="color:#fbbf24;">Средний вариант.</b>{% else %}<b style="color:#f87171;">Слабый вариант.</b>{% endif %}
+      {% if pluses %}<b>Плюсы:</b> {{ pluses | join('; ') }}.{% endif %} {% if minuses %}<b>Минусы:</b> {{ minuses | join('; ') }}.{% endif %}
+    </p>
+    {% for key, label in comp_meta %}
+    {% set c = hexd.components[key] %}
+    <div style="display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;">
+      <div style="width:200px;color:#999;">{{ label }} <span style="color:#666;font-size:11px;">({{ (c.weight * 100) | int }}%)</span></div>
+      <div style="flex:1;height:8px;background:var(--bg);border-radius:4px;overflow:hidden;"><div style="width:{{ c.score }}%;height:100%;background:{{ '#4ade80' if c.score >= 65 else ('#fbbf24' if c.score >= 40 else '#f87171') }};"></div></div>
+      <div style="width:28px;text-align:right;font-weight:700;">{{ c.score }}</div>
     </div>
+    <div style="font-size:11px;color:#888;margin:-2px 0 4px 210px;">{{ c.text }}</div>
+    {% endfor %}
+  </details>
+  {% endif %}
+
+  {% if layers %}
+  <details class="tile">
+    <summary>📍 Локация: разбор по слоям</summary>
+    {% set icons = {'noise':'🔊','schools':'🏫','transit':'🚌','amenities':'🛒','parks':'🌳','banks':'🏦'} %}
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+      {% for name, d in layers.items() %}
+      <tr style="border-bottom:1px solid var(--border);"><td style="padding:7px 8px;width:28px;">{{ icons.get(name,'•') }}</td><td style="padding:7px 8px;font-weight:700;width:50px;color:{{ '#4ade80' if d.adj > 0 else ('#f87171' if d.adj < 0 else '#888') }};">{{ '%+d'|format(d.adj) }}</td><td style="padding:7px 8px;">{{ d.reason }}</td></tr>
+      {% endfor %}
+    </table>
+  </details>
+  {% endif %}
+
+  {% if ai %}
+  <details class="tile">
+    <summary>🤖 AI-анализ описания</summary>
+    <ul style="font-size:13.5px;line-height:1.7;padding-left:18px;margin:0;">
+      {% if ai.urgency and ai.urgency != 'нет' %}<li><b>Срочность продажи: {{ ai.urgency }}</b>{% if ai.urgency_quote %} — «{{ ai.urgency_quote }}»{% endif %}</li>{% endif %}
+      {% if ai.finish %}<li>Отделка (по тексту): {{ ai.finish }}</li>{% endif %}
+      {% if ai.layout %}<li>Планировка: {{ ai.layout }}</li>{% endif %}
+      {% if ai.furniture %}<li>Мебель остаётся</li>{% endif %}
+      {% if ai.exchange %}<li style="color:#fbbf24;">⚠️ Предлагается обмен — обычно не инвест-вариант</li>{% endif %}
+      {% for d in ai.defects or [] %}<li>Дефект: {{ d }}</li>{% endfor %}
+      {% for n in ai.negotiation or [] %}<li>Зацепка для торга: {{ n }}</li>{% endfor %}
+      {% for f in ai.red_flags or [] %}<li style="color:#f87171;">🚩 {{ f }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+
+  <details class="tile">
+    <summary>🤝 Как торговаться по этому варианту</summary>
+    <ol style="font-size:13.5px;line-height:1.7;padding-left:18px;margin:0;">{% for p in negotiation_points %}<li>{{ p }}</li>{% endfor %}</ol>
+  </details>
+
+  <details class="tile">
+    <summary>❓ Вопросы продавцу</summary>
+    <ul style="font-size:13.5px;line-height:1.7;padding-left:18px;margin:0;">{% for q in seller_questions %}<li>{{ q }}</li>{% endfor %}</ul>
+    {% if listing.rent_source %}<p style="font-size:11.5px;color:#888;margin-top:8px;">Оценка аренды: источник — {{ listing.rent_source }}.</p>{% endif %}
+  </details>
+
+</div>
+
+<div id="photo-lb" onclick="if(event.target.id==='photo-lb')closePhotoLb()">
+  <img id="lb-img" style="max-width:92vw;max-height:80vh;border-radius:8px;object-fit:contain;">
+  <button onclick="closePhotoLb()" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:30px;cursor:pointer;">×</button>
+</div>
+
+{% if photos %}
+<script>
+const _photos = {{ photos | tojson }};
+let _pIdx = 0;
+function setPhoto(i) {
+  _pIdx = i;
+  document.getElementById('main-photo').src = _photos[i];
+  const c = document.getElementById('photo-counter'); if (c) c.textContent = (i+1) + '/' + _photos.length;
+  _photos.forEach((_, j) => {
+    const t = document.getElementById('thumb-' + j);
+    if (t) { t.style.opacity = j === i ? '1' : '.6'; t.style.borderColor = j === i ? 'var(--accent2, #60a5fa)' : 'transparent'; }
+  });
+}
+function photoNav(dir) { setPhoto((_pIdx + dir + _photos.length) % _photos.length); }
+function openPhotoLb(i) {
+  document.getElementById('lb-img').src = _photos[i];
+  document.getElementById('photo-lb').classList.add('open');
+}
+function closePhotoLb() { document.getElementById('photo-lb').classList.remove('open'); }
+</script>
+{% endif %}
 {% endblock %}

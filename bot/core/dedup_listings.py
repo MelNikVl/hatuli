@@ -89,15 +89,22 @@ def find_duplicates(listings: list[dict],
             matched_primary = photo_idx[uuid]
             matched_rule = "photo"
 
-        # 2. адрес + комнаты + площадь
+        # 2. адрес + комнаты + площадь (НО не дубль, если этажи ИЗВЕСТНЫ и
+        # РАЗНЫЕ — это явный признак разных квартир в одном доме/ЖК; адрес
+        # у Крыши часто на уровне дома, без номера квартиры, поэтому без
+        # этой проверки разные квартиры того же дома склеивались в один дубль)
         if matched_primary is None and addr and rooms is not None and area > 0:
             key = (addr, rooms, round(area / 5) * 5)
             for ex_id in addr_idx.get(key, []):
                 ex = by_id.get(ex_id)
-                if ex and abs(float(ex.get("area") or 0) - area) <= 3:
-                    matched_primary = ex_id
-                    matched_rule = "addr_area"
-                    break
+                if not ex or abs(float(ex.get("area") or 0) - area) > 3:
+                    continue
+                ex_floor = ex.get("floor")
+                if floor is not None and ex_floor is not None and floor != ex_floor:
+                    continue  # разные этажи — точно разные квартиры
+                matched_primary = ex_id
+                matched_rule = "addr_area"
+                break
 
         # 3. адрес + цена + этаж (запасной)
         if matched_primary is None and addr and price > 0 and floor is not None:

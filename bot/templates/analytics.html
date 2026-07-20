@@ -143,6 +143,33 @@ tr:last-child td { border-bottom: none; }
   </div>
   {% endif %}
 
+  {% if price_hist and (price_hist[1] or price_hist[2] or price_hist[3] or price_hist[4]) %}
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:16px;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:10px;">Распределение объектов по цене <span style="color:#888;font-weight:400;">(бакеты по 5 млн ₸)</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
+      {% for room_n, room_label, color in [(1,'1-комнатные','#2563eb'), (2,'2-комнатные','#16a34a'), (3,'3-комнатные','#f59e0b'), (4,'4+-комнатные','#8b5cf6')] %}
+      {% set hb = price_hist[room_n] %}
+      {% if hb %}
+      {% set pmax = hb | map(attribute='cnt') | max %}
+      <div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px;">{{ room_label }} <span style="color:#888;font-weight:400;">({{ hb | sum(attribute='cnt') }})</span></div>
+        <div style="display:flex;align-items:flex-end;gap:2px;height:90px;">
+          {% for b in hb %}
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%;" title="{{ b.bucket }}-{{ b.bucket + 5 }} млн: {{ b.cnt }} объектов">
+            <div style="height:{{ (b.cnt / pmax * 70) | round(0, 'floor') | int }}px;background:{{ color }};border-radius:2px 2px 0 0;min-height:2px;"></div>
+          </div>
+          {% endfor %}
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:10.5px;color:#888;margin-top:3px;">
+          <span>{{ hb[0].bucket }} млн</span><span>{{ hb[-1].bucket + 5 }} млн</span>
+        </div>
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
   <div class="stats-bar">
     <div class="stat-card"><div class="val">{{ total }}</div><div class="lbl">Объектов</div></div>
     {% set avg_score = (listings | map(attribute='score_total') | select | list | sum / (listings | length)) | round(1) if listings else 0 %}

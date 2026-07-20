@@ -271,6 +271,11 @@ async def run_cycle():
                     "UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
                     r["id"], json.dumps(r["photos"]),
                 )
+            if r.get("seller_name"):
+                await pg_exec(
+                    "UPDATE apartment_listings SET seller_name=$2 WHERE id=$1",
+                    r["id"], r["seller_name"],
+                )
             if r.get("is_archived"):
                 await pg_exec(
                     "UPDATE apartment_listings SET is_active=FALSE, archived_at=now() WHERE id=$1",
@@ -369,6 +374,10 @@ async def run_cycle():
                         await pg_exec(
                             "UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
                             m["id"], json.dumps(details["photos"]))
+                    if details.get("seller_name"):
+                        await pg_exec(
+                            "UPDATE apartment_listings SET seller_name=$2 WHERE id=$1",
+                            m["id"], details["seller_name"])
                 else:
                     # Не нашли ни координат, ни ЖК — отметим попытку, чтобы
                     # не долбить это же объявление каждый цикл; повторим через 3 дня.

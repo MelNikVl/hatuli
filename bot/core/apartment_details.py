@@ -351,6 +351,21 @@ async def fetch_apartment_details(url: str) -> dict:
         except ValueError:
             pass
 
+    # ── Имя продавца/риелтора ────────────────────────────────────────────
+    # Крыша по соображениям приватности обычно показывает только ИМЯ (без
+    # фамилии) рядом с блоком контактов/телефона. Паттерн best-effort — не
+    # на живой разметке, а по типовым JSON-полям объявлений; если не
+    # найдётся, просто не заполняем (не критично, есть is_owner).
+    for pat in (r'"userName"\s*:\s*"([^"\d][^"]{1,40})"',
+               r'"contactName"\s*:\s*"([^"\d][^"]{1,40})"',
+               r'"author"\s*:\s*\{\s*"name"\s*:\s*"([^"\d][^"]{1,40})"'):
+        m = _re.search(pat, resp.text)
+        if m:
+            name = m.group(1).strip()
+            if name and len(name) <= 40:
+                result["seller_name"] = name
+            break
+
     # ── Архивность: объявление снято/продано ─────────────────────────────
     result["is_archived"] = ("В архиве" in resp.text
                              or "может быть неактуальным" in resp.text)

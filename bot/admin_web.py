@@ -295,6 +295,25 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             GROUP BY 1 ORDER BY 1
         """, *params[:-1])  # последний параметр — min_score, его не применяем
 
+        # Гистограмма распределения по ЦЕНЕ, отдельно для 1к/2к/3к/4к+
+        # (бакеты по млн ₸, ширина зависит от типичного разброса комнатности)
+        price_hist_raw = await pg_fetch(f"""
+            SELECT
+                CASE WHEN rooms >= 4 THEN 4 ELSE COALESCE(rooms, 0) END AS room_bucket,
+                (price / 5000000) * 5 AS price_bucket_m,
+                COUNT(*) AS cnt
+            FROM apartment_listings
+            WHERE {' AND '.join(c for c in conditions if 'score_total >=' not in c)}
+              AND price > 0 AND rooms IS NOT NULL AND rooms >= 1
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+        """, *params[:-1])
+        price_hist = {1: [], 2: [], 3: [], 4: []}
+        for r in price_hist_raw:
+            rb = int(r["room_bucket"])
+            if rb in price_hist:
+                price_hist[rb].append({"bucket": r["price_bucket_m"], "cnt": r["cnt"]})
+
         # Компактный rental index: медиана аренды 1к и 2к
         rental_stats = await pg_fetch("""
             SELECT rooms, median_price, sample_count
@@ -315,6 +334,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "request": request,
                 "listings": [dict(r) for r in rows],
                 "score_hist": [dict(r) for r in hist_rows],
+                "price_hist": price_hist,
                 "rental_summary": rental_summary,
                 "filters": {
                     "district": district,
@@ -366,15 +386,38 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         bargain = analyze_bargain(listing.get("price", 0), comps, listing.get("is_owner"))
 
         # Аренда рядом
+        # БАГ (найден): apartment_listings.district = "Есильский р-н"
+        # (первая часть адреса как есть), rental_listings.district = "Есиль"
+        # (короткий корень из regex в rental_parser). ILIKE-подстрока между
+        # "Есильский р-н" и "Есиль" никогда не совпадала — блок был пуст
+        # почти всегда, независимо от реального наличия данных аренды.
+        # Фикс: нормализуем район той же регуляркой перед запросом.
+        import re as _re_district
+        _district_raw = listing.get("district") or ""
+        _m_district = _re_district.search(
+            r"(Есиль|Алматы|Сарыарка|Нура|Байконур)", _district_raw, _re_district.I)
+        district_norm = _m_district.group(1).capitalize() if _m_district else None
+
         rental_comps = await pg_fetch("""
             SELECT complex_name, district, rooms, price, area
             FROM rental_listings
-            WHERE ($1::text IS NULL OR district ILIKE '%' || $1 || '%')
+            WHERE ($1::text IS NULL OR district = $1)
               AND ($2::int IS NULL OR rooms = $2)
               AND price > 0
             ORDER BY found_at DESC
             LIMIT 10
-        """, listing.get("district"), listing.get("rooms"))
+        """, district_norm, listing.get("rooms"))
+
+        # Если по точному району+комнатам пусто — тот же район без фильтра
+        # по комнатам (лучше приблизительные соседи, чем "данных нет")
+        if not rental_comps and district_norm:
+            rental_comps = await pg_fetch("""
+                SELECT complex_name, district, rooms, price, area
+                FROM rental_listings
+                WHERE district = $1 AND price > 0
+                ORDER BY found_at DESC
+                LIMIT 10
+            """, district_norm)
 
         # Аргументы для торга и вопросы продавцу
         from bot.core.listing_intel import build_negotiation_points, build_seller_questions
