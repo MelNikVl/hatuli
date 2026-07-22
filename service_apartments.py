@@ -294,100 +294,13 @@ async def run_cycle():
     # независимо от того, встретились ли они в сегодняшних страницах.
     try:
         from bot.db import settings as _app_settings2
-        backfill_batch = _app_settings2.get_int("COORD_BACKFILL_BATCH", 15)
+        backfill_batch = _app_settings2.get_int("COORD_BACKFILL_BATCH", 80)
         if backfill_batch > 0:
-            from bot.db.pg import fetch as _pg_fetch_bf
-            from bot.core.apartment_details import fetch_apartment_details as _fetch_details_bf
-
-            # Колонки для жёсткой привязки к ЖК: ссылка на карточку ЖК с Крыши
-            await pg_exec("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS complex_url TEXT")
-            await pg_exec("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS krisha_url TEXT")
-
-            # Берём объявления, у которых нет координат ИЛИ нет привязки к ЖК —
-            # с детальной страницы достаём и то, и другое (там официальный
-            # блок «Жилой комплекс» со ссылкой + JS-блоб с lat/lon).
-            missing = await _pg_fetch_bf("""
-                SELECT id, url FROM apartment_listings
-                WHERE (lat IS NULL OR complex_name IS NULL OR btrim(complex_name) = '')
-                  AND is_active IS NOT FALSE AND url IS NOT NULL
-                  AND (coord_fetch_attempted_at IS NULL
-                       OR coord_fetch_attempted_at < now() - interval '3 days')
-                ORDER BY coord_fetch_attempted_at ASC NULLS FIRST, first_seen ASC
-                LIMIT $1
-            """, backfill_batch)
-
-            got = got_cx = 0
-            for m in missing:
-                await asyncio.sleep(random.uniform(8.0, 15.0))
-                try:
-                    details = await _fetch_details_bf(m["url"])
-                except Exception as e:
-                    log.warning("backfill fetch failed %s: %s", m["id"], e)
-                    details = None
-                if details and (details.get("lat") or details.get("complex_name")):
-                    if details.get("lat") and details.get("lon"):
-                        await pg_exec(
-                            "UPDATE apartment_listings SET lat=$2, lon=$3, geo_source='krisha', "
-                            "coord_fetch_attempted_at=now() WHERE id=$1",
-                            m["id"], details["lat"], details["lon"],
-                        )
-                        got += 1
-                    else:
-                        await pg_exec(
-                            "UPDATE apartment_listings SET coord_fetch_attempted_at=now() WHERE id=$1",
-                            m["id"],
-                        )
-                    if details.get("complex_name"):
-                        # не принимаем названия, помеченные аудитом как улицы
-                        try:
-                            from bot.core.complex_audit import street_names as _sn2
-                            import re as _re_b
-                            _st2 = await _sn2()
-                            _n = (details["complex_name"] or "").lower()
-                            _n = _re_b.sub(r"^\s*(жк|кг)\.?\s+", "", _n)
-                            _n = _re_b.sub(r"[«»\"'()]", " ", _n)
-                            _n = _re_b.sub(r"\s+", " ", _n).strip()
-                            from bot.core.complex_audit import _JUNK_NAMES
-                            if _n in _st2 or _n in _JUNK_NAMES or len(_n) < 4:
-                                details.pop("complex_name", None)
-                                details.pop("complex_url", None)
-                        except Exception:
-                            pass
-                    if details.get("complex_name"):
-                        await pg_exec(
-                            "UPDATE apartment_listings SET complex_name=$2, "
-                            "complex_url=COALESCE($3, complex_url) WHERE id=$1",
-                            m["id"], details["complex_name"],
-                            details.get("complex_url"))
-                        got_cx += 1
-                        # Канонический ЖК в справочнике: ссылка на карточку
-                        # Крыши — надёжный ключ для склейки названий
-                        if details.get("complex_url"):
-                            await pg_exec("""
-                                INSERT INTO complexes (name, krisha_url)
-                                SELECT $1, $2
-                                WHERE NOT EXISTS (
-                                    SELECT 1 FROM complexes
-                                    WHERE lower(name) = lower($1) OR krisha_url = $2)
-                            """, details["complex_name"], details["complex_url"])
-                    if details.get("photos"):
-                        await pg_exec(
-                            "UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
-                            m["id"], json.dumps(details["photos"]))
-                    if details.get("seller_name"):
-                        await pg_exec(
-                            "UPDATE apartment_listings SET seller_name=$2 WHERE id=$1",
-                            m["id"], details["seller_name"])
-                else:
-                    # Не нашли ни координат, ни ЖК — отметим попытку, чтобы
-                    # не долбить это же объявление каждый цикл; повторим через 3 дня.
-                    await pg_exec(
-                        "UPDATE apartment_listings SET coord_fetch_attempted_at=now() WHERE id=$1",
-                        m["id"],
-                    )
-            if missing:
+            from bot.core.coord_backfill import backfill_coords_and_complex
+            res = await backfill_coords_and_complex(backfill_batch)
+            if res["attempted"]:
                 log.info("coord/complex backfill: координаты %d/%d, ЖК %d (батч %d)",
-                         got, len(missing), got_cx, backfill_batch)
+                         res["got_coords"], res["attempted"], res["got_complex"], backfill_batch)
     except Exception as e:
         log.warning("coord backfill failed: %s", e)
 

@@ -46,7 +46,9 @@ SLIDER_SETTINGS = {
     "PARSER_MAX_PAGES":  ("Страниц Krisha за цикл (свежие)", 1, 40, 1, "стр.", "🕷 Обход парсера"),
     "DEEP_SWEEP_BATCH":  ("Глубокий обход: доп. страниц за цикл (0=выкл)", 0, 20, 1, "стр.", "🕷 Обход парсера"),
     "DETAIL_FETCH_BATCH": ("Деталей/координат за цикл (полскора+полслучайно)", 2, 40, 1, "шт.", "🕷 Обход парсера"),
-    "COORD_BACKFILL_BATCH": ("Добивка координат по ВСЕЙ базе за цикл", 0, 40, 1, "шт.", "🕷 Обход парсера"),
+    "COORD_BACKFILL_BATCH": ("Добивка координат по ВСЕЙ базе за цикл (~3-5 стр. объявлений/час)", 0, 200, 5, "шт.", "🕷 Обход парсера"),
+    "COORD_FETCH_DELAY_MIN": ("Задержка между запросами деталей — мин", 3, 30, 1, "с", "🕷 Обход парсера"),
+    "COORD_FETCH_DELAY_MAX": ("Задержка между запросами деталей — макс", 5, 45, 1, "с", "🕷 Обход парсера"),
 }
 
 
@@ -1092,127 +1094,12 @@ def make_extras_router(templates) -> APIRouter:
     rebind_state = {"running": False, "stage": "", "result": None}
 
     async def _do_rebind() -> dict:
-        import asyncio as _aio
-        import re as _re
-        from bot.db.pg import fetch as pg_fetch, execute as pg_exec, fetchval as pg_fv
+        from bot.core.rebind import run_rebind
 
-        await pg_exec("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS krisha_url TEXT")
+        def _set_stage(stage: str) -> None:
+            rebind_state["stage"] = stage
 
-        # ── A0: адрес из заголовка («…2/5 этаж, Сатпаева 19 — Майлина») ──
-        rebind_state["stage"] = "адреса из заголовков…"
-        addr_rows = await pg_fetch("""
-            SELECT id, title FROM apartment_listings
-            WHERE (address IS NULL OR btrim(address) = '') AND title IS NOT NULL
-        """)
-        addr_filled = 0
-        _addr_re = _re.compile(r",\s*([^,]{2,40}?\d[^,]{0,20}?)\s*(?=,|—|–|$)")
-        _letters = _re.compile(r"[А-Яа-яЁёA-Za-z]{2}")
-        addr_updates = []
-        for r in addr_rows:
-            hit = None
-            for m in _addr_re.finditer(r["title"] or ""):
-                cand = m.group(1).strip()
-                if _letters.search(cand) and not cand.lower().startswith(("м²", "м2")):
-                    hit = cand
-                    break
-            if hit:
-                addr_updates.append((r["id"], hit))
-        for lid, addr in addr_updates:
-            await pg_exec(
-                "UPDATE apartment_listings SET address = $2 WHERE id = $1", lid, addr)
-        addr_filled = len(addr_updates)
-
-        # ── A: склейка по ссылке на карточку ЖК ────────────────────────────
-        rebind_state["stage"] = "по ссылке на карточку ЖК…"
-        by_url = (await pg_exec("""
-            UPDATE apartment_listings al SET complex_name = c.name
-            FROM complexes c
-            WHERE (al.complex_name IS NULL OR btrim(al.complex_name) = '')
-              AND al.complex_url IS NOT NULL AND c.krisha_url IS NOT NULL
-              AND al.complex_url = c.krisha_url
-        """) or "").split()[-1]
-
-        # ── B: название ЖК в заголовке (НЕ в адресе — там улицы) ───────────
-        rebind_state["stage"] = "по названию из заголовков…"
-        complexes = await pg_fetch(
-            "SELECT name FROM complexes WHERE name IS NOT NULL AND btrim(name) != ''"
-            " AND COALESCE(is_street, FALSE) = FALSE")
-
-        def _norm(s: str) -> str:
-            s = s.lower()
-            s = _re.sub(r"^\s*(жк|кг)\.?\s+", "", s)
-            s = _re.sub(r"[«»\"']", " ", s)
-            return _re.sub(r"\s+", " ", s).strip()
-
-        norm_map = {}
-        for c in complexes:
-            n = _norm(c["name"])
-            if len(n) >= 3:
-                norm_map[n] = c["name"]
-        norm_items = sorted(norm_map.items(), key=lambda kv: -len(kv[0]))
-        norm_items = [
-            (n, canon, _re.compile(rf"(?<![а-яёa-z0-9]){_re.escape(n)}(?![а-яёa-z0-9])"))
-            for n, canon in norm_items
-        ]
-
-        rows = await pg_fetch("""
-            SELECT id, title FROM apartment_listings
-            WHERE complex_name IS NULL OR btrim(complex_name) = ''
-        """)
-        updates = []
-        for i, r in enumerate(rows):
-            if i % 500 == 0:
-                rebind_state["stage"] = f"по заголовкам… {i}/{len(rows)}"
-                await _aio.sleep(0)  # отдаём event loop — веб остаётся живым
-            hay = _norm(r["title"] or "")
-            if not hay:
-                continue
-            hit = None
-            for n, canon, rx in norm_items:
-                if n in hay and (f"жк {n}" in hay or rx.search(hay)):
-                    hit = canon
-                    break
-            if hit:
-                updates.append((r["id"], hit))
-        rebind_state["stage"] = f"запись {len(updates)} привязок…"
-        for lid, canon in updates:
-            await pg_exec(
-                "UPDATE apartment_listings SET complex_name = $2 WHERE id = $1",
-                lid, canon)
-        by_text = len(updates)
-
-        # ── C: геопривязка к ближайшему ЖК (≤ ~350 м) ──────────────────────
-        rebind_state["stage"] = "геопривязка…"
-        by_geo = (await pg_exec("""
-            UPDATE apartment_listings al
-            SET complex_name = (
-                SELECT c2.name FROM complexes c2
-                WHERE c2.lat IS NOT NULL AND c2.lon IS NOT NULL
-                  AND COALESCE(c2.is_street, FALSE) = FALSE
-                ORDER BY (c2.lat - al.lat)^2 + (c2.lon - al.lon)^2
-                LIMIT 1)
-            WHERE (al.complex_name IS NULL OR btrim(al.complex_name) = '')
-              AND al.lat IS NOT NULL AND al.lon IS NOT NULL
-              AND (SELECT min((c.lat - al.lat)^2 + (c.lon - al.lon)^2)
-                   FROM complexes c WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL
-                     AND COALESCE(c.is_street, FALSE) = FALSE)
-                  < 2.0e-5
-        """) or "").split()[-1]
-
-        left = await pg_fv("""
-            SELECT COUNT(*) FROM apartment_listings
-            WHERE is_active IS NOT FALSE
-              AND (complex_name IS NULL OR btrim(complex_name) = '')
-        """) or 0
-        logger.info("rebind: by_url=%s by_text=%d by_geo=%s, осталось без ЖК %d",
-                    by_url, by_text, by_geo, left)
-        return {
-            "ok": True,
-            "bound": int(by_url or 0) + by_text + int(by_geo or 0),
-            "by_url": int(by_url or 0), "by_text": by_text,
-            "by_geo": int(by_geo or 0), "left": left,
-            "addr_filled": addr_filled,
-        }
+        return await run_rebind(progress_cb=_set_stage)
 
     @router.get("/admin/rebind/status")
     async def rebind_status(request: Request):
