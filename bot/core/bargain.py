@@ -59,10 +59,14 @@ async def get_comparables(
     return [dict(r) for r in rows]
 
 
+URGENT_BONUS = 300_000  # доп. торг, если продавец сам пометил объявление «Срочно, торг»
+
+
 def analyze_bargain(
     price: int,
     comparables: list[dict],
     is_owner: bool | None = None,
+    is_urgent: bool = False,
 ) -> dict:
     """
     Анализ торга на основе реальных аналогов.
@@ -151,6 +155,13 @@ def analyze_bargain(
     if is_owner is False:
         discount_pct = min(discount_pct + 1, 20)
         recommendation += " (риелтор — есть пространство)"
+
+    # Продавец сам пометил объявление «Срочно, торг» — явный сигнал
+    # готовности уступить сверх обычного расчёта.
+    if is_urgent and price > 0:
+        target_price = max(target_price - URGENT_BONUS, int(price * 0.5))
+        discount_pct = round((1 - target_price / price) * 100, 1)
+        recommendation += " · продавец пометил «Срочно, торг» — минус ещё 300 тыс ₸"
 
     return {
         "recommendation": recommendation,

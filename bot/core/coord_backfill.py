@@ -44,6 +44,7 @@ async def backfill_coords_and_complex(limit: int, min_age_days: float = 3.0) -> 
 
     await pg_exec("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS complex_url TEXT")
     await pg_exec("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS krisha_url TEXT")
+    await pg_exec("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS is_urgent BOOLEAN")
 
     missing = await pg_fetch("""
         SELECT id, url FROM apartment_listings
@@ -125,6 +126,10 @@ async def backfill_coords_and_complex(limit: int, min_age_days: float = 3.0) -> 
             await pg_exec(
                 "UPDATE apartment_listings SET seller_name=$2 WHERE id=$1",
                 m["id"], details["seller_name"])
+        if "is_urgent" in details:
+            await pg_exec(
+                "UPDATE apartment_listings SET is_urgent=$2 WHERE id=$1",
+                m["id"], details["is_urgent"])
 
     if missing:
         logger.info("coord_backfill: готово — координаты %d/%d, ЖК %d",
