@@ -57,63 +57,9 @@ tr:last-child td { border-bottom: none; }
 </style>
 <div class="page-title">📊 Аналитика квартир</div>
 <div class="container">
-  <form method="get" action="/admin/analytics">
-    <div class="filters">
-      <div class="filter-group">
-        <label>Район</label>
-        <select name="district">
-          <option value="" {% if not filters.district %}selected{% endif %}>Все</option>
-          <option value="Есильский" {% if filters.district == 'Есильский' %}selected{% endif %}>Есиль</option>
-          <option value="Алматы" {% if filters.district == 'Алматы' %}selected{% endif %}>Алматы р-н</option>
-          <option value="Сарыарка" {% if filters.district == 'Сарыарка' %}selected{% endif %}>Сарыарка</option>
-          <option value="Нура" {% if filters.district == 'Нура' %}selected{% endif %}>Нура</option>
-          <option value="Байконур" {% if filters.district == 'Байконур' %}selected{% endif %}>Байконур</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label>Комнаты</label>
-        <select name="rooms">
-          <option value="" {% if not filters.rooms %}selected{% endif %}>Все</option>
-          <option value="1" {% if filters.rooms == '1' %}selected{% endif %}>1к</option>
-          <option value="2" {% if filters.rooms == '2' %}selected{% endif %}>2к</option>
-          <option value="3" {% if filters.rooms == '3' %}selected{% endif %}>3к</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label>Продавец</label>
-        <select name="seller">
-          <option value="" {% if not filters.seller %}selected{% endif %}>Все</option>
-          <option value="owner" {% if filters.seller == 'owner' %}selected{% endif %}>От хозяина</option>
-          <option value="agent" {% if filters.seller == 'agent' %}selected{% endif %}>От агента</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label title="Скрывает объекты со скором ниже порога. 0 = показывать все. Гистограмма ниже его игнорирует — клик по столбику ставит порог.">Мин. скор ⓘ</label>
-        <input type="number" name="min_score" value="{{ filters.min_score }}" min="0" max="100" style="width:80px"
-               title="Скрывает объекты со скором ниже порога. 0 = показывать все.">
-      </div>
-      <div class="filter-group">
-        <label>Сортировка</label>
-        <select name="sort">
-          <option value="score_total" {% if filters.sort == 'score_total' %}selected{% endif %}>По скору</option>
-          <option value="yield_pct" {% if filters.sort == 'yield_pct' %}selected{% endif %}>По yield</option>
-          <option value="bargain_discount_pct" {% if filters.sort == 'bargain_discount_pct' %}selected{% endif %}>По торгу</option>
-          <option value="price" {% if filters.sort == 'price' %}selected{% endif %}>По цене</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label>Показать лучших</label>
-        <select name="limit">
-          <option value="10" {% if filters.limit == 10 %}selected{% endif %}>топ-10</option>
-          <option value="20" {% if filters.limit == 20 %}selected{% endif %}>топ-20</option>
-          <option value="30" {% if filters.limit == 30 %}selected{% endif %}>топ-30</option>
-        </select>
-      </div>
-      <button type="submit" class="btn">Применить</button>
-    </div>
-  </form>
-
-  <!-- Компактный rental index + гистограмма скоров -->
+<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
+<div style="order:1;flex:1 1 480px;min-width:340px;">
+  <!-- Компактный rental index + гистограмма скоров — левая колонка: графики и показатели -->
   {% if rental_summary %}
   <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 18px;font-size:14px;">
@@ -189,6 +135,64 @@ tr:last-child td { border-bottom: none; }
     <span class="legend-item"><span class="legend-dot" style="background:#795548"></span>ЖК</span>
     <span class="legend-item"><span class="legend-dot" style="background:#607d8b"></span>Supply</span>
   </div>
+</div><!-- /левая колонка -->
+
+<div style="order:2;flex:1 1 480px;min-width:340px;max-height:90vh;overflow-y:auto;">
+  <form method="get" action="/admin/analytics">
+    <div class="filters">
+      <div class="filter-group">
+        <label>Район</label>
+        <select name="district">
+          <option value="" {% if not filters.district %}selected{% endif %}>Все</option>
+          <option value="Есильский" {% if filters.district == 'Есильский' %}selected{% endif %}>Есиль</option>
+          <option value="Алматы" {% if filters.district == 'Алматы' %}selected{% endif %}>Алматы р-н</option>
+          <option value="Сарыарка" {% if filters.district == 'Сарыарка' %}selected{% endif %}>Сарыарка</option>
+          <option value="Нура" {% if filters.district == 'Нура' %}selected{% endif %}>Нура</option>
+          <option value="Байконур" {% if filters.district == 'Байконур' %}selected{% endif %}>Байконур</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Комнаты</label>
+        <select name="rooms">
+          <option value="" {% if not filters.rooms %}selected{% endif %}>Все</option>
+          <option value="1" {% if filters.rooms == '1' %}selected{% endif %}>1к</option>
+          <option value="2" {% if filters.rooms == '2' %}selected{% endif %}>2к</option>
+          <option value="3" {% if filters.rooms == '3' %}selected{% endif %}>3к</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Продавец</label>
+        <select name="seller">
+          <option value="" {% if not filters.seller %}selected{% endif %}>Все</option>
+          <option value="owner" {% if filters.seller == 'owner' %}selected{% endif %}>От хозяина</option>
+          <option value="agent" {% if filters.seller == 'agent' %}selected{% endif %}>От агента</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label title="Скрывает объекты со скором ниже порога. 0 = показывать все. Гистограмма ниже его игнорирует — клик по столбику ставит порог.">Мин. скор ⓘ</label>
+        <input type="number" name="min_score" value="{{ filters.min_score }}" min="0" max="100" style="width:80px"
+               title="Скрывает объекты со скором ниже порога. 0 = показывать все.">
+      </div>
+      <div class="filter-group">
+        <label>Сортировка</label>
+        <select name="sort">
+          <option value="score_total" {% if filters.sort == 'score_total' %}selected{% endif %}>По скору</option>
+          <option value="yield_pct" {% if filters.sort == 'yield_pct' %}selected{% endif %}>По yield</option>
+          <option value="bargain_discount_pct" {% if filters.sort == 'bargain_discount_pct' %}selected{% endif %}>По торгу</option>
+          <option value="price" {% if filters.sort == 'price' %}selected{% endif %}>По цене</option>
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Показать лучших</label>
+        <select name="limit">
+          <option value="10" {% if filters.limit == 10 %}selected{% endif %}>топ-10</option>
+          <option value="20" {% if filters.limit == 20 %}selected{% endif %}>топ-20</option>
+          <option value="30" {% if filters.limit == 30 %}selected{% endif %}>топ-30</option>
+        </select>
+      </div>
+      <button type="submit" class="btn">Применить</button>
+    </div>
+  </form>
 
   <table>
     <thead>
@@ -271,7 +275,7 @@ tr:last-child td { border-bottom: none; }
     {% endfor %}
     </tbody>
   </table>
-
-  <!-- rental index показан компактным блоком сверху страницы -->
+</div><!-- /правая колонка -->
+</div><!-- /flex -->
 </div>
 {% endblock %}

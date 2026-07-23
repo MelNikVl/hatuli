@@ -573,6 +573,8 @@ def make_extras_router(templates) -> APIRouter:
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
                    a.is_owner, a.seller_name,
+                   a.score_yield, a.score_price_market, a.score_location,
+                   a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
                    (CASE WHEN a.market_type = 'primary' AND a.primary_score_total IS NOT NULL
                          THEN a.primary_score_total
@@ -616,6 +618,12 @@ def make_extras_router(templates) -> APIRouter:
             "url": r["url"] or "",
             "market": r["market_type"] or "",
             "geo": r["geo_source"] or "",
+            "score_bd": {
+                "yield": r["score_yield"], "price_market": r["score_price_market"],
+                "location": r["score_location"], "apt_type": r["score_apt_type"],
+                "floor": r["score_floor"], "complex": r["score_complex"],
+                "supply": r["score_supply"],
+            },
             "is_owner": r["is_owner"] is True,
             "seller_name": r["seller_name"] or "",
             "age": int(r["age_days"] or 0),

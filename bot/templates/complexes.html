@@ -30,17 +30,17 @@ async function auditCx(apply) {
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
-<div style="order:1;flex:1 1 560px;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+<div style="order:1;flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px;">
     <b style="font-size:14px;">🗺 Карта ЖК Астаны</b>
     <span style="font-size:12px;color:#888;"><span id="cxmap-count">…</span> ЖК с координатами · размер точки = объявлений в продаже · наведи курсор · клик = карточка ЖК</span>
   </div>
-  <div id="cx-rating-map" style="aspect-ratio:1/1;max-width:864px;margin:0;border-radius:8px;"></div>
+  <div id="cx-rating-map" style="aspect-ratio:1/1;width:100%;margin:0;border-radius:8px;"></div>
 </div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-  const map = L.map('cx-rating-map').setView([51.128, 71.43], 11);
+  const map = L.map('cx-rating-map').setView([51.128, 71.43], 13);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
 
   fetch('/admin/api/complexes-map').then(r => r.json()).then(d => {
@@ -102,7 +102,7 @@ tr:last-child td{border-bottom:none}
 .cancel-btn{padding:8px 16px;background:transparent;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text)}
 </style>
 
-<div style="order:2;flex:1 1 340px;min-width:300px;max-height:calc(864px + 46px);display:flex;flex-direction:column;gap:12px;">
+<div style="order:2;flex:1 1 0;min-width:300px;max-height:calc(864px + 46px);display:flex;flex-direction:column;gap:12px;">
   <form method="get" action="/admin/complexes" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;">
     <div class="filters" style="flex-direction:column;align-items:stretch;">
       <select name="district" onchange="this.form.submit()">
@@ -123,7 +123,7 @@ tr:last-child td{border-bottom:none}
     </div>
   </form>
 
-  <div style="overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding-right:2px;">
+  <div style="overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));grid-auto-rows:min-content;align-content:start;gap:10px;padding-right:2px;flex:1 1 0;min-height:0;">
     {% for c in complexes %}
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
       <a href="/admin/complex/{{ c.id }}" style="display:block;">
