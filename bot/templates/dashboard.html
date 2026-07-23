@@ -308,8 +308,8 @@ function renderLightbox() {
   }
   const thumbs = ph.map((p, i) => `<img src="${p}" onclick="lbIdx=${i};renderLightbox();" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === lbIdx ? '1' : '.5'};border:2px solid ${i === lbIdx ? '#fff' : 'transparent'};">`).join('');
   box.innerHTML = `
-    <div style="position:relative;max-width:92vw;max-height:78vh;display:flex;align-items:center;justify-content:center;">
-      <img src="${ph[lbIdx]}" style="max-width:92vw;max-height:78vh;border-radius:8px;object-fit:contain;">
+    <div style="position:relative;width:92vw;height:78vh;display:flex;align-items:center;justify-content:center;">
+      <img src="${ph[lbIdx]}" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;">
       ${ph.length > 1 ? `
       <button onclick="lbIdx=(lbIdx-1+${ph.length})%${ph.length};renderLightbox();" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">‹</button>
       <button onclick="lbIdx=(lbIdx+1)%${ph.length};renderLightbox();" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">›</button>` : ''}
@@ -459,7 +459,7 @@ function applyFilters() {
         ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}</div>`
         : '<div style="font-size:12.5px;color:#b45309;margin-top:7px;">🏢 ЖК не определён</div>';
       m.bindPopup(`
-<div style="min-width:293px;max-width:333px;font-family:inherit;">
+<div style="min-width:293px;max-width:380px;font-family:inherit;">
   ${carHtml}
   <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
@@ -475,7 +475,7 @@ function applyFilters() {
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
   <div style="font-size:13px;margin-top:6px;">${sellerHtml}</div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
-  <div style="font-size:12px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}${(pt.geo === 'address' && IS_ADMIN) ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}</div>
+  <div style="font-size:12px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}${(pt.geo === 'address' && IS_ADMIN) ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
   <div id="hexwrap-${pt.id}" style="margin-top:8px;"></div>
@@ -588,7 +588,7 @@ function loadBargainCaption(id) {
     const explain = `Медиана по ${b.comparables_cnt} похожим объявлениям (район/комнаты/площадь): ${medianM} млн ₸, ваша цена: ${priceM} млн ₸. ${b.recommendation || ''}`;
     // клик, а не наведение — надёжно работает и на тач-экранах
     el.innerHTML = `<div>
-      <span style="color:#16a34a;font-weight:800;">можно торговаться на ${b.discount_pct}% (${amountTenge} ₸)</span>
+      <span style="color:#16a34a;font-weight:800;white-space:nowrap;">можно торговаться на ${b.discount_pct}% (${amountTenge} ₸)</span>
       <span onclick="toggleBargainExplain('${id}', event)" style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:#e5e7eb;color:#555;font-size:12px;font-weight:800;cursor:pointer;">?</span>
       <div id="bgx-${id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:13.5px;line-height:1.4;color:#444;">${escapeHtml(explain)}</div>
     </div>`;
@@ -889,8 +889,13 @@ ${photoHtml}
   <div style="font-size:19px;color:#374151;margin-top:4px;">${d.rooms || '?'}-комн · ${d.area ? Math.round(d.area) : '?'} м²${d.floor ? ' · ' + d.floor + '/' + (d.floors_total || '?') + ' эт.' : ''}</div>
   <div style="font-size:16px;color:#555;margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}</div>
   ${d.complex_name ? `<div style="font-size:16px;margin-top:4px;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(d.complex_name)}">ЖК ${d.complex_name}</a>${d.year_built ? ' · ' + d.year_built + ' г.' : ''}</div>` : ''}
+  ${d.views_count ? `<div style="font-size:13px;color:#888;margin-top:6px;">👁 просмотрели ${d.views_count.toLocaleString('ru')} раз${d.first_seen ? ' с ' + d.first_seen : ''}</div>` : ''}
 </div>
 ${bargainHtml}
+${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
+  <div style="font-size:13px;color:#888;font-weight:700;margin-bottom:6px;">📝 Описание</div>
+  <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(d.description).slice(0, 600)}${d.description.length > 600 ? '…' : ''}</div>
+</div>` : ''}
 <div id="modal-price-history-wrap" style="padding:18px 22px 0;display:none;">
   <div style="font-size:14px;color:#888;margin-bottom:6px;">История цены</div>
   <div id="modal-price-history"></div>

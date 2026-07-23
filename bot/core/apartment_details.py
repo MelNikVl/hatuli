@@ -411,6 +411,16 @@ async def fetch_apartment_details(url: str) -> dict:
     result["is_archived"] = ("В архиве" in resp.text
                              or "может быть неактуальным" in resp.text)
 
+    # ── Просмотры (ОТЛОЖЕНО): число в статичном HTML пустое
+    # (<span class="nb-views-text">), реальный счётчик отдаёт внутренний
+    # микросервис Крыши POST'ом на /ms/views/krisha/live/{id}/ — но обычный
+    # httpx-запрос (с куками/referer/multipart — проверено) получает в ответ
+    # только {"status":"ok"} без данных; полноценный ответ с nb_views видел
+    # только у настоящего браузера — вероятно, нужен клиентский фингерпринт/
+    # подпись, которую считает JS-бандл Крыши. apartment_listings.views_count
+    # (миграция 019) и весь код отображения уже готовы — включить, когда
+    # найдётся рабочий способ получить число (или решим ставить headless-браузер).
+
     logger.info("fetch_apartment_details: extracted %d fields from %s",
                 len(result), url)
     return result

@@ -130,6 +130,14 @@ async def backfill_coords_and_complex(limit: int, min_age_days: float = 3.0) -> 
             await pg_exec(
                 "UPDATE apartment_listings SET is_urgent=$2 WHERE id=$1",
                 m["id"], details["is_urgent"])
+        if details.get("views_count"):
+            await pg_exec(
+                "UPDATE apartment_listings SET views_count=$2 WHERE id=$1",
+                m["id"], details["views_count"])
+        if details.get("description"):
+            await pg_exec(
+                "UPDATE apartment_listings SET description=$2 WHERE id=$1",
+                m["id"], details["description"])
 
     if missing:
         logger.info("coord_backfill: готово — координаты %d/%d, ЖК %d",

@@ -267,6 +267,7 @@ def make_extras_router(templates) -> APIRouter:
                    floors_total, price, est_rent, yield_pct, score_total,
                    COALESCE(zone_bonus, 0) AS zone_bonus, zone_name,
                    COALESCE(layer_bonus, 0) AS layer_bonus, layer_details, market_type,
+                   COALESCE(price_drop_bonus, 0) AS price_drop_bonus,
                    bargain_rec, bargain_target, is_owner, year_built, last_seen
             FROM apartment_listings
             WHERE score_total IS NOT NULL
@@ -275,7 +276,7 @@ def make_extras_router(templates) -> APIRouter:
               AND last_seen > now() - interval '14 days'
               AND price >= 500000
               AND COALESCE(yield_pct, 0) <= 100
-            ORDER BY (score_total + COALESCE(zone_bonus, 0) + COALESCE(layer_bonus, 0)) DESC,
+            ORDER BY (score_total + COALESCE(zone_bonus, 0) + COALESCE(layer_bonus, 0) + COALESCE(price_drop_bonus, 0)) DESC,
                      yield_pct DESC NULLS LAST
             LIMIT 10
         """)
@@ -514,7 +515,7 @@ def make_extras_router(templates) -> APIRouter:
             LEFT JOIN LATERAL (
                 SELECT AVG(al.lat) AS lat, AVG(al.lon) AS lon,
                        AVG(COALESCE(score_total,0) + COALESCE(zone_bonus,0)
-                           + COALESCE(layer_bonus,0))
+                           + COALESCE(layer_bonus,0) + COALESCE(price_drop_bonus,0))
                          FILTER (WHERE is_active IS NOT FALSE) AS avg_score
                 FROM apartment_listings al
                 WHERE lower(trim(regexp_replace(al.complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
@@ -614,7 +615,7 @@ def make_extras_router(templates) -> APIRouter:
             LEFT JOIN LATERAL (
                 SELECT AVG(al.lat) AS lat, AVG(al.lon) AS lon,
                        AVG(COALESCE(score_total,0) + COALESCE(zone_bonus,0)
-                           + COALESCE(layer_bonus,0))
+                           + COALESCE(layer_bonus,0) + COALESCE(price_drop_bonus,0))
                          FILTER (WHERE is_active IS NOT FALSE) AS avg_score,
                        AVG(EXTRACT(EPOCH FROM (al.archived_at - al.first_seen))/86400)
                          FILTER (WHERE al.archived_at IS NOT NULL) AS avg_days_to_sell,
@@ -757,7 +758,7 @@ def make_extras_router(templates) -> APIRouter:
         if area_max > 0:
             conds.append(f"AND area <= ${i}"); params.append(area_max); i += 1
         if min_score > 0:
-            conds.append(f"AND (COALESCE(score_total,0) + COALESCE(zone_bonus,0) + COALESCE(layer_bonus,0)) >= ${i}")
+            conds.append(f"AND (COALESCE(score_total,0) + COALESCE(zone_bonus,0) + COALESCE(layer_bonus,0) + COALESCE(price_drop_bonus,0)) >= ${i}")
             params.append(min_score); i += 1
         if seller == "owner":
             conds.append("AND is_owner IS TRUE")
@@ -772,7 +773,7 @@ def make_extras_router(templates) -> APIRouter:
         rows = await pg_fetch(f"""
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
-                   a.is_owner, a.seller_name, a.year_built,
+                   a.is_owner, a.seller_name, a.year_built, a.views_count,
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
@@ -780,7 +781,8 @@ def make_extras_router(templates) -> APIRouter:
                          THEN a.primary_score_total
                          ELSE COALESCE(a.score_total,0) END
                     + COALESCE(a.zone_bonus,0)
-                    + COALESCE(a.layer_bonus,0)) AS eff_score,
+                    + COALESCE(a.layer_bonus,0)
+                    + COALESCE(a.price_drop_bonus,0)) AS eff_score,
                    ph.old_price AS prev_price,
                    ph.changed_at AS price_changed_at
             FROM apartment_listings a
@@ -827,6 +829,7 @@ def make_extras_router(templates) -> APIRouter:
             },
             "is_owner": r["is_owner"] is True,
             "seller_name": r["seller_name"] or "",
+            "views": r["views_count"],
             "age": int(r["age_days"] or 0),
             # последняя смена цены (если была) — для попапа на карте
             "prev_price": r["prev_price"],
@@ -1332,6 +1335,9 @@ def make_extras_router(templates) -> APIRouter:
             "seller_name": l.get("seller_name") or "",
             "is_owner": l.get("is_owner") is True,
             "year_built": l.get("year_built"),
+            "views_count": l.get("views_count"),
+            "description": l.get("description") or "",
+            "first_seen": l["first_seen"].strftime("%d.%m.%Y") if l.get("first_seen") else None,
             "bargain": {
                 "discount_pct": bargain.get("discount_pct") or 0,
                 "target_price": bargain.get("target_price"),

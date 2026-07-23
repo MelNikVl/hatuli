@@ -52,6 +52,12 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/kris
 MIN_INTERVAL_H = 6 - 1
 MAX_INTERVAL_H = 6 + 1
 
+# Быстрая привязка (только rebind — без внешних запросов, чистый SQL по своей
+# БД) — отдельным более частым циклом, чтобы новые объявления от парсера
+# (цикл ~60-80 мин) не копились непривязанными до следующего большого цикла
+# раз в 6 часов. Без этого график /admin/unbound "пилит" вверх между циклами.
+FAST_REBIND_INTERVAL_MIN = 20
+
 # Лимиты внешних запросов за один цикл — самоограничение, чтобы не долбить
 # krisha.kz/korter.kz/homsters.kz/nominatim слишком часто одним прогоном.
 KRISHA_COMPLEX_LIMIT = 60      # ЖК за цикл (~4-8с/шт => до ~8 мин)
@@ -118,6 +124,19 @@ async def run_cycle() -> None:
     log.info("=== Geobind cycle done ===")
 
 
+async def fast_rebind_loop() -> None:
+    from bot.core.rebind import record_unbound_snapshot, run_rebind
+    while True:
+        await asyncio.sleep(FAST_REBIND_INTERVAL_MIN * 60)
+        try:
+            res = await run_rebind(progress_cb=lambda s: log.info("fast-rebind: %s", s))
+            log.info("fast-rebind: bound=%d (url=%d text=%d geo=%d) left=%d",
+                      res["bound"], res["by_url"], res["by_text"], res["by_geo"], res["left"])
+            await record_unbound_snapshot()
+        except Exception as e:
+            log.error("fast-rebind loop error: %s", e, exc_info=True)
+
+
 async def main() -> None:
     from bot.db.pg import init_pool
     await init_pool(DATABASE_URL)
@@ -130,6 +149,7 @@ async def main() -> None:
         return
 
     log.info("=== Geobind service started ===")
+    asyncio.create_task(fast_rebind_loop())
     while True:
         try:
             await run_cycle()

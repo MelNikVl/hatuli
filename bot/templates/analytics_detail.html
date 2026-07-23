@@ -67,8 +67,9 @@
   <div class="card">
     {% set zb = listing.zone_bonus or 0 %}
     {% set lb = listing.layer_bonus or 0 %}
+    {% set pdb = listing.price_drop_bonus or 0 %}
     {% set base = listing.score_total or 0 %}
-    {% set eff = base + zb + lb %}
+    {% set eff = base + zb + lb + pdb %}
     <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;">
       <div class="score-big">{{ eff }}</div>
       <div class="score-sub">
@@ -76,9 +77,13 @@
         = {{ base }} база (из 100)
         {% if zb %} <span style="color:{{ '#16a34a' if zb > 0 else '#ef4444' }};font-weight:700;">{{ '+' if zb > 0 }}{{ zb }} зона{% if listing.zone_name %} «{{ listing.zone_name }}»{% endif %}</span>{% endif %}
         {% if lb %} <span style="color:{{ '#16a34a' if lb > 0 else '#ef4444' }};font-weight:700;">{{ '+' if lb > 0 }}{{ lb }} слои</span>{% endif %}
+        {% if pdb %} <span style="color:#16a34a;font-weight:700;">+{{ pdb }} снижения цены</span>{% endif %}
       </div>
     </div>
 
+    {% if listing.views_count %}
+    <div class="row"><span class="key">👁 Просмотры</span><span class="val">{{ '{:,}'.format(listing.views_count).replace(',', ' ') }} раз{% if listing.first_seen %} с {{ listing.first_seen.strftime('%d.%m.%Y') }}{% endif %}</span></div>
+    {% endif %}
     <div class="row"><span class="key">🗺 Привязка к карте</span><span class="val">{% if listing.lat %}точные координаты (с детальной страницы Крыши){% else %}<span style="color:#f59e0b;">нет координат — в очереди докачки деталей</span>{% endif %}</span></div>
     <div class="row"><span class="key">📍 Адрес</span><span class="val">{{ listing.address or '—' }}</span></div>
     {% if listing.zone_name %}
@@ -253,6 +258,13 @@
       <tr style="border-bottom:1px solid var(--border);"><td style="padding:7px 8px;width:28px;">{{ icons.get(name,'•') }}</td><td style="padding:7px 8px;font-weight:700;width:50px;color:{{ '#4ade80' if d.adj > 0 else ('#f87171' if d.adj < 0 else '#888') }};">{{ '%+d'|format(d.adj) }}</td><td style="padding:7px 8px;">{{ d.reason }}</td></tr>
       {% endfor %}
     </table>
+  </details>
+  {% endif %}
+
+  {% if listing.description %}
+  <details class="tile full-width">
+    <summary>📝 Описание объявления</summary>
+    <div style="font-size:13.5px;line-height:1.7;white-space:pre-wrap;">{{ listing.description }}</div>
   </details>
   {% endif %}
 

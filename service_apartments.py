@@ -144,15 +144,6 @@ async def run_cycle():
 
         exists = await pg_get("SELECT id, price FROM apartment_listings WHERE id=$1", r["id"])
 
-        # История изменения цены (для статистики "цена выросла/упала")
-        if exists and r.get("price") and exists["price"] and exists["price"] != r["price"]:
-            try:
-                await pg_exec(
-                    "INSERT INTO price_history (listing_id, old_price, new_price) VALUES ($1,$2,$3)",
-                    r["id"], exists["price"], r["price"])
-            except Exception as e:
-                log.warning("price_history failed %s: %s", r["id"], e)
-
         try:
             if not exists:
                 await pg_exec("""
@@ -204,6 +195,21 @@ async def run_cycle():
                         log.info("price change %s: %s -> %s", r["id"], old_price, new_price)
                     except Exception as e:
                         log.warning("price_history insert failed %s: %s", r["id"], e)
+                    if new_price < old_price:
+                        # Мотивированный продавец: 1-е снижение без бонуса,
+                        # 2-е +5, 3-е +10 и т.д. — прибавляем к скору.
+                        try:
+                            from bot.db.pg import fetchval as _pg_fv2
+                            drops = await _pg_fv2(
+                                "SELECT COUNT(*) FROM price_history "
+                                "WHERE listing_id=$1 AND new_price < old_price",
+                                r["id"])
+                            bonus = max(0, (int(drops or 0) - 1) * 5)
+                            await pg_exec(
+                                "UPDATE apartment_listings SET price_drop_bonus=$2 WHERE id=$1",
+                                r["id"], bonus)
+                        except Exception as e:
+                            log.warning("price_drop_bonus update failed %s: %s", r["id"], e)
                 await pg_exec("""
                     UPDATE apartment_listings SET
                         price=$2, est_rent=$3, yield_pct=$4, payback_years=$5,
@@ -229,6 +235,13 @@ async def run_cycle():
                     r.get("details_fetched", False),
                 )
                 upd_cnt += 1
+
+            if r.get("views_count"):
+                # COALESCE — не затираем уже сохранённое число NULL'ом на
+                # циклах без свежего detail-fetch (views_count там просто нет).
+                await pg_exec(
+                    "UPDATE apartment_listings SET views_count=$2 WHERE id=$1",
+                    r["id"], r["views_count"])
         except Exception as e:
             log.warning("DB error %s: %s", r["id"], e)
 
