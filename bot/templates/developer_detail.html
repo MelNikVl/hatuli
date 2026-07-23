@@ -26,30 +26,62 @@ tr:last-child td{border-bottom:none}
 
 <div class="page-title" style="font-size:16px;">ЖК застройщика в нашей базе</div>
 {% if complexes %}
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;">
-  {% for c in complexes %}
-  <a href="/admin/complex/{{ c.id }}" style="display:block;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;color:inherit;text-decoration:none;">
-    {% if c.photo_url %}
-    <img src="{{ c.photo_url }}" loading="lazy" style="width:100%;height:140px;object-fit:cover;display:block;">
-    {% else %}
-    <div style="width:100%;height:140px;background:var(--bg);display:flex;align-items:center;justify-content:center;color:#555;font-size:28px;">🏢</div>
-    {% endif %}
-    <div style="padding:10px 12px;">
-      <div style="font-weight:700;font-size:14px;margin-bottom:2px;">{{ c.name }}</div>
-      <div style="font-size:12px;color:#888;margin-bottom:6px;">📍 {{ c.address or c.district or '—' }}</div>
-      <div style="font-size:12px;display:flex;flex-wrap:wrap;gap:6px;color:#aaa;">
-        {% if c.year_built %}<span>{{ c.year_built }} г.</span>{% endif %}
-        {% if c.housing_class %}<span>· {{ c.housing_class }}</span>{% endif %}
-        <span>· в продаже {{ c.active_cnt }}</span>
-        <span>· продано {{ c.sold_cnt }}</span>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+  <div style="order:1;flex:1 1 420px;min-width:300px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+    <div id="dev-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
+  </div>
+  <div style="order:2;flex:1 1 380px;min-width:300px;max-height:calc(100vh - 240px);overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;align-content:start;">
+    {% for c in complexes %}
+    <a href="/admin/complex/{{ c.id }}" style="display:block;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;color:inherit;text-decoration:none;">
+      {% if c.photo_url %}
+      <img src="{{ c.photo_url }}" loading="lazy" style="width:100%;height:140px;object-fit:cover;display:block;">
+      {% else %}
+      <div style="width:100%;height:140px;background:var(--bg);display:flex;align-items:center;justify-content:center;color:#555;font-size:28px;">🏢</div>
+      {% endif %}
+      <div style="padding:10px 12px;">
+        <div style="font-weight:700;font-size:14px;margin-bottom:2px;">{{ c.name }}</div>
+        <div style="font-size:12px;color:#888;margin-bottom:6px;">📍 {{ c.address or c.district or '—' }}</div>
+        <div style="font-size:12px;display:flex;flex-wrap:wrap;gap:6px;color:#aaa;">
+          {% if c.year_built %}<span>{{ c.year_built }} г.</span>{% endif %}
+          {% if c.housing_class %}<span>· {{ c.housing_class }}</span>{% endif %}
+          <span>· в продаже {{ c.active_cnt }}</span>
+          <span>· продано {{ c.sold_cnt }}</span>
+        </div>
+        {% if c.avg_price_m2 %}<div style="font-size:12.5px;margin-top:4px;">{{ '{:,.0f}'.format(c.avg_price_m2).replace(',', ' ') }} ₸/м²</div>{% endif %}
+        {% if c.avg_days_to_sell %}<div style="font-size:11px;color:#888;">~{{ '%.0f'|format(c.avg_days_to_sell) }} дней до продажи</div>{% endif %}
       </div>
-      {% if c.avg_price_m2 %}<div style="font-size:12.5px;margin-top:4px;">{{ '{:,.0f}'.format(c.avg_price_m2).replace(',', ' ') }} ₸/м²</div>{% endif %}
-      {% if c.avg_days_to_sell %}<div style="font-size:11px;color:#888;">~{{ '%.0f'|format(c.avg_days_to_sell) }} дней до продажи</div>{% endif %}
-    </div>
-  </a>
-  {% endfor %}
+    </a>
+    {% endfor %}
+  </div>
 </div>
 <p style="font-size:12px;color:#888;margin-top:10px;">«Дней до продажи» — от первого появления объявления в базе до ухода в архив (проверка архива работает с 12.07.2026): чем меньше, тем быстрее продаются квартиры.</p>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const pts = [
+    {% for c in complexes if c.lat and c.lon %}
+    {id: {{ c.id }}, name: {{ c.name | tojson }}, lat: {{ c.lat }}, lon: {{ c.lon }}, active: {{ c.active_cnt or 0 }}},
+    {% endfor %}
+  ];
+  if (!pts.length) {
+    document.getElementById('dev-map').outerHTML = '<p style="color:#888;font-size:13px;padding:20px;text-align:center;">Нет координат ни у одного ЖК этого застройщика.</p>';
+    return;
+  }
+  const map = L.map('dev-map').setView([pts[0].lat, pts[0].lon], 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+  const bounds = [];
+  pts.forEach(p => {
+    const radius = Math.min(14, 6 + Math.sqrt(p.active) * 1.6);
+    L.circleMarker([p.lat, p.lon], {radius, fillColor:'#2563eb', color:'#fff', weight:1, fillOpacity:.85})
+      .bindTooltip(`<b>${p.name}</b><br>в продаже: ${p.active}`)
+      .on('click', () => location.href = '/admin/complex/' + p.id)
+      .addTo(map);
+    bounds.push([p.lat, p.lon]);
+  });
+  if (bounds.length > 1) map.fitBounds(bounds, {padding: [30,30]});
+});
+</script>
 {% else %}
 <p style="color:#888;font-size:14px;">Ни один ЖК в базе пока не сопоставлен с этим застройщиком. Сопоставление происходит при импорте с homsters.kz по названию ЖК.</p>
 {% endif %}

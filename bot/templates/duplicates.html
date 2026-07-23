@@ -40,7 +40,7 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-  const map = L.map('dup-map').setView([51.128, 71.43], 12);
+  const map = L.map('dup-map').setView([51.128, 71.43], 13);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
   const matchLabel = {photo: '📸 та же фотография (точно один объект)',
                       addr_area: '📍 адрес + комнаты + площадь + этаж',
@@ -49,27 +49,49 @@ document.addEventListener('DOMContentLoaded', function() {
     {% for r in rows if r.lat and r.lon %}
     {id: {{ r.id | tojson }}, lat: {{ r.lat }}, lon: {{ r.lon }}, n: {{ r.dup_cnt }},
      addr: {{ (r.address or r.id) | tojson }}, price: {{ r.price or 0 }},
+     rooms: {{ r.rooms or 0 }}, area: {{ r.area or 0 }},
+     floor: {{ r.floor or 0 }}, floors_total: {{ r.floors_total or 0 }},
+     is_owner: {{ (r.is_owner is true) | tojson }}, seller_name: {{ (r.seller_name or '') | tojson }},
+     photo: {{ (r.photo or '') | tojson }},
      complex: {{ (r.complex_name or '') | tojson }},
      dups: {{ r.dups | tojson }}},
     {% endfor %}
   ];
+
+  function whoLabel(d) {
+    return d.is_owner ? '👤 хозяин' : (d.seller_name ? '🏢 ' + d.seller_name : '🏢 риелтор');
+  }
+  function floorLabel(d) {
+    return d.floor ? `${d.floor}/${d.floors_total || '?'} эт.` : '';
+  }
+  function listingCard(d, isPrimary) {
+    const priceTxt = d.price ? (d.price/1e6).toFixed(1) + ' млн ₸' : '—';
+    const photoHtml = d.photo
+      ? `<img src="${d.photo}" style="width:100%;height:100px;object-fit:cover;display:block;">`
+      : `<div style="width:100%;height:100px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:22px;">🏠</div>`;
+    return `
+<a href="${d.url ? d.url : '/admin/analytics/' + d.id}" target="${d.url ? '_blank' : '_self'}" style="display:block;text-decoration:none;color:inherit;flex:0 0 150px;border:1px solid ${isPrimary ? '#2563eb' : '#eee'};border-radius:9px;overflow:hidden;background:#fff;">
+  ${photoHtml}
+  <div style="padding:6px 8px;">
+    ${isPrimary ? '<div style="font-size:9.5px;color:#2563eb;font-weight:800;">ОСНОВНАЯ</div>' : ''}
+    <div style="font-weight:800;font-size:13px;">${priceTxt}</div>
+    <div style="font-size:11px;color:#555;">${whoLabel(d)}</div>
+    <div style="font-size:10.5px;color:#888;">${floorLabel(d)}${d.match ? (floorLabel(d) ? ' · ' : '') + (matchLabel[d.match] || '') : ''}</div>
+  </div>
+</a>`;
+  }
+
   pts.forEach(p => {
-    const dupRows = p.dups.map(dd => {
-      const who = dd.is_owner ? '👤 хозяин' : (dd.seller_name ? '🏢 ' + dd.seller_name : '🏢 риелтор');
-      return `<div style="border-top:1px solid #eee;padding:3px 0;font-size:12px;">` +
-      `<a href="/admin/analytics/${dd.id}">${(dd.price/1e6).toFixed(1)} млн</a> · ` +
-      `<b>${who}</b> · <span style="color:#888;">${matchLabel[dd.match] || dd.match}</span>` +
-      `${dd.url ? ' · <a href="' + dd.url + '" target="_blank">Крыша ↗</a>' : ''}</div>`;
-    }).join('');
+    const cards = [listingCard({...p, url: '/admin/analytics/' + p.id}, true)]
+      .concat(p.dups.map(dd => listingCard(dd, false)))
+      .join('');
     L.marker([p.lat, p.lon], {icon: L.divIcon({className:'',
       html:`<div style="background:${p.n >= 3 ? '#ef4444' : '#f59e0b'};color:#fff;border-radius:50%;width:${18 + Math.min(p.n,6)*3}px;height:${18 + Math.min(p.n,6)*3}px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:11px;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4);">${p.n}</div>`,
       iconSize:[24,24], iconAnchor:[12,12]})})
       .bindPopup(`<b>×${p.n} — это ${p.n + 1} объявлений ОДНОГО объекта</b><br>` +
-        `<span style="color:#888;font-size:12px;">одна и та же квартира, размещена несколько раз</span><br>` +
-        `${p.addr}${p.complex ? ' · 🏢 ' + p.complex : ''}<br>${p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : ''}<br>` +
-        `<a href="/admin/analytics/${p.id}"><b>Основная карточка</b></a> (primary)` +
-        `<div style="max-height:180px;overflow:auto;margin-top:6px;min-width:280px;">${dupRows}</div>`,
-        {maxWidth: 340})
+        `<span style="color:#888;font-size:12px;">${p.addr}${p.complex ? ' · 🏢 ' + p.complex : ''}</span>` +
+        `<div style="display:flex;gap:8px;overflow-x:auto;margin-top:8px;padding-bottom:2px;">${cards}</div>`,
+        {maxWidth: 500, minWidth: 340})
       .addTo(map);
   });
 });

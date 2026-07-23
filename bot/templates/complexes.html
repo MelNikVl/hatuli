@@ -30,12 +30,12 @@ async function auditCx(apply) {
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
-<div style="order:1;flex:1 1 560px;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+<div style="order:1;flex:1 1 560px;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px;">
     <b style="font-size:14px;">🗺 Карта ЖК Астаны</b>
     <span style="font-size:12px;color:#888;"><span id="cxmap-count">…</span> ЖК с координатами · размер точки = объявлений в продаже · наведи курсор · клик = карточка ЖК</span>
   </div>
-  <div id="cx-rating-map" style="aspect-ratio:1/1;max-width:820px;margin:0 auto;border-radius:8px;"></div>
+  <div id="cx-rating-map" style="aspect-ratio:1/1;max-width:864px;margin:0;border-radius:8px;"></div>
 </div>
 
 <script>
@@ -102,64 +102,61 @@ tr:last-child td{border-bottom:none}
 .cancel-btn{padding:8px 16px;background:transparent;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text)}
 </style>
 
-<form method="get" action="/admin/complexes" style="order:2;flex:0 0 240px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
-<div class="filters" style="flex-direction:column;align-items:stretch;">
-  <select name="district" onchange="this.form.submit()">
-    <option value="">Все районы</option>
-    <option value="Есильский" {% if filters.district == 'Есильский' %}selected{% endif %}>Есиль</option>
-    <option value="Алматы" {% if filters.district == 'Алматы' %}selected{% endif %}>Алматы р-н</option>
-    <option value="Сарыарка" {% if filters.district == 'Сарыарка' %}selected{% endif %}>Сарыарка</option>
-    <option value="Нура" {% if filters.district == 'Нура' %}selected{% endif %}>Нура</option>
-  </select>
-  <select name="sort" onchange="this.form.submit()">
-    <option value="listings" {% if filters.sort == 'listings' %}selected{% endif %}>По объявлениям</option>
-    <option value="yield" {% if filters.sort == 'yield' %}selected{% endif %}>По yield</option>
-    <option value="price" {% if filters.sort == 'price' %}selected{% endif %}>По цене/м²</option>
-    <option value="year" {% if filters.sort == 'year' %}selected{% endif %}>По году</option>
-  </select>
-  <input type="text" name="search" value="{{ filters.search }}" placeholder="Поиск по названию...">
-  <button type="submit">Найти</button>
-</div>
-</form>
-</div><!-- /flex -->
+<div style="order:2;flex:1 1 340px;min-width:300px;max-height:calc(864px + 46px);display:flex;flex-direction:column;gap:12px;">
+  <form method="get" action="/admin/complexes" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;">
+    <div class="filters" style="flex-direction:column;align-items:stretch;">
+      <select name="district" onchange="this.form.submit()">
+        <option value="">Все районы</option>
+        <option value="Есильский" {% if filters.district == 'Есильский' %}selected{% endif %}>Есиль</option>
+        <option value="Алматы" {% if filters.district == 'Алматы' %}selected{% endif %}>Алматы р-н</option>
+        <option value="Сарыарка" {% if filters.district == 'Сарыарка' %}selected{% endif %}>Сарыарка</option>
+        <option value="Нура" {% if filters.district == 'Нура' %}selected{% endif %}>Нура</option>
+      </select>
+      <select name="sort" onchange="this.form.submit()">
+        <option value="listings" {% if filters.sort == 'listings' %}selected{% endif %}>По объявлениям</option>
+        <option value="yield" {% if filters.sort == 'yield' %}selected{% endif %}>По yield</option>
+        <option value="price" {% if filters.sort == 'price' %}selected{% endif %}>По цене/м²</option>
+        <option value="year" {% if filters.sort == 'year' %}selected{% endif %}>По году</option>
+      </select>
+      <input type="text" name="search" value="{{ filters.search }}" placeholder="Поиск по названию...">
+      <button type="submit">Найти</button>
+    </div>
+  </form>
 
-<div style="overflow-x:auto;margin-top:14px;">
-<table>
-  <thead>
-    <tr>
-      <th></th><th>ЖК</th><th>Застройщик</th><th>Район</th><th>Год</th><th>Класс</th>
-      <th>Объявл.</th><th>₸/м²</th><th>Yield</th><th>Скор</th><th></th>
-    </tr>
-  </thead>
-  <tbody>
+  <div style="overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;padding-right:2px;">
     {% for c in complexes %}
-    <tr>
-      <td style="width:46px;">
-        {% if c.photo_url %}<img src="{{ c.photo_url }}" style="width:44px;height:30px;object-fit:cover;border-radius:5px;" onerror="this.style.display='none'">{% endif %}
-      </td>
-      <td><a href="/admin/complex/{{ c.id }}" style="font-weight:600;">{{ c.name }}</a></td>
-      <td>{% if c.developer_name %}<span class="dev-badge">{{ c.developer_name }}</span>{% else %}—{% endif %}</td>
-      <td>{{ c.district or '—' }}</td>
-      <td>{{ c.year_built or '—' }}</td>
-      <td>{{ c.comfort_class or '—' }}</td>
-      <td>{{ c.listings_count or 0 }}</td>
-      <td>{% if c.avg_price_m2 %}{{ (c.avg_price_m2/1000)|round|int }} тыс{% else %}—{% endif %}</td>
-      <td>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
+      <a href="/admin/complex/{{ c.id }}" style="display:block;">
+        {% if c.photo_url %}
+        <img src="{{ c.photo_url }}" style="width:100%;height:100px;object-fit:cover;display:block;" onerror="this.style.display='none'">
+        {% else %}
+        <div style="width:100%;height:100px;background:var(--bg);"></div>
+        {% endif %}
+      </a>
+      <div style="padding:10px 12px;flex:1;display:flex;flex-direction:column;gap:4px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
+          <a href="/admin/complex/{{ c.id }}" style="font-weight:700;font-size:13.5px;line-height:1.25;color:var(--text);text-decoration:none;">{{ c.name }}</a>
+          {% if c.avg_score %}<span style="flex-shrink:0;background:#2563eb;color:#fff;border-radius:8px;padding:2px 7px;font-weight:800;font-size:13px;">{{ c.avg_score|round|int }}</span>{% endif %}
+        </div>
+        <div style="font-size:11.5px;color:#888;">{% if c.developer_name %}{{ c.developer_name }}{% else %}застройщик не определён{% endif %}</div>
+        <div style="font-size:11px;color:#888;display:flex;gap:6px;flex-wrap:wrap;margin-top:2px;">
+          <span>{{ c.district or '—' }}</span>
+          {% if c.year_built %}<span>· {{ c.year_built }} г.</span>{% endif %}
+          <span>· {{ c.listings_count or 0 }} объявл.</span>
+        </div>
         {% if c.avg_yield %}
           {% set y = c.avg_yield %}
-          <span class="yield-tag {% if y >= 12 %}yield-hi{% elif y >= 8 %}yield-md{% else %}yield-lo{% endif %}">{{ y|round(1) }}%</span>
-        {% else %}<span class="yield-tag yield-na">—</span>{% endif %}
-      </td>
-      <td>{% if c.avg_score %}<b>{{ c.avg_score|round|int }}</b>{% else %}—{% endif %}</td>
-      <td><button class="edit-btn" onclick='openEdit({{ c | tojson }})'>✏️</button></td>
-    </tr>
+          <span class="yield-tag {% if y >= 12 %}yield-hi{% elif y >= 8 %}yield-md{% else %}yield-lo{% endif %}" style="align-self:flex-start;">{{ y|round(1) }}% yield</span>
+        {% endif %}
+        <button class="edit-btn" style="margin-top:auto;align-self:flex-start;" onclick='openEdit({{ c | tojson }})'>✏️ править</button>
+      </div>
+    </div>
+    {% else %}
+    <p style="grid-column:1/-1;padding:20px;text-align:center;color:#888;">Ничего не найдено — попробуйте сбросить фильтры.</p>
     {% endfor %}
-  </tbody>
-</table>
-{% if not complexes %}
-<p style="padding:20px;text-align:center;color:#888;">Ничего не найдено — попробуйте сбросить фильтры.</p>
-{% endif %}
+  </div>
 </div>
+</div><!-- /flex -->
 
 
 <div class="modal-overlay" id="modal">

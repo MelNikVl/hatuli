@@ -322,14 +322,44 @@ async def fetch_apartment_details(url: str) -> dict:
 
     # ── Координаты объявления (для зон приоритета) ────────────────────────
     # ── Фото: og:image + галерея (URL с CDN, сами файлы не качаем) ──
-    photo_urls = []
+    # CDN отдаёт КАЖДОЕ фото в 5-7 вариантах размера/формата
+    # (.../77-400x300.jpg, .../77-full.jpg, .../77-750x470.webp, ...) —
+    # без дедупликации по номеру фото лимит в 15 слотов съедался на
+    # 2-3 реальных кадра вместо полной галереи. Группируем по номеру
+    # фото и берём один лучший вариант (full > крупный resize, jpg > webp).
+    raw_urls = []
     og = _re.search(r'property="og:image"\s+content="([^"]+)"', resp.text)
     if og:
-        photo_urls.append(og.group(1))
+        raw_urls.append(og.group(1))
     for m in _re.finditer(r'https://[^\s"\'<>]+?(?:photos|photo)[^\s"\'<>]*?\.(?:jpe?g|webp)', resp.text):
         u = m.group(0)
-        if u not in photo_urls:
-            photo_urls.append(u)
+        if u not in raw_urls:
+            raw_urls.append(u)
+
+    def _photo_key(u: str) -> str:
+        km = _re.search(r'/(\d+)-[\w.]+\.(?:jpe?g|webp)$', u)
+        return km.group(1) if km else u
+
+    def _variant_rank(u: str) -> tuple:
+        if '-full.' in u:
+            size_rank = (2, 0)
+        else:
+            dm = _re.search(r'-(\d+)x(\d+)\.', u)
+            size_rank = (1, int(dm.group(1)) * int(dm.group(2))) if dm else (0, 0)
+        fmt_rank = 1 if u.lower().endswith(('.jpg', '.jpeg')) else 0
+        return size_rank + (fmt_rank,)
+
+    order: list[str] = []
+    best: dict[str, tuple[str, tuple]] = {}
+    for u in raw_urls:
+        key = _photo_key(u)
+        if key not in best:
+            order.append(key)
+        rank = _variant_rank(u)
+        if key not in best or rank > best[key][1]:
+            best[key] = (u, rank)
+    photo_urls = [best[k][0] for k in order]
+
     # Последнее фото галереи — рекламный баннер Крыши, не наше. Выкидываем.
     # (обрезаем ДО лимита в 15, иначе при длинной галерее баннер не попал бы
     # в хвост и мы бы срезали настоящее фото)

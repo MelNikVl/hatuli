@@ -319,11 +319,14 @@ def make_extras_router(templates) -> APIRouter:
         await pg_exec2("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS dup_match TEXT")
         rows = await pg_fetch("""
             SELECT p.id, p.address, p.price, p.rooms, p.area, p.is_owner,
-                   p.seller_name, p.lat, p.lon, p.complex_name, COUNT(d.id) AS dup_cnt,
+                   p.seller_name, p.lat, p.lon, p.complex_name, p.floor, p.floors_total,
+                   p.photos AS p_photos, COUNT(d.id) AS dup_cnt,
                    json_agg(json_build_object(
                        'id', d.id, 'price', d.price, 'is_owner', d.is_owner,
                        'url', d.url, 'match', COALESCE(d.dup_match, '?'),
-                       'seller_name', d.seller_name
+                       'seller_name', d.seller_name, 'floor', d.floor,
+                       'floors_total', d.floors_total, 'photos', d.photos,
+                       'rooms', d.rooms, 'area', d.area
                        ) ORDER BY d.is_owner DESC NULLS LAST, d.price ASC) AS dups
             FROM apartment_listings p
             JOIN apartment_listings d ON d.duplicate_of = p.id AND d.is_duplicate = TRUE
@@ -340,11 +343,21 @@ def make_extras_router(templates) -> APIRouter:
         except Exception:
             pass
         import json as _json2
+        def _photos_list(v):
+            if isinstance(v, str):
+                try:
+                    v = _json2.loads(v)
+                except ValueError:
+                    v = []
+            return (v or [])[:1]  # только первое фото нужно для мини-карточки
         out_rows = []
         for r in rows:
             d = dict(r)
             if isinstance(d.get("dups"), str):
                 d["dups"] = _json2.loads(d["dups"])
+            d["photo"] = (_photos_list(d.pop("p_photos", None)) or [None])[0]
+            for dd in d["dups"]:
+                dd["photo"] = (_photos_list(dd.pop("photos", None)) or [None])[0]
             out_rows.append(d)
         out_sim = []
         for r in similar:
@@ -954,7 +967,7 @@ def make_extras_router(templates) -> APIRouter:
             return HTMLResponse("<h2>Застройщик не найден</h2>", status_code=404)
         complexes = await fetch("""
             SELECT c.id, c.name, c.district, c.year_built, c.housing_class,
-                   c.photo_url,
+                   c.photo_url, c.lat, c.lon,
                    COALESCE(c.listings_count, 0) AS active_cnt,
                    COALESCE(c.sold_count, 0) AS sold_cnt,
                    c.avg_price_m2,
@@ -982,6 +995,92 @@ def make_extras_router(templates) -> APIRouter:
             "request": request,
             "dev": dict(dev),
             "complexes": [dict(r) for r in complexes],
+        })
+
+    # ── Дороги (кол-во полос) — для предварительной карты шума ─────────────
+
+    @router.get("/admin/api/city-roads")
+    async def city_roads(request: Request):
+        from bot.db.pg import fetch as pg_fetch
+        try:
+            rows = await pg_fetch("SELECT lat, lon, lanes, highway FROM city_roads")
+        except Exception:
+            rows = []
+        return JSONResponse({"roads": [dict(r) for r in rows]})
+
+    # ── Детали объявления для модального окна на дашборде ──────────────────
+
+    @router.get("/admin/api/listing/{listing_id}")
+    async def api_listing_detail(request: Request, listing_id: str):
+        """Полные данные объявления для модалки (фото, адрес, торг).
+        Публичный (как и сама карта) — ничего чувствительного тут нет."""
+        from bot.db.pg import fetchrow as pg_fetchrow, fetch as pg_fetch
+        from bot.core.bargain import get_comparables, analyze_bargain
+        import json as _json_ld
+
+        row = await pg_fetchrow("SELECT * FROM apartment_listings WHERE id = $1", listing_id)
+        if not row:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        l = dict(row)
+
+        photos = l.get("photos")
+        if isinstance(photos, str):
+            try:
+                photos = _json_ld.loads(photos)
+            except ValueError:
+                photos = []
+
+        comps = await get_comparables(
+            district=l.get("district"), rooms=l.get("rooms"),
+            area=l.get("area"), current_price=l.get("price", 0),
+            exclude_id=listing_id,
+        )
+        bargain = analyze_bargain(l.get("price", 0), comps, l.get("is_owner"))
+
+        # Лента "рядом" — 3 ближайших активных объявления по прямому расстоянию
+        nearby = []
+        if l.get("lat") is not None and l.get("lon") is not None:
+            nb_rows = await pg_fetch("""
+                SELECT id, url, price, rooms, area, photos
+                FROM apartment_listings
+                WHERE lat IS NOT NULL AND lon IS NOT NULL
+                  AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+                  AND id != $3
+                ORDER BY (lat - $1)^2 + (lon - $2)^2 ASC LIMIT 3
+            """, float(l["lat"]), float(l["lon"]), listing_id)
+            for nb in nb_rows:
+                nb_photos = nb["photos"]
+                if isinstance(nb_photos, str):
+                    try:
+                        nb_photos = _json_ld.loads(nb_photos)
+                    except ValueError:
+                        nb_photos = []
+                nearby.append({
+                    "id": nb["id"], "url": nb.get("url") or "",
+                    "price": nb.get("price"), "rooms": nb.get("rooms"),
+                    "area": float(nb["area"]) if nb.get("area") else None,
+                    "photo": (nb_photos or [None])[0],
+                })
+
+        return JSONResponse({
+            "id": l["id"], "url": l.get("url") or "",
+            "price": l.get("price"), "rooms": l.get("rooms"),
+            "area": float(l["area"]) if l.get("area") else None,
+            "floor": l.get("floor"), "floors_total": l.get("floors_total"),
+            "address": l.get("address") or "", "district": l.get("district") or "",
+            "complex_name": l.get("complex_name") or "",
+            "photos": photos or [],
+            "seller_name": l.get("seller_name") or "",
+            "is_owner": l.get("is_owner") is True,
+            "year_built": l.get("year_built"),
+            "bargain": {
+                "discount_pct": bargain.get("discount_pct") or 0,
+                "target_price": bargain.get("target_price"),
+                "median_price": bargain.get("median_price"),
+                "comparables_cnt": bargain.get("comparables_cnt") or 0,
+                "recommendation": bargain.get("recommendation") or "",
+            },
+            "nearby": nearby,
         })
 
     # ── История цены объявления ───────────────────────────────────────────
