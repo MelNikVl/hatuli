@@ -933,6 +933,39 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY found_at DESC LIMIT 30
         """, cname)
 
+        # Сравнение цены/м² по гексагону ЖК и 6 соседним (микролокация).
+        # Гекс не хранится в БД (считается на лету, см. bot/core/hexgrid.py) —
+        # берём объявления в радиусе ~0.9км (edge 300м * 3), группируем в
+        # Python и сравниваем свой гекс с соседями.
+        hex_cells = []
+        if geo and geo["lat"]:
+            from bot.core.hexgrid import hex_id as _hex_id, neighbors as _hex_neighbors
+            HEX_EDGE = 300.0
+            lat0, lon0 = float(geo["lat"]), float(geo["lon"])
+            dlat, dlon = 0.012, 0.019  # ~1.3км в каждую сторону — с запасом на 2 кольца гекса
+            nearby = await fetch("""
+                SELECT lat, lon, price, area FROM apartment_listings
+                WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
+                  AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+                  AND price > 500000 AND area > 0
+            """, lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon)
+            buckets: dict[str, list[float]] = {}
+            for r in nearby:
+                hid = _hex_id(float(r["lat"]), float(r["lon"]), HEX_EDGE)
+                buckets.setdefault(hid, []).append(float(r["price"]) / float(r["area"]))
+            self_hid = _hex_id(lat0, lon0, HEX_EDGE)
+            wanted = [("здесь (ЖК)", self_hid)] + [
+                (f"сосед {i+1}", h) for i, h in enumerate(_hex_neighbors(self_hid))
+            ]
+            for label, hid in wanted:
+                vals = buckets.get(hid, [])
+                hex_cells.append({
+                    "label": label,
+                    "avg_m2": round(sum(vals) / len(vals)) if vals else None,
+                    "count": len(vals),
+                    "is_self": label.startswith("здесь"),
+                })
+
         # Сводка по комнатности: медиана цены продажи, скорость архивации
         stats = await fetch("""
             SELECT rooms,
@@ -1031,7 +1064,26 @@ def make_extras_router(templates) -> APIRouter:
             "map_points": [dict(r) for r in cx_map_points],
             "live_cnt": (cx_total["live"] or 0) if cx_total else 0,
             "live_no_coords": (cx_total["live_no_coords"] or 0) if cx_total else 0,
+            "hex_cells": hex_cells,
         })
+
+    @router.post("/admin/complex/{complex_id}/photos")
+    async def complex_photos_save(request: Request, complex_id: int):
+        """Админ может задать до 3 фото ЖК (внешние URL — как и остальные
+        фото в проекте, без загрузки файлов на сервер)."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        data = await request.json()
+        photos = [u.strip() for u in (data.get("photos") or []) if u and u.strip()][:3]
+        from bot.db.pg import execute
+        await execute("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS photos JSONB")
+        import json as _json_ph2
+        await execute("""
+            UPDATE complexes SET photos = $2::jsonb,
+                   photo_url = COALESCE($3, photo_url), updated_at = now()
+            WHERE id = $1
+        """, complex_id, _json_ph2.dumps(photos), photos[0] if photos else None)
+        return JSONResponse({"ok": True, "photos": photos})
 
     @router.post("/admin/complex/{complex_id}/contacts")
     async def complex_contacts_save(request: Request, complex_id: int):
