@@ -594,18 +594,21 @@ def make_extras_router(templates) -> APIRouter:
                 conds.append(f"r.area <= ${i}"); params.append(area_max); i += 1
             if price_max > 0:
                 conds.append(f"r.price <= ${i}"); params.append(int(price_max)); i += 1
+            # Раньше центроид ЖК считался LATERAL-подзапросом по apartment_listings
+            # НА КАЖДУЮ строку аренды (до 1000 корреляционных сканов самой большой
+            # таблицы) — это и было причиной долгой загрузки. Вместо этого считаем
+            # центроиды всех ЖК ОДНИМ GROUP BY и джойним как обычную таблицу.
+            complex_geo = {r2["cx"]: (float(r2["lat"]), float(r2["lon"]))
+                           for r2 in await pg_fetch("""
+                SELECT lower(trim(complex_name)) AS cx, AVG(lat) AS lat, AVG(lon) AS lon
+                FROM apartment_listings
+                WHERE lat IS NOT NULL AND complex_name IS NOT NULL AND btrim(complex_name) != ''
+                GROUP BY lower(trim(complex_name))""")}
             rows = await pg_fetch(f"""
                 SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.district, r.found_at,
                        r.lat AS own_lat, r.lon AS own_lon,
-                       g.lat, g.lon,
                        ph.old_price AS prev_price, ph.changed_at AS price_changed_at
                 FROM rental_listings r
-                LEFT JOIN LATERAL (
-                    SELECT AVG(lat) AS lat, AVG(lon) AS lon
-                    FROM apartment_listings al
-                    WHERE lower(trim(al.complex_name)) = lower(trim(r.complex_name))
-                      AND al.lat IS NOT NULL
-                ) g ON TRUE
                 LEFT JOIN LATERAL (
                     SELECT old_price, changed_at FROM rental_price_history h
                     WHERE h.listing_id = r.id
@@ -627,11 +630,12 @@ def make_extras_router(templates) -> APIRouter:
             import random as _rnd
             for r in rows:
                 d = dict(r)
+                cx_geo = complex_geo.get(str(d.get("complex_name") or "").strip().lower())
                 if d.get("own_lat") is not None:
                     # свои координаты с детальной страницы — самая точная привязка
                     lat, lon, binding, jit = float(d["own_lat"]), float(d["own_lon"]), "точно", 0.0
-                elif d["lat"] is not None:
-                    lat, lon, binding, jit = float(d["lat"]), float(d["lon"]), "ЖК", 0.0005
+                elif cx_geo is not None:
+                    lat, lon, binding, jit = cx_geo[0], cx_geo[1], "ЖК", 0.0005
                 else:
                     dg = district_geo.get(d.get("district") or "")
                     if dg:
@@ -1367,12 +1371,34 @@ def make_extras_router(templates) -> APIRouter:
     rebind_state = {"running": False, "stage": "", "result": None}
 
     async def _do_rebind() -> dict:
-        from bot.core.rebind import run_rebind
+        from bot.core.rebind import run_rebind, record_unbound_snapshot
 
         def _set_stage(stage: str) -> None:
             rebind_state["stage"] = stage
 
-        return await run_rebind(progress_cb=_set_stage)
+        result = await run_rebind(progress_cb=_set_stage)
+        # Снимок для графика на /admin/unbound — сразу после ручного запуска,
+        # чтобы точка на графике отражала реальный эффект нажатия кнопки.
+        await record_unbound_snapshot()
+        return result
+
+    @router.get("/admin/api/unbound-history")
+    async def unbound_history(request: Request):
+        """История снимков unbound_stats_history — для графика на /admin/unbound."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT at, total_active, unbound, unbound_coords
+            FROM unbound_stats_history
+            ORDER BY at ASC
+        """)
+        return JSONResponse({"points": [{
+            "at": r["at"].strftime("%d.%m %H:%M"),
+            "total_active": r["total_active"],
+            "unbound": r["unbound"],
+            "unbound_coords": r["unbound_coords"],
+        } for r in rows]})
 
     @router.get("/admin/rebind/status")
     async def rebind_status(request: Request):

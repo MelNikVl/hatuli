@@ -461,7 +461,7 @@ function applyFilters() {
       m.bindPopup(`
 <div style="min-width:293px;max-width:333px;font-family:inherit;">
   ${carHtml}
-  <div id="bg-${pt.id}" style="font-size:12.5px;margin:${carHtml ? '2px 2px 0' : '0'};"></div>
+  <div id="bg-${pt.id}" style="font-size:12.5px;margin:${carHtml ? '2px 2px 0' : '0'};min-height:19px;"></div>
   <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
     <div>
@@ -518,7 +518,14 @@ function fmtMln(v) {
 }
 function sparklineSVG(points, w, h) {
   if (points.length === 0) return '';
-  const LABEL_H = 16;  // место сверху под постоянные подписи точек
+  // Подписи цен над точками: если точки стоят часто, соседние подписи наезжают
+  // друг на друга — тогда разносим их в два яруса (через одну выше/ниже) и
+  // резервируем под это чуть больше места сверху.
+  const labelTexts = points.map(p => fmtMln(p.price));
+  const stepX0 = points.length > 1 ? w / (points.length - 1) : w;
+  const estLabelW = Math.max(...labelTexts.map(t => t.length * 6.2 + 6));
+  const crowded = stepX0 < estLabelW;
+  const LABEL_H = crowded ? 26 : 16;  // место сверху под постоянные подписи точек
   const chartH = h - LABEL_H;
   const prices = points.map(p => p.price);
   const mn = Math.min(...prices), mx = Math.max(...prices);
@@ -530,7 +537,8 @@ function sparklineSVG(points, w, h) {
   const gid = 'sg' + Math.random().toString(36).slice(2, 9);
   const labels = coords.map((c, i) => {
     const x = Math.min(Math.max(c[0], 14), w - 14);  // не даём подписи вылезти за край
-    return `<text x="${x.toFixed(1)}" y="${LABEL_H - 5}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#2563eb">${fmtMln(points[i].price)}</text>`;
+    const y = crowded && i % 2 === 1 ? LABEL_H - 16 : LABEL_H - 5;  // нижний ярус чуть выше верхнего
+    return `<text x="${x.toFixed(1)}" y="${y}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#2563eb">${labelTexts[i]}</text>`;
   }).join('');
   const dots = coords.map((c, i) => {
     const p = points[i];
@@ -580,7 +588,7 @@ function loadBargainCaption(id) {
     // клик, а не наведение — надёжно работает и на тач-экранах
     el.innerHTML = `<div>
       <span style="color:#16a34a;font-weight:800;">можно торговаться на ${b.discount_pct}% (${amountTenge} ₸)</span>
-      <span onclick="toggleBargainExplain('${id}', event)" style="display:inline-block;width:16px;height:16px;line-height:16px;text-align:center;border-radius:50%;background:#e5e7eb;color:#555;font-size:11px;font-weight:800;cursor:pointer;">?</span>
+      <span onclick="toggleBargainExplain('${id}', event)" style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:#e5e7eb;color:#555;font-size:12px;font-weight:800;cursor:pointer;">?</span>
       <div id="bgx-${id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:11px;color:#444;">${escapeHtml(explain)}</div>
     </div>`;
   }).catch(() => { el.innerHTML = ''; });

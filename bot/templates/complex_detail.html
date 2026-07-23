@@ -264,7 +264,7 @@
 <div>
 
   <div class="cx-card contact-form">
-    <h3>👥 Люди и контакты</h3>
+    <h3>👥 Люди, контакты и источники инфы</h3>
     <label>ОСИ (контакты)</label>
     <textarea id="c-osi" placeholder="Председатель ОСИ, телефон, как связаться...">{{ cx.osi_contacts or '' }}</textarea>
     <label>Управляющая компания</label>
@@ -276,16 +276,16 @@
     <textarea id="c-notes" placeholder="Что говорят жители: отопление, лифты, парковка, качество...">{{ cx.residents_notes or '' }}</textarea>
     <button class="btn-save-c" onclick="saveContacts()">💾 Сохранить</button>
     <span id="c-status" style="font-size:12px;color:#22c55e;margin-left:8px;"></span>
-  </div>
 
-  <div class="cx-card">
-    <h3>🔎 Где искать инфу по этому ЖК</h3>
-    <p style="font-size:13px;line-height:1.6;">
-      · <a href="https://2gis.kz/astana/search/{{ cx.name | urlencode }}" target="_blank">2GIS: отзывы ↗</a><br>
-      · <a href="https://www.google.com/maps/search/{{ (cx.name ~ ' Астана') | urlencode }}" target="_blank">Google Maps ↗</a><br>
-      · <a href="https://www.google.com/search?q={{ ('телеграм чат жителей ЖК ' ~ cx.name ~ ' Астана') | urlencode }}" target="_blank">Найти чат жителей ↗</a><br>
-      · <a href="https://www.google.com/search?q={{ ('site:krisha.kz ЖК ' ~ cx.name) | urlencode }}" target="_blank">Krisha: найти страницу ЖК ↗</a>
-    </p>
+    <div style="border-top:1px solid var(--border);margin:16px 0 12px;padding-top:12px;">
+      <label style="display:block;margin-bottom:6px;">🔎 Где искать инфу по этому ЖК</label>
+      <p style="font-size:13px;line-height:1.6;margin:0;">
+        · <a href="https://2gis.kz/astana/search/{{ cx.name | urlencode }}" target="_blank">2GIS: отзывы ↗</a><br>
+        · <a href="https://www.google.com/maps/search/{{ (cx.name ~ ' Астана') | urlencode }}" target="_blank">Google Maps ↗</a><br>
+        · <a href="https://www.google.com/search?q={{ ('телеграм чат жителей ЖК ' ~ cx.name ~ ' Астана') | urlencode }}" target="_blank">Найти чат жителей ↗</a><br>
+        · <a href="https://www.google.com/search?q={{ ('site:krisha.kz ЖК ' ~ cx.name) | urlencode }}" target="_blank">Krisha: найти страницу ЖК ↗</a>
+      </p>
+    </div>
   </div>
 
 </div>

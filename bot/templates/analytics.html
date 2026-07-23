@@ -54,11 +54,14 @@ tr:last-child td { border-bottom: none; }
 .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
 
 .container { max-width: 100%; padding: 0; }
+/* 2 колонки: слева графики/KPI, справа фильтр + топ-объявления (по образцу .cx-grid) */
+.an-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 1150px) { .an-grid { grid-template-columns: 1fr; } }
 </style>
 <div class="page-title">📊 Аналитика квартир</div>
 <div class="container">
-<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
-<div style="order:1;flex:1 1 480px;min-width:340px;">
+<div class="an-grid">
+<div>
   <!-- Компактный rental index + гистограмма скоров — левая колонка: графики и показатели -->
   {% if rental_summary %}
   <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
@@ -137,7 +140,7 @@ tr:last-child td { border-bottom: none; }
   </div>
 </div><!-- /левая колонка -->
 
-<div style="order:2;flex:1 1 480px;min-width:340px;max-height:90vh;overflow-y:auto;">
+<div style="max-height:90vh;overflow-y:auto;">
   <form method="get" action="/admin/analytics">
     <div class="filters">
       <div class="filter-group">
@@ -276,6 +279,6 @@ tr:last-child td { border-bottom: none; }
     </tbody>
   </table>
 </div><!-- /правая колонка -->
-</div><!-- /flex -->
+</div><!-- /.an-grid -->
 </div>
 {% endblock %}

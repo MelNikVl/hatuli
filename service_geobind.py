@@ -107,6 +107,14 @@ async def run_cycle() -> None:
     except Exception as e:
         log.error("geocode stage failed: %s", e, exc_info=True)
 
+    # Снимок для графика на /admin/unbound — в конце цикла, когда все стадии
+    # (rebind/complex_audit/complex_coords/geocode) уже отразились в базе.
+    try:
+        from bot.core.rebind import record_unbound_snapshot
+        await record_unbound_snapshot()
+    except Exception as e:
+        log.error("unbound snapshot failed: %s", e, exc_info=True)
+
     log.info("=== Geobind cycle done ===")
 
 

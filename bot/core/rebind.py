@@ -32,6 +32,26 @@ async def _report(progress_cb: ProgressCB | None, stage: str) -> None:
         await result
 
 
+async def record_unbound_snapshot() -> None:
+    """Пишет строку в unbound_stats_history — источник графика на /admin/unbound."""
+    from bot.db.pg import fetchval as pg_fv, execute as pg_exec
+
+    total_active = await pg_fv(
+        "SELECT COUNT(*) FROM apartment_listings "
+        "WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+    unbound = await pg_fv(
+        "SELECT COUNT(*) FROM apartment_listings "
+        "WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE "
+        "AND (complex_name IS NULL OR btrim(complex_name) = '')") or 0
+    unbound_coords = await pg_fv(
+        "SELECT COUNT(*) FROM apartment_listings "
+        "WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE "
+        "AND (complex_name IS NULL OR btrim(complex_name) = '') AND lat IS NOT NULL") or 0
+    await pg_exec(
+        "INSERT INTO unbound_stats_history (total_active, unbound, unbound_coords) "
+        "VALUES ($1, $2, $3)", total_active, unbound, unbound_coords)
+
+
 async def run_rebind(progress_cb: ProgressCB | None = None) -> dict:
     """Стадии A0/A/B/C. Идемпотентно, можно запускать повторно."""
     from bot.db.pg import fetch as pg_fetch, execute as pg_exec, fetchval as pg_fv
