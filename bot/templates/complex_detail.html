@@ -11,7 +11,7 @@
 
 <!-- Три колонки: карта · основная информация · объявления в продаже -->
 <style>
-.cx-top { display:grid; grid-template-columns:minmax(260px,340px) minmax(280px,1fr) minmax(260px,320px); gap:16px; margin-bottom:16px; align-items:start; }
+.cx-top { display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:16px; align-items:start; }
 @media (max-width:1150px) { .cx-top { grid-template-columns:1fr; } }
 .cx-col-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
 .cx-listing-mini { display:flex; gap:10px; align-items:center; padding:7px 0; border-bottom:1px solid var(--border); text-decoration:none; color:inherit; }
@@ -77,8 +77,14 @@
       <input id="ph-url-1" placeholder="Фото 1 URL" value="{{ photos[0] if photos|length > 0 else '' }}" style="width:100%;padding:6px 8px;margin-bottom:5px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:12px;box-sizing:border-box;">
       <input id="ph-url-2" placeholder="Фото 2 URL" value="{{ photos[1] if photos|length > 1 else '' }}" style="width:100%;padding:6px 8px;margin-bottom:5px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:12px;box-sizing:border-box;">
       <input id="ph-url-3" placeholder="Фото 3 URL" value="{{ photos[2] if photos|length > 2 else '' }}" style="width:100%;padding:6px 8px;margin-bottom:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:12px;box-sizing:border-box;">
-      <button class="btn-save-c" style="padding:7px 14px;font-size:12px;" onclick="savePhotos()">💾 Сохранить фото</button>
+      <button class="btn-save-c" style="padding:7px 14px;font-size:12px;" onclick="savePhotos()">💾 Сохранить фото (URL)</button>
       <span id="ph-status" style="font-size:11px;color:#22c55e;margin-left:6px;"></span>
+      <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:10px;">
+        <div style="font-size:11px;color:#888;margin-bottom:6px;">или загрузить свои файлы (до 3, хранятся у нас на сервере)</div>
+        <input id="ph-upload" type="file" accept="image/*" multiple style="font-size:12px;">
+        <button class="btn-save-c" style="padding:7px 14px;font-size:12px;margin-left:6px;" onclick="uploadPhotos()">⬆️ Загрузить</button>
+        <span id="ph-upload-status" style="font-size:11px;color:#22c55e;margin-left:6px;"></span>
+      </div>
     </div>
     <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">
       <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx.address or cx_address or 'не определён' }}</b></td></tr>
@@ -176,21 +182,49 @@
   </div>
 </div>
 
-<!-- Микролокация: свой гексагон vs 6 соседних (цена/м²) -->
-{% if hex_cells %}
+<!-- Микролокация: свой гексагон vs 6 соседних (цена/м²) — продажа и аренда -->
+{% if hex_cells_sale or hex_cells_rental %}
 <div class="chart-card" style="margin-bottom:16px;">
   <b style="font-size:14px;">🔷 Цена/м² по микрорайону: этот ЖК и 6 соседних гексагонов</b>
-  <div style="font-size:11px;color:#888;margin-bottom:8px;">гекс ~300м, объявления в продаже поблизости</div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;">
-    {% for h in hex_cells %}
-    <div class="hex-cell {{ 'self' if h.is_self else '' }}">
-      <div style="font-size:10.5px;color:#888;">{{ h.label }}</div>
-      <div style="font-weight:800;font-size:14px;margin-top:2px;">{% if h.avg_m2 %}{{ (h.avg_m2/1000)|round|int }}к{% else %}—{% endif %}</div>
-      <div style="font-size:10px;color:#aaa;">{{ h.count }} объявл.</div>
+  <div style="font-size:11px;color:#888;margin-bottom:8px;">гекс ~300м</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+    <div>
+      <div style="font-size:12px;font-weight:700;color:#888;margin-bottom:4px;">💰 Продажа</div>
+      <div id="hex-map-sale" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
     </div>
-    {% endfor %}
+    <div>
+      <div style="font-size:12px;font-weight:700;color:#888;margin-bottom:4px;">🔑 Аренда</div>
+      <div id="hex-map-rental" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
+    </div>
   </div>
 </div>
+<script>
+function drawHexPriceMap(divId, cells) {
+  if (!cells || !cells.length || !cells.some(c => c.avg_m2)) {
+    document.getElementById(divId).innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#888;font-size:12px;">нет данных</div>';
+    return;
+  }
+  const self_ = cells.find(c => c.is_self);
+  const map = L.map(divId, {zoomControl:false, attributionControl:false, dragging:false, scrollWheelZoom:false, doubleClickZoom:false, boxZoom:false}).setView([self_.corners[0][0], self_.corners[0][1]], 14);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:0.5}).addTo(map);
+  const vals = cells.filter(c => c.avg_m2).map(c => c.avg_m2);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const bounds = [];
+  cells.forEach(c => {
+    const t = (hi > lo && c.avg_m2) ? (c.avg_m2 - lo) / (hi - lo) : 0.5;
+    const color = c.avg_m2 ? `rgb(${Math.round(34+(239-34)*t)},${Math.round(197+(68-197)*t)},${Math.round(94+(68-94)*t)})` : '#e5e7eb';
+    const poly = L.polygon(c.corners, {
+      color: c.is_self ? '#1e3a8a' : '#fff', weight: c.is_self ? 2.5 : 1,
+      fillColor: color, fillOpacity: c.avg_m2 ? 0.75 : 0.25,
+    }).addTo(map);
+    poly.bindTooltip(`${c.label}: ${c.avg_m2 ? Math.round(c.avg_m2/1000) + ' тыс ₸/м²' : 'нет данных'} (${c.count})`, {sticky:true});
+    c.corners.forEach(p => bounds.push(p));
+  });
+  map.fitBounds(bounds, {padding:[4,4]});
+}
+drawHexPriceMap('hex-map-sale', {{ hex_cells_sale | tojson }});
+drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }});
+</script>
 {% endif %}
 
 <style>
@@ -321,6 +355,18 @@ async function savePhotos() {
   });
   const st = document.getElementById('ph-status');
   st.textContent = r.ok ? 'Сохранено ✓ (обновится после перезагрузки)' : 'Ошибка!';
+  if (r.ok) setTimeout(() => location.reload(), 900);
+}
+async function uploadPhotos() {
+  const input = document.getElementById('ph-upload');
+  const st = document.getElementById('ph-upload-status');
+  if (!input.files.length) { st.textContent = 'выберите файлы'; return; }
+  st.textContent = 'загружаю…';
+  const fd = new FormData();
+  [...input.files].slice(0, 3).forEach(f => fd.append('files', f));
+  const r = await fetch('/admin/complex/{{ cx.id }}/photos/upload', {method: 'POST', body: fd});
+  const d = await r.json().catch(() => ({}));
+  st.textContent = r.ok ? 'Загружено ✓ (обновится после перезагрузки)' : (d.error || 'Ошибка!');
   if (r.ok) setTimeout(() => location.reload(), 900);
 }
 

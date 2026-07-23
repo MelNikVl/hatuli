@@ -1,11 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
 {% set admin = is_admin(request) %}
-<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
-  <div class="page-title" style="margin-bottom:0;">Карта предложений Астаны</div>
-  {% if admin %}<div id="admin-stats" style="display:flex;gap:10px;flex-wrap:wrap;"></div>{% endif %}
-</div>
-
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
@@ -71,14 +66,17 @@
   <span id="result-count" style="font-size:13px;color:#888;"></span>
   {% if admin %}
   <button id="hex-toggle" onclick="toggleHexGrid()" style="padding:9px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">⬡ Гекс-сетка: выкл</button>
+  <hr style="width:100%;border:none;border-top:1px solid var(--border);margin:2px 0;">
+  <div id="admin-stats" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
   {% endif %}
 </div>
 
-<!-- Карта: слева, занимает всё свободное место.
+<!-- Карта: слева, занимает всё свободное место, но не более 85% ширины блока
+     (уменьшена на 15% — без max-width flex:1 всё равно растягивался бы на 100%).
      РАЗМЕР КАРТЫ меняется здесь:
-       - ширина: flex-basis/max-width у контейнера ниже (сейчас flex:1 1 720px, без max-width = растягивается)
+       - ширина: flex-basis/max-width у контейнера ниже
        - высота: aspect-ratio у #objects-map (16/10, 1/1, 4/3...) или задай фикс. height, напр. height:75vh -->
-<div style="order:1;flex:1 1 600px;min-width:320px;">
+<div style="order:1;flex:1 1 600px;min-width:320px;max-width:85%;">
 
 <div id="map-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
   <div id="objects-map" style="aspect-ratio:3/2;width:100%;min-height:380px;border-radius:8px;"></div>
@@ -88,6 +86,7 @@
 </div><!-- /flex -->
 
 <script>
+const IS_ADMIN = {{ 'true' if admin else 'false' }};
 const map = L.map('objects-map').setView([51.128, 71.43], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
 const pointsLayer = L.layerGroup().addTo(map);  // аренда: обычные circleMarker (маркер-кластер их не поддерживает)
@@ -404,7 +403,8 @@ function applyFilters() {
           const dir = dp > 0;
           priceTrend = ` · <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(0)} тыс${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
         }
-        m.bindPopup(`<b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн${priceTrend}<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}`);
+        m.bindPopup(`<div style="min-width:250px;"><b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн${priceTrend}<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}<div id="hexwrap-r${pt.id}" style="margin-top:8px;"></div></div>`);
+        m.on('popupopen', () => loadHexPriceMini('r' + pt.id, pt.lat, pt.lon));
       });
       document.getElementById('result-count').textContent = lastPoints.length + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без привязки)` : '') + (drawnPolygon ? ' · в области' : '');
       if (hexOn) drawHexGrid();
@@ -456,12 +456,11 @@ function applyFilters() {
         : (pt.seller_name ? `<b style="color:#2563eb;">🏢 ${pt.seller_name}</b>` : '<b style="color:#2563eb;">🏢 риелтор</b>');
       const cxLabel = pt.complex && /^\s*(жк|кг)\b/i.test(pt.complex) ? pt.complex : `ЖК ${pt.complex}`;
       const cxLine = pt.complex
-        ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a></div>`
+        ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}</div>`
         : '<div style="font-size:12.5px;color:#b45309;margin-top:7px;">🏢 ЖК не определён</div>';
       m.bindPopup(`
 <div style="min-width:293px;max-width:333px;font-family:inherit;">
   ${carHtml}
-  <div id="bg-${pt.id}" style="font-size:12.5px;margin:${carHtml ? '2px 2px 0' : '0'};min-height:19px;"></div>
   <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
     <div>
@@ -473,18 +472,21 @@ function applyFilters() {
       <div style="font-weight:800;font-size:17px;line-height:1.2;">${pt.score}</div>
     </a>
   </div>
+  <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
   <div style="font-size:13px;margin-top:6px;">${sellerHtml}</div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
-  <div style="font-size:12px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}${pt.geo === 'address' ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}</div>
+  <div style="font-size:12px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}${(pt.geo === 'address' && IS_ADMIN) ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}</div>
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
+  <div id="hexwrap-${pt.id}" style="margin-top:8px;"></div>
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
     <a href="javascript:void(0)" onclick="openDetailModal('${pt.id}', event)" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:7px 10px;border-radius:7px;text-decoration:none;">Подробнее →</a>
+    <a href="/admin/analytics/${pt.id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:7px 10px;border-radius:7px;text-decoration:none;">Аналитика</a>
     <a href="${pt.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:7px 10px;border-radius:7px;text-decoration:none;">Крыша ↗</a>
   </div>
   </div>
 </div>`);
-      m.on('popupopen', () => { loadPriceHistory(pt.id); loadBargainCaption(pt.id); });
+      m.on('popupopen', () => { loadPriceHistory(pt.id); loadBargainCaption(pt.id); loadHexPriceMini(pt.id, pt.lat, pt.lon); });
     });
     document.getElementById('result-count').textContent = visiblePoints.length + ' объектов' + (drawnPolygon ? ' · в области' : '');
     lastPoints = visiblePoints;
@@ -518,26 +520,26 @@ function fmtMln(v) {
 }
 function sparklineSVG(points, w, h) {
   if (points.length === 0) return '';
-  // Подписи цен над точками: если точки стоят часто, соседние подписи наезжают
-  // друг на друга — тогда разносим их в два яруса (через одну выше/ниже) и
-  // резервируем под это чуть больше места сверху.
+  // Подписи цен — под точками. Если точки стоят часто, соседние подписи
+  // наезжают друг на друга — тогда разносим их в два яруса (через одну ниже)
+  // и резервируем под это чуть больше места снизу.
   const labelTexts = points.map(p => fmtMln(p.price));
   const stepX0 = points.length > 1 ? w / (points.length - 1) : w;
   const estLabelW = Math.max(...labelTexts.map(t => t.length * 6.2 + 6));
   const crowded = stepX0 < estLabelW;
-  const LABEL_H = crowded ? 26 : 16;  // место сверху под постоянные подписи точек
+  const LABEL_H = crowded ? 26 : 16;  // место снизу под подписи точек
   const chartH = h - LABEL_H;
   const prices = points.map(p => p.price);
   const mn = Math.min(...prices), mx = Math.max(...prices);
   const span = mx - mn || 1;
   const stepX = points.length > 1 ? w / (points.length - 1) : 0;
-  const coords = points.map((p, i) => [i * stepX, LABEL_H + chartH - ((p.price - mn) / span) * (chartH - 6) - 3]);
+  const coords = points.map((p, i) => [i * stepX, 3 + (chartH - 6) - ((p.price - mn) / span) * (chartH - 6)]);
   const path = coords.map((c, i) => (i ? 'L' : 'M') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
-  const areaPath = path + ` L${coords[coords.length-1][0].toFixed(1)},${h} L0,${h} Z`;
+  const areaPath = path + ` L${coords[coords.length-1][0].toFixed(1)},${chartH} L0,${chartH} Z`;
   const gid = 'sg' + Math.random().toString(36).slice(2, 9);
   const labels = coords.map((c, i) => {
     const x = Math.min(Math.max(c[0], 14), w - 14);  // не даём подписи вылезти за край
-    const y = crowded && i % 2 === 1 ? LABEL_H - 16 : LABEL_H - 5;  // нижний ярус чуть выше верхнего
+    const y = crowded && i % 2 === 1 ? h - 3 : chartH + 12;  // нижний ярус чуть ниже верхнего
     return `<text x="${x.toFixed(1)}" y="${y}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#2563eb">${labelTexts[i]}</text>`;
   }).join('');
   const dots = coords.map((c, i) => {
@@ -559,8 +561,7 @@ function loadPriceHistory(id) {
   fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
     // <=1 точка значит реальных изменений цены не было (только стартовая) — блок вообще не показываем
     if (!d.points || d.points.length <= 1) { el.innerHTML = ''; return; }
-    el.innerHTML = `<div style="font-size:11px;color:#888;">история цены, млн ₸ (наведи на точку)</div>` +
-      sparklineSVG(d.points, 220, 58);
+    el.innerHTML = sparklineSVG(d.points, 220, 58);
   }).catch(() => { el.innerHTML = ''; });
 }
 
@@ -589,9 +590,51 @@ function loadBargainCaption(id) {
     el.innerHTML = `<div>
       <span style="color:#16a34a;font-weight:800;">можно торговаться на ${b.discount_pct}% (${amountTenge} ₸)</span>
       <span onclick="toggleBargainExplain('${id}', event)" style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:#e5e7eb;color:#555;font-size:12px;font-weight:800;cursor:pointer;">?</span>
-      <div id="bgx-${id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:11px;color:#444;">${escapeHtml(explain)}</div>
+      <div id="bgx-${id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:13.5px;line-height:1.4;color:#444;">${escapeHtml(explain)}</div>
     </div>`;
   }).catch(() => { el.innerHTML = ''; });
+}
+
+// Мини-карта с гексагонами в попапе: цена/м² продажи и аренды в гексагоне
+// объявления и 6 смежных — переиспользует /admin/api/hex-prices (та же логика,
+// что и на странице ЖК).
+function drawHexPriceMini(divId, cells) {
+  const el = document.getElementById(divId);
+  if (!el) return;
+  if (!cells || !cells.length || !cells.some(c => c.avg_m2)) {
+    el.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#888;font-size:10.5px;">нет данных</div>';
+    return;
+  }
+  const self_ = cells.find(c => c.is_self);
+  const hmap = L.map(divId, {zoomControl:false, attributionControl:false, dragging:false, scrollWheelZoom:false, doubleClickZoom:false, boxZoom:false, touchZoom:false}).setView([self_.corners[0][0], self_.corners[0][1]], 14);
+  const vals = cells.filter(c => c.avg_m2).map(c => c.avg_m2);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const bounds = [];
+  cells.forEach(c => {
+    const t = (hi > lo && c.avg_m2) ? (c.avg_m2 - lo) / (hi - lo) : 0.5;
+    L.polygon(c.corners, {
+      color: c.is_self ? '#1e3a8a' : '#fff', weight: c.is_self ? 2 : 0.8,
+      fillColor: c.avg_m2 ? heatColor(t) : '#e5e7eb', fillOpacity: c.avg_m2 ? 0.75 : 0.25,
+    }).bindTooltip(`${c.label}: ${c.avg_m2 ? Math.round(c.avg_m2/1000) + ' тыс ₸/м²' : 'нет данных'} (${c.count})`, {sticky:true}).addTo(hmap);
+    c.corners.forEach(p => bounds.push(p));
+  });
+  hmap.fitBounds(bounds, {padding:[2,2]});
+  setTimeout(() => hmap.invalidateSize(), 50);
+}
+function loadHexPriceMini(id, lat, lon) {
+  const wrap = document.getElementById('hexwrap-' + id);
+  if (!wrap || wrap.dataset.loaded || lat == null || lon == null) return;
+  wrap.dataset.loaded = '1';
+  wrap.innerHTML = `
+<div style="font-size:10px;color:#888;margin-bottom:3px;">₸/м²: этот гексагон + 6 соседних</div>
+<div style="display:flex;gap:6px;">
+  <div style="flex:1;"><div style="font-size:9.5px;color:#888;text-align:center;">продажа</div><div id="hexmini-sale-${id}" style="aspect-ratio:1/1;width:100%;border-radius:6px;"></div></div>
+  <div style="flex:1;"><div style="font-size:9.5px;color:#888;text-align:center;">аренда</div><div id="hexmini-rental-${id}" style="aspect-ratio:1/1;width:100%;border-radius:6px;"></div></div>
+</div>`;
+  fetch(`/admin/api/hex-prices?lat=${lat}&lon=${lon}`).then(r => r.json()).then(d => {
+    drawHexPriceMini('hexmini-sale-' + id, d.sale);
+    drawHexPriceMini('hexmini-rental-' + id, d.rental);
+  }).catch(() => { wrap.innerHTML = ''; });
 }
 
 let lastPoints = [], hexOn = false, hexEdge = 50;
@@ -635,6 +678,12 @@ function drawHexGrid() {
 }
 // ── Тепловые карты (hexbin): цены продажи/аренды, школы, шум по полосам ───
 const HEAT_EDGE_M = 250;  // крупнее, чем гекс-сетка скоринга — это обзорный слой города
+const NOISE_EDGE_M = 30;  // шум — более мелкая сетка, ближе к масштабу отдельного дома/квартала
+// Типовая ширина/загруженность по классу дороги (не только число полос —
+// трасса и второстепенная улица с одинаковым числом полос шумят по-разному).
+const ROAD_CLASS_WEIGHT = {
+  motorway: 3.0, trunk: 2.6, primary: 2.0, secondary: 1.4, tertiary: 1.0,
+};
 const heatLayer = L.layerGroup();
 let heatMode = null;
 let heatCache = {sale: null, rental: null, schools: null, noise: null};
@@ -647,12 +696,13 @@ function heatColor(t) {
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
-function hexBucket(items, latLonFn) {
+function hexBucket(items, latLonFn, edge) {
+  edge = edge || HEAT_EDGE_M;
   const buckets = new Map();
   items.forEach(it => {
     const [lat, lon] = latLonFn(it);
     if (lat == null || lon == null) return;
-    const [q, r] = hexAxial(lat, lon, HEAT_EDGE_M);
+    const [q, r] = hexAxial(lat, lon, edge);
     const key = q + ':' + r;
     if (!buckets.has(key)) buckets.set(key, {q, r, items: []});
     buckets.get(key).items.push(it);
@@ -696,16 +746,19 @@ function drawCountHeat(items, latLonFn, label) {
 }
 
 function drawRoadHeat(roads) {
-  const buckets = hexBucket(roads, r => [r.lat, r.lon]);
+  // Вес участка = полосы × типовая ширина/загруженность класса дороги —
+  // трасса (motorway/trunk) шумнее второстепенной улицы при том же числе полос.
+  const roadWeight = r => (r.lanes || 1) * (ROAD_CLASS_WEIGHT[r.highway] || 1.0);
+  const buckets = hexBucket(roads, r => [r.lat, r.lon], NOISE_EDGE_M);
   const sums = [];
-  buckets.forEach(b => { b.value = b.items.reduce((s,i) => s + (i.lanes||0), 0); sums.push(b.value); });
+  buckets.forEach(b => { b.value = b.items.reduce((s,i) => s + roadWeight(i), 0); sums.push(b.value); });
   if (!sums.length) return;
   const hi = percentile(sums, 0.90) || Math.max(...sums);
   buckets.forEach(b => {
     const t = hi > 0 ? b.value / hi : 0;
-    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
+    L.polygon(hexCorners(b.q, b.r, NOISE_EDGE_M), {
       color: '#fff', weight: 0.5, fillColor: heatColor(t), fillOpacity: 0.5,
-    }).bindTooltip(`суммарно полос рядом: ${b.value} (${b.items.length} участков дорог)`, {sticky:true}).addTo(heatLayer);
+    }).bindTooltip(`шумовая нагрузка: ${b.value.toFixed(1)} (${b.items.length} участков дорог рядом)`, {sticky:true}).addTo(heatLayer);
   });
 }
 

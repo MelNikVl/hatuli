@@ -105,13 +105,6 @@ tr:last-child td{border-bottom:none}
 <div style="order:2;flex:1 1 0;min-width:300px;max-height:calc(864px + 46px);display:flex;flex-direction:column;gap:12px;">
   <form method="get" action="/admin/complexes" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;">
     <div class="filters" style="flex-direction:column;align-items:stretch;">
-      <select name="district" onchange="this.form.submit()">
-        <option value="">Все районы</option>
-        <option value="Есильский" {% if filters.district == 'Есильский' %}selected{% endif %}>Есиль</option>
-        <option value="Алматы" {% if filters.district == 'Алматы' %}selected{% endif %}>Алматы р-н</option>
-        <option value="Сарыарка" {% if filters.district == 'Сарыарка' %}selected{% endif %}>Сарыарка</option>
-        <option value="Нура" {% if filters.district == 'Нура' %}selected{% endif %}>Нура</option>
-      </select>
       <select name="sort" onchange="this.form.submit()">
         <option value="listings" {% if filters.sort == 'listings' %}selected{% endif %}>По объявлениям</option>
         <option value="yield" {% if filters.sort == 'yield' %}selected{% endif %}>По yield</option>
@@ -123,8 +116,7 @@ tr:last-child td{border-bottom:none}
     </div>
   </form>
 
-  <div style="overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));grid-auto-rows:min-content;align-content:start;gap:10px;padding-right:2px;flex:1 1 0;min-height:0;">
-    {% for c in complexes %}
+  {% macro complex_card(c) %}
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
       <a href="/admin/complex/{{ c.id }}" style="display:block;">
         {% if c.photo_url %}
@@ -151,10 +143,23 @@ tr:last-child td{border-bottom:none}
         <button class="edit-btn" style="margin-top:auto;align-self:flex-start;" onclick='openEdit({{ c | tojson }})'>✏️ править</button>
       </div>
     </div>
-    {% else %}
-    <p style="grid-column:1/-1;padding:20px;text-align:center;color:#888;">Ничего не найдено — попробуйте сбросить фильтры.</p>
-    {% endfor %}
+  {% endmacro %}
+
+  {% if complexes %}
+  <div>
+    <div style="font-size:12px;color:#888;font-weight:700;margin-bottom:6px;">🏆 Топ-10 по числу объявлений</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">
+      {% for c in complexes[:10] %}{{ complex_card(c) }}{% endfor %}
+    </div>
   </div>
+  {% if complexes|length > 10 %}
+  <div style="overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));grid-auto-rows:min-content;align-content:start;gap:10px;padding-right:2px;flex:1 1 0;min-height:0;">
+    {% for c in complexes[10:] %}{{ complex_card(c) }}{% endfor %}
+  </div>
+  {% endif %}
+  {% else %}
+  <p style="padding:20px;text-align:center;color:#888;">Ничего не найдено — попробуйте сбросить фильтры.</p>
+  {% endif %}
 </div>
 </div><!-- /flex -->
 

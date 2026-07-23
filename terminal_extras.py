@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from bot.db import settings as app_settings
@@ -50,6 +51,87 @@ SLIDER_SETTINGS = {
     "COORD_FETCH_DELAY_MIN": ("Задержка между запросами деталей — мин", 3, 30, 1, "с", "🕷 Обход парсера"),
     "COORD_FETCH_DELAY_MAX": ("Задержка между запросами деталей — макс", 5, 45, 1, "с", "🕷 Обход парсера"),
 }
+
+
+async def hex_price_cells(lat0: float, lon0: float) -> tuple[list[dict], list[dict]]:
+    """Цена/м² по гексагону (edge 300м) вокруг точки + 6 соседей — отдельно
+    продажа и аренда. Общая логика для страницы ЖК и мини-карты в попапе
+    объявления на дашборде."""
+    from bot.core.hexgrid import (
+        hex_id as _hex_id, neighbors as _hex_neighbors, hex_corners as _hex_corners,
+    )
+    HEX_EDGE = 300.0
+    dlat, dlon = 0.012, 0.019  # ~1.3км в каждую сторону — с запасом на 2 кольца гекса
+
+    def _build(rows) -> list[dict]:
+        buckets: dict[str, list[float]] = {}
+        for r in rows:
+            hid = _hex_id(float(r["lat"]), float(r["lon"]), HEX_EDGE)
+            buckets.setdefault(hid, []).append(float(r["price"]) / float(r["area"]))
+        self_hid = _hex_id(lat0, lon0, HEX_EDGE)
+        wanted = [("здесь", self_hid)] + [
+            (f"сосед {i+1}", h) for i, h in enumerate(_hex_neighbors(self_hid))
+        ]
+        cells = []
+        for label, hid in wanted:
+            vals = buckets.get(hid, [])
+            cells.append({
+                "label": label,
+                "avg_m2": round(sum(vals) / len(vals)) if vals else None,
+                "count": len(vals),
+                "is_self": label == "здесь",
+                "corners": [list(c) for c in _hex_corners(hid, HEX_EDGE)],
+            })
+        return cells
+
+    nearby_sale = await fetch("""
+        SELECT lat, lon, price, area FROM apartment_listings
+        WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
+          AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+          AND price > 500000 AND area > 0
+    """, lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon)
+    nearby_rental = await fetch("""
+        SELECT lat, lon, price, area FROM rental_listings
+        WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
+          AND price > 0 AND area > 0
+          AND last_seen > now() - interval '30 days'
+    """, lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon)
+    return _build(nearby_sale), _build(nearby_rental)
+
+
+_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "static", "uploads")
+_MAX_UPLOAD_SIDE = 1600  # px — большие фото ужимаем, чтобы не раздувать диск/трафик
+
+
+async def _save_uploaded_photos(files: list, kind: str, entity_id: int) -> list[str]:
+    """Сохраняет загруженные админом файлы на диск (static/uploads/{kind}/{id}/)
+    и возвращает список публичных /static-путей. Невалидные (не картинки) файлы
+    пропускаются молча. `kind` — "complexes" или "developers"."""
+    import io
+    import time
+
+    from PIL import Image
+
+    out_dir = os.path.join(_UPLOAD_DIR, kind, str(entity_id))
+    os.makedirs(out_dir, exist_ok=True)
+    urls: list[str] = []
+    for i, f in enumerate(files[:3]):
+        raw = await f.read()
+        if not raw:
+            continue
+        try:
+            img = Image.open(io.BytesIO(raw))
+            img.load()
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            if max(img.size) > _MAX_UPLOAD_SIDE:
+                img.thumbnail((_MAX_UPLOAD_SIDE, _MAX_UPLOAD_SIDE))
+        except Exception:
+            continue  # не картинка / битый файл — пропускаем
+        fname = f"{int(time.time())}_{i}.jpg"
+        img.save(os.path.join(out_dir, fname), "JPEG", quality=85)
+        urls.append(f"/static/uploads/{kind}/{entity_id}/{fname}")
+    return urls
 
 
 def make_extras_router(templates) -> APIRouter:
@@ -690,7 +772,7 @@ def make_extras_router(templates) -> APIRouter:
         rows = await pg_fetch(f"""
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
-                   a.is_owner, a.seller_name,
+                   a.is_owner, a.seller_name, a.year_built,
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
@@ -733,6 +815,7 @@ def make_extras_router(templates) -> APIRouter:
             "photos": _photos_of(r),
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
             "address": r["address"] or "", "complex": r["complex_name"] or "",
+            "year_built": r["year_built"],
             "url": r["url"] or "",
             "market": r["market_type"] or "",
             "geo": r["geo_source"] or "",
@@ -937,38 +1020,15 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY found_at DESC LIMIT 30
         """, cname)
 
-        # Сравнение цены/м² по гексагону ЖК и 6 соседним (микролокация).
-        # Гекс не хранится в БД (считается на лету, см. bot/core/hexgrid.py) —
-        # берём объявления в радиусе ~0.9км (edge 300м * 3), группируем в
-        # Python и сравниваем свой гекс с соседями.
-        hex_cells = []
+        # Сравнение цены/м² по гексагону ЖК и 6 соседним (микролокация),
+        # отдельно для продажи и аренды — общая логика вынесена в hex_price_cells()
+        # (переиспользуется и мини-картой в попапе объявления на дашборде).
+        hex_cells_sale, hex_cells_rental = [], []
         if geo and geo["lat"]:
-            from bot.core.hexgrid import hex_id as _hex_id, neighbors as _hex_neighbors
-            HEX_EDGE = 300.0
-            lat0, lon0 = float(geo["lat"]), float(geo["lon"])
-            dlat, dlon = 0.012, 0.019  # ~1.3км в каждую сторону — с запасом на 2 кольца гекса
-            nearby = await fetch("""
-                SELECT lat, lon, price, area FROM apartment_listings
-                WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
-                  AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-                  AND price > 500000 AND area > 0
-            """, lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon)
-            buckets: dict[str, list[float]] = {}
-            for r in nearby:
-                hid = _hex_id(float(r["lat"]), float(r["lon"]), HEX_EDGE)
-                buckets.setdefault(hid, []).append(float(r["price"]) / float(r["area"]))
-            self_hid = _hex_id(lat0, lon0, HEX_EDGE)
-            wanted = [("здесь (ЖК)", self_hid)] + [
-                (f"сосед {i+1}", h) for i, h in enumerate(_hex_neighbors(self_hid))
-            ]
-            for label, hid in wanted:
-                vals = buckets.get(hid, [])
-                hex_cells.append({
-                    "label": label,
-                    "avg_m2": round(sum(vals) / len(vals)) if vals else None,
-                    "count": len(vals),
-                    "is_self": label.startswith("здесь"),
-                })
+            hex_cells_sale, hex_cells_rental = await hex_price_cells(
+                float(geo["lat"]), float(geo["lon"]))
+
+        hex_cells = hex_cells_sale  # обратная совместимость, если где-то ещё используется
 
         # Сводка по комнатности: медиана цены продажи, скорость архивации
         stats = await fetch("""
@@ -1069,6 +1129,8 @@ def make_extras_router(templates) -> APIRouter:
             "live_cnt": (cx_total["live"] or 0) if cx_total else 0,
             "live_no_coords": (cx_total["live_no_coords"] or 0) if cx_total else 0,
             "hex_cells": hex_cells,
+            "hex_cells_sale": hex_cells_sale,
+            "hex_cells_rental": hex_cells_rental,
         })
 
     @router.post("/admin/complex/{complex_id}/photos")
@@ -1088,6 +1150,25 @@ def make_extras_router(templates) -> APIRouter:
             WHERE id = $1
         """, complex_id, _json_ph2.dumps(photos), photos[0] if photos else None)
         return JSONResponse({"ok": True, "photos": photos})
+
+    @router.post("/admin/complex/{complex_id}/photos/upload")
+    async def complex_photos_upload(request: Request, complex_id: int, files: list[UploadFile] = File(...)):
+        """Админ загружает свои файлы (до 3) — сохраняются на диск сервера
+        и раздаются через /static, вместо внешних URL."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        urls = await _save_uploaded_photos(files, "complexes", complex_id)
+        if not urls:
+            return JSONResponse({"error": "no valid image files"}, status_code=400)
+        from bot.db.pg import execute
+        import json as _json_ph3
+        await execute("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS photos JSONB")
+        await execute("""
+            UPDATE complexes SET photos = $2::jsonb,
+                   photo_url = COALESCE($3, photo_url), updated_at = now()
+            WHERE id = $1
+        """, complex_id, _json_ph3.dumps(urls), urls[0])
+        return JSONResponse({"ok": True, "photos": urls})
 
     @router.post("/admin/complex/{complex_id}/contacts")
     async def complex_contacts_save(request: Request, complex_id: int):
@@ -1381,6 +1462,13 @@ def make_extras_router(templates) -> APIRouter:
         # чтобы точка на графике отражала реальный эффект нажатия кнопки.
         await record_unbound_snapshot()
         return result
+
+    @router.get("/admin/api/hex-prices")
+    async def hex_prices_api(request: Request, lat: float, lon: float):
+        """Цена/м² по гексагону вокруг точки + 6 соседей (продажа/аренда) —
+        для мини-карты в попапе объявления на дашборде."""
+        sale, rental = await hex_price_cells(lat, lon)
+        return JSONResponse({"sale": sale, "rental": rental})
 
     @router.get("/admin/api/unbound-history")
     async def unbound_history(request: Request):

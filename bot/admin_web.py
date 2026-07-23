@@ -10,6 +10,7 @@ import os
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import bot.state as _state
@@ -17,10 +18,17 @@ from bot.db.compat import BotDB
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _LOG_FILE = "web.log"
+# Свои загруженные фото (ЖК/застройщики) — раздаются напрямую с диска сервера,
+# без внешних URL. Каталог создаётся при первом запуске, если его ещё нет.
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static")
+_UPLOADS_DIR = os.path.join(_STATIC_DIR, "uploads")
+os.makedirs(os.path.join(_UPLOADS_DIR, "complexes"), exist_ok=True)
+os.makedirs(os.path.join(_UPLOADS_DIR, "developers"), exist_ok=True)
 
 
 def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: str = "") -> FastAPI:
     app = FastAPI(title="Krisha Bot Admin")
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
     def is_authed(request: Request) -> bool:
