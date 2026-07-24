@@ -968,6 +968,16 @@ def make_extras_router(templates) -> APIRouter:
         """, complex_id)
         if not cx:
             return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+        cx = dict(cx)
+        # photos — JSONB, asyncpg отдаёт как строку; без парсинга шаблон
+        # итерировался бы по символам строки, а не по элементам массива
+        # (баг: показывало 3 битых <img src="["/"..."> вместо фото).
+        if isinstance(cx.get("photos"), str):
+            import json as _json_cxph
+            try:
+                cx["photos"] = _json_cxph.loads(cx["photos"])
+            except ValueError:
+                cx["photos"] = None
 
         cname = cx["name"]
 
