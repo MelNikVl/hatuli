@@ -39,109 +39,21 @@
 
 <a href="/admin/analytics" class="back-btn">← Назад к списку</a>
 
-<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;align-items:stretch;">
-  <div class="card" style="padding:10px;display:flex;flex-direction:column;min-width:0;">
-    {% if photos %}
-    <div style="position:relative;border-radius:10px;overflow:hidden;">
-      <img id="main-photo" src="{{ photos[0] }}" style="width:100%;aspect-ratio:4/3;object-fit:cover;display:block;cursor:zoom-in;" onclick="openPhotoLb(_pIdx)">
-      {% if photos|length > 1 %}
-      <button onclick="photoNav(-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">‹</button>
-      <button onclick="photoNav(1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">›</button>
-      <span id="photo-counter" style="position:absolute;right:8px;bottom:8px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;border-radius:8px;padding:2px 9px;">1/{{ photos|length }}</span>
-      {% endif %}
-    </div>
-    {% if photos|length > 1 %}
-    <div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto;padding:2px;">
-      {% for p in photos %}
-      <img src="{{ p }}" loading="lazy" onclick="setPhoto({{ loop.index0 }})" id="thumb-{{ loop.index0 }}"
-           style="width:64px;height:48px;object-fit:cover;border-radius:6px;cursor:pointer;flex-shrink:0;border:2px solid {{ 'var(--accent2, #60a5fa)' if loop.first else 'transparent' }};opacity:{{ '1' if loop.first else '.6' }};">
-      {% endfor %}
-    </div>
-    {% endif %}
-    {% else %}
-    <div style="aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;color:#555;font-size:15px;background:var(--bg);border-radius:10px;">нет фото</div>
-    {% endif %}
-    <a href="{{ listing.url }}" target="_blank" style="display:block;text-align:center;margin-top:10px;font-size:13px;color:var(--accent2, #60a5fa);">открыть на Krisha ↗</a>
-  </div>
+{% set zb = listing.zone_bonus or 0 %}
+{% set lb = listing.layer_bonus or 0 %}
+{% set pdb = listing.price_drop_bonus or 0 %}
+{% set base = listing.score_total or 0 %}
+{% set eff = base + zb + lb + pdb %}
+{% set price_m2 = (listing.price / listing.area) if listing.area else 0 %}
+{% set expected_m2 = (bargain.median_price / listing.area) if (bargain.median_price and listing.area) else 0 %}
 
-  <div class="card">
-    {% set zb = listing.zone_bonus or 0 %}
-    {% set lb = listing.layer_bonus or 0 %}
-    {% set pdb = listing.price_drop_bonus or 0 %}
-    {% set base = listing.score_total or 0 %}
-    {% set eff = base + zb + lb + pdb %}
-    <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;">
-      <div class="score-big">{{ eff }}</div>
-      <div class="score-sub">
-        эффективный скор — тот же, что на карте<br>
-        = {{ base }} база (из 100)
-        {% if zb %} <span style="color:{{ '#16a34a' if zb > 0 else '#ef4444' }};font-weight:700;">{{ '+' if zb > 0 }}{{ zb }} зона{% if listing.zone_name %} «{{ listing.zone_name }}»{% endif %}</span>{% endif %}
-        {% if lb %} <span style="color:{{ '#16a34a' if lb > 0 else '#ef4444' }};font-weight:700;">{{ '+' if lb > 0 }}{{ lb }} слои</span>{% endif %}
-        {% if pdb %} <span style="color:#16a34a;font-weight:700;">+{{ pdb }} снижения цены</span>{% endif %}
-      </div>
-    </div>
-
-    {% if listing.views_count %}
-    <div class="row"><span class="key">👁 Просмотры</span><span class="val">{{ '{:,}'.format(listing.views_count).replace(',', ' ') }} раз{% if listing.first_seen %} с {{ listing.first_seen.strftime('%d.%m.%Y') }}{% endif %}</span></div>
-    {% endif %}
-    <div class="row"><span class="key">🗺 Привязка к карте</span><span class="val">{% if listing.lat %}точные координаты (с детальной страницы Крыши){% else %}<span style="color:#f59e0b;">нет координат — в очереди докачки деталей</span>{% endif %}</span></div>
-    <div class="row"><span class="key">📍 Адрес</span><span class="val">{{ listing.address or '—' }}</span></div>
-    {% if listing.zone_name %}
-    <div class="row"><span class="key">📌 Зона</span><span class="val" style="color:{{ '#ef4444' if listing.zone_bonus and listing.zone_bonus < 0 else '#16a34a' }};">{{ listing.zone_name }} ({{ '%+d'|format(listing.zone_bonus or 0) }} к скору)</span></div>
-    {% endif %}
-    <div class="row"><span class="key">Комнат</span><span class="val">{{ listing.rooms or '?' }}</span></div>
-    <div class="row"><span class="key">Площадь</span><span class="val">{{ (listing.area or 0) | round(1) }} м²</span></div>
-    <div class="row"><span class="key">Этаж</span><span class="val">
-      {{ listing.floor or '?' }}/{{ listing.floors_total or '?' }}
-      {% if listing.floor == 1 %}<span style="color:#f87171;font-size:11px;"> ⚠ 1й этаж</span>
-      {% elif listing.floor and listing.floor == listing.floors_total %}<span style="color:#f87171;font-size:11px;"> ⚠ последний</span>{% endif %}
-    </span></div>
-    <div class="row"><span class="key">ЖК</span><span class="val">{% if listing.complex_name %}<a href="/admin/complex/find?name={{ listing.complex_name | urlencode }}">{{ listing.complex_name }}</a>{% else %}—{% endif %}</span></div>
-    <div class="row"><span class="key">Район</span><span class="val">{{ listing.district or '—' }}</span></div>
-    <div class="row"><span class="key">Год постройки</span><span class="val">{{ listing.year_built or '—' }}</span></div>
-    <div class="row"><span class="key">Новостройка</span><span class="val">{{ 'да' if listing.is_new_build else 'нет' }}</span></div>
-    <div class="row"><span class="key">Продавец</span><span class="val">
-      {% if listing.is_owner %}<b style="color:#16a34a;">👤 хозяин</b>{% elif listing.is_owner == false %}<b style="color:#60a5fa;">🏢 {{ listing.seller_name or 'риелтор' }}</b>{% else %}?{% endif %}
-    </span></div>
-    <div class="row"><span class="key">Цена</span><span class="val" style="font-size:17px;">{{ "{:,.0f}".format(listing.price or 0) }} ₸</span></div>
-    <div class="row"><span class="key">Аренда (оценка)</span><span class="val" style="color:#4ade80;">{{ "{:,.0f}".format(listing.est_rent or 0) }} ₸/мес</span></div>
-    <div class="row"><span class="key">Источник аренды</span><span class="val" style="font-size:11px;color:#888;">{{ listing.rent_source or '—' }}</span></div>
-    <div class="row"><span class="key">Yield</span><span class="val" style="color:#4ade80;font-size:17px;font-weight:800;">{{ listing.yield_pct or 0 }}%</span></div>
-    <div class="row"><span class="key">Окупаемость</span><span class="val">{{ listing.payback_years or '—' }} лет</span></div>
-
-    {% if bargain.comparables_cnt > 0 %}
-    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
-      <div style="font-size:14px;font-weight:700;margin-bottom:8px;">🤝 Анализ торга</div>
-      <div class="row"><span class="key">Аналогов в базе</span><span class="val">{{ bargain.comparables_cnt }}</span></div>
-      <div class="row"><span class="key">Медиана аналогов</span><span class="val">{{ "{:,.0f}".format(bargain.median_price or 0) }} ₸</span></div>
-      <div class="row"><span class="key">Мин. цена</span><span class="val">{{ "{:,.0f}".format(bargain.min_price or 0) }} ₸</span></div>
-      <div class="row"><span class="key">Рынок</span><span class="val"><span class="tag tag-{{ bargain.market_status or 'normal' }}">{% if bargain.market_status == 'hot' %}Горячий{% elif bargain.market_status == 'cold' %}Холодный{% else %}Нормальный{% endif %}</span></span></div>
-      <div class="row"><span class="key">Объявл. 30+ дней</span><span class="val">{{ bargain.old_listings_ratio or 0 }}%</span></div>
-      <div class="row"><span class="key">Рек. дисконт</span><span class="val" style="color:#4ade80;">-{{ bargain.discount_pct or 0 }}%</span></div>
-      <div class="row"><span class="key">Целевая цена</span><span class="val" style="font-size:15px;">{{ "{:,.0f}".format(bargain.target_price or 0) }} ₸</span></div>
-      <div style="margin-top:10px;padding:10px 12px;background:var(--bg);border-radius:8px;font-size:13px;">{{ bargain.recommendation }}</div>
-    </div>
-    {% endif %}
-  </div>
-
-  <div class="card" style="padding:10px;display:flex;flex-direction:column;min-width:0;">
-    {% if listing.lat and listing.lon %}
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <div id="listing-map" style="flex:1;min-height:260px;border-radius:10px;"></div>
-    <script>
-      (function() {
-        const map = L.map('listing-map').setView([{{ listing.lat }}, {{ listing.lon }}], 15);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OSM'}).addTo(map);
-        L.marker([{{ listing.lat }}, {{ listing.lon }}]).addTo(map);
-      })();
-    </script>
-    {% else %}
-    <div style="flex:1;min-height:260px;display:flex;align-items:center;justify-content:center;color:#555;font-size:13px;background:var(--bg);border-radius:10px;text-align:center;padding:16px;">
-      нет координат — объявление в очереди докачки деталей
-    </div>
-    {% endif %}
-    <div style="font-size:12.5px;color:#888;margin-top:10px;">📍 {{ listing.address or listing.district or 'адрес не определён' }}</div>
+<!-- Главное сразу видно: цена, комнатность, продавец, метраж -->
+<div class="card" style="display:flex;align-items:center;gap:26px;flex-wrap:wrap;margin-bottom:18px;padding:16px 24px;">
+  <div style="font-size:32px;font-weight:800;">{{ "{:,.0f}".format(listing.price or 0) }} ₸</div>
+  <div style="font-size:20px;font-weight:700;color:var(--text);">{{ listing.rooms or '?' }}-комн</div>
+  <div style="font-size:18px;color:#aaa;">{{ (listing.area or 0) | round(1) }} м²</div>
+  <div style="font-size:15px;">
+    {% if listing.is_owner %}<b style="color:#16a34a;">👤 хозяин</b>{% elif listing.is_owner == false %}<b style="color:#60a5fa;">🏢 риелтор {{ listing.seller_name or '' }}</b>{% else %}?{% endif %}
   </div>
 </div>
 
@@ -166,19 +78,147 @@
   {% if ai.exchange %}{% set _ = minuses.append('Предлагается обмен — обычно не инвест-вариант') %}{% endif %}
   {% for d in ai.defects or [] %}{% set _ = minuses.append('Дефект: ' ~ d) %}{% endfor %}
 {% endif %}
-{% if pluses or minuses %}
-<div class="card" style="margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:20px;">
-  <div>
-    <div style="font-size:14px;font-weight:700;color:#4ade80;margin-bottom:8px;">✅ Плюсы</div>
-    <ul style="font-size:13.5px;line-height:1.8;padding-left:18px;margin:0;">
-      {% for p in pluses %}<li>{{ p }}</li>{% else %}<li style="color:#888;list-style:none;padding-left:-18px;">не выявлено</li>{% endfor %}
-    </ul>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;align-items:stretch;">
+  <div class="card" style="padding:10px;display:flex;flex-direction:column;min-width:0;">
+    {% if photos %}
+    <div style="position:relative;border-radius:10px;overflow:hidden;">
+      <img id="main-photo" src="{{ photos[0] }}" style="width:100%;aspect-ratio:4/3;object-fit:cover;display:block;cursor:zoom-in;" onclick="openPhotoLb(_pIdx)">
+      {% if photos|length > 1 %}
+      <button onclick="photoNav(-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">‹</button>
+      <button onclick="photoNav(1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">›</button>
+      <span id="photo-counter" style="position:absolute;right:8px;bottom:8px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;border-radius:8px;padding:2px 9px;">1/{{ photos|length }}</span>
+      {% endif %}
+    </div>
+    {% if photos|length > 1 %}
+    <div style="display:flex;gap:6px;margin-top:8px;overflow-x:auto;padding:2px;">
+      {% for p in photos %}
+      <img src="{{ p }}" loading="lazy" onclick="setPhoto({{ loop.index0 }})" id="thumb-{{ loop.index0 }}"
+           style="width:64px;height:48px;object-fit:cover;border-radius:6px;cursor:pointer;flex-shrink:0;border:2px solid {{ 'var(--accent2, #60a5fa)' if loop.first else 'transparent' }};opacity:{{ '1' if loop.first else '.6' }};">
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% else %}
+    <div style="aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;color:#555;font-size:15px;background:var(--bg);border-radius:10px;">нет фото</div>
+    {% endif %}
+    <a href="{{ listing.url }}" target="_blank" style="display:block;text-align:center;margin-top:10px;font-size:13px;color:var(--accent2, #60a5fa);">открыть на Krisha ↗</a>
+
+    {% if pluses or minuses %}
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-size:13px;font-weight:700;color:#4ade80;margin-bottom:6px;">✅ Плюсы</div>
+      <ul style="font-size:12.5px;line-height:1.7;padding-left:16px;margin:0 0 12px;">
+        {% for p in pluses %}<li>{{ p }}</li>{% else %}<li style="color:#888;list-style:none;padding-left:-16px;">не выявлено</li>{% endfor %}
+      </ul>
+      <div style="font-size:13px;font-weight:700;color:#f87171;margin-bottom:6px;">⚠️ Минусы</div>
+      <ul style="font-size:12.5px;line-height:1.7;padding-left:16px;margin:0;">
+        {% for m in minuses %}<li>{{ m }}</li>{% else %}<li style="color:#888;list-style:none;padding-left:-16px;">не выявлено</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
   </div>
-  <div>
-    <div style="font-size:14px;font-weight:700;color:#f87171;margin-bottom:8px;">⚠️ Минусы</div>
-    <ul style="font-size:13.5px;line-height:1.8;padding-left:18px;margin:0;">
-      {% for m in minuses %}<li>{{ m }}</li>{% else %}<li style="color:#888;list-style:none;padding-left:-18px;">не выявлено</li>{% endfor %}
-    </ul>
+
+  <div class="card" style="min-width:0;">
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;">
+      <div style="width:84px;height:84px;border-radius:50%;background:conic-gradient({{ '#22c55e' if eff >= 60 else ('#f59e0b' if eff >= 35 else '#ef4444') }} {{ (eff * 3.6) | round }}deg, var(--bg) 0deg);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        <div style="width:64px;height:64px;border-radius:50%;background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;">
+          <div style="font-size:22px;font-weight:800;line-height:1;">{{ eff }}</div>
+          <div style="font-size:8.5px;color:#888;">Deal Score</div>
+        </div>
+      </div>
+      <div class="score-sub">
+        = {{ base }} база (из 100)
+        {% if zb %}<br><span style="color:{{ '#16a34a' if zb > 0 else '#ef4444' }};font-weight:700;">{{ '+' if zb > 0 }}{{ zb }} зона{% if listing.zone_name %} «{{ listing.zone_name }}»{% endif %}</span>{% endif %}
+        {% if lb %}<br><span style="color:{{ '#16a34a' if lb > 0 else '#ef4444' }};font-weight:700;">{{ '+' if lb > 0 }}{{ lb }} слои</span>{% endif %}
+        {% if pdb %}<br><span style="color:#16a34a;font-weight:700;">+{{ pdb }} снижения цены</span>{% endif %}
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
+      <div style="background:var(--bg);border-radius:10px;padding:10px 12px;">
+        <div style="font-size:11px;color:#888;">Тактическая цена</div>
+        <div style="font-size:17px;font-weight:800;">{{ "{:,.0f}".format(price_m2) }} ₸/м²</div>
+      </div>
+      <div style="background:{{ '#4c1d1d' if expected_m2 and expected_m2 < price_m2 else '#14392a' }};border-radius:10px;padding:10px 12px;">
+        <div style="font-size:11px;color:#ccc;">Ожидаемая цена (медиана рынка)</div>
+        <div style="font-size:17px;font-weight:800;color:#fff;">{{ "{:,.0f}".format(expected_m2) if expected_m2 else '—' }} ₸/м²</div>
+      </div>
+    </div>
+
+    {% if listing.views_count %}
+    <div class="row"><span class="key">👁 Просмотры</span><span class="val">{{ '{:,}'.format(listing.views_count).replace(',', ' ') }} раз{% if listing.first_seen %} с {{ listing.first_seen.strftime('%d.%m.%Y') }}{% endif %}</span></div>
+    {% endif %}
+    <div class="row"><span class="key">🗺 Привязка к карте</span><span class="val">{% if listing.lat %}точные координаты{% else %}<span style="color:#f59e0b;">нет координат</span>{% endif %}</span></div>
+    <div class="row"><span class="key">📍 Адрес</span><span class="val">{{ listing.address or '—' }}</span></div>
+    {% if listing.zone_name %}
+    <div class="row"><span class="key">📌 Зона</span><span class="val" style="color:{{ '#ef4444' if listing.zone_bonus and listing.zone_bonus < 0 else '#16a34a' }};">{{ listing.zone_name }} ({{ '%+d'|format(listing.zone_bonus or 0) }} к скору)</span></div>
+    {% endif %}
+    <div class="row"><span class="key">Этаж</span><span class="val">
+      {{ listing.floor or '?' }}/{{ listing.floors_total or '?' }}
+      {% if listing.floor == 1 %}<span style="color:#f87171;font-size:11px;"> ⚠ 1й этаж</span>
+      {% elif listing.floor and listing.floor == listing.floors_total %}<span style="color:#f87171;font-size:11px;"> ⚠ последний</span>{% endif %}
+    </span></div>
+    <div class="row"><span class="key">ЖК</span><span class="val">{% if listing.complex_name %}<a href="/admin/complex/find?name={{ listing.complex_name | urlencode }}" style="color:#d4af37;font-weight:800;font-size:15px;text-decoration:none;border-bottom:1px solid #d4af37;">{{ listing.complex_name }}</a>{% else %}—{% endif %}</span></div>
+    <div class="row"><span class="key">Район</span><span class="val">{{ listing.district or '—' }}</span></div>
+    <div class="row"><span class="key">Год постройки</span><span class="val">{{ listing.year_built or '—' }}</span></div>
+    <div class="row"><span class="key">Новостройка</span><span class="val">{{ 'да' if listing.is_new_build else 'нет' }}</span></div>
+    <div class="row"><span class="key">Аренда (оценка)</span><span class="val" style="color:#4ade80;">{{ "{:,.0f}".format(listing.est_rent or 0) }} ₸/мес</span></div>
+    <div class="row"><span class="key">Источник аренды</span><span class="val" style="font-size:11px;color:#888;">{{ listing.rent_source or '—' }}</span></div>
+    <div class="row"><span class="key">Yield</span><span class="val" style="color:#4ade80;font-size:17px;font-weight:800;">{{ (listing.yield_pct or 0) | round(1) }}%</span></div>
+    <div class="row"><span class="key">Окупаемость</span><span class="val">{{ (listing.payback_years | round(1)) if listing.payback_years else '—' }} лет</span></div>
+
+    {% if bargain.comparables_cnt > 0 %}
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-size:14px;font-weight:700;margin-bottom:8px;">🤝 Анализ торга</div>
+      <div class="row"><span class="key">Аналогов в базе</span><span class="val">{{ bargain.comparables_cnt }}</span></div>
+      <div class="row"><span class="key">Медиана аналогов</span><span class="val">{{ "{:,.0f}".format(bargain.median_price or 0) }} ₸</span></div>
+      <div class="row"><span class="key">Мин. цена</span><span class="val">{{ "{:,.0f}".format(bargain.min_price or 0) }} ₸</span></div>
+      <div class="row"><span class="key">Рынок</span><span class="val"><span class="tag tag-{{ bargain.market_status or 'normal' }}">{% if bargain.market_status == 'hot' %}Горячий{% elif bargain.market_status == 'cold' %}Холодный{% else %}Нормальный{% endif %}</span></span></div>
+      <div class="row"><span class="key">Объявл. 30+ дней</span><span class="val">{{ bargain.old_listings_ratio or 0 }}%</span></div>
+      <div class="row"><span class="key">Рек. дисконт</span><span class="val" style="color:#4ade80;">-{{ bargain.discount_pct or 0 }}%</span></div>
+      <div class="row"><span class="key">Целевая цена</span><span class="val" style="font-size:15px;">{{ "{:,.0f}".format(bargain.target_price or 0) }} ₸</span></div>
+      <div style="margin-top:10px;padding:10px 12px;background:var(--bg);border-radius:8px;font-size:13px;">{{ bargain.recommendation }}</div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="card" style="padding:10px;display:flex;flex-direction:column;min-width:0;">
+    {% if listing.lat and listing.lon %}
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <div style="position:relative;flex:1;min-height:260px;">
+      <div id="listing-map" style="position:absolute;inset:0;aspect-ratio:1/1;border-radius:10px;"></div>
+      <a href="/admin?rooms={{ listing.rooms or '' }}" style="position:absolute;left:8px;bottom:8px;z-index:1000;background:#2563eb;color:#fff;font-weight:700;font-size:12px;padding:7px 12px;border-radius:7px;text-decoration:none;box-shadow:0 1px 4px rgba(0,0,0,.4);">🔎 Похожие варианты</a>
+    </div>
+    <script>
+      (function() {
+        const map = L.map('listing-map').setView([{{ listing.lat }}, {{ listing.lon }}], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OSM'}).addTo(map);
+        L.marker([{{ listing.lat }}, {{ listing.lon }}]).addTo(map);
+      })();
+    </script>
+    {% else %}
+    <div style="flex:1;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;color:#555;font-size:13px;background:var(--bg);border-radius:10px;text-align:center;padding:16px;">
+      нет координат — объявление в очереди докачки деталей
+    </div>
+    {% endif %}
+    <div style="font-size:12.5px;color:#888;margin-top:10px;">📍 {{ listing.address or listing.district or 'адрес не определён' }}</div>
+  </div>
+</div>
+
+{% if similar_listings %}
+<div class="card full-width" style="margin-top:18px;">
+  <b style="font-size:14px;">🔎 Похожие варианты ({{ listing.rooms }}-комн, похожая цена)</b>
+  <div style="display:flex;gap:10px;overflow-x:auto;margin-top:12px;padding-bottom:4px;">
+    {% for s in similar_listings %}
+    <a href="/admin/analytics/{{ s.id }}" style="flex:0 0 150px;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+      {% if s.photo %}<img src="{{ s.photo }}" loading="lazy" style="width:100%;height:100px;object-fit:cover;display:block;">
+      {% else %}<div style="width:100%;height:100px;background:var(--bg);"></div>{% endif %}
+      <div style="padding:8px 10px;">
+        <div style="font-weight:800;font-size:14px;">{{ "{:,.0f}".format(s.price) }} ₸</div>
+        <div style="font-size:11.5px;color:#888;">{{ s.area|round(1) if s.area else '?' }} м² · {{ s.floor or '?' }}/{{ s.floors_total or '?' }}эт</div>
+        {% if s.complex_name %}<div style="font-size:11px;color:#d4af37;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ s.complex_name }}</div>{% endif %}
+      </div>
+    </a>
+    {% endfor %}
   </div>
 </div>
 {% endif %}
@@ -237,25 +277,6 @@
       {% endfor %}
     </table>
     {% else %}<div style="color:#888;font-size:13px;">Данных аренды по этому району пока нет в базе.</div>{% endif %}
-  </details>
-
-  <details class="tile full-width">
-    <summary>🏘 Аналоги продаж (для расчёта торга)</summary>
-    {% if comps %}
-    <table class="comps-table">
-      <tr><th>ЖК</th><th>Адрес</th><th>Площадь</th><th>Этаж</th><th>Цена</th><th>Дней в базе</th></tr>
-      {% for c in comps %}
-      <tr>
-        <td>{% if c.complex_name %}<a href="/admin/complex/find?name={{ c.complex_name | urlencode }}">{{ c.complex_name }}</a>{% else %}—{% endif %}</td>
-        <td style="font-size:11px;color:#999;">{{ c.address or '—' }}</td>
-        <td>{{ c.area | round(1) }} м²</td>
-        <td>{{ c.floor or '?' }}/{{ c.floors_total or '?' }}</td>
-        <td style="font-weight:700;">{{ "{:,.0f}".format(c.price) }} ₸</td>
-        <td>{% if c.first_seen and c.last_seen %}{{ ((c.last_seen - c.first_seen).days) }}{% else %}—{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}<div style="color:#888;font-size:13px;">Аналогов не найдено</div>{% endif %}
   </details>
 
   {% if primary_details %}
