@@ -679,11 +679,6 @@ function drawHexGrid() {
 // ── Тепловые карты (hexbin): цены продажи/аренды, школы, шум по полосам ───
 const HEAT_EDGE_M = 250;  // крупнее, чем гекс-сетка скоринга — это обзорный слой города
 const NOISE_EDGE_M = 30;  // шум — более мелкая сетка, ближе к масштабу отдельного дома/квартала
-// Типовая ширина/загруженность по классу дороги (не только число полос —
-// трасса и второстепенная улица с одинаковым числом полос шумят по-разному).
-const ROAD_CLASS_WEIGHT = {
-  motorway: 3.0, trunk: 2.6, primary: 2.0, secondary: 1.4, tertiary: 1.0,
-};
 const heatLayer = L.layerGroup();
 let heatMode = null;
 let heatCache = {sale: null, rental: null, schools: null, noise: null};
@@ -745,20 +740,71 @@ function drawCountHeat(items, latLonFn, label) {
   });
 }
 
+// Базовый рейтинг шума участка дороги: магистраль (motorway/trunk) — 30
+// всегда, иначе по числу полос: 3+ полосы — 20, 2 (или меньше/неизвестно) — 10.
+function roadNoiseScore(r) {
+  if (r.highway === 'motorway' || r.highway === 'trunk') return 30;
+  if ((r.lanes || 0) >= 3) return 20;
+  return 10;
+}
+
+// Соседи гекса в осевых координатах — для распространения шума от гексов
+// с дорогами на соседние (там, где стоят ЖК рядом с дорогой, но сам гекс
+// дороги не содержит).
+const HEX_DIRS = [[1,0],[1,-1],[0,-1],[-1,0],[-1,1],[0,1]];
+function hexNeighborsAxial(q, r) {
+  return HEX_DIRS.map(([dq, dr]) => [q + dq, r + dr]);
+}
+
 function drawRoadHeat(roads) {
-  // Вес участка = полосы × типовая ширина/загруженность класса дороги —
-  // трасса (motorway/trunk) шумнее второстепенной улицы при том же числе полос.
-  const roadWeight = r => (r.lanes || 1) * (ROAD_CLASS_WEIGHT[r.highway] || 1.0);
   const buckets = hexBucket(roads, r => [r.lat, r.lon], NOISE_EDGE_M);
-  const sums = [];
-  buckets.forEach(b => { b.value = b.items.reduce((s,i) => s + roadWeight(i), 0); sums.push(b.value); });
-  if (!sums.length) return;
-  const hi = percentile(sums, 0.90) || Math.max(...sums);
-  buckets.forEach(b => {
-    const t = hi > 0 ? b.value / hi : 0;
-    L.polygon(hexCorners(b.q, b.r, NOISE_EDGE_M), {
-      color: '#fff', weight: 0.5, fillColor: heatColor(t), fillOpacity: 0.5,
-    }).bindTooltip(`шумовая нагрузка: ${b.value.toFixed(1)} (${b.items.length} участков дорог рядом)`, {sticky:true}).addTo(heatLayer);
+  // Базовый скор гекса = сумма скорингов дорог в нём + бонус за пересечение
+  // (2+ разных участка дороги рядом друг с другом в одном 30м гексе —
+  // приближение: точных координат пересечений в данных нет, у нас только
+  // одна точка-центр на весь отрезок дороги из OSM).
+  const base = new Map();
+  buckets.forEach((b, key) => {
+    let score = b.items.reduce((s, i) => s + roadNoiseScore(i), 0);
+    if (b.items.length >= 2) score += 10;  // пересечение (приближённо)
+    base.set(key, {q: b.q, r: b.r, score, isRoad: true, roadCount: b.items.length});
+  });
+  // Распространяем на 1 кольцо соседей с затуханием, чтобы гексы РЯДОМ с
+  // дорогой (не только сами дорожные) тоже получили оценку шума — именно
+  // там чаще всего стоят жилые комплексы. Дальше 1 кольца не идём —
+  // при ~2700 точках дорог даже так получается 15-20 тыс. полигонов,
+  // это уже граница комфортной отрисовки в браузере.
+  const DECAY = [1, 0.55];  // сам гекс, кольцо 1
+  const spread = new Map(base);
+  let frontier = [...base.values()];
+  for (let ring = 1; ring <= 1; ring++) {
+    const next = [];
+    frontier.forEach(cell => {
+      hexNeighborsAxial(cell.q, cell.r).forEach(([nq, nr]) => {
+        const nkey = nq + ':' + nr;
+        const propagated = (base.get(cell.q + ':' + cell.r)?.score ?? cell.score) * DECAY[ring];
+        const existing = spread.get(nkey);
+        if (!existing || existing.score < propagated) {
+          const cellData = {q: nq, r: nr, score: propagated, isRoad: false, roadCount: 0};
+          spread.set(nkey, cellData);
+          next.push(cellData);
+        }
+      });
+    });
+    frontier = next;
+  }
+  const scores = [...spread.values()].map(c => c.score);
+  if (!scores.length) return;
+  const hi = percentile(scores, 0.90) || Math.max(...scores);
+  spread.forEach(c => {
+    const t = hi > 0 ? c.score / hi : 0;
+    L.polygon(hexCorners(c.q, c.r, NOISE_EDGE_M), {
+      color: '#fff', weight: 0.4, fillColor: heatColor(t), fillOpacity: c.isRoad ? 0.55 : 0.35,
+    }).bindTooltip(
+      c.isRoad
+        ? `шум: ${c.score.toFixed(0)} (${c.roadCount} уч. дорог${c.roadCount >= 2 ? ' · пересечение' : ''})`
+        : `шум (по соседству с дорогой): ~${c.score.toFixed(0)}`,
+      {sticky:true}
+    ).addTo(heatLayer);
   });
 }
 
