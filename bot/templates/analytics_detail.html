@@ -39,8 +39,8 @@
 
 <a href="/admin/analytics" class="back-btn">← Назад к списку</a>
 
-<div style="display:grid;grid-template-columns:minmax(320px,42%) 1fr;gap:18px;align-items:start;">
-  <div class="card" style="padding:10px;position:sticky;top:14px;">
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;align-items:stretch;">
+  <div class="card" style="padding:10px;display:flex;flex-direction:column;min-width:0;">
     {% if photos %}
     <div style="position:relative;border-radius:10px;overflow:hidden;">
       <img id="main-photo" src="{{ photos[0] }}" style="width:100%;aspect-ratio:4/3;object-fit:cover;display:block;cursor:zoom-in;" onclick="openPhotoLb(_pIdx)">
@@ -123,7 +123,65 @@
     </div>
     {% endif %}
   </div>
+
+  <div class="card" style="padding:10px;display:flex;flex-direction:column;min-width:0;">
+    {% if listing.lat and listing.lon %}
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <div id="listing-map" style="flex:1;min-height:260px;border-radius:10px;"></div>
+    <script>
+      (function() {
+        const map = L.map('listing-map').setView([{{ listing.lat }}, {{ listing.lon }}], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OSM'}).addTo(map);
+        L.marker([{{ listing.lat }}, {{ listing.lon }}]).addTo(map);
+      })();
+    </script>
+    {% else %}
+    <div style="flex:1;min-height:260px;display:flex;align-items:center;justify-content:center;color:#555;font-size:13px;background:var(--bg);border-radius:10px;text-align:center;padding:16px;">
+      нет координат — объявление в очереди докачки деталей
+    </div>
+    {% endif %}
+    <div style="font-size:12.5px;color:#888;margin-top:10px;">📍 {{ listing.address or listing.district or 'адрес не определён' }}</div>
+  </div>
 </div>
+
+{% set pluses = [] %}
+{% set minuses = [] %}
+{% if layers %}
+  {% for name, d in layers.items() %}
+    {% if d.adj > 0 %}{% set _ = pluses.append(d.reason) %}{% elif d.adj < 0 %}{% set _ = minuses.append(d.reason) %}{% endif %}
+  {% endfor %}
+{% endif %}
+{% if listing.zone_name and listing.zone_bonus %}
+  {% if listing.zone_bonus > 0 %}{% set _ = pluses.append('Зона «' ~ listing.zone_name ~ '»: ' ~ '%+d'|format(listing.zone_bonus) ~ ' к скору') %}
+  {% else %}{% set _ = minuses.append('Зона «' ~ listing.zone_name ~ '»: ' ~ '%+d'|format(listing.zone_bonus) ~ ' к скору') %}{% endif %}
+{% endif %}
+{% if listing.floor == 1 %}{% set _ = minuses.append('1-й этаж — обычно дисконт 5-10% при перепродаже') %}
+{% elif listing.floor and listing.floor == listing.floors_total %}{% set _ = minuses.append('Последний этаж — обычно дисконт 3-5% при перепродаже') %}{% endif %}
+{% if bargain.discount_pct and bargain.discount_pct > 0 %}{% set _ = pluses.append('Цена ниже медианы аналогов на ' ~ bargain.discount_pct ~ '% — есть пространство для торга') %}{% endif %}
+{% if listing.price_drop_bonus %}{% set _ = pluses.append('Продавец уже снижал цену несколько раз — мотивирован продать') %}{% endif %}
+{% if ai %}
+  {% if ai.urgency and ai.urgency != 'нет' %}{% set _ = pluses.append('Срочная продажа: ' ~ ai.urgency) %}{% endif %}
+  {% for f in ai.red_flags or [] %}{% set _ = minuses.append(f) %}{% endfor %}
+  {% if ai.exchange %}{% set _ = minuses.append('Предлагается обмен — обычно не инвест-вариант') %}{% endif %}
+  {% for d in ai.defects or [] %}{% set _ = minuses.append('Дефект: ' ~ d) %}{% endfor %}
+{% endif %}
+{% if pluses or minuses %}
+<div class="card" style="margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+  <div>
+    <div style="font-size:14px;font-weight:700;color:#4ade80;margin-bottom:8px;">✅ Плюсы</div>
+    <ul style="font-size:13.5px;line-height:1.8;padding-left:18px;margin:0;">
+      {% for p in pluses %}<li>{{ p }}</li>{% else %}<li style="color:#888;list-style:none;padding-left:-18px;">не выявлено</li>{% endfor %}
+    </ul>
+  </div>
+  <div>
+    <div style="font-size:14px;font-weight:700;color:#f87171;margin-bottom:8px;">⚠️ Минусы</div>
+    <ul style="font-size:13.5px;line-height:1.8;padding-left:18px;margin:0;">
+      {% for m in minuses %}<li>{{ m }}</li>{% else %}<li style="color:#888;list-style:none;padding-left:-18px;">не выявлено</li>{% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
 
 <div class="tiles">
 
