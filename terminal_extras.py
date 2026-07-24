@@ -48,6 +48,7 @@ SLIDER_SETTINGS = {
     "DEEP_SWEEP_BATCH":  ("Глубокий обход: доп. страниц за цикл (0=выкл)", 0, 20, 1, "стр.", "🕷 Обход парсера"),
     "DETAIL_FETCH_BATCH": ("Деталей/координат за цикл (полскора+полслучайно)", 2, 40, 1, "шт.", "🕷 Обход парсера"),
     "COORD_BACKFILL_BATCH": ("Добивка координат по ВСЕЙ базе за цикл (~3-5 стр. объявлений/час)", 0, 200, 5, "шт.", "🕷 Обход парсера"),
+    "ARCHIVE_CHECK_BATCH": ("Проверка архивности за цикл (2.5-5с/шт — влияет на длину цикла)", 15, 400, 5, "шт.", "🕷 Обход парсера"),
     "COORD_FETCH_DELAY_MIN": ("Задержка между запросами деталей — мин", 3, 30, 1, "с", "🕷 Обход парсера"),
     "COORD_FETCH_DELAY_MAX": ("Задержка между запросами деталей — макс", 5, 45, 1, "с", "🕷 Обход парсера"),
 }
@@ -387,6 +388,7 @@ def make_extras_router(templates) -> APIRouter:
         ]
         return templates.TemplateResponse("parser_detail.html", {
             "request": request, "title": "🏢 Парсер аренды — детализация",
+            "atab": "rental",
             "days": days, "stats": stats,
             "chart_labels": labels, "chart_values": values,
         })
@@ -450,6 +452,7 @@ def make_extras_router(templates) -> APIRouter:
             out_sim.append(d)
         return templates.TemplateResponse("duplicates.html", {
             "request": request,
+            "atab": "dups",
             "rows": out_rows,
             "similar": out_sim,
             "rent_cnt": rent_cnt,
@@ -1330,6 +1333,8 @@ def make_extras_router(templates) -> APIRouter:
             "area": float(l["area"]) if l.get("area") else None,
             "floor": l.get("floor"), "floors_total": l.get("floors_total"),
             "address": l.get("address") or "", "district": l.get("district") or "",
+            "lat": float(l["lat"]) if l.get("lat") is not None else None,
+            "lon": float(l["lon"]) if l.get("lon") is not None else None,
             "complex_name": l.get("complex_name") or "",
             "photos": photos or [],
             "seller_name": l.get("seller_name") or "",
@@ -1379,6 +1384,58 @@ def make_extras_router(templates) -> APIRouter:
             "changes": len(rows),
         })
 
+    # ── Ушедшие в архив: динамика по дням, по комнатности ──────────────────
+
+    @router.get("/admin/archived", response_class=HTMLResponse)
+    async def archived_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetchval as pg_fv
+        stats = {
+            "archived_total": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings WHERE archived_at IS NOT NULL") or 0,
+            "archived_today": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings WHERE archived_at::date = CURRENT_DATE") or 0,
+            "archived_7d": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings "
+                "WHERE archived_at > now() - interval '7 days'") or 0,
+        }
+        return templates.TemplateResponse("archived.html", {
+            "request": request, "atab": "archived", "stats": stats,
+        })
+
+    @router.get("/admin/api/archived-history")
+    async def archived_history(request: Request, days: int = 30):
+        """Сколько объявлений ушло в архив по дням, отдельно по комнатности
+        (1/2/3+) — для графика на /admin/archived. Показывает реальный охват
+        archive_check (см. ARCHIVE_CHECK_BATCH в настройках), а не момент
+        фактического снятия объявления с Крыши — это дата, когда МЫ это
+        заметили при следующей проверке."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT archived_at::date AS d,
+                   CASE WHEN rooms >= 3 THEN 3 ELSE COALESCE(rooms, 0) END AS room_bucket,
+                   COUNT(*) AS cnt
+            FROM apartment_listings
+            WHERE archived_at > now() - ($1 || ' days')::interval
+            GROUP BY 1, 2
+            ORDER BY 1
+        """, str(days))
+        days_set = sorted({r["d"] for r in rows})
+        series = {"1": [], "2": [], "3": []}
+        by_day = {}
+        for r in rows:
+            by_day.setdefault(r["d"], {})[str(r["room_bucket"])] = r["cnt"]
+        for d in days_set:
+            for k in ("1", "2", "3"):
+                series[k].append(by_day.get(d, {}).get(k, 0))
+        return JSONResponse({
+            "days": [d.strftime("%d.%m") for d in days_set],
+            "series": series,
+        })
+
     # ── Объявления без привязки к ЖК ──────────────────────────────────────
 
     @router.get("/admin/unbound", response_class=HTMLResponse)
@@ -1404,7 +1461,7 @@ def make_extras_router(templates) -> APIRouter:
                 "AND lat IS NOT NULL") or 0,
         }
         return templates.TemplateResponse("unbound.html", {
-            "request": request, "stats": stats,
+            "request": request, "atab": "unbound", "stats": stats,
         })
 
     @router.get("/admin/api/unbound-points")

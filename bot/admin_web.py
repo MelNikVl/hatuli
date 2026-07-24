@@ -340,6 +340,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "analytics.html",
             {
                 "request": request,
+                "atab": "sales",
                 "listings": [dict(r) for r in rows],
                 "score_hist": [dict(r) for r in hist_rows],
                 "price_hist": price_hist,

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% if atab %}{% include "_analytics_tabs.html" with context %}{% endif %}
 <div class="page-title">{{ title }}</div>
 
 <div style="margin-bottom:14px;">

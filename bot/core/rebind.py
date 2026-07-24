@@ -8,9 +8,16 @@
   A0. Адрес из заголовка, если address пуст.
   A.  Привязка по ссылке на карточку ЖК (complex_url == complexes.krisha_url).
   B.  Название ЖК, найденное в заголовке (не в адресе — там улицы).
-  C.  Геопривязка к ближайшему ЖК (≤ ~350 м), если есть свои координаты.
   D.  Geocode fallback: адрес есть, координат нет — Nominatim (bot.core.geo).
       Ограничено батчем за прогон (Nominatim: 1 запрос/сек, ToS).
+
+УБРАНА стадия геопривязки «ближайший ЖК ≤350м по прямой» — она слепо
+присваивала complex_name самому близкому ЖК по координатам, даже без
+текстового/ссылочного подтверждения, что реально засоряло статистику ЖК
+фантомными объявлениями (объявление в 300м от чужого ЖК подписывалось им).
+Без надёжного способа подтвердить принадлежность — лучше оставить объявление
+непривязанным (виден на /admin/unbound) и обработать вручную/другим методом,
+чем привязать неверно.
 """
 from __future__ import annotations
 
@@ -140,23 +147,10 @@ async def run_rebind(progress_cb: ProgressCB | None = None) -> dict:
             lid, canon)
     by_text = len(updates)
 
-    # ── C: геопривязка к ближайшему ЖК (≤ ~350 м) ──────────────────────
-    await _report(progress_cb, "геопривязка…")
-    by_geo = (await pg_exec("""
-        UPDATE apartment_listings al
-        SET complex_name = (
-            SELECT c2.name FROM complexes c2
-            WHERE c2.lat IS NOT NULL AND c2.lon IS NOT NULL
-              AND COALESCE(c2.is_street, FALSE) = FALSE
-            ORDER BY (c2.lat - al.lat)^2 + (c2.lon - al.lon)^2
-            LIMIT 1)
-        WHERE (al.complex_name IS NULL OR btrim(al.complex_name) = '')
-          AND al.lat IS NOT NULL AND al.lon IS NOT NULL
-          AND (SELECT min((c.lat - al.lat)^2 + (c.lon - al.lon)^2)
-               FROM complexes c WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL
-                 AND COALESCE(c.is_street, FALSE) = FALSE)
-              < 2.0e-5
-    """) or "").split()[-1]
+    # Стадия C (геопривязка по ближайшему ЖК ≤350м) убрана — см. докстринг
+    # модуля. by_geo оставлен в возвращаемом словаре для совместимости с
+    # вызывающим кодом (UI показывает "по гео: 0"), но всегда 0.
+    by_geo = 0
 
     left = await pg_fv("""
         SELECT COUNT(*) FROM apartment_listings

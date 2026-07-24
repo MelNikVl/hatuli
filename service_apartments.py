@@ -572,10 +572,14 @@ async def run_cycle():
     except Exception as e:
         log.warning("complex stats refresh failed: %s", e)
 
-    # ── Проверка архивности топовых объявлений (максимум 15 за цикл) ──────
+    # ── Проверка архивности объявлений ─────────────────────────────────────
+    # Было limit=15/цикл — при ~22k+ активных объявлений и цикле ~60-90 мин
+    # это давало охват ~15-20/час, то есть полный проход по базе занимал бы
+    # больше месяца. Подняли дефолт на порядок; настраивается в /admin/settings.
     try:
         from bot.core.archive_check import check_archived
-        res = await check_archived(limit=15)
+        archive_batch = app_settings.get_int("ARCHIVE_CHECK_BATCH", 150)
+        res = await check_archived(limit=archive_batch)
         log.info("archive check: %s", res)
     except Exception as e:
         log.warning("archive check failed: %s", e)

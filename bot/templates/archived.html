@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🗄 Ушедшие в архив
+  <small style="font-size:13px;color:#888;font-weight:400;">
+    {{ stats.archived_total }} всего в архиве · {{ stats.archived_7d }} за 7 дней · {{ stats.archived_today }} сегодня
+  </small>
+</div>
+<p style="font-size:13px;color:#888;max-width:900px;">
+  Мы не узнаём об уходе объявления в архив мгновенно — раз в цикл парсера (~60-90 мин)
+  проверяем ARCHIVE_CHECK_BATCH (настраивается в /admin/settings) самых старых
+  по проверке активных объявлений и смотрим, не стоит ли на странице пометка
+  «В архиве»/«может быть неактуальным». Дата на графике — когда МЫ это заметили,
+  а не когда объявление реально сняли с Крыши.
+</p>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-top:14px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+    <b style="font-size:14px;">По дням, с разбивкой по комнатности</b>
+    <div style="display:flex;gap:6px;">
+      <button type="button" class="rng-btn" data-days="14" onclick="loadArchivedChart(14)" style="padding:5px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">14 дн</button>
+      <button type="button" class="rng-btn" data-days="30" onclick="loadArchivedChart(30)" style="padding:5px 12px;border:1px solid var(--border);border-radius:7px;background:var(--accent, #5865f2);color:#fff;font-size:12px;cursor:pointer;">30 дн</button>
+      <button type="button" class="rng-btn" data-days="90" onclick="loadArchivedChart(90)" style="padding:5px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">90 дн</button>
+    </div>
+  </div>
+  <div style="display:flex;gap:14px;font-size:12px;color:#888;margin-bottom:10px;">
+    <span><span style="display:inline-block;width:10px;height:10px;background:#3b82f6;border-radius:2px;"></span> 1-комн</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;"></span> 2-комн</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;"></span> 3+-комн</span>
+  </div>
+  <div id="archived-chart" style="overflow-x:auto;"></div>
+</div>
+
+<script>
+function loadArchivedChart(days) {
+  document.querySelectorAll('.rng-btn').forEach(b => {
+    const active = Number(b.dataset.days) === days;
+    b.style.background = active ? 'var(--accent, #5865f2)' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  fetch('/admin/api/archived-history?days=' + days).then(r => r.json()).then(d => {
+    const el = document.getElementById('archived-chart');
+    if (!d.days || !d.days.length) {
+      el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;">пока нет данных за этот период</div>';
+      return;
+    }
+    const colors = {1: '#3b82f6', 2: '#22c55e', 3: '#f59e0b'};
+    const maxTotal = Math.max(1, ...d.days.map((_, i) => d.series['1'][i] + d.series['2'][i] + d.series['3'][i]));
+    const barW = Math.max(18, Math.min(36, Math.floor(900 / d.days.length)));
+    const H = 160;
+    const bars = d.days.map((label, i) => {
+      const v1 = d.series['1'][i], v2 = d.series['2'][i], v3 = d.series['3'][i];
+      const total = v1 + v2 + v3;
+      const h1 = Math.round(v1 / maxTotal * (H - 20));
+      const h2 = Math.round(v2 / maxTotal * (H - 20));
+      const h3 = Math.round(v3 / maxTotal * (H - 20));
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:0 0 ${barW}px;">
+        <div style="font-size:9.5px;color:#888;">${total || ''}</div>
+        <div style="width:${Math.round(barW*0.7)}px;display:flex;flex-direction:column-reverse;" title="${label}: 1к=${v1}, 2к=${v2}, 3+к=${v3}">
+          ${v1 ? `<div style="height:${h1}px;background:${colors[1]};"></div>` : ''}
+          ${v2 ? `<div style="height:${h2}px;background:${colors[2]};"></div>` : ''}
+          ${v3 ? `<div style="height:${h3}px;background:${colors[3]};"></div>` : ''}
+        </div>
+        <div style="font-size:9px;color:#888;transform:rotate(-45deg);white-space:nowrap;margin-top:4px;">${label}</div>
+      </div>`;
+    }).join('');
+    el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:4px;height:${H}px;padding-bottom:22px;min-width:${d.days.length*(barW+4)}px;">${bars}</div>`;
+  }).catch(() => {});
+}
+loadArchivedChart(30);
+</script>
+{% endblock %}
