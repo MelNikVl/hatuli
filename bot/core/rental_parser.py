@@ -439,11 +439,17 @@ async def lookup_rental_estimate(
 
 async def run_rental_cycle() -> None:
     """Полный цикл: парсинг → сохранение → пересчёт индекса."""
-    logger.info("=== Rental cycle start ===")
+    from bot.db import settings as app_settings
+    await app_settings.load()
+    # На Крыше сейчас ~4250 объявлений аренды квартир (~213 страниц по 20) —
+    # 10 страниц/цикл покрывали только ~4.7% рынка. Дефолт поднят, настраивается
+    # в /admin/settings отдельно от лимита продаж (аренда медленнее — 8-16с/стр).
+    max_pages = app_settings.get_int("RENTAL_MAX_PAGES", MAX_PAGES_PER_PATH)
+    logger.info("=== Rental cycle start (max_pages=%d) ===", max_pages)
     total = 0
     for path, prop_type in RENTAL_PATHS.items():
         logger.info("Parsing %s (%s)...", path, prop_type)
-        listings = await parse_rental_path(path, prop_type)
+        listings = await parse_rental_path(path, prop_type, max_pages=max_pages)
         saved = await save_rental_listings(listings)
         total += saved
         logger.info("  saved %d for %s", saved, prop_type)

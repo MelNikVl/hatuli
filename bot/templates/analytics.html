@@ -63,6 +63,88 @@ tr:last-child td { border-bottom: none; }
 <div class="container">
 <div class="an-grid">
 <div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+    <b style="font-size:13.5px;">📉 Объявления без фото во времени</b>
+    <span style="font-size:11.5px;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж</span>
+    <div id="no-photo-chart" style="margin-top:8px;"></div>
+  </div>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+    <b style="font-size:13.5px;">💸 Снижения цены по дням, по комнатности</b>
+    <div style="display:flex;gap:14px;font-size:11px;color:#888;margin:6px 0;">
+      <span><span style="display:inline-block;width:9px;height:9px;background:#3b82f6;border-radius:2px;"></span> 1-комн</span>
+      <span><span style="display:inline-block;width:9px;height:9px;background:#22c55e;border-radius:2px;"></span> 2-комн</span>
+      <span><span style="display:inline-block;width:9px;height:9px;background:#f59e0b;border-radius:2px;"></span> 3+-комн</span>
+    </div>
+    <div id="price-drops-chart" style="overflow-x:auto;"></div>
+  </div>
+
+  <script>
+  function unboundStyleLineChart(divId, points, valueKey, w, h) {
+    const el = document.getElementById(divId);
+    if (!points || points.length < 2) {
+      el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек</div>';
+      return;
+    }
+    const LABEL_H = 24;
+    const chartH = h - LABEL_H;
+    const vals = points.map(p => p[valueKey]);
+    const mn = Math.min(...vals), mx = Math.max(...vals);
+    const span = (mx - mn) || 1;
+    const stepX = w / (points.length - 1);
+    const coords = points.map((p, i) => [i * stepX, LABEL_H + chartH - ((p[valueKey] - mn) / span) * (chartH - 10) - 5]);
+    const path = coords.map((c, i) => (i ? 'L' : 'M') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
+    const areaPath = path + ` L${coords[coords.length-1][0].toFixed(1)},${h} L0,${h} Z`;
+    const gid = 'ph' + Math.random().toString(36).slice(2, 9);
+    const labelEvery = Math.max(1, Math.ceil(points.length / Math.floor(w / 60)));
+    const labels = coords.map((c, i) => {
+      if (i !== 0 && i !== points.length - 1 && i % labelEvery !== 0) return '';
+      const x = Math.min(Math.max(c[0], 20), w - 20);
+      const y = i % 2 === 1 ? LABEL_H - 15 : LABEL_H - 4;
+      return `<text x="${x.toFixed(1)}" y="${y}" text-anchor="middle" font-size="10" font-weight="700" fill="#ef4444">${points[i][valueKey]}</text>`;
+    }).join('');
+    const dots = coords.map((c, i) => `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="7" fill="transparent"><title>${points[i].at}: ${points[i][valueKey]}</title></circle>` +
+      `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="3.5" fill="#ef4444" stroke="#fff" stroke-width="1.3" style="pointer-events:none;"/>`).join('');
+    el.innerHTML = `<svg width="${w}" height="${h}" style="display:block;overflow:visible;max-width:100%;">` +
+      `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">` +
+      `<stop offset="0%" stop-color="#ef4444" stop-opacity="0.3"/>` +
+      `<stop offset="100%" stop-color="#ef4444" stop-opacity="0.02"/></linearGradient></defs>` +
+      `<path d="${areaPath}" fill="url(#${gid})" stroke="none"/>` +
+      `<path d="${path}" fill="none" stroke="#ef4444" stroke-width="2"/>${dots}${labels}</svg>` +
+      `<div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:2px;"><span>${points[0].at}</span><span>${points[points.length-1].at}</span></div>`;
+  }
+  fetch('/admin/api/no-photo-history?days=30').then(r => r.json()).then(d => {
+    unboundStyleLineChart('no-photo-chart', d.points || [], 'no_photo', Math.max(300, 480), 130);
+  }).catch(() => {});
+
+  fetch('/admin/api/price-drops-history?days=30').then(r => r.json()).then(d => {
+    const el = document.getElementById('price-drops-chart');
+    if (!d.days || !d.days.length) { el.innerHTML = '<div style="padding:14px;color:#888;font-size:12px;">пока нет данных</div>'; return; }
+    const colors = {1:'#3b82f6', 2:'#22c55e', 3:'#f59e0b'};
+    const maxTotal = Math.max(1, ...d.days.map((_,i)=>d.series['1'][i]+d.series['2'][i]+d.series['3'][i]));
+    const barW = Math.max(16, Math.min(30, Math.floor(480/d.days.length)));
+    const H = 130;
+    const bars = d.days.map((label,i)=>{
+      const v1=d.series['1'][i], v2=d.series['2'][i], v3=d.series['3'][i];
+      const a1=d.amounts['1'][i], a2=d.amounts['2'][i], a3=d.amounts['3'][i];
+      const total=v1+v2+v3, totalAmt=a1+a2+a3;
+      const h1=Math.round(v1/maxTotal*(H-16)), h2=Math.round(v2/maxTotal*(H-16)), h3=Math.round(v3/maxTotal*(H-16));
+      const amtTxt = totalAmt ? (totalAmt/1e6).toFixed(1)+'М' : '';
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;flex:0 0 ${barW}px;">
+        <div style="font-size:8px;color:#888;">${total||''}</div>
+        <div style="width:${Math.round(barW*0.7)}px;display:flex;flex-direction:column-reverse;" title="${label}: 1к=${v1} (-${(a1/1e6).toFixed(1)}М), 2к=${v2} (-${(a2/1e6).toFixed(1)}М), 3+к=${v3} (-${(a3/1e6).toFixed(1)}М)">
+          ${v1?`<div style="height:${h1}px;background:${colors[1]};"></div>`:''}
+          ${v2?`<div style="height:${h2}px;background:${colors[2]};"></div>`:''}
+          ${v3?`<div style="height:${h3}px;background:${colors[3]};"></div>`:''}
+        </div>
+        <div style="font-size:7.5px;color:#666;">${amtTxt}</div>
+        <div style="font-size:8px;color:#888;transform:rotate(-45deg);white-space:nowrap;margin-top:2px;">${label}</div>
+      </div>`;
+    }).join('');
+    el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:3px;height:${H}px;padding-bottom:20px;min-width:${d.days.length*(barW+3)}px;">${bars}</div>`;
+  }).catch(() => {});
+  </script>
+
   <!-- Компактный rental index + гистограмма скоров — левая колонка: графики и показатели -->
   {% if rental_summary %}
   <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">

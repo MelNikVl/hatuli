@@ -45,6 +45,7 @@ SLIDER_SETTINGS = {
     "ALERT_THRESHOLD":   ("Порог скора для алертов", 50, 90, 1, "баллов", "🎯 Скоринг"),
     "HEX_EDGE_M":        ("Гексагон-сетка: ребро (м)", 30, 200, 10, "м", "🎯 Скоринг"),
     "PARSER_MAX_PAGES":  ("Страниц Krisha за цикл (свежие)", 1, 40, 1, "стр.", "🕷 Обход парсера"),
+    "RENTAL_MAX_PAGES":  ("Страниц Крыши за цикл аренды (было 10 — покрывало ~5% рынка)", 5, 100, 5, "стр.", "🕷 Обход парсера"),
     "DEEP_SWEEP_BATCH":  ("Глубокий обход: доп. страниц за цикл (0=выкл)", 0, 20, 1, "стр.", "🕷 Обход парсера"),
     "DETAIL_FETCH_BATCH": ("Деталей/координат за цикл (полскора+полслучайно)", 2, 40, 1, "шт.", "🕷 Обход парсера"),
     "COORD_BACKFILL_BATCH": ("Добивка координат по ВСЕЙ базе за цикл (~3-5 стр. объявлений/час)", 0, 200, 5, "шт.", "🕷 Обход парсера"),
@@ -309,28 +310,46 @@ def make_extras_router(templates) -> APIRouter:
 
     # ── API: точки для карты на дашборде ─────────────────────────────────
 
-    # ── Детализация парсеров: график добавлений + статистика ─────────────
+    # ── Детализация парсера: один график продажи+аренда, разными цветами ───
 
-    @router.get("/admin/parser/sales", response_class=HTMLResponse)
-    async def parser_sales(request: Request, days: int = 1):
+    @router.get("/admin/parser/sales")
+    async def parser_sales_redirect(days: int = 1):
+        return RedirectResponse(url=f"/admin/parser?days={days}", status_code=301)
+
+    @router.get("/admin/parser/rental")
+    async def parser_rental_redirect(days: int = 1):
+        return RedirectResponse(url=f"/admin/parser?days={days}", status_code=301)
+
+    @router.get("/admin/parser", response_class=HTMLResponse)
+    async def parser_combined(request: Request, days: int = 1):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         days = days if days in (1, 3, 5) else 1
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval
 
-        hourly = await pg_fetch("""
+        sale_hourly = await pg_fetch("""
             SELECT date_trunc('hour', first_seen) AS h, COUNT(*) AS cnt
             FROM apartment_listings
             WHERE first_seen > now() - ($1 || ' days')::interval
             GROUP BY 1 ORDER BY 1
         """, str(days))
-        labels = [r["h"].strftime("%d.%m %H:00") for r in hourly]
-        values = [r["cnt"] for r in hourly]
+        rental_hourly = await pg_fetch("""
+            SELECT date_trunc('hour', found_at) AS h, COUNT(*) AS cnt
+            FROM rental_listings
+            WHERE found_at > now() - ($1 || ' days')::interval
+            GROUP BY 1 ORDER BY 1
+        """, str(days))
+        sale_by_h = {r["h"]: r["cnt"] for r in sale_hourly}
+        rental_by_h = {r["h"]: r["cnt"] for r in rental_hourly}
+        all_hours = sorted(set(sale_by_h) | set(rental_by_h))
+        labels = [h.strftime("%d.%m %H:00") for h in all_hours]
+        sale_values = [sale_by_h.get(h, 0) for h in all_hours]
+        rental_values = [rental_by_h.get(h, 0) for h in all_hours]
 
         total_active = await pg_fetchval(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
             "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
-        today_new = await pg_fetchval(
+        today_new_sale = await pg_fetchval(
             "SELECT COUNT(*) FROM apartment_listings WHERE first_seen::date = CURRENT_DATE") or 0
         today_archived = await pg_fetchval(
             "SELECT COUNT(*) FROM apartment_listings WHERE archived_at::date = CURRENT_DATE") or 0
@@ -340,57 +359,28 @@ def make_extras_router(templates) -> APIRouter:
         price_down = await pg_fetchval(
             "SELECT COUNT(DISTINCT listing_id) FROM price_history "
             "WHERE changed_at::date = CURRENT_DATE AND new_price < old_price") or 0
-
-        stats = [
-            {"label": "всего в мониторинге (активных)", "value": f"{total_active:,}".replace(",", " ")},
-            {"label": "спаршено сегодня", "value": today_new},
-            {"label": "ушло в архив сегодня", "value": today_archived, "color": "#f59e0b"},
-            {"label": "цена выросла сегодня", "value": price_up, "color": "#ef4444"},
-            {"label": "цена снизилась сегодня", "value": price_down, "color": "#16a34a"},
-        ]
-        return templates.TemplateResponse("parser_detail.html", {
-            "request": request, "title": "🏠 Парсер продаж — детализация",
-            "days": days, "stats": stats,
-            "chart_labels": labels, "chart_values": values,
-        })
-
-    @router.get("/admin/parser/rental", response_class=HTMLResponse)
-    async def parser_rental(request: Request, days: int = 1):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        days = days if days in (1, 3, 5) else 1
-        from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval
-
-        hourly = await pg_fetch("""
-            SELECT date_trunc('hour', found_at) AS h, COUNT(*) AS cnt
-            FROM rental_listings
-            WHERE found_at > now() - ($1 || ' days')::interval
-            GROUP BY 1 ORDER BY 1
-        """, str(days))
-        labels = [r["h"].strftime("%d.%m %H:00") for r in hourly]
-        values = [r["cnt"] for r in hourly]
-
-        total = await pg_fetchval("SELECT COUNT(*) FROM rental_listings") or 0
-        fresh = await pg_fetchval(
+        rental_total = await pg_fetchval("SELECT COUNT(*) FROM rental_listings") or 0
+        rental_fresh = await pg_fetchval(
             "SELECT COUNT(*) FROM rental_listings WHERE last_seen > now() - interval '3 days'") or 0
-        today_new = await pg_fetchval(
+        today_new_rental = await pg_fetchval(
             "SELECT COUNT(*) FROM rental_listings WHERE found_at::date = CURRENT_DATE") or 0
-        gone = await pg_fetchval("""
-            SELECT COUNT(*) FROM rental_listings
-            WHERE last_seen::date = CURRENT_DATE - 3
-        """) or 0
 
         stats = [
-            {"label": "всего в базе", "value": f"{total:,}".replace(",", " ")},
-            {"label": "живых (видели за 3 дня)", "value": f"{fresh:,}".replace(",", " ")},
-            {"label": "спаршено сегодня", "value": today_new},
-            {"label": "пропало из выдачи (сдано?)", "value": gone, "color": "#f59e0b"},
+            {"label": "продажа: активных в мониторинге", "value": f"{total_active:,}".replace(",", " ")},
+            {"label": "продажа: спаршено сегодня", "value": today_new_sale},
+            {"label": "продажа: ушло в архив сегодня", "value": today_archived, "color": "#f59e0b"},
+            {"label": "продажа: цена ↓ сегодня", "value": price_down, "color": "#16a34a"},
+            {"label": "продажа: цена ↑ сегодня", "value": price_up, "color": "#ef4444"},
+            {"label": "аренда: живых (видели за 3 дня)", "value": f"{rental_fresh:,}".replace(",", " ")},
+            {"label": "аренда: всего в базе", "value": f"{rental_total:,}".replace(",", " ")},
+            {"label": "аренда: спаршено сегодня", "value": today_new_rental},
         ]
         return templates.TemplateResponse("parser_detail.html", {
-            "request": request, "title": "🏢 Парсер аренды — детализация",
+            "request": request, "title": "🕷 Парсер — продажа и аренда",
             "atab": "rental",
             "days": days, "stats": stats,
-            "chart_labels": labels, "chart_values": values,
+            "chart_labels": labels,
+            "sale_values": sale_values, "rental_values": rental_values,
         })
 
     @router.get("/admin/duplicates", response_class=HTMLResponse)
@@ -1382,6 +1372,61 @@ def make_extras_router(templates) -> APIRouter:
             "points": points,
             "current": cur["price"] if cur else None,
             "changes": len(rows),
+        })
+
+    @router.get("/admin/api/no-photo-history")
+    async def no_photo_history(request: Request, days: int = 30):
+        """Снимки no_photo_stats_history — сколько активных объявлений без
+        фото во времени (записывается раз в цикл парсера продаж)."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT at, total_active, no_photo
+            FROM no_photo_stats_history
+            WHERE at > now() - ($1 || ' days')::interval
+            ORDER BY at ASC
+        """, str(days))
+        return JSONResponse({"points": [{
+            "at": r["at"].strftime("%d.%m %H:%M"),
+            "total_active": r["total_active"],
+            "no_photo": r["no_photo"],
+        } for r in rows]})
+
+    @router.get("/admin/api/price-drops-history")
+    async def price_drops_history(request: Request, days: int = 30):
+        """Сколько объявлений снизили цену по дням, по комнатности (1/2/3+),
+        и на какую суммарную сумму — для графика на /admin/analytics."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT ph.changed_at::date AS d,
+                   CASE WHEN a.rooms >= 3 THEN 3 ELSE COALESCE(a.rooms, 0) END AS room_bucket,
+                   COUNT(DISTINCT ph.listing_id) AS cnt,
+                   SUM(ph.old_price - ph.new_price) AS total_drop
+            FROM price_history ph
+            JOIN apartment_listings a ON a.id = ph.listing_id
+            WHERE ph.new_price < ph.old_price
+              AND ph.changed_at > now() - ($1 || ' days')::interval
+            GROUP BY 1, 2
+            ORDER BY 1
+        """, str(days))
+        days_set = sorted({r["d"] for r in rows})
+        series = {"1": [], "2": [], "3": []}
+        amounts = {"1": [], "2": [], "3": []}
+        by_day = {}
+        for r in rows:
+            by_day.setdefault(r["d"], {})[str(r["room_bucket"])] = (r["cnt"], r["total_drop"] or 0)
+        for d in days_set:
+            for k in ("1", "2", "3"):
+                cnt, amt = by_day.get(d, {}).get(k, (0, 0))
+                series[k].append(cnt)
+                amounts[k].append(int(amt))
+        return JSONResponse({
+            "days": [d.strftime("%d.%m") for d in days_set],
+            "series": series,
+            "amounts": amounts,
         })
 
     # ── Ушедшие в архив: динамика по дням, по комнатности ──────────────────

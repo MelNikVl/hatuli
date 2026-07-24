@@ -459,7 +459,7 @@ function applyFilters() {
 </div>` : '';
       const sellerHtml = pt.is_owner
         ? '<b style="color:#16a34a;">👤 от собственника</b>'
-        : (pt.seller_name ? `<b style="color:#2563eb;">🏢 ${pt.seller_name}</b>` : '<b style="color:#2563eb;">🏢 риелтор</b>');
+        : (pt.seller_name ? `<b style="color:#2563eb;">🏢 риелтор ${pt.seller_name}</b>` : '<b style="color:#2563eb;">🏢 риелтор</b>');
       const cxLabel = pt.complex && /^\s*(жк|кг)\b/i.test(pt.complex) ? pt.complex : `ЖК ${pt.complex}`;
       const cxLine = pt.complex
         ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}</div>`
@@ -470,13 +470,13 @@ function applyFilters() {
   <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
   <div style="cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
       <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
-      <div style="font-size:16px;color:#374151;margin-top:3px;">${pt.rooms || '?'}-комн · <b style="font-size:17px;">${areaTxt}</b> м²<span style="font-size:13px;color:#888;">${ppm}</span></div>
+      <div style="font-size:16px;color:#374151;margin-top:3px;">${pt.rooms || '?'}-комн · <b style="font-size:17px;">${areaTxt}</b> м²<span style="font-size:13px;color:#888;">${ppm}</span><span style="font-size:13px;color:#888;"> · на рынке: ${ageText}</span></div>
   </div>
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
   <div style="font-size:12.5px;margin-top:3px;">Смарт рейтинг: <a href="/admin/analytics/${pt.id}" onclick="event.stopPropagation()" title="${scoreExplainText(pt.score_bd)}" style="color:${sc};font-weight:800;text-decoration:none;border-bottom:1px dashed ${sc};">${pt.score}</a></div>
   <div style="font-size:13px;margin-top:6px;">${sellerHtml}</div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
-  <div style="font-size:12px;color:#888;margin-top:5px;">на рынке: ${ageText}${priceTrend}${(pt.geo === 'address' && IS_ADMIN) ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>
+  ${(priceTrend || (pt.geo === 'address' && IS_ADMIN) || pt.views) ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend ? priceTrend.replace(/^ · /, '') : ''}${(pt.geo === 'address' && IS_ADMIN) ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>` : ''}
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
@@ -607,6 +607,7 @@ function drawHexPriceMini(divId, cells) {
   }
   const self_ = cells.find(c => c.is_self);
   const hmap = L.map(divId, {zoomControl:false, attributionControl:false, dragging:false, scrollWheelZoom:false, doubleClickZoom:false, boxZoom:false, touchZoom:false}).setView([self_.corners[0][0], self_.corners[0][1]], 14);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:0.5}).addTo(hmap);
   const vals = cells.filter(c => c.avg_m2).map(c => c.avg_m2);
   const lo = Math.min(...vals), hi = Math.max(...vals);
   const bounds = [];

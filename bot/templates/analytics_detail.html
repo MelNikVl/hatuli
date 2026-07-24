@@ -43,7 +43,7 @@
   <div class="card" style="padding:10px;position:sticky;top:14px;">
     {% if photos %}
     <div style="position:relative;border-radius:10px;overflow:hidden;">
-      <img id="main-photo" src="{{ photos[0] }}" style="width:100%;aspect-ratio:4/3;object-fit:cover;display:block;cursor:zoom-in;" onclick="openPhotoLb(0)">
+      <img id="main-photo" src="{{ photos[0] }}" style="width:100%;aspect-ratio:4/3;object-fit:cover;display:block;cursor:zoom-in;" onclick="openPhotoLb(_pIdx)">
       {% if photos|length > 1 %}
       <button onclick="photoNav(-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">‹</button>
       <button onclick="photoNav(1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">›</button>

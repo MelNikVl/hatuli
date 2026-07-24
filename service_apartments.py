@@ -584,6 +584,20 @@ async def run_cycle():
     except Exception as e:
         log.warning("archive check failed: %s", e)
 
+    # ── Снимок для графика "объявления без фото во времени" (/admin/analytics) ──
+    try:
+        from bot.db.pg import execute as _pg_exec3, fetchval as _pg_fv3
+        _total_active = await _pg_fv3(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE") or 0
+        _no_photo = await _pg_fv3(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND (photos IS NULL OR photos::text IN ('[]', 'null'))") or 0
+        await _pg_exec3(
+            "INSERT INTO no_photo_stats_history (total_active, no_photo) VALUES ($1, $2)",
+            _total_active, _no_photo)
+    except Exception as e:
+        log.warning("no_photo snapshot failed: %s", e)
+
     # Google Sheets sync
     try:
         # === Гексагональный анализ цены (микролокальный Deal Index) ===
