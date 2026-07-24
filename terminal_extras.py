@@ -1583,6 +1583,31 @@ def make_extras_router(templates) -> APIRouter:
             })
         return JSONResponse({"points": pts, "count": len(pts), "no_geo": no_geo})
 
+    @router.get("/admin/api/unbound-no-coords")
+    async def unbound_no_coords(request: Request):
+        """Объявления совсем без своих координат (lat IS NULL) — список для
+        ручной простановки локации на карте, а не только строгий счётчик
+        no_geo (тот требует ЕЩЁ и отсутствия геоцентроида по району)."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT id, url, title, price, rooms, area, address, district, first_seen
+            FROM apartment_listings
+            WHERE is_active IS NOT FALSE
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND lat IS NULL
+            ORDER BY first_seen DESC LIMIT 200
+        """)
+        return JSONResponse({"points": [{
+            "id": r["id"], "url": r["url"] or "",
+            "title": r["title"] or "",
+            "price": r["price"], "rooms": r["rooms"],
+            "area": float(r["area"]) if r["area"] else None,
+            "address": r["address"] or "", "district": r["district"] or "",
+            "found": r["first_seen"].strftime("%d.%m.%Y") if r["first_seen"] else "",
+        } for r in rows]})
+
     # ── Привязка к ЖК: фоновая задача (не блокирует веб) + поллинг статуса ──
 
     rebind_state = {"running": False, "stage": "", "result": None}

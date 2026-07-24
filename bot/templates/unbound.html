@@ -25,15 +25,55 @@
   <span id="map-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
-  <b style="font-size:14px;">📉 Непривязанные объявления во времени</b>
-  <span style="font-size:12px;color:#888;margin-left:8px;">точка = снимок после каждого прогона привязки (кнопкой, быстрой привязкой по тексту/гео каждые ~20 мин, или полным циклом раз в ~6 часов)</span>
-  <div id="unbound-chart" style="margin-top:10px;"></div>
+<div id="unbound-statbar" style="display:flex;gap:0;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 24px;margin-bottom:12px;">
+  <div style="text-align:center;">
+    <div style="font-size:34px;font-weight:800;color:#3b82f6;" id="stat-on-map">…</div>
+    <div style="font-size:12px;color:#888;">на карте (точно + по району)</div>
+  </div>
+  <div style="font-size:34px;color:#444;padding:0 22px;">/</div>
+  <div style="text-align:center;">
+    <div style="font-size:34px;font-weight:800;color:#ef4444;" id="stat-no-geo">…</div>
+    <div style="font-size:12px;color:#888;">совсем без координат</div>
+  </div>
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;margin-top:12px;max-width:40%;">
-  <div id="unbound-map" style="aspect-ratio:16/9;width:100%;min-height:192px;border-radius:8px;"></div>
+<div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;">
+  <div style="flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+    <b style="font-size:14px;">📉 Непривязанные объявления во времени</b>
+    <div style="font-size:11.5px;color:#888;margin-top:2px;">точка = снимок после каждого прогона привязки (быстрая — каждые ~20 мин, полная — раз в ~6ч)</div>
+    <div id="unbound-chart" style="margin-top:10px;"></div>
+  </div>
+
+  <div style="flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+    <div id="unbound-map" style="aspect-ratio:1/1;width:100%;min-height:280px;border-radius:8px;"></div>
+  </div>
 </div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-top:14px;">
+  <b style="font-size:14px;">📋 Объявления совсем без координат</b>
+  <span style="font-size:12px;color:#888;margin-left:6px;">чтобы проставить локацию вручную — открыть на Крыше, найти адрес/карту, вбить координаты</span>
+  <div id="no-coords-list" style="margin-top:10px;max-height:520px;overflow-y:auto;display:flex;flex-direction:column;gap:1px;">
+    <div style="color:#888;font-size:12px;padding:10px;">загрузка…</div>
+  </div>
+</div>
+
+<script>
+function loadNoCoordsList() {
+  fetch('/admin/api/unbound-no-coords').then(r => r.json()).then(d => {
+    const el = document.getElementById('no-coords-list');
+    if (!d.points || !d.points.length) { el.innerHTML = '<div style="color:#888;font-size:12px;padding:10px;">пусто</div>'; return; }
+    el.innerHTML = d.points.map(p => `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border);">
+        <div style="min-width:0;">
+          <div style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.title || (p.rooms + '-комн, ' + (p.address || p.district || 'адрес неизвестен'))}</div>
+          <div style="font-size:11px;color:#888;">${p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : '—'} · ${p.rooms || '?'}-комн${p.area ? ', ' + p.area + ' м²' : ''} · в базе с ${p.found}</div>
+        </div>
+        ${p.url ? `<a href="${p.url}" target="_blank" style="flex-shrink:0;color:#d4af37;font-weight:800;font-size:12.5px;text-decoration:none;white-space:nowrap;">Крыша ↗</a>` : ''}
+      </div>`).join('');
+  }).catch(() => {});
+}
+loadNoCoordsList();
+</script>
 
 <script>
 function unboundChartSVG(points, w, h) {
@@ -99,6 +139,8 @@ function loadPoints() {
     });
     document.getElementById('map-count').textContent =
       d.count + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без координат)` : '');
+    document.getElementById('stat-on-map').textContent = d.count.toLocaleString('ru');
+    document.getElementById('stat-no-geo').textContent = (d.no_geo || 0).toLocaleString('ru');
   });
 }
 

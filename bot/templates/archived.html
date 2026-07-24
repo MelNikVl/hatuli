@@ -46,8 +46,8 @@ function loadArchivedChart(days) {
     }
     const colors = {1: '#3b82f6', 2: '#22c55e', 3: '#f59e0b'};
     const maxTotal = Math.max(1, ...d.days.map((_, i) => d.series['1'][i] + d.series['2'][i] + d.series['3'][i]));
-    const barW = Math.max(36, Math.min(72, Math.floor(1800 / d.days.length)));
-    const H = 320;
+    const barW = Math.max(72, Math.min(140, Math.floor(3600 / d.days.length)));
+    const H = 640;
     const bars = d.days.map((label, i) => {
       const v1 = d.series['1'][i], v2 = d.series['2'][i], v3 = d.series['3'][i];
       const total = v1 + v2 + v3;

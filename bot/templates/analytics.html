@@ -38,7 +38,7 @@ tr:last-child td { border-bottom: none; }
 .s-floor { background: #00bcd4; }
 .s-cplx  { background: #795548; }
 .s-sup   { background: #607d8b; }
-.link-btn { color: #1a1a2e; text-decoration: none; font-weight: 600; }
+.link-btn { color: #d4af37; text-decoration: none; font-weight: 800; }
 .link-btn:hover { text-decoration: underline; }
 .bargain-tag { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: #e3f2fd; color: #0d47a1; }
 .owner-tag { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: #e8f5e9; color: #1b5e20; }
@@ -122,8 +122,8 @@ tr:last-child td { border-bottom: none; }
     if (!d.days || !d.days.length) { el.innerHTML = '<div style="padding:14px;color:#888;font-size:12px;">пока нет данных</div>'; return; }
     const colors = {1:'#3b82f6', 2:'#22c55e', 3:'#f59e0b'};
     const maxTotal = Math.max(1, ...d.days.map((_,i)=>d.series['1'][i]+d.series['2'][i]+d.series['3'][i]));
-    const barW = Math.max(16, Math.min(30, Math.floor(480/d.days.length)));
-    const H = 130;
+    const barW = Math.max(32, Math.min(60, Math.floor(960/d.days.length)));
+    const H = 260;
     const bars = d.days.map((label,i)=>{
       const v1=d.series['1'][i], v2=d.series['2'][i], v3=d.series['3'][i];
       const a1=d.amounts['1'][i], a2=d.amounts['2'][i], a3=d.amounts['3'][i];
@@ -356,7 +356,7 @@ tr:last-child td { border-bottom: none; }
           <span style="color:#aaa;font-size:11px;">?</span>
         {% endif %}
       </td>
-      <td><a href="{{ l.url }}" target="_blank" style="color:#1a1a2e;font-size:11px;">krisha↗</a></td>
+      <td><a href="{{ l.url }}" target="_blank" style="color:#d4af37;font-weight:800;font-size:11px;">krisha↗</a></td>
     </tr>
     {% endfor %}
     </tbody>

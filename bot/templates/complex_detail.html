@@ -141,44 +141,44 @@
 
 <!-- Графики: цена продажи по комнатности, цена текущих объявлений, аренда по комнатности -->
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:16px;">
-  <div class="chart-card">
-    <b style="font-size:14px;">📈 Цена продажи по комнатности</b>
-    <div style="font-size:11px;color:#888;">медиана, млн ₸</div>
+  <div class="chart-card" style="min-height:280px;">
+    <b style="font-size:17.5px;">📈 Цена продажи по комнатности</b>
+    <div style="font-size:13.5px;color:#888;">медиана, млн ₸</div>
     {% if stats %}
     {% set max_p = stats | map(attribute='median_price') | select | max %}
     <div class="bar-row">
       {% for s in stats %}
       <div class="bar-col">
-        <div style="font-size:11px;font-weight:700;">{{ '%.1f'|format((s.median_price or 0)/1e6) }}</div>
-        <div style="width:70%;background:#2563eb;border-radius:4px 4px 0 0;height:{{ ((s.median_price or 0)/max_p*60)|round(0,'floor')|int }}px;"></div>
-        <div style="font-size:11px;color:#888;margin-top:3px;">{{ s.rooms or '?' }}к</div>
+        <div style="font-size:13.5px;font-weight:700;">{{ '%.1f'|format((s.median_price or 0)/1e6) }}</div>
+        <div style="width:70%;background:#2563eb;border-radius:4px 4px 0 0;height:{{ ((s.median_price or 0)/max_p*120)|round(0,'floor')|int }}px;"></div>
+        <div style="font-size:13.5px;color:#888;margin-top:3px;">{{ s.rooms or '?' }}к</div>
       </div>
       {% endfor %}
     </div>
-    {% else %}<p style="font-size:12px;color:#888;">Недостаточно данных.</p>{% endif %}
+    {% else %}<p style="font-size:15px;color:#888;">Недостаточно данных.</p>{% endif %}
   </div>
 
-  <div class="chart-card">
-    <b style="font-size:14px;">📊 Цена активных объявлений сейчас</b>
-    <div style="font-size:11px;color:#888;">распределение по бакетам (текущие цены)</div>
+  <div class="chart-card" style="min-height:280px;">
+    <b style="font-size:17.5px;">📊 Цена активных объявлений сейчас</b>
+    <div style="font-size:13.5px;color:#888;">распределение по бакетам (текущие цены)</div>
     <div id="cx-price-hist" class="bar-row"></div>
   </div>
 
-  <div class="chart-card">
-    <b style="font-size:14px;">🔑 Аренда по комнатности</b>
-    <div style="font-size:11px;color:#888;">медиана, тыс ₸/мес</div>
+  <div class="chart-card" style="min-height:280px;">
+    <b style="font-size:17.5px;">🔑 Аренда по комнатности</b>
+    <div style="font-size:13.5px;color:#888;">медиана, тыс ₸/мес</div>
     {% if rental_stats %}
     {% set max_r = rental_stats | map(attribute='median_rent') | select | max %}
     <div class="bar-row">
       {% for r in rental_stats %}
       <div class="bar-col">
-        <div style="font-size:11px;font-weight:700;">{{ (r.median_rent/1000)|round|int if r.median_rent else '—' }}</div>
-        <div style="width:70%;background:#16a34a;border-radius:4px 4px 0 0;height:{{ ((r.median_rent or 0)/max_r*60)|round(0,'floor')|int }}px;"></div>
-        <div style="font-size:11px;color:#888;margin-top:3px;">{{ r.rooms or '?' }}к</div>
+        <div style="font-size:13.5px;font-weight:700;">{{ (r.median_rent/1000)|round|int if r.median_rent else '—' }}</div>
+        <div style="width:70%;background:#16a34a;border-radius:4px 4px 0 0;height:{{ ((r.median_rent or 0)/max_r*120)|round(0,'floor')|int }}px;"></div>
+        <div style="font-size:13.5px;color:#888;margin-top:3px;">{{ r.rooms or '?' }}к</div>
       </div>
       {% endfor %}
     </div>
-    {% else %}<p style="font-size:12px;color:#888;">Нет данных аренды.</p>{% endif %}
+    {% else %}<p style="font-size:15px;color:#888;">Нет данных аренды.</p>{% endif %}
   </div>
 </div>
 
@@ -218,6 +218,14 @@ function drawHexPriceMap(divId, cells) {
       fillColor: color, fillOpacity: c.avg_m2 ? 0.75 : 0.25,
     }).addTo(map);
     poly.bindTooltip(`${c.label}: ${c.avg_m2 ? Math.round(c.avg_m2/1000) + ' тыс ₸/м²' : 'нет данных'} (${c.count})`, {sticky:true});
+    if (c.avg_m2) {
+      const cLat = c.corners.reduce((s,p)=>s+p[0],0)/c.corners.length;
+      const cLon = c.corners.reduce((s,p)=>s+p[1],0)/c.corners.length;
+      L.marker([cLat, cLon], {
+        icon: L.divIcon({className:'', html:`<div style="font-size:11px;font-weight:800;color:#111;text-shadow:0 1px 2px rgba(255,255,255,.6);white-space:nowrap;transform:translate(-50%,-50%);">${Math.round(c.avg_m2/1000)}к</div>`, iconSize:[0,0]}),
+        interactive: false,
+      }).addTo(map);
+    }
     c.corners.forEach(p => bounds.push(p));
   });
   map.fitBounds(bounds, {padding:[4,4]});
@@ -389,9 +397,9 @@ async function uploadPhotos() {
     const from = ((mn + i * span) / 1e6).toFixed(0);
     const to = ((mn + (i + 1) * span) / 1e6).toFixed(0);
     return `<div class="bar-col" title="${from}-${to} млн ₸: ${c}">
-      <div style="font-size:11px;font-weight:700;">${c}</div>
-      <div style="width:70%;background:#f59e0b;border-radius:4px 4px 0 0;height:${maxCnt ? Math.round(c/maxCnt*60) : 0}px;"></div>
-      <div style="font-size:9.5px;color:#888;margin-top:3px;">${from}М</div>
+      <div style="font-size:13.5px;font-weight:700;">${c}</div>
+      <div style="width:70%;background:#f59e0b;border-radius:4px 4px 0 0;height:${maxCnt ? Math.round(c/maxCnt*120) : 0}px;"></div>
+      <div style="font-size:12px;color:#888;margin-top:3px;">${from}М</div>
     </div>`;
   }).join('');
 })();
