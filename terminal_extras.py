@@ -18,11 +18,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 
+import httpx
 from fastapi import APIRouter, File, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from bot.db import settings as app_settings
 from bot.db.pg import fetch
@@ -136,6 +138,14 @@ async def _save_uploaded_photos(files: list, kind: str, entity_id: int) -> list[
     return urls
 
 
+_PHOTO_CACHE_DIR = os.path.join(os.path.dirname(__file__), "static", "cache", "photos")
+os.makedirs(_PHOTO_CACHE_DIR, exist_ok=True)
+# Только известные источники фото объявлений/ЖК — proxy не должен превращаться
+# в открытый прокси для произвольных URL (SSRF).
+_PHOTO_ALLOWED_HOSTS = ("kcdn.online", "krisha.kz")
+_PHOTO_EXT_WHITELIST = (".jpg", ".jpeg", ".png", ".webp")
+
+
 def make_extras_router(templates) -> APIRouter:
     router = APIRouter()
 
@@ -145,6 +155,42 @@ def make_extras_router(templates) -> APIRouter:
     # Доступно во всех шаблонах: {{ is_admin(request) }} — для скрытия
     # админ-элементов на публичных страницах
     templates.env.globals["is_admin"] = is_authed
+
+    # ── Кеширующий прокси для фото объявлений/ЖК ────────────────────────────
+    # Krisha сама раздаёт фото через свой CDN (kcdn.online) — мы их не
+    # массово скачиваем, а кэшируем НА ЛЕТУ по факту первого просмотра
+    # (первый запрос идёт на источник и сохраняется на диск, повторные —
+    # сразу с диска). Не открытый прокси: домен строго из allowlist.
+
+    @router.get("/img-proxy")
+    async def img_proxy(request: Request, u: str):
+        from urllib.parse import urlparse
+        parsed = urlparse(u)
+        host = (parsed.hostname or "").lower()
+        if not any(host == h or host.endswith("." + h) for h in _PHOTO_ALLOWED_HOSTS):
+            return JSONResponse({"error": "host not allowed"}, status_code=400)
+
+        ext = os.path.splitext(parsed.path)[1].lower()
+        if ext not in _PHOTO_EXT_WHITELIST:
+            ext = ".jpg"
+        fname = hashlib.sha256(u.encode()).hexdigest() + ext
+        fpath = os.path.join(_PHOTO_CACHE_DIR, fname)
+
+        if not os.path.exists(fpath):
+            try:
+                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+                    resp = await c.get(u, headers={"User-Agent": "Mozilla/5.0"})
+                    resp.raise_for_status()
+                    tmp_path = fpath + ".tmp"
+                    with open(tmp_path, "wb") as f:
+                        f.write(resp.content)
+                    os.replace(tmp_path, fpath)
+            except Exception:
+                # источник недоступен — отдаём оригинал напрямую, чтобы фото
+                # хотя бы показалось (не кэшируем неудачу)
+                return RedirectResponse(url=u)
+
+        return FileResponse(fpath, headers={"Cache-Control": "public, max-age=2592000"})
 
     # ── Настройки ─────────────────────────────────────────────────────────
 

@@ -94,6 +94,9 @@
 
 <script>
 const IS_ADMIN = {{ 'true' if admin else 'false' }};
+// Кеширующий прокси фото (см. /img-proxy на бэкенде) — первый показ идёт на
+// источник и кэшируется на диске сервера, дальше отдаётся с диска.
+function proxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
 const map = L.map('objects-map').setView([51.128, 71.43], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
 const pointsLayer = L.layerGroup().addTo(map);  // аренда: обычные circleMarker (маркер-кластер их не поддерживает)
@@ -289,7 +292,7 @@ function carNav(id, dir, ev) {
   const ph = ptPhotos[id]; if (!ph || !ph.length) return;
   carIdx[id] = (carIdx[id] + dir + ph.length) % ph.length;
   const img = document.getElementById('car-' + id);
-  if (img) img.src = ph[carIdx[id]];
+  if (img) img.src = proxyImg(ph[carIdx[id]]);
   const n = document.getElementById('car-n-' + id);
   if (n) n.textContent = (carIdx[id] + 1) + '/' + ph.length;
 }
@@ -313,10 +316,10 @@ function renderLightbox() {
     box.onclick = (e) => { if (e.target === box) closeLightbox(); };
     document.body.appendChild(box);
   }
-  const thumbs = ph.map((p, i) => `<img src="${p}" onclick="lbIdx=${i};renderLightbox();" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === lbIdx ? '1' : '.5'};border:2px solid ${i === lbIdx ? '#fff' : 'transparent'};">`).join('');
+  const thumbs = ph.map((p, i) => `<img src="${proxyImg(p)}" onclick="lbIdx=${i};renderLightbox();" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === lbIdx ? '1' : '.5'};border:2px solid ${i === lbIdx ? '#fff' : 'transparent'};">`).join('');
   box.innerHTML = `
     <div style="position:relative;width:92vw;height:78vh;display:flex;align-items:center;justify-content:center;">
-      <img src="${ph[lbIdx]}" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;">
+      <img src="${proxyImg(ph[lbIdx])}" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;">
       ${ph.length > 1 ? `
       <button onclick="lbIdx=(lbIdx-1+${ph.length})%${ph.length};renderLightbox();" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">‹</button>
       <button onclick="lbIdx=(lbIdx+1)%${ph.length};renderLightbox();" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">›</button>` : ''}
@@ -451,7 +454,7 @@ function applyFilters() {
       if (pt.photos && pt.photos.length) { ptPhotos[pt.id] = pt.photos; carIdx[pt.id] = 0; }
       const carHtml = pt.photos && pt.photos.length ? `
 <div style="position:relative;margin:-13px -19px 8px -19px;width:calc(100% + 38px);border-radius:11px 11px 0 0;overflow:hidden;cursor:pointer;" onclick="openLightbox('${pt.id}', event)">
-  <img id="car-${pt.id}" src="${pt.photos[0]}" style="width:100%;height:178px;object-fit:cover;display:block;border:none;" onerror="this.parentNode.style.display='none'">
+  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="width:100%;height:178px;object-fit:cover;display:block;border:none;" onerror="this.parentNode.style.display='none'">
   ${pt.photos.length > 1 ? `
   <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">‹</button>
   <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">›</button>
@@ -881,7 +884,7 @@ function modalPhotoNav(dir, ev) {
   if (!modalPhotos.length) return;
   modalPhotoIdx = (modalPhotoIdx + dir + modalPhotos.length) % modalPhotos.length;
   const img = document.getElementById('modal-photo-img');
-  if (img) img.src = modalPhotos[modalPhotoIdx];
+  if (img) img.src = proxyImg(modalPhotos[modalPhotoIdx]);
   const n = document.getElementById('modal-photo-n');
   if (n) n.textContent = (modalPhotoIdx + 1) + '/' + modalPhotos.length;
 }
@@ -901,7 +904,7 @@ function openDetailModal(id, ev) {
     const priceM = d.price ? (d.price/1e6).toFixed(1) : '—';
     const photoHtml = modalPhotos.length ? `
 <div style="position:relative;">
-  <img id="modal-photo-img" src="${modalPhotos[0]}" style="width:100%;height:420px;object-fit:cover;display:block;">
+  <img id="modal-photo-img" src="${proxyImg(modalPhotos[0])}" style="width:100%;height:420px;object-fit:cover;display:block;">
   ${modalPhotos.length > 1 ? `
   <button onclick="modalPhotoNav(-1,event)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">‹</button>
   <button onclick="modalPhotoNav(1,event)" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">›</button>
@@ -920,7 +923,7 @@ function openDetailModal(id, ev) {
 <div style="margin:14px 22px 0;">
   <div style="font-size:12px;color:#888;font-weight:700;margin-bottom:6px;">🏢 Фото ЖК</div>
   <div style="display:flex;gap:6px;overflow-x:auto;">
-    ${d.complex_photos.slice(0,3).map(p => `<img src="${p}" style="width:130px;height:96px;object-fit:cover;border-radius:8px;flex-shrink:0;">`).join('')}
+    ${d.complex_photos.slice(0,3).map(p => `<img src="${proxyImg(p)}" style="width:130px;height:96px;object-fit:cover;border-radius:8px;flex-shrink:0;">`).join('')}
   </div>
 </div>` : '';
 
