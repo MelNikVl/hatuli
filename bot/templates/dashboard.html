@@ -465,7 +465,7 @@ function applyFilters() {
         ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}</div>`
         : '<div style="font-size:12.5px;color:#b45309;margin-top:7px;">🏢 ЖК не определён</div>';
       m.bindPopup(`
-<div style="min-width:293px;max-width:380px;font-family:inherit;">
+<div style="min-width:293px;max-width:418px;font-family:inherit;">
   ${carHtml}
   <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
   <div style="cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
@@ -476,7 +476,7 @@ function applyFilters() {
   <div style="font-size:12.5px;margin-top:3px;">Смарт рейтинг: <a href="/admin/analytics/${pt.id}" onclick="event.stopPropagation()" title="${scoreExplainText(pt.score_bd)}" style="color:${sc};font-weight:800;text-decoration:none;border-bottom:1px dashed ${sc};">${pt.score}</a></div>
   <div style="font-size:13px;margin-top:6px;">${sellerHtml}</div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
-  ${(priceTrend || (pt.geo === 'address' && IS_ADMIN) || pt.views) ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend ? priceTrend.replace(/^ · /, '') : ''}${(pt.geo === 'address' && IS_ADMIN) ? ' · <span style="color:#b45309;">📍 привязка по адресу (≈)</span>' : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>` : ''}
+  ${(priceTrend || pt.views) ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend ? priceTrend.replace(/^ · /, '') : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>` : ''}
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
@@ -540,7 +540,7 @@ function sparklineSVG(points, w, h) {
   const labels = coords.map((c, i) => {
     const x = Math.min(Math.max(c[0], 14), w - 14);  // не даём подписи вылезти за край
     const y = crowded && i % 2 === 1 ? h - 3 : chartH + 12;  // нижний ярус чуть ниже верхнего
-    return `<text x="${x.toFixed(1)}" y="${y}" text-anchor="middle" font-size="9.5" font-weight="700" fill="#2563eb">${labelTexts[i]}</text>`;
+    return `<text x="${x.toFixed(1)}" y="${y}" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2563eb">${labelTexts[i]}</text>`;
   }).join('');
   const dots = coords.map((c, i) => {
     const p = points[i];
@@ -909,9 +909,19 @@ function openDetailModal(id, ev) {
 </div>` : '<div style="height:60px;"></div>';
 
     const bargainHtml = (d.bargain && d.bargain.discount_pct > 0) ? `
-<div title="Медиана по ${d.bargain.comparables_cnt} похожим объявлениям (тот же район/комнаты/площадь): ${d.bargain.median_price ? (d.bargain.median_price/1e6).toFixed(1) + ' млн ₸' : '—'}, ваша цена: ${priceM} млн ₸. ${d.bargain.recommendation}"
-     style="color:#16a34a;font-weight:800;font-size:19px;margin:14px 22px 0;cursor:help;border-bottom:2px dashed #16a34a;display:inline-block;">
-  ${d.bargain.target_price ? 'реальная цена ' + (d.bargain.target_price/1e6).toFixed(1) + ' млн ₸' : 'можно торговаться на ' + d.bargain.discount_pct + '%'}
+<div style="margin:14px 22px 0;">
+  <div style="color:#16a34a;font-weight:800;font-size:19px;display:inline-block;">
+    ${d.bargain.target_price ? 'реальная цена ' + (d.bargain.target_price/1e6).toFixed(1) + ' млн ₸' : 'можно торговаться на ' + d.bargain.discount_pct + '%'}
+  </div>
+  ${d.bargain.recommendation ? `<div style="font-size:13.5px;color:#555;margin-top:4px;">${escapeHtml(d.bargain.recommendation)}</div>` : ''}
+</div>` : '';
+
+    const complexPhotosHtml = (d.complex_photos && d.complex_photos.length) ? `
+<div style="margin:14px 22px 0;">
+  <div style="font-size:12px;color:#888;font-weight:700;margin-bottom:6px;">🏢 Фото ЖК</div>
+  <div style="display:flex;gap:6px;overflow-x:auto;">
+    ${d.complex_photos.slice(0,3).map(p => `<img src="${p}" style="width:130px;height:96px;object-fit:cover;border-radius:8px;flex-shrink:0;">`).join('')}
+  </div>
 </div>` : '';
 
     const nearbyHtml = (d.nearby && d.nearby.length) ? `
@@ -934,11 +944,12 @@ ${photoHtml}
 <div style="padding:20px 22px 0;">
   <div style="font-size:34px;font-weight:800;">${priceM} <span style="font-size:21px;">млн ₸</span></div>
   <div style="font-size:19px;color:#374151;margin-top:4px;">${d.rooms || '?'}-комн · ${d.area ? Math.round(d.area) : '?'} м²${d.floor ? ' · ' + d.floor + '/' + (d.floors_total || '?') + ' эт.' : ''}</div>
-  <div style="font-size:16px;color:#555;margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}</div>
-  ${d.complex_name ? `<div style="font-size:16px;margin-top:4px;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(d.complex_name)}">ЖК ${d.complex_name}</a>${d.year_built ? ' · ' + d.year_built + ' г.' : ''}</div>` : ''}
+  <div style="font-size:16px;color:#555;margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
+  ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:#888;font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
   ${d.views_count ? `<div style="font-size:13px;color:#888;margin-top:6px;">👁 просмотрели ${d.views_count.toLocaleString('ru')} раз${d.first_seen ? ' с ' + d.first_seen : ''}</div>` : ''}
 </div>
 ${bargainHtml}
+${complexPhotosHtml}
 ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:13px;color:#888;font-weight:700;margin-bottom:6px;">📝 Описание</div>
   <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(d.description).slice(0, 600)}${d.description.length > 600 ? '…' : ''}</div>
@@ -953,9 +964,17 @@ ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:v
 </div>
 ${nearbyHtml}
 <div id="hexwrap-modal" style="padding:18px 22px 0;"></div>
-<div style="padding:20px 22px;">
+<div style="padding:20px 22px;display:flex;gap:10px;flex-wrap:wrap;">
   <a href="${d.url}" target="_blank" style="display:inline-block;padding:11px 20px;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;text-decoration:none;font-size:16px;">Открыть на Крыше ↗</a>
+  <a href="/admin/analytics/${id}" style="display:inline-block;padding:11px 20px;border-radius:8px;background:#0f766e;color:#fff;font-weight:700;text-decoration:none;font-size:16px;">Аналитика</a>
 </div>`;
+
+    if (modalPhotos.length) {
+      ptPhotos[id] = modalPhotos; carIdx[id] = 0;
+      const mainImg = document.getElementById('modal-photo-img');
+      if (mainImg) mainImg.style.cursor = 'zoom-in';
+      if (mainImg) mainImg.onclick = () => { carIdx[id] = modalPhotoIdx; openLightbox(id, event); };
+    }
 
     if (d.lat != null && d.lon != null) loadHexPriceMini('modal', d.lat, d.lon);
 

@@ -1302,6 +1302,22 @@ def make_extras_router(templates) -> APIRouter:
         )
         bargain = analyze_bargain(l.get("price", 0), comps, l.get("is_owner"), l.get("is_urgent") is True)
 
+        # Фото ЖК — для галереи в модалке объявления (переиспользуем то же
+        # поле photos, что и на карточке ЖК)
+        complex_photos = []
+        if l.get("complex_name"):
+            cx_row = await pg_fetchrow(
+                "SELECT photos, photo_url FROM complexes WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
+                l["complex_name"])
+            if cx_row:
+                cxp = cx_row["photos"]
+                if isinstance(cxp, str):
+                    try:
+                        cxp = _json_ld.loads(cxp)
+                    except ValueError:
+                        cxp = None
+                complex_photos = cxp or ([cx_row["photo_url"]] if cx_row.get("photo_url") else [])
+
         # Лента "рядом" — 3 ближайших активных объявления по прямому расстоянию
         nearby = []
         if l.get("lat") is not None and l.get("lon") is not None:
@@ -1336,6 +1352,8 @@ def make_extras_router(templates) -> APIRouter:
             "lat": float(l["lat"]) if l.get("lat") is not None else None,
             "lon": float(l["lon"]) if l.get("lon") is not None else None,
             "complex_name": l.get("complex_name") or "",
+            "complex_photos": complex_photos,
+            "geo": l.get("geo_source") or "",
             "photos": photos or [],
             "seller_name": l.get("seller_name") or "",
             "is_owner": l.get("is_owner") is True,
