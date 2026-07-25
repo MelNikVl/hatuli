@@ -147,23 +147,44 @@ async def run_rebind(progress_cb: ProgressCB | None = None) -> dict:
             lid, canon)
     by_text = len(updates)
 
-    # Стадия C (геопривязка по ближайшему ЖК ≤350м) убрана — см. докстринг
-    # модуля. by_geo оставлен в возвращаемом словаре для совместимости с
-    # вызывающим кодом (UI показывает "по гео: 0"), но всегда 0.
+    # Стадия C (геопривязка по ближайшему ЖК ≤350м — угадывание БЕЗ
+    # текстового подтверждения) убрана — см. докстринг модуля. by_geo
+    # оставлен в возвращаемом словаре для совместимости с вызывающим кодом
+    # (UI показывает "по гео: 0"), но всегда 0.
     by_geo = 0
+
+    # ── E: координаты ЖК для объявлений, у которых ЖК ПОДТВЕРЖДЁН текстом/
+    # ссылкой (complex_name уже проставлен — A/B выше или detail-страница),
+    # но собственные координаты объявления либо отсутствуют, либо явно не
+    # совпадают с ЖК (>~600м — то есть GPS с Крыши смотрит не туда, встречается
+    # у объявлений с неточным пином на карте источника). Это НЕ угадывание —
+    # ЖК уже надёжно определён текстом, просто чиним геопозицию под него.
+    await _report(progress_cb, "координаты по подтверждённому ЖК…")
+    geo_fixed = (await pg_exec("""
+        UPDATE apartment_listings al
+        SET lat = c.lat, lon = c.lon, geo_source = 'complex_confirmed'
+        FROM complexes c
+        WHERE al.complex_name = c.name
+          AND c.lat IS NOT NULL AND c.lon IS NOT NULL
+          AND COALESCE(c.is_street, FALSE) = FALSE
+          AND (
+            al.lat IS NULL
+            OR ((al.lat - c.lat)^2 + (al.lon - c.lon)^2) > 4.0e-5
+          )
+    """) or "").split()[-1]
 
     left = await pg_fv("""
         SELECT COUNT(*) FROM apartment_listings
         WHERE is_active IS NOT FALSE
           AND (complex_name IS NULL OR btrim(complex_name) = '')
     """) or 0
-    logger.info("rebind: by_url=%s by_text=%d by_geo=%s, осталось без ЖК %d",
-                by_url, by_text, by_geo, left)
+    logger.info("rebind: by_url=%s by_text=%d by_geo=%s geo_fixed=%s, осталось без ЖК %d",
+                by_url, by_text, by_geo, geo_fixed, left)
     return {
         "ok": True,
         "bound": int(by_url or 0) + by_text + int(by_geo or 0),
         "by_url": int(by_url or 0), "by_text": by_text,
-        "by_geo": int(by_geo or 0), "left": left,
+        "by_geo": int(by_geo or 0), "geo_fixed": int(geo_fixed or 0), "left": left,
         "addr_filled": addr_filled,
     }
 

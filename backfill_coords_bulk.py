@@ -47,7 +47,10 @@ async def main() -> None:
 
     total = await fetchval("""
         SELECT COUNT(*) FROM apartment_listings
-        WHERE (lat IS NULL OR complex_name IS NULL OR btrim(complex_name) = '')
+        WHERE (lat IS NULL OR complex_name IS NULL OR btrim(complex_name) = ''
+               OR (COALESCE(is_owner, FALSE) = FALSE AND (seller_name IS NULL OR btrim(seller_name) = ''))
+               OR photos IS NULL OR photos::text IN ('[]', 'null')
+               OR description IS NULL OR btrim(description) = '')
           AND is_active IS NOT FALSE AND url IS NOT NULL
     """) or 0
     log.info("=== Bulk backfill start: в очереди ~%d объявлений, ~%.1f ч при 8-15с/шт ===",

@@ -350,31 +350,39 @@ async def run_cycle():
         log.warning("geo-by-address failed: %s", e)
 
     # ── Зоны приоритета: пересчёт бонусов для всех объявлений с координатами ──
+    # ВАЖНО: раньше это блок пропускался целиком, если zones пуст (все зоны
+    # удалены) — из-за этого старые zone_bonus от УЖЕ УДАЛЁННЫХ зон навсегда
+    # застревали на объявлениях и продолжали влиять на скор. Теперь строки
+    # без активных зон явно обнуляются (bonus=0, zone_name=None) вместо
+    # того чтобы просто не трогаться.
     try:
         from bot.core.zones import load_zones, zone_bonus_for
         zones = await load_zones()
-        if zones:
-            from bot.db.pg import fetch as pg_fetch
-            coords = await pg_fetch(
-                "SELECT id, lat, lon, COALESCE(zone_bonus,0) AS zb FROM apartment_listings "
-                "WHERE lat IS NOT NULL AND lon IS NOT NULL"
-            )
-            zcnt = 0
-            for c in coords:
+        from bot.db.pg import fetch as pg_fetch
+        coords = await pg_fetch(
+            "SELECT id, lat, lon, COALESCE(zone_bonus,0) AS zb FROM apartment_listings "
+            "WHERE lat IS NOT NULL AND lon IS NOT NULL"
+        )
+        zcnt = 0
+        for c in coords:
+            if zones:
                 bonus, zname = zone_bonus_for(c["lat"], c["lon"], zones)
                 if zname is None:
                     # Вне всех зон: штраф -20 (фокус стратегии — зонные локации).
                     # Применяется только когда зоны нарисованы; без координат
                     # объявление не наказываем (данных нет — не вина объекта).
                     bonus = -20
-                if bonus != c["zb"]:
-                    await pg_exec(
-                        "UPDATE apartment_listings SET zone_bonus=$2, zone_name=$3 WHERE id=$1",
-                        c["id"], bonus, zname,
-                    )
-                    zcnt += 1
-            if zcnt:
-                log.info("zones: updated bonus for %d listings", zcnt)
+            else:
+                # Зоны не нарисованы / все удалены — бонус/штраф не применяется.
+                bonus, zname = 0, None
+            if bonus != c["zb"]:
+                await pg_exec(
+                    "UPDATE apartment_listings SET zone_bonus=$2, zone_name=$3 WHERE id=$1",
+                    c["id"], bonus, zname,
+                )
+                zcnt += 1
+        if zcnt:
+            log.info("zones: updated bonus for %d listings", zcnt)
     except Exception as e:
         log.warning("zone recompute failed: %s", e)
 

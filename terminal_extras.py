@@ -836,7 +836,7 @@ def make_extras_router(templates) -> APIRouter:
               AND a.last_seen > now() - interval '14 days'
               {' '.join(conds)}
             ORDER BY eff_score DESC
-            LIMIT 2000
+            LIMIT 15000
         """, *params)
         import json as _json_ph
         def _photos_of(r):

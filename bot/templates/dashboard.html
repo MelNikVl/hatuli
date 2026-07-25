@@ -468,12 +468,12 @@ function applyFilters() {
         ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}</div>`
         : '<div style="font-size:12.5px;color:#b45309;margin-top:7px;">🏢 ЖК не определён</div>';
       m.bindPopup(`
-<div style="min-width:293px;max-width:418px;font-family:inherit;">
+<div style="min-width:340px;max-width:480px;font-family:inherit;">
   ${carHtml}
   <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
   <div style="cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
       <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
-      <div style="font-size:16px;color:#374151;margin-top:3px;">${pt.rooms || '?'}-комн · <b style="font-size:17px;">${areaTxt}</b> м²<span style="font-size:13px;color:#888;">${ppm}</span><span style="font-size:13px;color:#888;"> · на рынке: ${ageText}</span></div>
+      <div style="font-size:16px;color:#374151;margin-top:3px;white-space:nowrap;">${pt.rooms || '?'}-комн · <b style="font-size:17px;">${areaTxt}</b> м²<span style="font-size:13px;color:#888;">${ppm}</span><span style="font-size:13px;color:#888;"> · на рынке: ${ageText}</span></div>
   </div>
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
   <div style="font-size:12.5px;margin-top:3px;">Смарт рейтинг: <a href="/admin/analytics/${pt.id}" onclick="event.stopPropagation()" title="${scoreExplainText(pt.score_bd)}" style="color:${sc};font-weight:800;text-decoration:none;border-bottom:1px dashed ${sc};">${pt.score}</a></div>
@@ -564,7 +564,8 @@ function loadPriceHistory(id) {
   fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
     // <=1 точка значит реальных изменений цены не было (только стартовая) — блок вообще не показываем
     if (!d.points || d.points.length <= 1) { el.innerHTML = ''; return; }
-    el.innerHTML = sparklineSVG(d.points, 220, 58);
+    const w = Math.max(220, el.clientWidth || 220);  // почти вся ширина карточки, а не фикс. 220px
+    el.innerHTML = sparklineSVG(d.points, w, 58);
   }).catch(() => { el.innerHTML = ''; });
 }
 
