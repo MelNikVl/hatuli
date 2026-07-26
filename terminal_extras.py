@@ -1951,6 +1951,24 @@ def make_extras_router(templates) -> APIRouter:
         } for r in rows]
         return JSONResponse({"points": pts, "days": days})
 
+    # ── Аналитика: покрытие данными по этажам ──────────────────────────────
+
+    @router.get("/admin/analytics/floors", response_class=HTMLResponse)
+    async def floors_analytics_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetchval as pg_fv
+        total_active = await pg_fv(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+        missing_floor = await pg_fv(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE AND floor IS NULL") or 0
+        return templates.TemplateResponse("floors_analytics.html", {
+            "request": request, "atab": "floors",
+            "total_active": total_active, "missing_floor": missing_floor,
+        })
+
     # ── Объявления без привязки к ЖК ──────────────────────────────────────
 
     @router.get("/admin/unbound", response_class=HTMLResponse)

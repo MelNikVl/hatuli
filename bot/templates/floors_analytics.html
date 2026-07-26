@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🧱 Покрытие данными по этажам</div>
+<p style="font-size:13px;color:#888;max-width:900px;">
+  Этаж (как и координаты, фото, отделка) приходит только с детальной страницы объявления на Крыше —
+  та же докачка, что упирается в лимит запросов (см. вкладку <a href="/admin/parser">Парсеры</a>).
+  График ниже — снимки <code>floor_stats_history</code>, которые пишутся раз в цикл парсера продаж.
+</p>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+    <div style="font-size:24px;font-weight:800;">{{ "{:,}".format(total_active).replace(",", " ") }}</div>
+    <div style="font-size:12px;color:#888;">активных объявлений</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+    <div style="font-size:24px;font-weight:800;color:#ef4444;">{{ "{:,}".format(missing_floor).replace(",", " ") }}</div>
+    <div style="font-size:12px;color:#888;">сейчас без этажа{% if total_active %} ({{ (missing_floor / total_active * 100) | round(1) }}%){% endif %}</div>
+  </div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;">
+  <b style="font-size:14px;">Сколько активных объявлений БЕЗ этажа — во времени</b>
+  <div style="display:inline-flex;gap:6px;margin-left:12px;">
+    {% for d in [7, 30, 90] %}
+    <a href="?days={{ d }}" class="floors-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
+    {% endfor %}
+  </div>
+  <canvas id="floor-missing-chart" height="90"></canvas>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+let daysParam = new URLSearchParams(location.search).get('days') || 30;
+document.querySelectorAll('.floors-days-link').forEach(a => {
+  if (a.dataset.days === String(daysParam)) { a.style.background = '#2563eb'; a.style.color = '#fff'; }
+});
+let chartInst = null;
+fetch('/admin/api/floor-history?days=' + daysParam).then(r => r.json()).then(d => {
+  const pts = d.points || [];
+  if (pts.length < 2) {
+    document.getElementById('floor-missing-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек снимков</div>';
+    return;
+  }
+  new Chart(document.getElementById('floor-missing-chart'), {
+    type: 'line',
+    data: {
+      labels: pts.map(p => p.at),
+      datasets: [{
+        label: 'без этажа, шт.', data: pts.map(p => p.total_active - p.with_floor),
+        borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,.12)', fill: true, tension: 0.25, pointRadius: 2,
+      }],
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 12, font: { size: 10 } }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { precision: 0 } },
+      },
+    },
+  });
+}).catch(() => {});
+</script>
+{% endblock %}
