@@ -599,7 +599,12 @@ function renderSaleBatch(d) {
       pillList.push(`${areaTxt} м²`);
       if (pt.ceiling_height) pillList.push(`Потолок ${pt.ceiling_height} м`);
       pillList.push(`на рынке: ${ageText}`);
-      const pillsHtml = `<span style="${pillStyle}">${pillList[0]}</span>${ownerPillHtml}` +
+      const devPillHtml = pt.developer_name
+        ? (pt.developer_id
+            ? `<a href="/admin/developer/${pt.developer_id}" onclick="event.stopPropagation()" style="${pillStyle}text-decoration:none;">🏗 ${escapeHtml(pt.developer_name)}</a>`
+            : `<span style="${pillStyle}">🏗 ${escapeHtml(pt.developer_name)}</span>`)
+        : '';
+      const pillsHtml = `<span style="${pillStyle}">${pillList[0]}</span>${ownerPillHtml}${devPillHtml}` +
         pillList.slice(1).map(t => `<span style="${pillStyle}">${t}</span>`).join('');
       const priceM2Txt = (pt.price && pt.area) ? Math.round(pt.price/pt.area/1000) + ' тыс ₸/м²' : '';
       m.bindPopup(`

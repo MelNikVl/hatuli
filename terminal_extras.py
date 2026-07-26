@@ -976,13 +976,16 @@ def make_extras_router(templates) -> APIRouter:
                     + COALESCE(a.layer_bonus,0)
                     + COALESCE(a.price_drop_bonus,0)) AS eff_score,
                    ph.old_price AS prev_price,
-                   ph.changed_at AS price_changed_at
+                   ph.changed_at AS price_changed_at,
+                   dv.id AS developer_id, dv.name AS developer_name
             FROM apartment_listings a
             LEFT JOIN LATERAL (
                 SELECT old_price, changed_at FROM price_history h
                 WHERE h.listing_id = a.id
                 ORDER BY changed_at DESC LIMIT 1
             ) ph ON TRUE
+            LEFT JOIN complexes cx ON lower(trim(cx.name)) = lower(trim(a.complex_name))
+            LEFT JOIN developers dv ON dv.id = cx.developer_id
             WHERE a.lat IS NOT NULL AND a.lon IS NOT NULL
               AND a.is_active IS NOT FALSE
               AND COALESCE(a.is_duplicate, FALSE) = FALSE
@@ -1009,6 +1012,7 @@ def make_extras_router(templates) -> APIRouter:
             "photos": _photos_of(r),
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
             "address": r["address"] or "", "complex": r["complex_name"] or "",
+            "developer_id": r["developer_id"], "developer_name": r["developer_name"] or "",
             "year_built": r["year_built"],
             "description": r["description"] or "",
             "ceiling_height": float(r["ceiling_height"]) if r["ceiling_height"] is not None else None,
