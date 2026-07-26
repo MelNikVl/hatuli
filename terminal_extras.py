@@ -266,6 +266,44 @@ def make_extras_router(templates) -> APIRouter:
 
     # ── Настройки ─────────────────────────────────────────────────────────
 
+    # ── Мониторинг сервера/проекта (CPU/память/диск/размер) ────────────────
+
+    @router.get("/admin/api/system-stats")
+    async def system_stats_live(request: Request):
+        """Мгновенный снимок для живого обновления на /admin/settings (опрос
+        раз в несколько секунд с клиента) — см. bot/core/system_stats.py."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.system_stats import read_live_stats
+        from bot.db.pg import fetchrow as pg_fr
+        live = read_live_stats()
+        last_project = await pg_fr(
+            "SELECT project_size_gb, at FROM system_stats_history ORDER BY at DESC LIMIT 1")
+        return JSONResponse({
+            **live,
+            "project_size_gb": float(last_project["project_size_gb"]) if last_project else None,
+            "project_size_at": last_project["at"].strftime("%d.%m.%Y %H:%M") if last_project else None,
+        })
+
+    @router.get("/admin/api/system-stats-history")
+    async def system_stats_history_api(request: Request, hours: int = 24):
+        """История снимков (раз в цикл парсера продаж) — для графика на
+        /admin/settings."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT at, cpu_pct, mem_pct, disk_pct, project_size_gb
+            FROM system_stats_history
+            WHERE at > now() - ($1 || ' hours')::interval
+            ORDER BY at ASC
+        """, str(hours))
+        return JSONResponse({"points": [{
+            "at": r["at"].strftime("%d.%m %H:%M"),
+            "cpu_pct": r["cpu_pct"], "mem_pct": r["mem_pct"], "disk_pct": r["disk_pct"],
+            "project_size_gb": float(r["project_size_gb"]) if r["project_size_gb"] is not None else None,
+        } for r in rows]})
+
     @router.get("/admin/settings", response_class=HTMLResponse)
     async def settings_page(request: Request):
         if not is_authed(request):

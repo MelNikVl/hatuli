@@ -33,6 +33,29 @@
 </div>
 
 <div class="settings-block">
+  <h3>🖥 Сервер и проект</h3>
+  <div class="settings-grid" style="margin-bottom:16px;">
+    <div class="set-card">
+      <div class="set-label">CPU <span class="set-value" id="sys-cpu">…</span></div>
+    </div>
+    <div class="set-card">
+      <div class="set-label">Память <span class="set-value" id="sys-mem">…</span></div>
+      <div style="font-size:11.5px;color:#888;margin-top:4px;" id="sys-mem-detail"></div>
+    </div>
+    <div class="set-card">
+      <div class="set-label">Диск <span class="set-value" id="sys-disk">…</span></div>
+      <div style="font-size:11.5px;color:#888;margin-top:4px;" id="sys-disk-detail"></div>
+    </div>
+    <div class="set-card">
+      <div class="set-label">Проект на диске <span class="set-value" id="sys-project">…</span></div>
+      <div style="font-size:11.5px;color:#888;margin-top:4px;" id="sys-project-detail"></div>
+    </div>
+  </div>
+  <div style="font-size:11px;color:#888;margin-bottom:6px;">CPU/память/диск обновляются каждые 5с (live), график ниже — раз в цикл парсера продаж (~50-80 мин).</div>
+  <canvas id="sys-chart" height="80"></canvas>
+</div>
+
+<div class="settings-block">
   <h3>👁 Настройки вида</h3>
   <div class="ctrl-row" style="margin-bottom:0;">
     <button class="btn-big {{ 'btn-money-on' if monetization else 'btn-money-off' }}" id="btn-money" onclick="toggleMoney()">
@@ -174,5 +197,51 @@ async function saveSettings() {
 
 refreshStatus();
 setInterval(refreshStatus, 15000);
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// ── Мониторинг сервера/проекта ──────────────────────────────────────────
+function fmtGb(v) { return v == null ? '—' : v.toFixed(1) + ' ГБ'; }
+async function refreshSystemLive() {
+  try {
+    const d = await (await fetch('/admin/api/system-stats')).json();
+    document.getElementById('sys-cpu').textContent = d.cpu_pct + '%';
+    document.getElementById('sys-mem').textContent = d.mem_pct + '%';
+    document.getElementById('sys-mem-detail').textContent = `${fmtGb(d.mem_used_gb)} / ${fmtGb(d.mem_total_gb)}`;
+    document.getElementById('sys-disk').textContent = d.disk_pct + '%';
+    document.getElementById('sys-disk-detail').textContent = `${fmtGb(d.disk_used_gb)} / ${fmtGb(d.disk_total_gb)}`;
+    document.getElementById('sys-project').textContent = d.project_size_gb != null ? fmtGb(d.project_size_gb) : '—';
+    document.getElementById('sys-project-detail').textContent = d.project_size_at ? `на момент снимка: ${d.project_size_at}` : 'ещё нет снимка';
+  } catch (e) {}
+}
+refreshSystemLive();
+setInterval(refreshSystemLive, 5000);
+
+let sysChartInst = null;
+fetch('/admin/api/system-stats-history?hours=72').then(r => r.json()).then(d => {
+  const pts = d.points || [];
+  if (pts.length < 2) {
+    document.getElementById('sys-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 снимков — график появится после следующих циклов парсера</div>';
+    return;
+  }
+  sysChartInst = new Chart(document.getElementById('sys-chart'), {
+    type: 'line',
+    data: {
+      labels: pts.map(p => p.at),
+      datasets: [
+        { label: 'CPU %', data: pts.map(p => p.cpu_pct), borderColor: '#2563eb', backgroundColor: 'transparent', tension: 0.25, pointRadius: 1 },
+        { label: 'Память %', data: pts.map(p => p.mem_pct), borderColor: '#16a34a', backgroundColor: 'transparent', tension: 0.25, pointRadius: 1 },
+        { label: 'Диск %', data: pts.map(p => p.disk_pct), borderColor: '#f59e0b', backgroundColor: 'transparent', tension: 0.25, pointRadius: 1 },
+      ],
+    },
+    options: {
+      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 12, font: { size: 10 } }, grid: { display: false } },
+        y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+      },
+    },
+  });
+}).catch(() => {});
 </script>
 {% endblock %}

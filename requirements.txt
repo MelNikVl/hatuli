@@ -42,3 +42,4 @@ google-auth==2.34.0
 
 # Homsters.kz enrichment: обходит anti-bot защиту (403 без этого)
 curl_cffi==0.7.1
+psutil==7.2.2

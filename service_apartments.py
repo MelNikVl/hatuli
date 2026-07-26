@@ -647,6 +647,14 @@ async def run_cycle():
     except Exception as e:
         log.warning("floor snapshot failed: %s", e)
 
+    # === Мониторинг сервера/проекта (CPU/память/диск/размер) — снимок раз
+    # в цикл, см. /admin/settings ===
+    try:
+        from bot.core.system_stats import snapshot_system_stats
+        await snapshot_system_stats()
+    except Exception as e:
+        log.warning("system stats snapshot failed: %s", e)
+
     # Google Sheets sync
     try:
         # === Гексагональный анализ цены (микролокальный Deal Index) ===
