@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
+{% set catab = 'list' %}
+{% include "_complexes_tabs.html" with context %}
 <div class="page-title">
-  Рейтинг ЖК
-  <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} жилых комплексов</small>
+  Жилые комплексы
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} всего в базе{% if shown < total %} · показано {{ shown }}{% endif %}</small>
 </div>
 <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
   <button onclick="auditCx(false)" style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">🔍 Найти ЖК-улицы</button>

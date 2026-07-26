@@ -858,6 +858,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             """,
             *params,
         )
+        total_all = await pg_fetch(f"SELECT COUNT(*) AS n FROM complexes c {where}", *params)
 
         def _serialize(r):
             d = dict(r)
@@ -871,7 +872,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             {
                 "request": request,
                 "complexes": [_serialize(r) for r in rows],
-                "total": len(rows),
+                "total": total_all[0]["n"] if total_all else len(rows),
+                "shown": len(rows),
                 "filters": {"district": district, "sort": sort, "search": search},
             },
         )

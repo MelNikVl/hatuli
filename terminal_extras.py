@@ -1820,23 +1820,27 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY 1
         """, str(days))
         rental_rows = await pg_fetch("""
-            SELECT (last_seen::date + interval '3 days')::date AS d, COUNT(*) AS cnt
+            SELECT (last_seen::date + interval '3 days')::date AS d,
+                   CASE WHEN rooms >= 3 THEN 3 ELSE COALESCE(rooms, 0) END AS room_bucket,
+                   COUNT(*) AS cnt
             FROM rental_listings
             WHERE last_seen < now() - interval '3 days'
               AND last_seen::date + interval '3 days' > now() - ($1 || ' days')::interval
-            GROUP BY 1
+            GROUP BY 1, 2
             ORDER BY 1
         """, str(days))
-        rental_by_day = {r["d"]: r["cnt"] for r in rental_rows}
-        days_set = sorted({r["d"] for r in rows} | set(rental_by_day))
-        series = {"1": [], "2": [], "3": [], "rental": []}
         by_day = {}
         for r in rows:
             by_day.setdefault(r["d"], {})[str(r["room_bucket"])] = r["cnt"]
+        rental_by_day = {}
+        for r in rental_rows:
+            rental_by_day.setdefault(r["d"], {})[str(r["room_bucket"])] = r["cnt"]
+        days_set = sorted(set(by_day) | set(rental_by_day))
+        series = {"1": [], "2": [], "3": [], "rental_1": [], "rental_2": [], "rental_3": []}
         for d in days_set:
             for k in ("1", "2", "3"):
                 series[k].append(by_day.get(d, {}).get(k, 0))
-            series["rental"].append(rental_by_day.get(d, 0))
+                series["rental_" + k].append(rental_by_day.get(d, {}).get(k, 0))
         return JSONResponse({
             "days": [d.strftime("%d.%m") for d in days_set],
             "series": series,

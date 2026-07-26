@@ -103,6 +103,22 @@
 <script>
 const IS_ADMIN = {{ 'true' if admin else 'false' }};
 const POPUP_WIDTH = {{ popup_width | default(380) }};
+// Реестр маркеров по id объявления — чтобы клик по мини-плашке внутри
+// маленького (<=3) кластера открывал попап именно этого объявления
+// напрямую, без spiderfy (см. openMiniClusterPin).
+const MINI_PIN_MARKERS = {};
+function openMiniClusterPin(id) {
+  const m = MINI_PIN_MARKERS[id];
+  if (!m) return;
+  const latlng = m.getLatLng();
+  L.popup({maxWidth: POPUP_WIDTH, minWidth: Math.min(POPUP_WIDTH, 260), autoPan: false})
+    .setLatLng(latlng)
+    .setContent(m.getPopup().getContent())
+    .openOn(map);
+  map.panTo(latlng, {animate: true});
+  loadPriceHistory(id);
+  loadListingExtras(id);
+}
 // Кеширующий прокси фото (см. /img-proxy на бэкенде) — первый показ идёт на
 // источник и кэшируется на диске сервера, дальше отдаётся с диска.
 function proxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
@@ -189,7 +205,10 @@ const saleCluster = L.markerClusterGroup({
         if (!meta) return '';
         const priceTxt = fmtPriceShort(meta.pt.price);
         const roomsTxt = meta.pt.rooms ? meta.pt.rooms + 'к' : '?';
-        return `<div style="background:${meta.pinBg};color:#fff;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);margin-bottom:2px;">${meta.isTop ? '⭐' : ''}${roomsTxt} · ${priceTxt}</div>`;
+        // Клик по конкретной мини-плашке открывает превью ЭТОГО объявления
+        // напрямую (без zoomToBoundsOnClick/spiderfy кластера) — раз мы уже
+        // показали 2-3 варианта отдельно, лишний "разлёт" по треугольнику не нужен.
+        return `<div onclick="event.stopPropagation();openMiniClusterPin('${meta.pt.id}')" style="cursor:pointer;background:${meta.pinBg};color:#fff;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);margin-bottom:2px;">${meta.isTop ? '⭐' : ''}${roomsTxt} · ${priceTxt}</div>`;
       }).join('');
       return L.divIcon({
         html: `<div style="display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-100%);">${mini}</div>`,
@@ -458,6 +477,7 @@ function applyFilters() {
           icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
           pinMeta: {pt, pinBg: '#0077FF', isTop: false},
         }).addTo(saleCluster);
+        MINI_PIN_MARKERS[pt.id] = m;
         const cx = pt.complex ? `<a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}">${pt.complex}</a>` : 'ЖК не определён';
         let priceTrend = '';
         if (pt.prev_price && pt.prev_price !== pt.price) {
@@ -520,6 +540,7 @@ function renderSaleBatch(d) {
         zIndexOffset: isTop ? 1000 : 0,
         pinMeta: {pt, pinBg, isTop},
       }).addTo(isTop ? topLayer : saleCluster);
+      MINI_PIN_MARKERS[pt.id] = m;
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
       const areaTxt = pt.area ? Math.round(pt.area) : '?';
       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
@@ -540,9 +561,6 @@ function renderSaleBatch(d) {
   <span id="car-n-${pt.id}" style="position:absolute;right:6px;bottom:5px;background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;border-radius:6px;padding:1px 7px;">1/${pt.photos.length}</span>` : ''}
 </div>` : '';
       const isOwner = !!pt.is_owner;
-      const sellerHtml = isOwner
-        ? '<b style="color:#16a34a;">👤 от собственника</b>'
-        : (pt.seller_name ? `<span style="color:#000;">🏢 риелтор <b>${pt.seller_name}</b></span>` : '<span style="color:#000;">🏢 риелтор</span>');
       const cxLabel = pt.complex && /^\s*(жк|кг)\b/i.test(pt.complex) ? pt.complex : `ЖК ${pt.complex}`;
       const cxLine = pt.complex
         ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}</div>`
@@ -582,17 +600,11 @@ function renderSaleBatch(d) {
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
   <div style="font-size:12.5px;margin-top:3px;">Смарт рейтинг: <a href="/admin/analytics/${pt.id}" onclick="event.stopPropagation()" title="${scoreExplainText(pt.score_bd)}" style="color:${sc};font-weight:800;text-decoration:none;border-bottom:1px dashed ${sc};">${pt.score}</a></div>
   <div id="dealscore-${pt.id}" style="font-size:12.5px;margin-top:3px;"></div>
-  <div style="font-size:13px;margin-top:6px;">${sellerHtml}</div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
   ${(priceTrend || pt.views) ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend ? priceTrend.replace(/^ · /, '') : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>` : ''}
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
-  ${(pt.lat != null && pt.lon != null) ? `
-  <a href="https://yandex.kz/maps/?ll=${pt.lon}%2C${pt.lat}&z=16&pt=${pt.lon},${pt.lat},pm2rdm" target="_blank" onclick="event.stopPropagation()" style="display:block;margin-top:8px;border-radius:8px;overflow:hidden;line-height:0;">
-    <img src="https://static-maps.yandex.ru/1.x/?ll=${pt.lon},${pt.lat}&z=16&l=map&pt=${pt.lon},${pt.lat},pm2rdm&size=650,260" style="width:100%;height:auto;display:block;" onerror="this.parentNode.style.display='none'">
-  </a>` : ''}
   ${descHtml}
-  <div id="nearby-${pt.id}"></div>
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
     <a href="javascript:void(0)" onclick="openDetailModal('${pt.id}', event)" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Подробнее</a>
     <a href="/admin/analytics/${pt.id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Аналитика</a>
@@ -701,10 +713,8 @@ function toggleBargainExplain(uid, ev) {
   if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
 }
 // Один запрос к /admin/api/listing/{id} (та же ручка, что и у модалки
-// "Подробнее") наполняет сразу 4 блока попапа: основная информация
-// (адрес/этаж), реальная цена (торг), Deal Score (гексагональный индекс)
-// и похожие варианты рядом — то же самое, что показано на странице
-// объявления на сайте, просто компактно.
+// "Подробнее") наполняет 3 блока попапа: основная информация (адрес/этаж),
+// реальная цена (торг) и Deal Score (гексагональный индекс).
 function loadListingExtras(id) {
   const el = document.getElementById('bg-' + id);
   if (!el || el.dataset.loaded) return;
@@ -742,22 +752,6 @@ function loadListingExtras(id) {
       dsEl.innerHTML = `🎯 Deal Score: <b>${d.deal_score.deal}/100</b> <span style="color:#888;">· уверенность ${d.deal_score.confidence}%</span>`;
     }
 
-    // Похожие варианты рядом (3 ближайших по расстоянию)
-    const nbEl = document.getElementById('nearby-' + id);
-    if (nbEl && d.nearby && d.nearby.length) {
-      nbEl.innerHTML = `
-<div style="font-size:12px;color:#888;font-weight:700;margin-top:9px;">🔎 Похожие варианты рядом</div>
-<div style="display:flex;gap:6px;overflow-x:auto;margin-top:6px;padding-bottom:2px;">
-  ${d.nearby.map(n => `
-  <a href="/admin/analytics/${n.id}" style="flex:0 0 96px;text-decoration:none;color:inherit;border:1px solid #eee;border-radius:8px;overflow:hidden;display:block;">
-    ${n.photo ? `<img src="${proxyImg(n.photo)}" style="width:100%;height:60px;object-fit:cover;display:block;">` : `<div style="width:100%;height:60px;background:#f3f4f6;"></div>`}
-    <div style="padding:4px 6px;">
-      <div style="font-weight:800;font-size:11.5px;">${n.price ? (n.price/1e6).toFixed(1)+' М' : '—'}</div>
-      <div style="font-size:10px;color:#888;">${n.rooms||'?'}к · ${n.area?Math.round(n.area):'?'}м²</div>
-    </div>
-  </a>`).join('')}
-</div>`;
-    }
   }).catch(() => { el.innerHTML = ''; });
 }
 

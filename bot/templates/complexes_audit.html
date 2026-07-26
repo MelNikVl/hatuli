@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+{% set catab = 'audit' %}
+{% include "_complexes_tabs.html" with context %}
 <div class="page-title">🧾 Аудит данных по ЖК
   <small style="font-size:13px;color:#888;font-weight:400;">показано {{ rows|length }} из {{ total_cx }} ЖК, по числу активных объявлений</small>
 </div>

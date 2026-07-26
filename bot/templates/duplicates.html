@@ -15,10 +15,10 @@
 
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
   <div style="order:1;flex:1 1 380px;min-width:250px;max-width:68%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
-    <div id="dup-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
+    <div id="dup-map" style="height:calc(100vh - 210px);min-height:400px;width:100%;border-radius:8px;"></div>
   </div>
 
-  <div style="order:2;flex:0 0 320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;max-height:600px;overflow-y:auto;">
+  <div style="order:2;flex:0 0 320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;max-height:calc(100vh - 210px);overflow-y:auto;">
     <b style="font-size:14px;">🏆 Топ по числу дублей</b>
     <div style="margin-top:10px;">
       {% for r in rows[:20] %}
@@ -68,13 +68,13 @@ document.addEventListener('DOMContentLoaded', function() {
       ? `<img src="${d.photo}" style="width:85px;height:65px;object-fit:cover;display:block;border-radius:4px;flex-shrink:0;">`
       : `<div style="width:85px;height:65px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:16px;border-radius:4px;flex-shrink:0;">🏠</div>`;
     return `
-<a href="${d.url ? d.url : '/admin/analytics/' + d.id}" target="${d.url ? '_blank' : '_self'}" style="display:flex;gap:7px;align-items:center;text-decoration:none;color:inherit;border:1px solid ${isPrimary ? '#2563eb' : '#eee'};border-radius:5px;overflow:hidden;background:#fff;padding:5px;">
+<a href="${d.url ? d.url : '/admin/analytics/' + d.id}" target="${d.url ? '_blank' : '_self'}" style="display:flex;gap:10px;align-items:center;text-decoration:none;color:inherit;border:1px solid ${isPrimary ? '#2563eb' : '#eee'};border-radius:6px;overflow:hidden;background:#fff;padding:7px;">
   ${photoHtml}
   <div style="min-width:0;">
-    ${isPrimary ? '<div style="font-size:5.5px;color:#2563eb;font-weight:800;">ОСНОВНАЯ</div>' : ''}
-    <div style="font-weight:800;font-size:9.5px;">${priceTxt}</div>
-    <div style="font-size:7px;color:#555;">${d.rooms ? d.rooms + '-комн' : ''}</div>
-    <div style="font-size:6.75px;color:#555;">${whoLabel(d)}</div>
+    ${isPrimary ? '<div style="font-size:8.25px;color:#2563eb;font-weight:800;">ОСНОВНАЯ</div>' : ''}
+    <div style="font-weight:800;font-size:14.25px;">${priceTxt}</div>
+    <div style="font-size:10.5px;color:#555;">${d.rooms ? d.rooms + '-комн' : ''}</div>
+    <div style="font-size:10px;color:#555;">${whoLabel(d)}</div>
   </div>
 </a>`;
   }
@@ -88,8 +88,8 @@ document.addEventListener('DOMContentLoaded', function() {
       iconSize:[24,24], iconAnchor:[12,12]})})
       .bindPopup(`<b>×${p.n} — это ${p.n + 1} объявлений ОДНОГО объекта</b>` +
         `${p.complex ? `<br><span style="color:#888;font-size:12px;">🏢 ${p.complex}</span>` : ''}` +
-        `<div style="display:flex;flex-direction:column;gap:4px;overflow-y:auto;max-height:280px;margin-top:8px;padding-right:2px;">${cards}</div>`,
-        {maxWidth: 240, minWidth: 220})
+        `<div style="display:flex;flex-direction:column;gap:5px;overflow-y:auto;max-height:250px;margin-top:8px;padding-right:2px;">${cards}</div>`,
+        {maxWidth: 280, minWidth: 260})
       .addTo(map);
   });
 });

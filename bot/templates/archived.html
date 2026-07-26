@@ -14,9 +14,10 @@
   а не когда объявление реально сняли с Крыши.
 </p>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-top:14px;">
+<div style="display:flex;gap:14px;margin-top:14px;flex-wrap:wrap;align-items:flex-start;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:0 0 calc(50% - 7px);min-width:320px;max-width:calc(50% - 7px);overflow:hidden;box-sizing:border-box;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-    <b style="font-size:14px;">По дням, с разбивкой по комнатности</b>
+    <b style="font-size:14px;">По дням, отдельно продажа/аренда, с разбивкой по комнатности</b>
     <div style="display:flex;gap:6px;">
       <button type="button" class="rng-btn" data-days="14" onclick="loadArchivedChart(14)" style="padding:5px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">14 дн</button>
       <button type="button" class="rng-btn" data-days="30" onclick="loadArchivedChart(30)" style="padding:5px 12px;border:1px solid var(--border);border-radius:7px;background:var(--accent, #5865f2);color:#fff;font-size:12px;cursor:pointer;">30 дн</button>
@@ -24,10 +25,10 @@
     </div>
   </div>
   <div style="display:flex;gap:14px;font-size:12px;color:#888;margin-bottom:10px;flex-wrap:wrap;">
-    <span><span style="display:inline-block;width:10px;height:10px;background:#3b82f6;border-radius:2px;"></span> 1-комн (продажа)</span>
-    <span><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;"></span> 2-комн (продажа)</span>
-    <span><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;"></span> 3+-комн (продажа)</span>
-    <span><span style="display:inline-block;width:10px;height:10px;background:#a855f7;border-radius:2px;"></span> аренда (≥3 дня не видели)</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#3b82f6;border-radius:2px;"></span> 1-комн</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;"></span> 2-комн</span>
+    <span><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;"></span> 3+-комн</span>
+    <span style="color:#555;">·  два бара в день: <b>продажа</b> / <b>аренда</b> (аренда: ≥3 дня не видели)</span>
   </div>
   <div id="archived-chart" style="overflow-x:auto;"></div>
 </div>
@@ -35,7 +36,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-top:14px;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:0 0 calc(50% - 7px);min-width:320px;max-width:calc(50% - 7px);overflow:hidden;box-sizing:border-box;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
     <b style="font-size:14px;">🗺 Гекс-карта ушедших в архив</b>
     <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -57,9 +58,10 @@
       {% endfor %}
     </div>
   </div>
-  <div id="arch-hex-map" style="aspect-ratio:16/9;width:100%;min-height:420px;border-radius:8px;"></div>
+  <div id="arch-hex-map" style="aspect-ratio:16/9;width:100%;min-height:340px;border-radius:8px;"></div>
   <div id="arch-hex-status" style="font-size:12px;color:#888;margin-top:6px;"></div>
 </div>
+</div><!-- /half-width row -->
 
 <script>
 // ── Гекс-карта: последняя цена / скорость ухода объявлений в архив ────────
@@ -121,7 +123,7 @@ function setArchHexType(t) {
     b.style.background = active ? 'var(--accent, #5865f2)' : 'var(--bg)';
     b.style.color = active ? '#fff' : 'var(--text)';
   });
-  loadArchHexPoints();
+  loadArchHexPoints(true);
 }
 function setArchHexRooms(r) {
   archHexRooms = r;
@@ -130,53 +132,65 @@ function setArchHexRooms(r) {
     b.style.background = active ? 'var(--accent, #5865f2)' : 'var(--bg)';
     b.style.color = active ? '#fff' : 'var(--text)';
   });
-  loadArchHexPoints();
+  loadArchHexPoints(false);
 }
-function loadArchHexPoints() {
+function loadArchHexPoints(fit) {
   const key = archHexType + ':' + archHexRooms;
   const status = document.getElementById('arch-hex-status');
   status.textContent = 'загрузка…';
   fetch(`/admin/api/archived-hex-points?type=${archHexType}&rooms=${archHexRooms}`).then(r => r.json()).then(d => {
     archHexCache[key] = d.points || [];
-    drawArchHex();
+    drawArchHex(fit);
   }).catch(() => { status.textContent = 'не удалось загрузить'; });
 }
-function drawArchHex() {
+let archHexEverFit = false;
+function drawArchHex(fit) {
   archHexLayer.clearLayers();
   const key = archHexType + ':' + archHexRooms;
   const points = archHexCache[key];
   const status = document.getElementById('arch-hex-status');
-  if (!points) { loadArchHexPoints(); return; }
-  const field = archHexMetric === 'price' ? 'price' : 'days';
-  const valid = points.filter(p => p[field] != null && p[field] > 0);
+  if (!points) { loadArchHexPoints(fit); return; }
+  const valid = points.filter(p => (p.price != null && p.price > 0) || (p.days != null && p.days > 0));
   if (!valid.length) { status.textContent = 'нет данных за выбранный фильтр'; return; }
   const buckets = new Map();
   valid.forEach(p => {
     const [q, r] = archHexAxial(p.lat, p.lon, ARCH_HEX_EDGE);
     const key2 = q + ':' + r;
-    if (!buckets.has(key2)) buckets.set(key2, {q, r, vals: []});
-    buckets.get(key2).vals.push(p[field]);
+    if (!buckets.has(key2)) buckets.set(key2, {q, r, prices: [], daysVals: []});
+    const b = buckets.get(key2);
+    if (p.price > 0) b.prices.push(p.price);
+    if (p.days != null && p.days > 0) b.daysVals.push(p.days);
+    b.n = (b.n || 0) + 1;
   });
-  const medians = [];
-  buckets.forEach(b => { b.value = archMedian(b.vals); medians.push(b.value); });
-  const lo = archPercentile(medians, 0.10), hi = archPercentile(medians, 0.90);
+  buckets.forEach(b => {
+    b.priceMedian = b.prices.length ? archMedian(b.prices) : null;
+    b.daysMedian = b.daysVals.length ? archMedian(b.daysVals) : null;
+  });
+  const colorField = archHexMetric === 'price' ? 'priceMedian' : 'daysMedian';
+  const colorVals = [...buckets.values()].map(b => b[colorField]).filter(v => v != null);
+  const lo = archPercentile(colorVals, 0.10), hi = archPercentile(colorVals, 0.90);
   const bounds = [];
   buckets.forEach(b => {
-    const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
+    const v = b[colorField];
+    const t = (v != null && hi > lo) ? (v - lo) / (hi - lo) : 0.5;
     const corners = archHexCorners(b.q, b.r, ARCH_HEX_EDGE);
-    const label = archHexMetric === 'price'
-      ? (b.value >= 1e6 ? (b.value/1e6).toFixed(1) + 'М' : Math.round(b.value/1e3) + 'К')
-      : Math.round(b.value) + ' дн.';
+    const priceLabel = b.priceMedian != null
+      ? (b.priceMedian >= 1e6 ? (b.priceMedian/1e6).toFixed(1) + 'М' : Math.round(b.priceMedian/1e3) + 'К')
+      : '-';
+    const daysLabel = b.daysMedian != null ? Math.round(b.daysMedian) + ' дн.' : '-';
     L.polygon(corners, {
-      color: '#fff', weight: 0.6, fillColor: archHeatColor(archHexMetric === 'price' ? t : (1 - t)), fillOpacity: 0.6,
-    }).bindTooltip(`${label} · ${b.vals.length} объявл.`, {sticky:true}).addTo(archHexLayer);
+      color: '#fff', weight: 0.6,
+      fillColor: v != null ? archHeatColor(archHexMetric === 'price' ? t : (1 - t)) : '#9ca3af',
+      fillOpacity: 0.6,
+    }).bindTooltip(`${priceLabel} - ${daysLabel} - ${b.n} объявл.`, {sticky:true}).addTo(archHexLayer);
     corners.forEach(c => bounds.push(c));
   });
-  status.textContent = `${valid.length} объявлений · ${buckets.size} гексагонов`;
-  if (bounds.length) archMap.fitBounds(bounds, {padding:[10,10]});
+  status.textContent = `${valid.length} объявлений - ${buckets.size} гексагонов`;
+  if (fit && bounds.length) { archMap.fitBounds(bounds, {padding:[10,10]}); archHexEverFit = true; }
+  else if (!archHexEverFit && bounds.length) { archMap.fitBounds(bounds, {padding:[10,10]}); archHexEverFit = true; }
   setTimeout(() => archMap.invalidateSize(), 50);
 }
-loadArchHexPoints();
+loadArchHexPoints(true);
 </script>
 
 <script>
@@ -192,34 +206,48 @@ function loadArchivedChart(days) {
       el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;">пока нет данных за этот период</div>';
       return;
     }
-    const colors = {1: '#3b82f6', 2: '#22c55e', 3: '#f59e0b', rental: '#a855f7'};
-    const rentalSeries = d.series.rental || d.days.map(() => 0);
-    const maxTotal = Math.max(1, ...d.days.map((_, i) => d.series['1'][i] + d.series['2'][i] + d.series['3'][i] + rentalSeries[i]));
-    // Ширина бара — по реальной ширине контейнера (раньше считалась от
-    // хардкода 3600px, из-за чего график почти всегда был шире страницы
-    // и уходил в горизонтальный скролл вместо того, чтобы влезать целиком).
+    const colors = {1: '#3b82f6', 2: '#22c55e', 3: '#f59e0b'};
+    // 2 бара в день: продажа (series 1/2/3) и аренда (series rental_1/2/3),
+    // каждый стеком по комнатности.
+    const maxTotal = Math.max(1, ...d.days.map((_, i) => {
+      const saleT = d.series['1'][i] + d.series['2'][i] + d.series['3'][i];
+      const rentT = d.series.rental_1[i] + d.series.rental_2[i] + d.series.rental_3[i];
+      return Math.max(saleT, rentT);
+    }));
     const containerW = (el.clientWidth || 900) * 0.9;
-    const barW = Math.max(20, Math.min(140, Math.floor(containerW / d.days.length) - 4));
+    const slotW = Math.max(40, Math.min(220, Math.floor(containerW / d.days.length) - 6));
+    const barW = Math.round((slotW - 4) / 2);
     const H = Math.round(640 * 2 / 3);
-    const bars = d.days.map((label, i) => {
-      const v1 = d.series['1'][i], v2 = d.series['2'][i], v3 = d.series['3'][i], vr = rentalSeries[i];
-      const total = v1 + v2 + v3 + vr;
+    function stack(v1, v2, v3, w) {
       const h1 = Math.round(v1 / maxTotal * (H - 20));
       const h2 = Math.round(v2 / maxTotal * (H - 20));
       const h3 = Math.round(v3 / maxTotal * (H - 20));
-      const hr = Math.round(vr / maxTotal * (H - 20));
-      return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:0 0 ${barW}px;">
-        <div style="font-size:9.5px;color:#888;">${total || ''}</div>
-        <div style="width:${Math.round(barW*0.7)}px;display:flex;flex-direction:column-reverse;" title="${label}: 1к=${v1}, 2к=${v2}, 3+к=${v3}, аренда=${vr}">
-          ${v1 ? `<div style="height:${h1}px;background:${colors[1]};"></div>` : ''}
-          ${v2 ? `<div style="height:${h2}px;background:${colors[2]};"></div>` : ''}
-          ${v3 ? `<div style="height:${h3}px;background:${colors[3]};"></div>` : ''}
-          ${vr ? `<div style="height:${hr}px;background:${colors.rental};"></div>` : ''}
+      return `<div style="width:${w}px;display:flex;flex-direction:column-reverse;">
+        ${v1 ? `<div style="height:${h1}px;background:${colors[1]};"></div>` : ''}
+        ${v2 ? `<div style="height:${h2}px;background:${colors[2]};"></div>` : ''}
+        ${v3 ? `<div style="height:${h3}px;background:${colors[3]};"></div>` : ''}
+      </div>`;
+    }
+    const bars = d.days.map((label, i) => {
+      const s1 = d.series['1'][i], s2 = d.series['2'][i], s3 = d.series['3'][i];
+      const r1 = d.series.rental_1[i], r2 = d.series.rental_2[i], r3 = d.series.rental_3[i];
+      const saleTotal = s1 + s2 + s3, rentTotal = r1 + r2 + r3;
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:0 0 ${slotW}px;">
+        <div style="display:flex;gap:4px;align-items:flex-end;">
+          <div style="display:flex;flex-direction:column;align-items:center;">
+            <div style="font-size:12.5px;font-weight:700;color:#888;">${saleTotal || ''}</div>
+            ${stack(s1, s2, s3, barW)}
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:center;">
+            <div style="font-size:12.5px;font-weight:700;color:#888;">${rentTotal || ''}</div>
+            ${stack(r1, r2, r3, barW)}
+          </div>
         </div>
-        <div style="font-size:9px;color:#888;transform:rotate(-45deg);white-space:nowrap;margin-top:4px;">${label}</div>
+        <div style="font-size:9px;color:#888;text-align:center;line-height:1.3;margin-top:1px;">прод. · аренда</div>
+        <div style="font-size:11.5px;font-weight:600;color:#888;transform:rotate(-45deg);white-space:nowrap;margin-top:4px;" title="${label}: продажа 1к=${s1},2к=${s2},3+к=${s3} · аренда 1к=${r1},2к=${r2},3+к=${r3}">${label}</div>
       </div>`;
     }).join('');
-    el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:4px;height:${H}px;padding-bottom:22px;min-width:${d.days.length*(barW+4)}px;">${bars}</div>`;
+    el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:6px;height:${H}px;padding-bottom:28px;min-width:${d.days.length*(slotW+6)}px;">${bars}</div>`;
   }).catch(() => {});
 }
 loadArchivedChart(30);
