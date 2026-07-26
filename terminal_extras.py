@@ -1172,9 +1172,8 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/complexes/data-audit", response_class=HTMLResponse)
     async def complexes_data_audit(request: Request, limit: int = 300):
         """Таблица по всем ЖК: где какие данные удалось вытащить (застройщик,
-        описание, фото, цена/м²), а где нет — чтобы разбираться точечно."""
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
+        описание, фото, цена/м²), а где нет — чтобы разбираться точечно.
+        Публичная страница — админ-элементы скрываются в шаблоне."""
         limit = max(50, min(limit, 5000))
         rows = await fetch("""
             SELECT c.id, c.name, c.developer_id, d.name AS developer_name,
@@ -1212,8 +1211,8 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/complex/{complex_id}", response_class=HTMLResponse)
     async def complex_detail(request: Request, complex_id: int):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
+        # Публичная страница — админ-элементы (редактирование фото/контактов)
+        # скрываются в шаблоне через is_admin(request)
         from bot.db.pg import fetchrow
         cx = await fetchrow("""
             SELECT c.*, d.name AS developer_name
@@ -1454,8 +1453,6 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/developers", response_class=HTMLResponse)
     async def developers_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT d.id, d.name, d.founded_year, d.projects_active,
@@ -1478,8 +1475,6 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/developer/{dev_id}", response_class=HTMLResponse)
     async def developer_detail(request: Request, dev_id: int):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import fetch, fetchrow
         dev = await fetchrow("SELECT * FROM developers WHERE id = $1", dev_id)
         if not dev:

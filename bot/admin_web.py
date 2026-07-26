@@ -819,9 +819,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         sort: str = "listings",
         search: str = "",
     ):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-
+        # Публичная страница (как главная карта) — админ-элементы скрываются
+        # в шаблоне через is_admin(request)
         from bot.db.pg import fetch as pg_fetch
 
         conditions = []
