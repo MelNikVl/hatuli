@@ -51,6 +51,11 @@
     <select id="f-pricechange" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">любое</option><option value="dropped_today">▼ снизили цену сегодня</option><option value="raised_today">▲ подняли цену сегодня</option>
     </select></div>
+  <div id="f-finish-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Отделка</label>
+    <select id="f-finish" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+      <option value="">любая</option><option value="черновая">бетон (черновая)</option><option value="с отделкой">с отделкой</option><option value="с мебелью">с мебелью</option>
+    </select>
+    <span style="font-size:10.5px;color:#aaa;">по тексту объявления — не у всех определена</span></div>
   <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;" id="f-price-label">Цена (млн ₸ или ₸)</label>
     <div style="display:flex;gap:6px;align-items:center;">
       <input id="f-pmin" type="number" min="0" step="1" placeholder="от" style="width:50%;padding:9px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
@@ -472,10 +477,13 @@ function applyFilters() {
   if (market && type === 'sale') p.set('market', market);
   const pricechange = document.getElementById('f-pricechange').value;
   if (pricechange && type === 'sale') p.set('price_change', pricechange);
+  const finish = document.getElementById('f-finish').value;
+  if (finish && type === 'sale') p.set('finish', finish);
 
   document.getElementById('f-market-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-pricechange-wrap').style.display = type === 'sale' ? '' : 'none';
+  document.getElementById('f-finish-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
   if (type === 'rental') {
@@ -598,6 +606,7 @@ function renderSaleBatch(d) {
       const ownerPillHtml = `<span style="${ownerPillStyle}">${isOwner ? '👤 собственник' : '🏢 риелтор'}</span>`;
       pillList.push(`${areaTxt} м²`);
       if (pt.ceiling_height) pillList.push(`Потолок ${pt.ceiling_height} м`);
+      if (pt.finish_type) pillList.push(`${pt.finish_type === 'черновая' ? '🧱' : pt.finish_type === 'с мебелью' ? '🛋' : '🎨'} ${pt.finish_type}`);
       pillList.push(`на рынке: ${ageText}`);
       const devPillHtml = pt.developer_name
         ? (pt.developer_id

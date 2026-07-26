@@ -828,7 +828,7 @@ def make_extras_router(templates) -> APIRouter:
                          price_min: float = 0, price_max: float = 0,
                          area_min: float = 0, area_max: float = 0,
                          min_score: int = 0, seller: str = "", market: str = "",
-                         price_change: str = "",
+                         price_change: str = "", finish: str = "",
                          offset: int = 0, limit: int = 15000):
         # публичный (карта на главной без логина); coverage — только админу
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
@@ -954,6 +954,10 @@ def make_extras_router(templates) -> APIRouter:
             conds.append("""AND EXISTS (
                 SELECT 1 FROM price_history ph2 WHERE ph2.listing_id = a.id
                 AND ph2.changed_at >= CURRENT_DATE AND ph2.new_price > ph2.old_price)""")
+        # Отделка (см. bot/core/finish_classify.py) — текстовая эвристика,
+        # покрывает только объявления с явным сигналом в описании.
+        if finish in ("черновая", "с отделкой", "с мебелью"):
+            conds.append(f"AND a.finish_type = ${i}"); params.append(finish); i += 1
         # Пагинация: главная страница подгружает точки батчами (см. dashboard.html
         # applyFilters) — сперва первые ~300 для мгновенной отрисовки, остальное
         # довозится в фоне без блокировки первой отрисовки карты.
@@ -965,7 +969,7 @@ def make_extras_router(templates) -> APIRouter:
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
                    a.is_owner, a.seller_name, a.year_built, a.views_count,
-                   a.description, a.ceiling_height,
+                   a.description, a.ceiling_height, a.finish_type,
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
@@ -1012,6 +1016,7 @@ def make_extras_router(templates) -> APIRouter:
             "photos": _photos_of(r),
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
             "address": r["address"] or "", "complex": r["complex_name"] or "",
+            "finish_type": r["finish_type"] or "",
             "developer_id": r["developer_id"], "developer_name": r["developer_name"] or "",
             "year_built": r["year_built"],
             "description": r["description"] or "",
