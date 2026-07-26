@@ -47,6 +47,12 @@
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
 <!-- Фильтры справа: порядок в flex через order -->
 <div style="order:2;flex:0 0 340px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;">
+  <div id="load-progress-wrap" style="display:none;">
+    <div style="height:8px;border-radius:4px;background:var(--bg);overflow:hidden;position:relative;">
+      <div id="load-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:4px;transition:width .2s ease;"></div>
+    </div>
+    <div id="load-progress-label" style="font-size:11px;color:#888;margin-top:3px;text-align:right;">0%</div>
+  </div>
   <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Тип</label>
     <select id="f-type" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="sale">Продажа</option><option value="rental">Аренда</option><option value="complex">ЖК</option>
@@ -588,6 +594,13 @@ function applyFilters() {
   topOnlyFilter = document.getElementById('f-top-only').checked;
   const BATCH = 300;
   const filterSeq = ++applyFiltersSeq;
+  let loadTarget = null;
+  const progWrap = document.getElementById('load-progress-wrap');
+  const progBar = document.getElementById('load-progress-bar');
+  const progLabel = document.getElementById('load-progress-label');
+  progWrap.style.display = '';
+  progBar.style.width = '0%';
+  progLabel.textContent = 'загрузка…';
   function loadSaleBatch(offset) {
     if (filterSeq !== applyFiltersSeq) return;  // фильтры сменились — бросаем старую цепочку батчей
     const bp = new URLSearchParams(p);
@@ -595,9 +608,21 @@ function applyFilters() {
     fetch('/admin/api/map-points?' + bp.toString()).then(r => r.json()).then(d => {
       if (filterSeq !== applyFiltersSeq) return;
       renderSaleBatch(d);
+      // Общий ориентир для полосы загрузки — всего активных объявлений
+      // (coverage считается только в первом батче offset=0); при активных
+      // фильтрах реальное число меньше, поэтому доводим до 100% в любом
+      // случае, как только батчи закончились (has_more=false).
+      if (d.coverage && d.coverage.total) loadTarget = d.coverage.total;
+      const pct = d.has_more ? Math.min(99, loadTarget ? Math.round(100 * lastPoints.length / loadTarget) : 0) : 100;
+      progBar.style.width = pct + '%';
+      progLabel.textContent = lastPoints.length.toLocaleString('ru') + (loadTarget ? ' / ' + loadTarget.toLocaleString('ru') : '') + ` (${pct}%)`;
       // Топ-10 всегда попадают в первый батч (ORDER BY eff_score DESC) —
       // при включённом фильтре остальные тысячи объектов грузить незачем.
-      if (d.has_more && !topOnlyFilter) loadSaleBatch(offset + BATCH);
+      if (d.has_more && !topOnlyFilter) {
+        loadSaleBatch(offset + BATCH);
+      } else {
+        setTimeout(() => { if (filterSeq === applyFiltersSeq) progWrap.style.display = 'none'; }, 600);
+      }
     });
   }
   loadSaleBatch(0);
