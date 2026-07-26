@@ -230,6 +230,7 @@ async def geocode_missing_coords(
 
     geocoded = 0
     failed = 0
+    no_house_number = 0
     for i, r in enumerate(rows):
         if i % 25 == 0:
             await _report(progress_cb, f"geocode… {i}/{len(rows)}")
@@ -237,9 +238,31 @@ async def geocode_missing_coords(
         if not raw_query:
             continue
         query = _clean_address_for_geocode(raw_query)
+        # БАГ (найден на живых данных, объявление 1013672419): улица без
+        # номера дома ("Момышулы" без "12") — Nominatim в этом случае не
+        # признаёт "не найдено", а подбирает ЛЮБУЮ точку с этим названием
+        # (может быть другой конец улицы в несколько км, парк/сквер с тем же
+        # именем и т.п.) — координата выглядит точной, а на деле произвольная.
+        # Без номера дома честнее не гадать вообще: оставляем lat/lun NULL,
+        # объявление корректно всплывает на /admin/unbound вместо неверного
+        # пина на главной карте.
+        if not re.search(r"\d", query):
+            no_house_number += 1
+            failed += 1
+            continue
         coords = await geocode(query, city=city)
         if not coords and query != raw_query:
             coords = await geocode(raw_query, city=city)  # запасной вариант — вдруг чистка отрезала нужное
+        # Sanity-проверка на пределы Астаны — без неё geocode() на мусорном
+        # адресе ("А 105 23" и т.п.) иногда возвращает совпадение за сотни км
+        # (Nominatim подбирает "похожий" объект где угодно в Казахстане, а
+        # city=astana — это только подсказка, не жёсткое ограничение). Найдено
+        # на живых данных: 2 объявления с district="Сарайшык р-н" получили
+        # координаты у Актобе/Костаная (lat≈50.27, lon≈57.19) и потом
+        # попадали в "похожие варианты" совсем в другом городе.
+        if coords and not (50.0 < coords[0] < 53.0 and 69.0 < coords[1] < 73.0):
+            logger.warning("geocode: отбросили результат вне Астаны для %s: %s", r["id"], coords)
+            coords = None
         if coords:
             await pg_exec(
                 "UPDATE apartment_listings SET lat = $2, lon = $3, "
@@ -249,6 +272,7 @@ async def geocode_missing_coords(
         else:
             failed += 1
 
-    logger.info("geocode fallback: %d/%d успешно, %d не найдено",
-                geocoded, len(rows), failed)
-    return {"attempted": len(rows), "geocoded": geocoded, "failed": failed}
+    logger.info("geocode fallback: %d/%d успешно, %d не найдено (из них %d без номера дома)",
+                geocoded, len(rows), failed, no_house_number)
+    return {"attempted": len(rows), "geocoded": geocoded, "failed": failed,
+            "no_house_number": no_house_number}
