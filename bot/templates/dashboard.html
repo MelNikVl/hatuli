@@ -24,6 +24,23 @@
 /* Цена прямо на гексагоне мини-карты — жирный, хорошо читаемый шрифт с обводкой */
 .hex-price-label { background:transparent; border:none; box-shadow:none; padding:0; font-weight:800; font-size:12px; color:#fff; text-shadow:-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000; }
 .hex-price-label::before { display:none; }
+/* Двойной ползунок диапазона (цена/метраж) — два <input type=range> наложены
+   друг на друга, трек прозрачный у обоих, видна только область/бегунки. */
+.range-slider { position: relative; height: 22px; margin-top: 8px; }
+.range-slider input[type=range] {
+  position: absolute; left: 0; top: 8px; width: 100%; margin: 0;
+  -webkit-appearance: none; appearance: none; background: transparent; pointer-events: none;
+}
+.range-slider input[type=range]::-webkit-slider-runnable-track { height: 4px; background: var(--border); border-radius: 2px; }
+.range-slider input[type=range]::-moz-range-track { height: 4px; background: var(--border); border-radius: 2px; }
+.range-slider input[type=range]::-webkit-slider-thumb {
+  pointer-events: all; -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: #2563eb; border: 2px solid #fff; cursor: pointer; margin-top: -6px; box-shadow: 0 1px 3px rgba(0,0,0,.4);
+}
+.range-slider input[type=range]::-moz-range-thumb {
+  pointer-events: all; width: 16px; height: 16px; border-radius: 50%; background: #2563eb;
+  border: 2px solid #fff; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.4);
+}
 </style>
 
 <!-- Статистика (админ) -->
@@ -62,15 +79,23 @@
       <span style="color:#888;">—</span>
       <input id="f-pmax" type="number" min="0" step="1" placeholder="до" style="width:50%;padding:9px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
     </div>
+    <div class="range-slider">
+      <input id="f-pmin-rng" type="range" min="0" max="200" step="1" value="0">
+      <input id="f-pmax-rng" type="range" min="0" max="200" step="1" value="200">
+    </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
       <span style="font-size:10.5px;color:#aaa;">можно 25 или 25000000</span>
-      <button type="button" onclick="document.getElementById('f-pmin').value='';document.getElementById('f-pmax').value='';applyFilters();" style="padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:#888;font-size:11px;cursor:pointer;">✕ сбросить цену</button>
+      <button type="button" onclick="document.getElementById('f-pmin').value='';document.getElementById('f-pmax').value='';document.getElementById('f-pmin-rng').value=0;document.getElementById('f-pmax-rng').value=document.getElementById('f-pmax-rng').max;applyFilters();" style="padding:3px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:#888;font-size:11px;cursor:pointer;">✕ сбросить цену</button>
     </div></div>
   <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Метраж (м²)</label>
     <div style="display:flex;gap:6px;align-items:center;">
       <input id="f-amin" type="number" min="0" step="1" placeholder="от" style="width:50%;padding:9px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <span style="color:#888;">—</span>
       <input id="f-amax" type="number" min="0" step="1" placeholder="до" style="width:50%;padding:9px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+    </div>
+    <div class="range-slider">
+      <input id="f-amin-rng" type="range" min="0" max="300" step="1" value="0">
+      <input id="f-amax-rng" type="range" min="0" max="300" step="1" value="300">
     </div></div>
   <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Минимальный смарт рейтинг</label>
     <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
@@ -440,9 +465,41 @@ function percentile(arr, p) {
   return s[Math.min(Math.floor(s.length * p), s.length - 1)];
 }
 
+// Двойной range-слайдер <-> текстовые поля от/до — держим оба способа
+// ввода в синхроне. Слайдер триггерит applyFilters только на отпускание
+// (change), текстовое поле обновляется на каждое движение (input), чтобы
+// не долбить сервер запросом на каждый пиксель протаскивания бегунка.
+function wireRangeSlider(minRngId, maxRngId, minFieldId, maxFieldId) {
+  const minRng = document.getElementById(minRngId), maxRng = document.getElementById(maxRngId);
+  const minField = document.getElementById(minFieldId), maxField = document.getElementById(maxFieldId);
+  minRng.addEventListener('input', () => {
+    if (parseFloat(minRng.value) > parseFloat(maxRng.value)) maxRng.value = minRng.value;
+    minField.value = minRng.value;
+  });
+  maxRng.addEventListener('input', () => {
+    if (parseFloat(maxRng.value) < parseFloat(minRng.value)) minRng.value = maxRng.value;
+    maxField.value = maxRng.value;
+  });
+  minRng.addEventListener('change', applyFilters);
+  maxRng.addEventListener('change', applyFilters);
+  // Ручной ввод в текстовое поле тоже двигает слайдер (в пределах его max).
+  minField.addEventListener('change', () => { minRng.value = Math.min(parseFloat(minField.value) || 0, parseFloat(minRng.max)); });
+  maxField.addEventListener('change', () => { maxRng.value = Math.min(parseFloat(maxField.value) || parseFloat(maxRng.max), parseFloat(maxRng.max)); });
+}
+wireRangeSlider('f-pmin-rng', 'f-pmax-rng', 'f-pmin', 'f-pmax');
+wireRangeSlider('f-amin-rng', 'f-amax-rng', 'f-amin', 'f-amax');
+// Цена в млн ₸ (продажа) или тыс ₸/мес (аренда) — у слайдера разный масштаб.
+function reconfigurePriceSlider(type) {
+  const max = type === 'rental' ? 500 : 200;
+  document.getElementById('f-pmin-rng').max = max;
+  document.getElementById('f-pmax-rng').max = max;
+  if (parseFloat(document.getElementById('f-pmax-rng').value) > max) document.getElementById('f-pmax-rng').value = max;
+}
+
 function applyFilters() {
   applyFiltersSeq++;  // обрывает батчи предыдущего вызова (см. loadSaleBatch)
   const type = document.getElementById('f-type').value;
+  reconfigurePriceSlider(type);
   document.getElementById('f-listing-filters').style.display = type === 'complex' ? 'none' : '';
   if (type === 'complex') {
     map.removeLayer(pointsLayer); map.removeLayer(topLayer); map.removeLayer(saleCluster);
