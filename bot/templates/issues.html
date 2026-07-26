@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+{% set stab = 'issues' %}
+{% include "_settings_tabs.html" with context %}
 <div class="page-title">
   Ошибки парсера
   <small id="refresh-cnt">автообновление каждые 30 сек</small>

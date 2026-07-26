@@ -30,9 +30,22 @@ DEFAULTS: dict[str, str] = {
     "MORTGAGE_DOWN_PCT": "20",
     "REALTOR_FEE_PCT": "2.0",
     "ALERT_THRESHOLD": "65",
+    "POPUP_WIDTH_PX": "380",
     "PARSER_MAX_PAGES": "5",
     "PARSER_MAX_PRICE": "80000000",
     "MONETIZATION_ENABLED": "0",
+    # Веса компонентов Deal Score (bot/core/deal_score.py) — сумма нормализуется
+    # к 1.0 при чтении, так что абсолютные значения не обязаны давать ровно 100.
+    "SCORE_W_PRICE": "40",
+    "SCORE_W_LOCATION": "20",
+    "SCORE_W_QUALITY": "20",
+    "SCORE_W_MARKET": "15",
+    "SCORE_W_RISK": "5",
+    # Сервис реальных просмотров (service_viewcount.py, Playwright)
+    "VIEWCOUNT_BATCH": "20",
+    "VIEWCOUNT_DELAY_MIN": "6",
+    "VIEWCOUNT_DELAY_MAX": "12",
+    "VIEWCOUNT_MIN_AGE_HOURS": "20",
 }
 
 _cache: dict[str, str] = {}

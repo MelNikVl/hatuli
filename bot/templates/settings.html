@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+{% set stab = 'settings' %}
+{% include "_settings_tabs.html" with context %}
 <div class="page-title">Настройки проекта</div>
 
 <style>

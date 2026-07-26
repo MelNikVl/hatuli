@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+{% set stab = 'logs' %}
+{% include "_settings_tabs.html" with context %}
 <div class="page-title">Логи бота</div>
 
 <div class="flex gap items-c" style="margin-bottom:14px">

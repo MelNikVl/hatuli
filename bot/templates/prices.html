@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.container { padding: 20px; max-width: 1400px; margin: 0 auto; }
+</style>
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">💹 Цены</div>
+<div class="container">
+
+  <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">
+    {% for val, label in [('', 'Все'), ('1', '1-комн'), ('2', '2-комн'), ('3', '3-комн'), ('4', '4+-комн')] %}
+    <button type="button" class="rooms-btn" data-rooms="{{ val }}" onclick="loadPrices('{{ val }}')"
+            style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:{{ 'var(--accent, #5865f2)' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:13px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+  </div>
+
+  <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;">
+    {% for val, label in [(1, 'День'), (3, '3 дня'), (7, 'Неделя'), (30, 'Месяц'), (180, 'Пол года'), (365, 'Год')] %}
+    <button type="button" class="days-btn" data-days="{{ val }}" onclick="loadPrices(currentRooms, {{ val }})"
+            style="padding:5px 12px;border:1px solid var(--border);border-radius:20px;background:{{ 'var(--bg)' if val != 30 else '#2563eb' }};color:{{ 'var(--text)' if val != 30 else '#fff' }};font-size:12px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+  </div>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+    <b style="font-size:14px;">Изменения цен по дням: сколько объявлений подняли / снизили цену</b>
+    <div style="display:flex;gap:14px;font-size:11.5px;color:#888;margin:6px 0 10px;">
+      <span><span style="display:inline-block;width:9px;height:9px;background:#ef4444;border-radius:2px;"></span> 🔺 поднятие цены</span>
+      <span><span style="display:inline-block;width:9px;height:9px;background:#16a34a;border-radius:2px;"></span> 🔻 снижение цены</span>
+    </div>
+    <div id="price-trend-chart" style="overflow-x:auto;"></div>
+  </div>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+    <b style="font-size:14px;">Средняя сумма изменения цены по дням</b>
+    <div style="font-size:11.5px;color:#888;margin:4px 0 10px;">млн ₸ — насколько в среднем поднимали/снижали цену в тот день</div>
+    <div id="price-amount-chart" style="overflow-x:auto;"></div>
+  </div>
+
+</div>
+
+<script>
+function twoLineChart(divId, days, seriesUp, seriesDown, w, h, fmtVal) {
+  const el = document.getElementById(divId);
+  if (!days || days.length < 2) {
+    el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек</div>';
+    return;
+  }
+  const LABEL_H = 22, TOP_PAD = 10;
+  const chartH = h - LABEL_H - TOP_PAD;
+  const allVals = seriesUp.concat(seriesDown);
+  const mx = Math.max(1, ...allVals);
+  const stepX = w / (days.length - 1);
+  const yOf = v => TOP_PAD + chartH - (v / mx) * (chartH - 6);
+  const coordsOf = series => series.map((v, i) => [i * stepX, yOf(v)]);
+  const pathOf = coords => coords.map((c, i) => (i ? 'L' : 'M') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
+  const cUp = coordsOf(seriesUp), cDown = coordsOf(seriesDown);
+  const dotsOf = (coords, series, color) => coords.map((c, i) =>
+    `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="7" fill="transparent"><title>${days[i]}: ${fmtVal(series[i])}</title></circle>` +
+    `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="3.5" fill="${color}" stroke="#fff" stroke-width="1.3" style="pointer-events:none;"/>`
+  ).join('');
+  const labelEvery = Math.max(1, Math.ceil(days.length / Math.floor(w / 60)));
+  const xLabels = days.map((label, i) => {
+    if (i !== 0 && i !== days.length - 1 && i % labelEvery !== 0) return '';
+    return `<text x="${(i * stepX).toFixed(1)}" y="${h - 2}" text-anchor="middle" font-size="10" fill="#888">${label}</text>`;
+  }).join('');
+  // Стрелки-аннотации у последней точки каждой линии — как на скетче: 🔺
+  // рост цены (красная), 🔻 снижение (зелёная), направление — по последнему
+  // отрезку линии.
+  const arrowAt = (coords, color, glyph) => {
+    if (coords.length < 2) return '';
+    const last = coords[coords.length - 1], prev = coords[coords.length - 2];
+    const dir = last[1] < prev[1] ? -1 : 1;  // выше по Y = меньше значение на экране, т.к. Y растёт вниз
+    const ax = Math.min(last[0] + 22, w - 6), ay = last[1];
+    return `<text x="${ax}" y="${ay + 4}" font-size="15" text-anchor="middle" style="filter:drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 1.5px #fff);">${glyph}</text>`;
+  };
+  el.innerHTML = `<svg width="${w}" height="${h}" style="display:block;overflow:visible;max-width:100%;">` +
+    `<path d="${pathOf(cUp)}" fill="none" stroke="#ef4444" stroke-width="2"/>` +
+    `<path d="${pathOf(cDown)}" fill="none" stroke="#16a34a" stroke-width="2"/>` +
+    dotsOf(cUp, seriesUp, '#ef4444') + dotsOf(cDown, seriesDown, '#16a34a') +
+    arrowAt(cUp, '#ef4444', '🔺') + arrowAt(cDown, '#16a34a', '🔻') +
+    xLabels + `</svg>`;
+}
+
+let currentRooms = '', currentDays = 30;
+function loadPrices(rooms, days) {
+  currentRooms = rooms;
+  currentDays = days || currentDays;
+  document.querySelectorAll('.rooms-btn').forEach(b => {
+    const active = b.dataset.rooms === rooms;
+    b.style.background = active ? 'var(--accent, #5865f2)' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  document.querySelectorAll('.days-btn').forEach(b => {
+    const active = parseInt(b.dataset.days) === currentDays;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  fetch('/admin/api/price-trend-history?days=' + currentDays + '&rooms=' + encodeURIComponent(rooms)).then(r => r.json()).then(d => {
+    const w = Math.max(320, Math.min(1400, (d.days || []).length * 34));
+    twoLineChart('price-trend-chart', d.days || [], d.cnt_up || [], d.cnt_down || [], w, 220,
+      v => v + ' объявл.');
+    twoLineChart('price-amount-chart', d.days || [], (d.avg_up || []).map(v => v / 1e6),
+      (d.avg_down || []).map(v => v / 1e6), w, 220,
+      v => v.toFixed(1) + ' млн ₸');
+  }).catch(() => {
+    document.getElementById('price-trend-chart').innerHTML = '<div style="padding:14px;color:#888;font-size:12px;">не удалось загрузить</div>';
+  });
+}
+loadPrices('', 30);
+</script>
+{% endblock %}

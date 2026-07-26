@@ -102,6 +102,7 @@
 
 <script>
 const IS_ADMIN = {{ 'true' if admin else 'false' }};
+const POPUP_WIDTH = {{ popup_width | default(380) }};
 // Кеширующий прокси фото (см. /img-proxy на бэкенде) — первый показ идёт на
 // источник и кэшируется на диске сервера, дальше отдаётся с диска.
 function proxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
@@ -267,21 +268,6 @@ function openComplexPopup(c, layer) {
   </div>
 </div>`);
   }).catch(() => {});
-}
-
-// Ширина попапа = ширина ряда из 4 овалов (комнатность, метраж, цена/м²,
-// срок на рынке) + отступы. Меряем реальным canvas-текстом, а не на глаз,
-// т.к. цифры разной длины ("3-комн" vs "12-комн", "900 тыс ₸/м²" и т.п.).
-let _measureCtx = null;
-function measureTextWidth(text, font) {
-  if (!_measureCtx) _measureCtx = document.createElement('canvas').getContext('2d');
-  _measureCtx.font = font;
-  return _measureCtx.measureText(text).width;
-}
-function popupWidthForPills(pillTexts) {
-  const PILL_PAD = 22, PILL_GAP = 5, OUTER_PAD = 44;  // паддинги плашек + попапа/кнопки закрытия
-  const total = pillTexts.reduce((s, t) => s + measureTextWidth(t, '600 13px sans-serif') + PILL_PAD + PILL_GAP, 0);
-  return Math.max(300, Math.min(600, Math.round(total) + OUTER_PAD));
 }
 
 // Цена компактно: "30.5 М" (от 1 млн) или "850.0K" (меньше 1 млн)
@@ -547,13 +533,14 @@ function renderSaleBatch(d) {
       if (pt.photos && pt.photos.length) { ptPhotos[pt.id] = pt.photos; carIdx[pt.id] = 0; }
       const carHtml = pt.photos && pt.photos.length ? `
 <div style="position:relative;margin:-13px -19px 8px -19px;width:calc(100% + 38px);border-radius:11px 11px 0 0;overflow:hidden;cursor:pointer;" onclick="openLightbox('${pt.id}', event)">
-  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="width:100%;height:178px;object-fit:cover;display:block;border:none;" onerror="this.parentNode.style.display='none'">
+  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;display:block;border:none;" onerror="this.parentNode.style.display='none'">
   ${pt.photos.length > 1 ? `
   <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">‹</button>
   <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">›</button>
   <span id="car-n-${pt.id}" style="position:absolute;right:6px;bottom:5px;background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;border-radius:6px;padding:1px 7px;">1/${pt.photos.length}</span>` : ''}
 </div>` : '';
-      const sellerHtml = pt.is_owner
+      const isOwner = !!pt.is_owner;
+      const sellerHtml = isOwner
         ? '<b style="color:#16a34a;">👤 от собственника</b>'
         : (pt.seller_name ? `<span style="color:#000;">🏢 риелтор <b>${pt.seller_name}</b></span>` : '<span style="color:#000;">🏢 риелтор</span>');
       const cxLabel = pt.complex && /^\s*(жк|кг)\b/i.test(pt.complex) ? pt.complex : `ЖК ${pt.complex}`;
@@ -567,41 +554,56 @@ function renderSaleBatch(d) {
   <span onclick="event.stopPropagation();toggleDesc('${descId}', this)" style="color:#2563eb;cursor:pointer;font-weight:600;font-size:11.5px;">развернуть ▾</span>
 </div>` : '';
       const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
-      // 4 ключевых показателя — по ним считаем ширину попапа (см. popupWidthForPills)
-      const corePills = [`${pt.rooms || '?'}-комн`, `${areaTxt} м²`];
-      if (pt.price && pt.area) corePills.push(Math.round(pt.price/pt.area/1000) + ' тыс ₸/м²');
-      corePills.push(`на рынке: ${ageText}`);
-      const pillList = corePills.slice();
-      if (pt.ceiling_height) pillList.splice(pillList.length - 1, 0, `Потолок ${pt.ceiling_height} м`);
-      const pillsHtml = pillList.map(t => `<span style="${pillStyle}">${t}</span>`).join('');
-      const popupW = popupWidthForPills(corePills);
+      const ownerPillStyle = isOwner
+        ? 'display:inline-block;background:#dcfce7;color:#166534;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;'
+        : 'display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+      // Комнатность + от собственника/риелтора рядом, затем метраж/потолок/срок на рынке.
+      // Цена/м² переехала в строку с ценой (см. ниже) — тут больше не дублируется.
+      const pillList = [`${pt.rooms || '?'}-комн`];
+      const ownerPillHtml = `<span style="${ownerPillStyle}">${isOwner ? '👤 собственник' : '🏢 риелтор'}</span>`;
+      pillList.push(`${areaTxt} м²`);
+      if (pt.ceiling_height) pillList.push(`Потолок ${pt.ceiling_height} м`);
+      pillList.push(`на рынке: ${ageText}`);
+      const pillsHtml = `<span style="${pillStyle}">${pillList[0]}</span>${ownerPillHtml}` +
+        pillList.slice(1).map(t => `<span style="${pillStyle}">${t}</span>`).join('');
+      const priceM2Txt = (pt.price && pt.area) ? Math.round(pt.price/pt.area/1000) + ' тыс ₸/м²' : '';
       m.bindPopup(`
-<div style="width:${popupW}px;font-family:inherit;">
+<div style="width:${POPUP_WIDTH}px;max-width:92vw;font-family:inherit;">
   ${carHtml}
   <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
   <div style="cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
-      <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
+      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+        <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
+        ${priceM2Txt ? `<span style="${pillStyle}margin:0;">${priceM2Txt}</span>` : ''}
+      </div>
       <div style="margin-top:6px;">${pillsHtml}</div>
   </div>
+  <div id="info-${pt.id}" style="font-size:12.5px;color:#555;margin-top:4px;"></div>
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
   <div style="font-size:12.5px;margin-top:3px;">Смарт рейтинг: <a href="/admin/analytics/${pt.id}" onclick="event.stopPropagation()" title="${scoreExplainText(pt.score_bd)}" style="color:${sc};font-weight:800;text-decoration:none;border-bottom:1px dashed ${sc};">${pt.score}</a></div>
+  <div id="dealscore-${pt.id}" style="font-size:12.5px;margin-top:3px;"></div>
   <div style="font-size:13px;margin-top:6px;">${sellerHtml}</div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
   ${(priceTrend || pt.views) ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend ? priceTrend.replace(/^ · /, '') : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>` : ''}
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
+  ${(pt.lat != null && pt.lon != null) ? `
+  <a href="https://yandex.kz/maps/?ll=${pt.lon}%2C${pt.lat}&z=16&pt=${pt.lon},${pt.lat},pm2rdm" target="_blank" onclick="event.stopPropagation()" style="display:block;margin-top:8px;border-radius:8px;overflow:hidden;line-height:0;">
+    <img src="https://static-maps.yandex.ru/1.x/?ll=${pt.lon},${pt.lat}&z=16&l=map&pt=${pt.lon},${pt.lat},pm2rdm&size=650,260" style="width:100%;height:auto;display:block;" onerror="this.parentNode.style.display='none'">
+  </a>` : ''}
   ${descHtml}
+  <div id="nearby-${pt.id}"></div>
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
     <a href="javascript:void(0)" onclick="openDetailModal('${pt.id}', event)" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Подробнее</a>
     <a href="/admin/analytics/${pt.id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Аналитика</a>
     <a href="${pt.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Крыша</a>
   </div>
   </div>
-</div>`, {maxWidth: popupW, minWidth: popupW, autoPan: false});
+</div>`, {maxWidth: POPUP_WIDTH, minWidth: Math.min(POPUP_WIDTH, 260), autoPan: false});
       m.on('popupopen', () => {
         map.panTo([pt.lat, pt.lon], {animate: true});
         loadPriceHistory(pt.id);
-        loadBargainCaption(pt.id);
+        loadListingExtras(pt.id);
       });
     });
     document.getElementById('result-count').textContent = lastPoints.length + ' объектов' + (d.has_more ? '…' : '') + (drawnPolygon ? ' · в области' : '');
@@ -698,23 +700,64 @@ function toggleBargainExplain(uid, ev) {
   const box = document.getElementById('bgx-' + uid);
   if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
 }
-function loadBargainCaption(id) {
+// Один запрос к /admin/api/listing/{id} (та же ручка, что и у модалки
+// "Подробнее") наполняет сразу 4 блока попапа: основная информация
+// (адрес/этаж), реальная цена (торг), Deal Score (гексагональный индекс)
+// и похожие варианты рядом — то же самое, что показано на странице
+// объявления на сайте, просто компактно.
+function loadListingExtras(id) {
   const el = document.getElementById('bg-' + id);
   if (!el || el.dataset.loaded) return;
   el.dataset.loaded = '1';
   fetch('/admin/api/listing/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
+    // Основная информация: адрес + этаж
+    const infoEl = document.getElementById('info-' + id);
+    if (infoEl) {
+      const parts = [];
+      if (d.address) parts.push(d.address);
+      if (d.floor) parts.push(`${d.floor}/${d.floors_total || '?'} эт.`);
+      infoEl.textContent = parts.join(' · ');
+    }
+
+    // Реальная цена (торг)
     const b = d.bargain;
-    if (!b || !(b.discount_pct > 0) || !b.target_price) { el.innerHTML = ''; return; }
-    const priceM = d.price ? (d.price/1e6).toFixed(1) : '—';
-    const medianM = b.median_price ? (b.median_price/1e6).toFixed(1) : '—';
-    const targetM = (b.target_price/1e6).toFixed(1);
-    const explain = `Медиана по ${b.comparables_cnt} похожим объявлениям (район/комнаты/площадь): ${medianM} млн ₸, ваша цена: ${priceM} млн ₸. ${b.recommendation || ''}`;
-    // клик, а не наведение — надёжно работает и на тач-экранах
-    el.innerHTML = `<div>
-      <span style="color:#16a34a;font-weight:800;white-space:nowrap;">реальная цена ${targetM} млн ₸</span>
-      <span onclick="toggleBargainExplain('${id}', event)" style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:#e5e7eb;color:#555;font-size:12px;font-weight:800;cursor:pointer;">?</span>
-      <div id="bgx-${id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:13.5px;line-height:1.4;color:#444;">${escapeHtml(explain)}</div>
-    </div>`;
+    if (b && b.discount_pct > 0 && b.target_price) {
+      const priceM = d.price ? (d.price/1e6).toFixed(1) : '—';
+      const medianM = b.median_price ? (b.median_price/1e6).toFixed(1) : '—';
+      const targetM = (b.target_price/1e6).toFixed(1);
+      const explain = `Медиана по ${b.comparables_cnt} похожим объявлениям (район/комнаты/площадь): ${medianM} млн ₸, ваша цена: ${priceM} млн ₸. ${b.recommendation || ''}`;
+      // клик, а не наведение — надёжно работает и на тач-экранах
+      el.innerHTML = `<div>
+        <span style="color:#16a34a;font-weight:800;white-space:nowrap;">реальная цена ${targetM} млн ₸</span>
+        <span onclick="toggleBargainExplain('${id}', event)" style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:#e5e7eb;color:#555;font-size:12px;font-weight:800;cursor:pointer;">?</span>
+        <div id="bgx-${id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:13.5px;line-height:1.4;color:#444;">${escapeHtml(explain)}</div>
+      </div>`;
+    } else {
+      el.innerHTML = '';
+    }
+
+    // Deal Score: гексагональный индекс микрорынка (см. вкладку Скор в Инфо)
+    const dsEl = document.getElementById('dealscore-' + id);
+    if (dsEl && d.deal_score && d.deal_score.deal != null) {
+      dsEl.innerHTML = `🎯 Deal Score: <b>${d.deal_score.deal}/100</b> <span style="color:#888;">· уверенность ${d.deal_score.confidence}%</span>`;
+    }
+
+    // Похожие варианты рядом (3 ближайших по расстоянию)
+    const nbEl = document.getElementById('nearby-' + id);
+    if (nbEl && d.nearby && d.nearby.length) {
+      nbEl.innerHTML = `
+<div style="font-size:12px;color:#888;font-weight:700;margin-top:9px;">🔎 Похожие варианты рядом</div>
+<div style="display:flex;gap:6px;overflow-x:auto;margin-top:6px;padding-bottom:2px;">
+  ${d.nearby.map(n => `
+  <a href="/admin/analytics/${n.id}" style="flex:0 0 96px;text-decoration:none;color:inherit;border:1px solid #eee;border-radius:8px;overflow:hidden;display:block;">
+    ${n.photo ? `<img src="${proxyImg(n.photo)}" style="width:100%;height:60px;object-fit:cover;display:block;">` : `<div style="width:100%;height:60px;background:#f3f4f6;"></div>`}
+    <div style="padding:4px 6px;">
+      <div style="font-weight:800;font-size:11.5px;">${n.price ? (n.price/1e6).toFixed(1)+' М' : '—'}</div>
+      <div style="font-size:10px;color:#888;">${n.rooms||'?'}к · ${n.area?Math.round(n.area):'?'}м²</div>
+    </div>
+  </a>`).join('')}
+</div>`;
+    }
   }).catch(() => { el.innerHTML = ''; });
 }
 

@@ -45,6 +45,7 @@ SLIDER_SETTINGS = {
     "MORTGAGE_DOWN_PCT": ("Первоначальный взнос", 10, 50, 5, "%", "💰 Финансовые допущения"),
     "REALTOR_FEE_PCT":   ("Комиссия риелтора", 0, 5, 0.5, "%", "💰 Финансовые допущения"),
     "ALERT_THRESHOLD":   ("Порог скора для алертов", 50, 90, 1, "баллов", "🎯 Скоринг"),
+    "POPUP_WIDTH_PX":    ("Ширина превью объявления на карте", 280, 600, 10, "px", "👁 Настройки вида"),
     "HEX_EDGE_M":        ("Гексагон-сетка: ребро (м)", 30, 200, 10, "м", "⬡ Гексагоны"),
     "SCORE_W_PRICE":     ("Вес: цена vs локальный рынок", 0, 100, 5, "%", "⚖️ Веса Deal Score"),
     "SCORE_W_LOCATION":  ("Вес: локация + инфраструктура", 0, 100, 5, "%", "⚖️ Веса Deal Score"),
@@ -1555,6 +1556,11 @@ def make_extras_router(templates) -> APIRouter:
                 "recommendation": bargain.get("recommendation") or "",
             },
             "nearby": nearby,
+            "deal_score": (lambda hd: {
+                "deal": hd.get("deal"), "confidence": hd.get("confidence"),
+            } if hd else None)(
+                (lambda v: (_json_ld.loads(v) if isinstance(v, str) else v) if v else None)(l.get("hex_details"))
+            ),
         })
 
     # ── История цены объявления ───────────────────────────────────────────
@@ -1724,10 +1730,16 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/api/archived-history")
     async def archived_history(request: Request, days: int = 30):
         """Сколько объявлений ушло в архив по дням, отдельно по комнатности
-        (1/2/3+) — для графика на /admin/archived. Показывает реальный охват
-        archive_check (см. ARCHIVE_CHECK_BATCH в настройках), а не момент
+        (1/2/3+, продажа) — для графика на /admin/archived. Показывает реальный
+        охват archive_check (см. ARCHIVE_CHECK_BATCH в настройках), а не момент
         фактического снятия объявления с Крыши — это дата, когда МЫ это
-        заметили при следующей проверке."""
+        заметили при следующей проверке.
+
+        Плюс отдельная серия "аренда": у rental_listings нет явного
+        archived_at (нет детального парсера, который бы проверял страницу на
+        пометку "В архиве") — как и в карточке ЖК ("скорость ухода аренды"),
+        считаем объявление ушедшим, если его не видели 3+ дня подряд после
+        last_seen, и датой ухода — last_seen + 3 дня."""
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch
@@ -1740,18 +1752,73 @@ def make_extras_router(templates) -> APIRouter:
             GROUP BY 1, 2
             ORDER BY 1
         """, str(days))
-        days_set = sorted({r["d"] for r in rows})
-        series = {"1": [], "2": [], "3": []}
+        rental_rows = await pg_fetch("""
+            SELECT (last_seen::date + interval '3 days')::date AS d, COUNT(*) AS cnt
+            FROM rental_listings
+            WHERE last_seen < now() - interval '3 days'
+              AND last_seen::date + interval '3 days' > now() - ($1 || ' days')::interval
+            GROUP BY 1
+            ORDER BY 1
+        """, str(days))
+        rental_by_day = {r["d"]: r["cnt"] for r in rental_rows}
+        days_set = sorted({r["d"] for r in rows} | set(rental_by_day))
+        series = {"1": [], "2": [], "3": [], "rental": []}
         by_day = {}
         for r in rows:
             by_day.setdefault(r["d"], {})[str(r["room_bucket"])] = r["cnt"]
         for d in days_set:
             for k in ("1", "2", "3"):
                 series[k].append(by_day.get(d, {}).get(k, 0))
+            series["rental"].append(rental_by_day.get(d, 0))
         return JSONResponse({
             "days": [d.strftime("%d.%m") for d in days_set],
             "series": series,
         })
+
+    @router.get("/admin/api/archived-hex-points")
+    async def archived_hex_points(request: Request, type: str = "sale", rooms: str = ""):
+        """Точки для гекс-карт на /admin/archived: последняя цена и скорость
+        ухода (дни от появления до архива) для каждого ушедшего объявления.
+        type: sale|rental. rooms: "" (все), "1".."3", "4" (4+).
+        Бакетирование в гексагоны и агрегация (среднее по гексу) — на клиенте,
+        тем же кодом, что и тепловые карты на дашборде."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        room_cond = ""
+        params: list = []
+        if rooms == "4":
+            room_cond = "AND rooms >= 4"
+        elif rooms in ("1", "2", "3"):
+            room_cond = "AND rooms = $1"
+            params.append(int(rooms))
+        if type == "rental":
+            rows = await pg_fetch(f"""
+                SELECT lat, lon, price, rooms,
+                       EXTRACT(EPOCH FROM (last_seen - found_at)) / 86400.0 AS days
+                FROM rental_listings
+                WHERE last_seen < now() - interval '3 days'
+                  AND last_seen > now() - interval '180 days'
+                  AND lat IS NOT NULL AND lon IS NOT NULL
+                  AND price > 0
+                  {room_cond}
+            """, *params)
+        else:
+            rows = await pg_fetch(f"""
+                SELECT lat, lon, price, rooms,
+                       EXTRACT(EPOCH FROM (archived_at - first_seen)) / 86400.0 AS days
+                FROM apartment_listings
+                WHERE is_active = FALSE AND archived_at IS NOT NULL
+                  AND archived_at > now() - interval '180 days'
+                  AND lat IS NOT NULL AND lon IS NOT NULL
+                  AND price > 0
+                  {room_cond}
+            """, *params)
+        return JSONResponse({"points": [{
+            "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "price": r["price"], "rooms": r["rooms"],
+            "days": round(float(r["days"]), 1) if r["days"] is not None and r["days"] >= 0 else None,
+        } for r in rows]})
 
     # ── Объявления без привязки к ЖК ──────────────────────────────────────
 

@@ -57,6 +57,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # Публичная страница: карта и фильтры без логина; админ-элементы
         # скрываются в шаблоне через is_admin(request)
         stats = await db.get_dashboard_stats()
+        from bot.db import settings as app_settings
+        await app_settings.load()
         return templates.TemplateResponse(
             "dashboard.html", {
                 "request": request,
@@ -65,6 +67,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "parser_enabled": _state.parser_enabled,
                 "parse_interval_min": _state.parse_interval_min,
                 "parse_interval_max": _state.parse_interval_max,
+                "popup_width": app_settings.get_int("POPUP_WIDTH_PX", 380),
             }
         )
 
@@ -357,6 +360,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             },
         )
 
+    @app.get("/admin/analytics/prices", response_class=HTMLResponse)
+    async def prices_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse(
+            "prices.html", {"request": request, "atab": "prices"})
+
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
     async def analytics_detail(request: Request, listing_id: str):
         if not is_authed(request):
@@ -547,11 +557,24 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                     LIMIT 10
                 """, listing["rooms"], listing_id, listing["complex_name"], listing["price"]))
 
-            if len(sim_rows) < 10 and listing.get("lat") and listing.get("lon"):
+            if listing.get("lat") and listing.get("lon"):
+                # БАГ (найден, критично): раньше последний fallback здесь не
+                # имел вообще никакого гео-ограничения (просто ближайшая цена
+                # по всей БД), а потом — ограничение по district ILIKE, но
+                # текстовое совпадение района не гарантирует близость (нашли
+                # 2 объявления с district="Сарайшык р-н", но геокод у них
+                # улетел за сотни км от Астаны — см. fix в rebind.py). Теперь
+                # ВСЕГДА только гео: тот же гексагон (300м) + кольцо 1 + кольцо 2
+                # — никогда не расширяемся на весь город, даже если найдётся
+                # меньше 10 вариантов.
                 from bot.core.hexgrid import hex_id as _hex_id, neighbors as _hex_nb
                 HEX_EDGE = 300.0
                 my_hid = _hex_id(float(listing["lat"]), float(listing["lon"]), HEX_EDGE)
-                wanted_hids = {my_hid, *_hex_nb(my_hid)}
+                ring1 = set(_hex_nb(my_hid))
+                ring2 = set()
+                for h in ring1:
+                    ring2.update(_hex_nb(h))
+                wanted_hids = {my_hid} | ring1 | ring2
                 exclude_ids = [listing_id] + [r["id"] for r in sim_rows]
                 candidates = await pg_fetch("""
                     SELECT id, url, price, area, floor, floors_total, district,
@@ -560,27 +583,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                     WHERE rooms = $1 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
                       AND lat IS NOT NULL AND NOT (id = ANY($2::text[]))
                     ORDER BY ABS(price - $3) ASC
-                    LIMIT 500
+                    LIMIT 1500
                 """, listing["rooms"], exclude_ids, listing["price"])
                 for c in candidates:
                     if len(sim_rows) >= 10:
                         break
                     if _hex_id(float(c["lat"]), float(c["lon"]), HEX_EDGE) in wanted_hids:
                         sim_rows.append(c)
-
-            if len(sim_rows) < 10:
-                exclude_ids = [listing_id] + [r["id"] for r in sim_rows]
-                more = await pg_fetch("""
-                    SELECT id, url, price, area, floor, floors_total, district,
-                           complex_name, photos, lat, lon
-                    FROM apartment_listings
-                    WHERE rooms = $1 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-                      AND NOT (id = ANY($2::text[])) AND price BETWEEN $3 AND $4
-                    ORDER BY ABS(price - $5) ASC
-                    LIMIT $6
-                """, listing["rooms"], exclude_ids, price_lo, price_hi, listing["price"],
-                    10 - len(sim_rows))
-                sim_rows.extend(more)
 
             for r in sim_rows[:10]:
                 sp = r["photos"]
