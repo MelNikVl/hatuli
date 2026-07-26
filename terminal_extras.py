@@ -1799,6 +1799,7 @@ def make_extras_router(templates) -> APIRouter:
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import fetchval as pg_fv
+        await app_settings.load()
         stats = {
             "archived_total": await pg_fv(
                 "SELECT COUNT(*) FROM apartment_listings WHERE archived_at IS NOT NULL") or 0,
@@ -1807,6 +1808,22 @@ def make_extras_router(templates) -> APIRouter:
             "archived_7d": await pg_fv(
                 "SELECT COUNT(*) FROM apartment_listings "
                 "WHERE archived_at > now() - interval '7 days'") or 0,
+            # Покрытие/частота проверки на архивность (см. bot/core/archive_check.py):
+            # каждый цикл продаж (~50-80 мин) проверяет ARCHIVE_CHECK_BATCH
+            # лучших по скору активных объявлений, у которых archive_checked_at
+            # либо NULL, либо старше 24ч (не чаще раза в сутки на объявление).
+            "total_active": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE") or 0,
+            "never_checked": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings "
+                "WHERE is_active IS NOT FALSE AND archive_checked_at IS NULL") or 0,
+            "checked_24h": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+                "AND archive_checked_at > now() - interval '24 hours'") or 0,
+            "stale_over_7d": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+                "AND archive_checked_at < now() - interval '7 days'") or 0,
+            "archive_batch": app_settings.get_int("ARCHIVE_CHECK_BATCH", 150),
         }
         return templates.TemplateResponse("archived.html", {
             "request": request, "atab": "archived", "stats": stats,

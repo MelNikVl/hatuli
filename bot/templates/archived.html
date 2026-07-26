@@ -14,6 +14,25 @@
   а не когда объявление реально сняли с Крыши.
 </p>
 
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:6px;max-width:900px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+    <div style="font-size:20px;font-weight:800;">{{ stats.archive_batch }}</div>
+    <div style="font-size:11.5px;color:#888;">объявлений проверяется за цикл (~60-90 мин)</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+    <div style="font-size:20px;font-weight:800;color:#16a34a;">{{ stats.checked_24h }}</div>
+    <div style="font-size:11.5px;color:#888;">активных проверено за 24ч{% if stats.total_active %} ({{ (stats.checked_24h / stats.total_active * 100) | round(1) }}%){% endif %}</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+    <div style="font-size:20px;font-weight:800;color:#f59e0b;">{{ stats.stale_over_7d }}</div>
+    <div style="font-size:11.5px;color:#888;">не проверялись 7+ дней</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+    <div style="font-size:20px;font-weight:800;color:#ef4444;">{{ stats.never_checked }}</div>
+    <div style="font-size:11.5px;color:#888;">активных ни разу не проверены</div>
+  </div>
+</div>
+
 <div style="display:flex;gap:14px;margin-top:14px;flex-wrap:wrap;align-items:flex-start;">
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:0 0 calc(50% - 7px);min-width:320px;max-width:calc(50% - 7px);overflow:hidden;box-sizing:border-box;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
