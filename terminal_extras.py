@@ -23,7 +23,7 @@ import logging
 import os
 
 import httpx
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from bot.db import settings as app_settings
@@ -282,6 +282,11 @@ def make_extras_router(templates) -> APIRouter:
             })
         sliders = [s for g in groups.values() for s in g]  # обратная совместимость
 
+        from bot.core.auth_users import ensure_seeded, list_users
+        await ensure_seeded(os.getenv("ADMIN_PASSWORD", "123"))
+        users = await list_users()
+        current_username = request.cookies.get("admin_user") or "admin"
+
         return templates.TemplateResponse("settings.html", {
             "request": request,
             "sliders": sliders,
@@ -289,7 +294,28 @@ def make_extras_router(templates) -> APIRouter:
             "monetization": app_settings.get_bool("MONETIZATION_ENABLED"),
             "ai_analysis": app_settings.get_bool("AI_TEXT_ANALYSIS"),
             "deepseek_key_set": bool(__import__("os").getenv("DEEPSEEK_API_KEY")),
+            "users": [dict(u) for u in users],
+            "current_username": current_username,
         })
+
+    @router.post("/admin/users-manage/create")
+    async def users_manage_create(request: Request, username: str = Form(...), password: str = Form(...)):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.core.auth_users import create_user
+        username = username.strip()
+        if username and password:
+            await create_user(username, password)
+        return RedirectResponse(url="/admin/settings", status_code=302)
+
+    @router.post("/admin/users-manage/password")
+    async def users_manage_password(request: Request, user_id: int = Form(...), new_password: str = Form(...)):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.core.auth_users import set_password
+        if new_password:
+            await set_password(user_id, new_password)
+        return RedirectResponse(url="/admin/settings", status_code=302)
 
     @router.post("/admin/settings/save")
     async def settings_save(request: Request):

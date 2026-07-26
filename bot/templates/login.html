@@ -14,9 +14,9 @@
     .logo{font-size:18px;font-weight:700;color:#7289da;margin-bottom:4px}
     .sub{font-size:13px;color:#8892b0;margin-bottom:28px}
     label{display:block;font-size:12px;color:#8892b0;margin-bottom:6px;text-transform:uppercase;letter-spacing:.6px}
-    input[type=password]{width:100%;background:#22253a;color:#e8eaf6;border:1px solid #2e3150;
+    input[type=password],input[type=text]{width:100%;background:#22253a;color:#e8eaf6;border:1px solid #2e3150;
       border-radius:8px;padding:10px 14px;font-size:14px;margin-bottom:20px}
-    input[type=password]:focus{outline:1px solid #5865f2}
+    input[type=password]:focus,input[type=text]:focus{outline:1px solid #5865f2}
     button{width:100%;background:#5865f2;color:#fff;border:none;border-radius:8px;
       padding:11px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
     button:hover{background:#7289da}
@@ -31,8 +31,10 @@
     <div class="sub">Admin Panel</div>
     {% if error %}<div class="err">{{ error }}</div>{% endif %}
     <form method="post" action="/admin/login">
+      <label>Логин</label>
+      <input type="text" name="username" placeholder="admin" value="admin" autofocus>
       <label>Пароль</label>
-      <input type="password" name="password" placeholder="••••••••" autofocus required>
+      <input type="password" name="password" placeholder="••••••••" required>
       <button type="submit">Войти →</button>
     </form>
   </div>

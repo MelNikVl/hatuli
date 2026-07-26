@@ -39,17 +39,22 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         return templates.TemplateResponse("login.html", {"request": request, "error": None})
 
     @app.post("/admin/login", response_class=HTMLResponse)
-    async def admin_login(request: Request, password: str = Form(...)):
-        if password != admin_password:
-            return templates.TemplateResponse("login.html", {"request": request, "error": "Неверный пароль"})
+    async def admin_login(request: Request, username: str = Form(default="admin"), password: str = Form(...)):
+        from bot.core.auth_users import ensure_seeded, get_user, verify_password
+        await ensure_seeded(admin_password)
+        user = await get_user(username.strip() or "admin")
+        if not user or not verify_password(password, user["password_hash"]):
+            return templates.TemplateResponse("login.html", {"request": request, "error": "Неверный логин или пароль"})
         response = RedirectResponse(url="/admin", status_code=302)
         response.set_cookie("admin_auth", "1", httponly=True)
+        response.set_cookie("admin_user", user["username"], httponly=True)
         return response
 
     @app.get("/admin/logout")
     async def admin_logout():
         response = RedirectResponse(url="/admin/login", status_code=302)
         response.delete_cookie("admin_auth")
+        response.delete_cookie("admin_user")
         return response
 
     @app.get("/admin", response_class=HTMLResponse)
