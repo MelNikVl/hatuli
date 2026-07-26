@@ -4,6 +4,14 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Hatuli — Admin</title>
+  <script>
+  // Применяем сохранённую тему ДО отрисовки — иначе была бы вспышка тёмной
+  // темы на белом фоне при каждой загрузке страницы в светлом режиме.
+  (function() {
+    const saved = localStorage.getItem('hatuli-theme');
+    if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  })();
+  </script>
   <style>
   html { font-size: 16px; } body { font-size: 16.5px; }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -21,13 +29,31 @@
       --text:     #e8eaf6;
       --muted:    #8892b0;
       --sidebar-w: 220px;
+      --logo-color: #8b9bff;
+    }
+    /* Светлая тема — переключается через /admin/settings, хранится в
+       localStorage (per-browser, не привязано к аккаунту). */
+    :root[data-theme="light"] {
+      --bg:       #f5f6fa;
+      --surface:  #ffffff;
+      --surface2: #eef0f5;
+      --border:   #dde1ea;
+      --accent:   #5865f2;
+      --accent2:  #4752c4;
+      --green:    #16a34a;
+      --red:      #dc2626;
+      --yellow:   #d97706;
+      --blue:     #2563eb;
+      --text:     #1a1d27;
+      --muted:    #6b7280;
+      --logo-color: #4752c4;
     }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; }
 
     /* sidebar */
     .sidebar { width: var(--sidebar-w); min-height: 100vh; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; }
     .sidebar-logo { padding: 22px 20px 16px; border-bottom: 1px solid var(--border); }
-    .sidebar-logo .title { font-size: 22px; font-weight: 800; color: #8b9bff; letter-spacing: .3px; }
+    .sidebar-logo .title { font-size: 22px; font-weight: 800; color: var(--logo-color); letter-spacing: .3px; }
     .sidebar-logo .sub   { font-size: 11px; color: var(--muted); margin-top: 3px; }
     .nav { padding: 10px 0; flex: 1; }
     .nav a { display: flex; align-items: center; gap: 10px; padding: 10px 20px; color: var(--muted); text-decoration: none; font-size: 13.5px; border-left: 3px solid transparent; transition: all .15s; }
