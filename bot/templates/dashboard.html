@@ -889,11 +889,27 @@ const heatLayer = L.layerGroup();
 let heatMode = null;
 let heatCache = {sale: null, rental: null, schools: null, noise: null};
 
+// Расширенная палитра: зелёный (дёшево/тихо) -> жёлто-зелёный -> жёлтый ->
+// оранжевый -> красный -> бордовый (дорого/шумно) — 6 стопов вместо 2,
+// чтобы верхний край шкалы (самые дорогие/шумные гексы) отличался от
+// середины, а не сливался в один и тот же красный.
+const HEAT_STOPS = [
+  [22, 163, 74],   // #16a34a зелёный
+  [132, 204, 22],  // #84cc16 жёлто-зелёный
+  [234, 179, 8],   // #eab308 жёлтый
+  [249, 115, 22],  // #f97316 оранжевый
+  [239, 68, 68],   // #ef4444 красный
+  [127, 29, 29],   // #7f1d1d бордовый
+];
 function heatColor(t) {
-  // t: 0 (зелёный, дёшево/тихо) .. 1 (красный, дорого/шумно)
+  // t: 0 (зелёный, дёшево/тихо) .. 1 (бордовый, дорого/шумно)
   t = Math.max(0, Math.min(1, t));
-  const from = [34,197,94], to = [239,68,68];
-  const c = from.map((f,i) => Math.round(f + (to[i]-f)*t));
+  const n = HEAT_STOPS.length - 1;
+  const pos = t * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const frac = pos - i;
+  const from = HEAT_STOPS[i], to = HEAT_STOPS[i + 1];
+  const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
