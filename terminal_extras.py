@@ -1544,12 +1544,14 @@ def make_extras_router(templates) -> APIRouter:
             except ValueError:
                 photos = []
 
-        comps = await get_comparables(
-            district=l.get("district"), rooms=l.get("rooms"),
-            area=l.get("area"), current_price=l.get("price", 0),
+        comps, comps_meta = await get_comparables(
+            lat=float(l["lat"]) if l.get("lat") is not None else None,
+            lon=float(l["lon"]) if l.get("lon") is not None else None,
+            rooms=l.get("rooms"), area=l.get("area"), current_price=l.get("price", 0),
+            complex_name=l.get("complex_name"), district=l.get("district"),
             exclude_id=listing_id,
         )
-        bargain = analyze_bargain(l.get("price", 0), comps, l.get("is_owner"), l.get("is_urgent") is True)
+        bargain = analyze_bargain(l.get("price", 0), comps, l.get("is_owner"), l.get("is_urgent") is True, comps_meta)
 
         # Фото ЖК — для галереи в модалке объявления (переиспользуем то же
         # поле photos, что и на карточке ЖК)
@@ -1616,6 +1618,8 @@ def make_extras_router(templates) -> APIRouter:
                 "median_price": bargain.get("median_price"),
                 "comparables_cnt": bargain.get("comparables_cnt") or 0,
                 "recommendation": bargain.get("recommendation") or "",
+                "method": bargain.get("method"),
+                "class_note": bargain.get("class_note"),
             },
             "nearby": nearby,
             "deal_score": (lambda hd: {

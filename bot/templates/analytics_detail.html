@@ -132,6 +132,7 @@
     {% endif %}
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
       <span class="pill"><span class="pk">Этаж</span><span class="pv">{{ listing.floor or '?' }}/{{ listing.floors_total or '?' }}</span></span>
+      {% if listing.ceiling_height %}<span class="pill"><span class="pk">Потолок</span><span class="pv">{{ listing.ceiling_height }} м</span></span>{% endif %}
       <span class="pill"><span class="pk">Район</span><span class="pv">{{ listing.district or '—' }}</span></span>
       <span class="pill"><span class="pk">Год</span><span class="pv">{{ listing.year_built or '—' }}</span></span>
       <span class="pill"><span class="pk">Новостройка</span><span class="pv">{{ 'да' if listing.is_new_build else 'нет' }}</span></span>
@@ -155,7 +156,7 @@
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
       <div style="background:var(--bg);border-radius:10px;padding:10px 12px;">
-        <div style="font-size:11px;color:#888;">Тактическая цена</div>
+        <div style="font-size:11px;color:#888;">Цена в объявлении</div>
         <div style="font-size:17px;font-weight:800;">{{ "{:,.0f}".format(price_m2) }} ₸/м²</div>
       </div>
       <div style="background:{{ '#4c1d1d' if expected_m2 and expected_m2 < price_m2 else '#14392a' }};border-radius:10px;padding:10px 12px;">
@@ -177,6 +178,7 @@
     <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
       <div style="font-size:14px;font-weight:700;margin-bottom:8px;">🤝 Анализ торга</div>
       <div class="row"><span class="key">Аналогов в базе</span><span class="val">{{ bargain.comparables_cnt }}</span></div>
+      <div class="row"><span class="key">Метод сравнения</span><span class="val" style="font-size:12px;">{{ {'hex+ring+class': 'гексагон+соседние, тот же класс ЖК', 'hex+ring': 'гексагон+соседние', 'city_segment': 'по городу (мало аналогов рядом)', 'district_fallback': 'по району (нет координат)'}.get(bargain.method, '—') }}</span></div>
       <div class="row"><span class="key">Медиана аналогов</span><span class="val">{{ "{:,.0f}".format(bargain.median_price or 0) }} ₸</span></div>
       <div class="row"><span class="key">Мин. цена</span><span class="val">{{ "{:,.0f}".format(bargain.min_price or 0) }} ₸</span></div>
       <div class="row"><span class="key">Рынок</span><span class="val"><span class="tag tag-{{ bargain.market_status or 'normal' }}">{% if bargain.market_status == 'hot' %}Горячий{% elif bargain.market_status == 'cold' %}Холодный{% else %}Нормальный{% endif %}</span></span></div>
@@ -195,6 +197,7 @@
     <div style="position:relative;flex:1;min-height:400px;">
       <div id="listing-map" style="position:absolute;inset:0;aspect-ratio:1/1;border-radius:10px;"></div>
       <button onclick="toggleSimilarOnMap()" id="similar-btn" type="button" style="position:absolute;right:8px;top:8px;z-index:1000;background:#2563eb;color:#fff;font-weight:700;font-size:12px;padding:7px 12px;border-radius:7px;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);">🔎 Похожие ({{ similar_listings|length }})</button>
+      <button onclick="toggleHexOverlay()" id="hex-overlay-btn" type="button" style="position:absolute;right:8px;top:48px;z-index:1000;background:#fff;color:#333;font-weight:700;font-size:12px;padding:7px 12px;border-radius:7px;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);">⬡ Гексагоны</button>
     </div>
     <script>
       (function() {
@@ -209,7 +212,7 @@
           if (!s.lat || !s.lon) return;
           const priceTxt = s.price ? (s.price/1e6).toFixed(1) + ' М' : '—';
           const m = L.marker([s.lat, s.lon], {icon: L.divIcon({className:'', html:
-            `<div style="background:#0077FF;color:#fff;border-radius:10px;padding:3px 8px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);transform:translate(-50%,-100%);">${priceTxt}</div>`,
+            `<div style="display:inline-block;background:#0077FF;color:#fff;border-radius:10px;padding:3px 8px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);transform:translate(-50%,-100%);">${priceTxt}</div>`,
             iconSize:[0,0], iconAnchor:[0,0]})});
           m.bindPopup(`<b>${priceTxt} ₸</b> · {{ listing.rooms or '?' }}-комн${s.area ? ', ' + s.area.toFixed(0) + ' м²' : ''}` +
             `${s.complex_name ? '<br>🏢 ' + s.complex_name : ''}<br><a href="/admin/analytics/${s.id}">Карточка →</a>`);
@@ -228,6 +231,32 @@
             map.removeLayer(simLayer);
             btn.style.background = '#2563eb';
           }
+        };
+
+        // Гексагон объявления + 6 соседних — та же сетка (300м), что и в
+        // Deal Score/мини-карте на дашборде (переиспользуем /admin/api/hex-prices
+        // ради готовых corners, цена тут не нужна — только контур).
+        let hexLayer = null, hexOn = false;
+        window.toggleHexOverlay = function() {
+          hexOn = !hexOn;
+          const btn = document.getElementById('hex-overlay-btn');
+          if (!hexOn) {
+            if (hexLayer) map.removeLayer(hexLayer);
+            btn.style.background = '#fff'; btn.style.color = '#333';
+            return;
+          }
+          btn.style.background = '#7c3aed'; btn.style.color = '#fff';
+          if (hexLayer) { hexLayer.addTo(map); return; }
+          fetch(`/admin/api/hex-prices?lat={{ listing.lat }}&lon={{ listing.lon }}`).then(r => r.json()).then(d => {
+            hexLayer = L.layerGroup();
+            (d.sale || []).forEach(c => {
+              L.polygon(c.corners, {
+                color: c.is_self ? '#1e3a8a' : '#7c3aed', weight: c.is_self ? 2.5 : 1.5,
+                fillColor: '#7c3aed', fillOpacity: 0.06,
+              }).bindTooltip(c.label, {sticky:true}).addTo(hexLayer);
+            });
+            if (hexOn) hexLayer.addTo(map);
+          });
         };
       })();
     </script>
@@ -413,8 +442,14 @@
 </div>
 
 <div id="photo-lb" onclick="if(event.target.id==='photo-lb')closePhotoLb()">
-  <img id="lb-img" style="max-width:92vw;max-height:80vh;border-radius:8px;object-fit:contain;">
-  <button onclick="closePhotoLb()" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:30px;cursor:pointer;">×</button>
+  <div style="position:relative;width:92vw;height:78vh;display:flex;align-items:center;justify-content:center;">
+    <img id="lb-img" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;">
+    <button onclick="photoNav(-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">‹</button>
+    <button onclick="photoNav(1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">›</button>
+  </div>
+  <div id="lb-thumbs" style="display:flex;gap:6px;margin-top:14px;max-width:92vw;overflow-x:auto;padding:4px;"></div>
+  <div id="lb-counter" style="color:#ccc;font-size:13px;margin-top:6px;"></div>
+  <button onclick="closePhotoLb()" style="position:absolute;top:16px;right:20px;background:#fff;border:none;border-radius:50%;color:#000;width:38px;height:38px;font-size:24px;cursor:pointer;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.5);">×</button>
 </div>
 
 {% if photos %}
@@ -429,13 +464,35 @@ function setPhoto(i) {
     const t = document.getElementById('thumb-' + j);
     if (t) { t.style.opacity = j === i ? '1' : '.6'; t.style.borderColor = j === i ? 'var(--accent2, #60a5fa)' : 'transparent'; }
   });
+  const lb = document.getElementById('photo-lb');
+  if (lb.classList.contains('open')) renderLb();
 }
 function photoNav(dir) { setPhoto((_pIdx + dir + _photos.length) % _photos.length); }
+function renderLb() {
+  document.getElementById('lb-img').src = _photos[_pIdx];
+  document.getElementById('lb-counter').textContent = (_pIdx + 1) + ' / ' + _photos.length;
+  document.getElementById('lb-thumbs').innerHTML = _photos.map((p, i) =>
+    `<img src="${p}" onclick="setPhoto(${i})" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === _pIdx ? '1' : '.5'};border:2px solid ${i === _pIdx ? '#fff' : 'transparent'};">`
+  ).join('');
+}
 function openPhotoLb(i) {
-  document.getElementById('lb-img').src = _photos[i];
+  _pIdx = i;
   document.getElementById('photo-lb').classList.add('open');
+  renderLb();
 }
 function closePhotoLb() { document.getElementById('photo-lb').classList.remove('open'); }
+document.addEventListener('keydown', (e) => {
+  if (!document.getElementById('photo-lb').classList.contains('open')) return;
+  // capture-фаза + preventDefault — иначе те же стрелки долистывают страницу
+  // под лайтбоксом (тот же баг, что чинили в попапе на дашборде).
+  if (e.key === 'Escape' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  if (e.key === 'Escape') closePhotoLb();
+  if (e.key === 'ArrowLeft') photoNav(-1);
+  if (e.key === 'ArrowRight') photoNav(1);
+}, true);
 </script>
 {% endif %}
 {% endblock %}

@@ -399,15 +399,18 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
         listing = dict(row)
 
-        # Свежие аналоги
-        comps = await get_comparables(
-            district=listing.get("district"),
+        # Свежие аналоги (гексагон+кольцо+класс ЖК — см. bot/core/bargain.py)
+        comps, comps_meta = await get_comparables(
+            lat=float(listing["lat"]) if listing.get("lat") is not None else None,
+            lon=float(listing["lon"]) if listing.get("lon") is not None else None,
             rooms=listing.get("rooms"),
             area=listing.get("area"),
             current_price=listing.get("price", 0),
+            complex_name=listing.get("complex_name"),
+            district=listing.get("district"),
             exclude_id=listing_id,
         )
-        bargain = analyze_bargain(listing.get("price", 0), comps, listing.get("is_owner"))
+        bargain = analyze_bargain(listing.get("price", 0), comps, listing.get("is_owner"), meta=comps_meta)
 
         # Аренда рядом
         # БАГ (найден): apartment_listings.district = "Есильский р-н"

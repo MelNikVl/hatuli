@@ -22,6 +22,20 @@ from bs4 import BeautifulSoup
 from bot.core.rental_parser import lookup_rental_estimate
 from bot.core.bargain import get_comparables, analyze_bargain
 
+
+def _prelim_rank(s: dict, avg_m2: float | None) -> float:
+    """Дешёвая предварительная прикидка — используется ТОЛЬКО чтобы выбрать,
+    какие объявления в первую очередь отправить на дорогой detail-fetch
+    (координаты/ЖК/фото с krisha.kz, ограничен по времени). Настоящий скор
+    (Deal Score v3, bot/core/deal_score.py) считается позже по всей базе
+    сразу, как только у объявления появятся координаты."""
+    price, area = s.get("price") or 0, s.get("area") or 0
+    if not price or not area or not avg_m2:
+        return 0.0
+    price_m2 = price / area
+    return max(0.0, (avg_m2 - price_m2) / avg_m2)
+
+
 def _norm_district(district: str) -> str:
     """Normalize district name for lookup."""
     d = district.lower().strip()
@@ -141,7 +155,6 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
 
 async def analyze_apartments(city="astana", max_pages=5, start_page=1):
     """Full pipeline: parse sales + rentals, score, return sorted results."""
-    from bot.core.apartment_score_v2 import compute_apartment_score_v2 as compute_apartment_score
     from collections import defaultdict
 
     # 1. Build rental index
@@ -199,37 +212,35 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1):
         same_count = complex_counter.get(cname, 1)
         avg_m2 = district_avg_m2.get(d)
 
-        # Аналоги для анализа торга
-        comps = await get_comparables(
-            district=d or None,
+        # Аналоги для анализа торга. На этом шаге координат ещё нет (их
+        # даёт fetch_apartment_details ниже) — get_comparables сам падает
+        # обратно на район, а Deal Score/аналитика позже пересчитают это
+        # уже по гексагону, когда будут известны координаты и ЖК.
+        comps, comps_meta = await get_comparables(
+            lat=None, lon=None,
             rooms=rooms,
             area=s.get("area"),
             current_price=s.get("price", 0),
+            district=d or None,
             exclude_id=s["id"],
         )
-        bargain = analyze_bargain(s.get("price", 0), comps, s.get("is_owner"))
+        bargain = analyze_bargain(s.get("price", 0), comps, s.get("is_owner"), meta=comps_meta)
         s["bargain_target"] = bargain.get("target_price")
         s["bargain_discount_pct"] = bargain.get("discount_pct")
         s["bargain_rec"] = bargain.get("recommendation")
         s["comparables_cnt"] = bargain.get("comparables_cnt", 0)
 
-        score = compute_apartment_score(
-            s,
-            monthly_rent=rent,
-            same_complex_count=same_count,
-            district_avg_m2=avg_m2,
-            comparables=comps,
-        )
-        s["score_data"] = score
-        s["score_total"] = score["total_score"]
+        s["score_total"] = 0  # реальный скор — позже, в deal_score.apply_deal_scores()
+        s["_prelim_rank"] = _prelim_rank(s, avg_m2)
         results.append(s)
 
     # Fetch detailed info (координаты, фото, отделка) — теперь не только для
-    # топ-скора: иначе карта показывает только хорошие объекты (все зелёные),
-    # ведь у слабых просто никогда не появляются координаты. Берём половину
-    # батча — лучшие по скору (для точности топа), половину — случайную
-    # выборку из остальных (чтобы карта отражала реальный разброс качества).
-    results.sort(key=lambda x: x["score_total"], reverse=True)
+    # топа по предварительной прикидке: иначе карта показывает только хорошие
+    # объекты (все зелёные), ведь у слабых просто никогда не появляются
+    # координаты. Берём половину батча — лучшие по prelim_rank (для точности
+    # топа), половину — случайную выборку из остальных (чтобы карта отражала
+    # реальный разброс качества).
+    results.sort(key=lambda x: x["_prelim_rank"], reverse=True)
 
     from bot.db import settings as _app_settings
     detail_batch = _app_settings.get_int("DETAIL_FETCH_BATCH", 15)
@@ -245,21 +256,15 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1):
     for r in to_fetch:
         url = r.get("url", "")
         if url:
-            logger.info("fetching details for %s (score=%d)", r["id"], r["score_total"])
+            logger.info("fetching details for %s (prelim_rank=%.2f)", r["id"], r["_prelim_rank"])
             await asyncio.sleep(random.uniform(8.0, 15.0))  # пауза чтобы не блокировали
             details = await fetch_apartment_details(url)
             if details:
                 r.update(details)
                 r["details_fetched"] = True
-                # Re-score with new info
-                cname = r.get("address", "").split(",")[0].strip().lower()
-                same_count = complex_counter.get(cname, 1)
-                d = _norm_district(r.get("district", ""))
-                avg_m2 = district_avg_m2.get(d)
-                score = compute_apartment_score(r, monthly_rent=r.get("est_rent"), same_complex_count=same_count, district_avg_m2=avg_m2)
-                r["score_data"] = score
-                r["score_total"] = score["total_score"]
+                # Настоящий скор посчитается в следующем проходе
+                # deal_score.apply_deal_scores() — теперь, когда есть координаты.
 
 
-    results.sort(key=lambda x: x["score_total"], reverse=True)
+    results.sort(key=lambda x: x["_prelim_rank"], reverse=True)
     return results

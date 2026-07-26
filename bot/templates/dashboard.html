@@ -735,7 +735,9 @@ function loadListingExtras(id) {
       const priceM = d.price ? (d.price/1e6).toFixed(1) : '—';
       const medianM = b.median_price ? (b.median_price/1e6).toFixed(1) : '—';
       const targetM = (b.target_price/1e6).toFixed(1);
-      const explain = `Медиана по ${b.comparables_cnt} похожим объявлениям (район/комнаты/площадь): ${medianM} млн ₸, ваша цена: ${priceM} млн ₸. ${b.recommendation || ''}`;
+      const methodTxt = {'hex+ring+class': 'гексагон+соседние, тот же класс ЖК', 'hex+ring': 'гексагон+соседние',
+        'city_segment': 'по городу (мало аналогов рядом)', 'district_fallback': 'по району (нет координат)'}[b.method] || 'аналоги рядом';
+      const explain = `Медиана по ${b.comparables_cnt} похожим объявлениям (${methodTxt}, комнаты/площадь ±15%): ${medianM} млн ₸, ваша цена: ${priceM} млн ₸. ${b.recommendation || ''}`;
       // клик, а не наведение — надёжно работает и на тач-экранах
       el.innerHTML = `<div>
         <span style="color:#16a34a;font-weight:800;white-space:nowrap;">реальная цена ${targetM} млн ₸</span>
