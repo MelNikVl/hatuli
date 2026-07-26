@@ -72,7 +72,7 @@
       <span style="color:#888;">—</span>
       <input id="f-amax" type="number" min="0" step="1" placeholder="до" style="width:50%;padding:9px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
     </div></div>
-  <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Мин. скор</label>
+  <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Минимальный смарт рейтинг</label>
     <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
   <div id="f-top-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;">
     <input id="f-top-only" type="checkbox" onchange="applyFilters()"> ⭐ Только топ-10 по скору</label></div>
@@ -654,15 +654,11 @@ function renderSaleBatch(d) {
     document.getElementById('result-count').textContent = lastPoints.length + ' объектов' + (d.has_more ? '…' : '') + (drawnPolygon ? ' · в области' : '');
     if (d.coverage) {
       hexEdge = d.coverage.hex_edge || 50;
-      const pct = d.coverage.total ? Math.round(100*d.coverage.with_coords/d.coverage.total) : 0;
       const kr = d.coverage.krisha_total;
       const el = document.getElementById('admin-stats');
       if (el) el.innerHTML = mkStats([
         [d.coverage.total.toLocaleString('ru'), 'активных объявлений'],
         [(d.coverage.complexes || 0).toLocaleString('ru'), 'ЖК в базе'],
-        [`${d.coverage.with_coords.toLocaleString('ru')} · ${pct}%`, 'с координатами'],
-        [d.coverage.dups.toLocaleString('ru'), 'дублей среди активных'],
-        [`<a href="/admin/unbound" style="color:inherit;">${(d.coverage.unbound || 0).toLocaleString('ru')}</a>`, 'без привязки к ЖК'],
         [kr ? kr.toLocaleString('ru') : '—', 'всего на Крыше (≤ потолка цены)'],
       ]);
       if (hexOn) drawHexGrid();
