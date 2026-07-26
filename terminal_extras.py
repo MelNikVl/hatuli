@@ -1910,14 +1910,10 @@ def make_extras_router(templates) -> APIRouter:
         } for r in rows]})
 
     # ── Аналитика просмотров (krisha-viewcount.service, см. вкладку Инфо) ──
-
-    @router.get("/admin/analytics/views", response_class=HTMLResponse)
-    async def views_analytics_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("views_analytics.html", {
-            "request": request, "atab": "views",
-        })
+    # HTML-страницы /admin/analytics/views и /admin/analytics/floors теперь
+    # объявлены в bot/admin_web.py (ДО catch-all /admin/analytics/{listing_id},
+    # который иначе перехватывал их как несуществующий listing_id — см. фикс).
+    # Тут остаются только их API-эндпоинты.
 
     @router.get("/admin/api/views-points")
     async def views_points(request: Request, days: int = 7):
@@ -1955,24 +1951,6 @@ def make_extras_router(templates) -> APIRouter:
             "first_seen": r["first_seen"].strftime("%d.%m.%Y") if r["first_seen"] else None,
         } for r in rows]
         return JSONResponse({"points": pts, "days": days})
-
-    # ── Аналитика: покрытие данными по этажам ──────────────────────────────
-
-    @router.get("/admin/analytics/floors", response_class=HTMLResponse)
-    async def floors_analytics_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        from bot.db.pg import fetchval as pg_fv
-        total_active = await pg_fv(
-            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
-            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
-        missing_floor = await pg_fv(
-            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
-            "AND COALESCE(is_duplicate, FALSE) = FALSE AND floor IS NULL") or 0
-        return templates.TemplateResponse("floors_analytics.html", {
-            "request": request, "atab": "floors",
-            "total_active": total_active, "missing_floor": missing_floor,
-        })
 
     # ── Объявления без привязки к ЖК ──────────────────────────────────────
 

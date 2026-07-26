@@ -372,6 +372,34 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         return templates.TemplateResponse(
             "prices.html", {"request": request, "atab": "prices"})
 
+    @app.get("/admin/analytics/views", response_class=HTMLResponse)
+    async def views_analytics_page(request: Request):
+        # ВАЖНО: должен быть объявлен ДО /admin/analytics/{listing_id} ниже —
+        # Starlette матчит роуты в порядке регистрации, и этот catch-all
+        # (объявлен в этом же модуле раньше include_router с terminal_extras)
+        # перехватывал "views"/"floors" как listing_id, отдавая "Not found".
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("views_analytics.html", {
+            "request": request, "atab": "views",
+        })
+
+    @app.get("/admin/analytics/floors", response_class=HTMLResponse)
+    async def floors_analytics_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetchval as pg_fv
+        total_active = await pg_fv(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+        missing_floor = await pg_fv(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE AND floor IS NULL") or 0
+        return templates.TemplateResponse("floors_analytics.html", {
+            "request": request, "atab": "floors",
+            "total_active": total_active, "missing_floor": missing_floor,
+        })
+
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
     async def analytics_detail(request: Request, listing_id: str):
         if not is_authed(request):
