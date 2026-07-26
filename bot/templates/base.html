@@ -150,6 +150,10 @@
   <div class="sidebar-logo">
     <div class="title">🏘 Hatuli</div>
     <div class="sub">Admin Panel</div>
+    <button id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button"
+      style="margin-top:8px;width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">
+      🌓 Тема: <span id="sidebar-theme-label">тёмная</span>
+    </button>
   </div>
   <nav class="nav">
     <div class="nav-section">Мониторинг</div>
@@ -183,5 +187,20 @@
 <main class="main">
 {% block content %}{% endblock %}
 </main>
+<script>
+function _applySidebarTheme(theme) {
+  if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  else document.documentElement.removeAttribute('data-theme');
+  const lbl = document.getElementById('sidebar-theme-label');
+  if (lbl) lbl.textContent = theme === 'light' ? 'светлая' : 'тёмная';
+}
+function toggleSidebarTheme() {
+  const current = localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark';
+  const next = current === 'light' ? 'dark' : 'light';
+  localStorage.setItem('hatuli-theme', next);
+  _applySidebarTheme(next);
+}
+_applySidebarTheme(localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark');
+</script>
 </body>
 </html>

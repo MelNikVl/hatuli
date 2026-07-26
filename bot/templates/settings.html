@@ -41,10 +41,8 @@
     <button class="btn-big {{ 'btn-money-on' if ai_analysis else 'btn-money-off' }}" id="btn-ai" onclick="toggleAi()" {{ 'disabled title="DEEPSEEK_API_KEY не задан в .env"' | safe if not deepseek_key_set else '' }}>
       {{ '🤖 AI-анализ текста: ВКЛ' if ai_analysis else '🤖 AI-анализ текста: ВЫКЛ' }}
     </button>
-    <button class="btn-big" id="btn-theme" onclick="toggleTheme()" style="background:#64748b;color:#fff;">
-      🌓 Тема: <span id="theme-label">тёмная</span>
-    </button>
   </div>
+  <p style="font-size:12px;color:#888;margin:8px 0 0;">Переключатель темы теперь в сайдбаре, под названием Hatuli.</p>
   {% if not deepseek_key_set %}<p style="font-size:12px;color:#f59e0b;margin:8px 0 0;">DEEPSEEK_API_KEY не найден в .env — кнопка неактивна, пока ключ не прописан на сервере.</p>{% endif %}
 </div>
 
@@ -173,19 +171,6 @@ async function saveSettings() {
     setTimeout(() => t.style.display = 'none', 2000);
   }
 }
-
-function applyTheme(theme) {
-  if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
-  else document.documentElement.removeAttribute('data-theme');
-  document.getElementById('theme-label').textContent = theme === 'light' ? 'светлая' : 'тёмная';
-}
-function toggleTheme() {
-  const current = localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark';
-  const next = current === 'light' ? 'dark' : 'light';
-  localStorage.setItem('hatuli-theme', next);
-  applyTheme(next);
-}
-applyTheme(localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark');
 
 refreshStatus();
 setInterval(refreshStatus, 15000);
