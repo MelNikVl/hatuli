@@ -18,6 +18,12 @@
 .marker-cluster-medium div { background-color: rgba(29,78,216,.6); }
 .marker-cluster-large { background-color: rgba(30,58,138,.35); }
 .marker-cluster-large div { background-color: rgba(30,58,138,.65); }
+/* Треугольник тренда цены на плашке — лёгкая пульсация, чтобы был заметнее */
+.price-trend-arrow { animation: trendPulse 1.4s ease-in-out infinite; }
+@keyframes trendPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
+/* Цена прямо на гексагоне мини-карты — жирный, хорошо читаемый шрифт с обводкой */
+.hex-price-label { background:transparent; border:none; box-shadow:none; padding:0; font-weight:800; font-size:12px; color:#fff; text-shadow:-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000; }
+.hex-price-label::before { display:none; }
 </style>
 
 <!-- Статистика (админ) -->
@@ -59,6 +65,8 @@
     </div></div>
   <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Мин. скор</label>
     <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
+  <div id="f-top-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;">
+    <input id="f-top-only" type="checkbox" onchange="applyFilters()"> ⭐ Только топ-10 по скору</label></div>
   </div>
   <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;margin-bottom:4px;">Тепловые карты</label>
     <div style="display:flex;flex-wrap:wrap;gap:6px;">
@@ -165,6 +173,36 @@ const saleCluster = L.markerClusterGroup({
   maxClusterRadius: 45,
   spiderfyOnEveryZoom: true,  // без этого на макс. зуме близкие пины оставались нераздельными и накладывались друг на друга — по такому нельзя было кликнуть
   zoomToBoundsOnClick: true,
+  // Плашки с ценой широкие (текст "1к | 16.0 M"), а дефолтный радиус
+  // "раскрытия" рассчитан на маленькие круглые иконки — несколько квартир
+  // в одном ЖК (почти одинаковые координаты) после spiderfy всё равно
+  // накладывались друг на друга. x2.2 — достаточно, чтобы плашки не пересекались.
+  iconCreateFunction: function(cluster) {
+    const markers = cluster.getAllChildMarkers();
+    const n = markers.length;
+    // Дом с 2-3 объявлениями — не прячем их за кружком-счётчиком, а
+    // показываем прямо стопкой мини-плашек с ценой на месте дома.
+    if (n <= 3) {
+      const mini = markers.map(m => {
+        const meta = m.options.pinMeta;
+        if (!meta) return '';
+        const priceTxt = fmtPriceShort(meta.pt.price);
+        const roomsTxt = meta.pt.rooms ? meta.pt.rooms + 'к' : '?';
+        return `<div style="background:${meta.pinBg};color:#fff;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);margin-bottom:2px;">${meta.isTop ? '⭐' : ''}${roomsTxt} · ${priceTxt}</div>`;
+      }).join('');
+      return L.divIcon({
+        html: `<div style="display:flex;flex-direction:column;align-items:center;transform:translate(-50%,-100%);">${mini}</div>`,
+        className: '',
+        iconSize: [0, 0],
+        iconAnchor: [0, 0],
+      });
+    }
+    const count = cluster.getChildCount();
+    let sizeClass = 'marker-cluster-small';
+    if (count >= 100) sizeClass = 'marker-cluster-large';
+    else if (count >= 10) sizeClass = 'marker-cluster-medium';
+    return L.divIcon({html: `<div><span>${count}</span></div>`, className: 'marker-cluster ' + sizeClass, iconSize: L.point(40, 40)});
+  },
 });
 // Топ-10 по скору — отдельный НЕкластеризуемый слой, чтобы они не прятались
 // внутри кластеров и были видны на любом масштабе карты.
@@ -219,7 +257,7 @@ function openComplexPopup(c, layer) {
   <div style="padding:${photoHtml ? '9px 10px 10px' : '4px 4px 4px'};">
     <div style="font-weight:800;font-size:15px;">ЖК ${d.name}</div>
     <div style="font-size:12px;color:#666;margin-top:2px;">
-      ${d.housing_class ? d.housing_class + ' класс · ' : ''}${d.developer || 'застройщик не указан'}${d.year_built ? ' · ' + d.year_built + ' г.' : ''}
+      ${d.housing_class ? d.housing_class + ' класс · ' : ''}${d.developer ? (d.developer_id ? `<a href="/admin/developer/${d.developer_id}">${d.developer}</a>` : d.developer) : 'застройщик не указан'}${d.year_built ? ' · ' + d.year_built + ' г.' : ''}
     </div>
     ${d.avg_price_m2 ? `<div style="font-size:13px;margin-top:5px;">Средняя цена: <b>${Math.round(d.avg_price_m2/1000)} тыс ₸/м²</b></div>` : ''}
     <div style="font-size:12.5px;color:#555;margin-top:2px;">Объявлений в базе: ${d.listings_count}</div>
@@ -229,6 +267,21 @@ function openComplexPopup(c, layer) {
   </div>
 </div>`);
   }).catch(() => {});
+}
+
+// Ширина попапа = ширина ряда из 4 овалов (комнатность, метраж, цена/м²,
+// срок на рынке) + отступы. Меряем реальным canvas-текстом, а не на глаз,
+// т.к. цифры разной длины ("3-комн" vs "12-комн", "900 тыс ₸/м²" и т.п.).
+let _measureCtx = null;
+function measureTextWidth(text, font) {
+  if (!_measureCtx) _measureCtx = document.createElement('canvas').getContext('2d');
+  _measureCtx.font = font;
+  return _measureCtx.measureText(text).width;
+}
+function popupWidthForPills(pillTexts) {
+  const PILL_PAD = 22, PILL_GAP = 5, OUTER_PAD = 44;  // паддинги плашек + попапа/кнопки закрытия
+  const total = pillTexts.reduce((s, t) => s + measureTextWidth(t, '600 13px sans-serif') + PILL_PAD + PILL_GAP, 0);
+  return Math.max(300, Math.min(600, Math.round(total) + OUTER_PAD));
 }
 
 // Цена компактно: "30.5 М" (от 1 млн) или "850.0K" (меньше 1 млн)
@@ -246,11 +299,15 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
   let trendHtml = '';
   if (pt.prev_price && pt.prev_price !== pt.price) {
     const down = pt.price < pt.prev_price;
-    trendHtml = `<span style="font-size:10px;margin-left:1px;color:${down ? '#16a34a' : '#ef4444'};">${down ? '▼' : '▲'}</span>`;
+    const color = down ? '#16a34a' : '#ef4444';
+    trendHtml = `<span class="price-trend-arrow" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:4px;font-size:11px;color:${color};background:#fff;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">${down ? '▼' : '▲'}</span>`;
   }
   return `
 <div style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;">
-  <div style="background:${pinBg};color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;gap:5px;">${isTop ? '<span style="font-size:11px;">⭐</span>' : ''}<span>${roomsTxt}</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span style="display:flex;align-items:center;gap:1px;">${priceTxt}${trendHtml}</span></div>
+  <div style="display:flex;align-items:center;">
+    <div style="background:${pinBg};color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;gap:5px;">${isTop ? '<span style="font-size:11px;">⭐</span>' : ''}<span>${roomsTxt}</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${priceTxt}</span></div>
+    ${trendHtml}
+  </div>
   ${sellerTxt ? `<div style="font-size:9px;color:#fff;background:rgba(0,0,0,.55);border-radius:5px;padding:0 5px;margin-top:1px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sellerTxt}</div>` : ''}
   <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid ${pinBg};"></div>
 </div>`;
@@ -326,7 +383,7 @@ function renderLightbox() {
     </div>
     <div style="display:flex;gap:6px;margin-top:14px;max-width:92vw;overflow-x:auto;padding:4px;">${thumbs}</div>
     <div style="color:#ccc;font-size:13px;margin-top:6px;">${lbIdx + 1} / ${ph.length}</div>
-    <button onclick="closeLightbox()" style="position:absolute;top:16px;right:20px;background:none;border:none;color:#fff;font-size:30px;cursor:pointer;line-height:1;">×</button>
+    <button onclick="closeLightbox()" style="position:absolute;top:16px;right:20px;background:#fff;border:none;border-radius:50%;color:#000;width:38px;height:38px;font-size:24px;cursor:pointer;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.5);">×</button>
   `;
 }
 function closeLightbox() {
@@ -336,10 +393,17 @@ function closeLightbox() {
 }
 document.addEventListener('keydown', (e) => {
   if (!lbId) return;
+  // Стрелки/Esc — только для лайтбокса. Без preventDefault+stopPropagation
+  // тот же keydown ловит Leaflet (карта под лайтбоксом ещё в фокусе) и
+  // одновременно двигает карту стрелками — визуально "уезжает" фон.
+  if (e.key === 'Escape' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    e.stopPropagation();
+  }
   if (e.key === 'Escape') closeLightbox();
   if (e.key === 'ArrowLeft') { const ph = ptPhotos[lbId]; lbIdx = (lbIdx - 1 + ph.length) % ph.length; renderLightbox(); }
   if (e.key === 'ArrowRight') { const ph = ptPhotos[lbId]; lbIdx = (lbIdx + 1) % ph.length; renderLightbox(); }
-});
+}, true);
 
 function scoreColor(s, p10, p90) {
   const t = p90 > p10 ? Math.max(0, Math.min(1, (s - p10) / (p90 - p10))) : 0.5;
@@ -353,6 +417,7 @@ function percentile(arr, p) {
 }
 
 function applyFilters() {
+  applyFiltersSeq++;  // обрывает батчи предыдущего вызова (см. loadSaleBatch)
   const type = document.getElementById('f-type').value;
   document.getElementById('f-listing-filters').style.display = type === 'complex' ? 'none' : '';
   if (type === 'complex') {
@@ -391,8 +456,8 @@ function applyFilters() {
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
+  if (type === 'rental') {
   fetch('/admin/api/map-points?' + p.toString()).then(r => r.json()).then(d => {
-    if (type === 'rental') {
       map.removeLayer(pointsLayer);
       map.removeLayer(topLayer);
       pointsLayer.clearLayers();
@@ -405,6 +470,7 @@ function applyFilters() {
         const pinHtml = buildPricePinHtml(pt, '#0077FF', false, '');
         const m = L.marker([pt.lat, pt.lon], {
           icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
+          pinMeta: {pt, pinBg: '#0077FF', isTop: false},
         }).addTo(saleCluster);
         const cx = pt.complex ? `<a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}">${pt.complex}</a>` : 'ЖК не определён';
         let priceTrend = '';
@@ -413,21 +479,48 @@ function applyFilters() {
           const dir = dp > 0;
           priceTrend = ` · <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(0)} тыс${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
         }
-        m.bindPopup(`<div style="min-width:250px;"><b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн${priceTrend}<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}</div>`);
+        m.bindPopup(`<div style="min-width:250px;"><b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн${priceTrend}<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}</div>`, {autoPan: false});
+        m.on('popupopen', () => map.panTo([pt.lat, pt.lon], {animate: true}));
       });
       document.getElementById('result-count').textContent = lastPoints.length + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без привязки)` : '') + (drawnPolygon ? ' · в области' : '');
       if (hexOn) drawHexGrid();
-      return;
-    }
-    map.removeLayer(pointsLayer);
-    pointsLayer.clearLayers();
-    if (!map.hasLayer(saleCluster)) saleCluster.addTo(map);
-    if (!map.hasLayer(topLayer)) topLayer.addTo(map);
-    saleCluster.clearLayers();
-    topLayer.clearLayers();
+  });
+    return;
+  }
+  // Продажа: объектов может быть 10-15 тыс. — вместо одного долгого запроса
+  // (~5с) подгружаем батчами по BATCH шт., первый батч рисуется почти сразу,
+  // остальное довозится в фоне без блокировки первой отрисовки карты.
+  map.removeLayer(pointsLayer);
+  pointsLayer.clearLayers();
+  if (!map.hasLayer(saleCluster)) saleCluster.addTo(map);
+  if (!map.hasLayer(topLayer)) topLayer.addTo(map);
+  saleCluster.clearLayers();
+  topLayer.clearLayers();
+  lastPoints = [];
+  topOnlyFilter = document.getElementById('f-top-only').checked;
+  const BATCH = 300;
+  const filterSeq = ++applyFiltersSeq;
+  function loadSaleBatch(offset) {
+    if (filterSeq !== applyFiltersSeq) return;  // фильтры сменились — бросаем старую цепочку батчей
+    const bp = new URLSearchParams(p);
+    bp.set('offset', offset); bp.set('limit', BATCH);
+    fetch('/admin/api/map-points?' + bp.toString()).then(r => r.json()).then(d => {
+      if (filterSeq !== applyFiltersSeq) return;
+      renderSaleBatch(d);
+      // Топ-10 всегда попадают в первый батч (ORDER BY eff_score DESC) —
+      // при включённом фильтре остальные тысячи объектов грузить незачем.
+      if (d.has_more && !topOnlyFilter) loadSaleBatch(offset + BATCH);
+    });
+  }
+  loadSaleBatch(0);
+}
+function renderSaleBatch(d) {
     let visiblePoints = d.points;
+    if (topOnlyFilter) visiblePoints = visiblePoints.filter(pt => pt.top);
     if (drawnPolygon) visiblePoints = visiblePoints.filter(pt => pointInPolygon(pt.lat, pt.lon, drawnPolygon));
-    const scores = visiblePoints.map(pt => pt.score);
+    lastPoints = lastPoints.concat(visiblePoints);
+    // p10/p90 — по всем точкам, загруженным на данный момент (уточняется по мере догрузки батчей)
+    const scores = lastPoints.map(pt => pt.score);
     const p10 = percentile(scores, 0.10), p90 = percentile(scores, 0.90);
     visiblePoints.forEach(pt => {
       // Плашка с ценой: малиновая+звезда для топ-10 по скору, иначе синяя.
@@ -439,10 +532,10 @@ function applyFilters() {
       const m = L.marker([pt.lat, pt.lon], {
         icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
         zIndexOffset: isTop ? 1000 : 0,
+        pinMeta: {pt, pinBg, isTop},
       }).addTo(isTop ? topLayer : saleCluster);
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
       const areaTxt = pt.area ? Math.round(pt.area) : '?';
-      const ppm = (pt.price && pt.area) ? ' · ' + Math.round(pt.price/pt.area/1000) + ' тыс ₸/м²' : '';
       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
       let priceTrend = '';
       if (pt.prev_price && pt.prev_price !== pt.price) {
@@ -462,18 +555,33 @@ function applyFilters() {
 </div>` : '';
       const sellerHtml = pt.is_owner
         ? '<b style="color:#16a34a;">👤 от собственника</b>'
-        : (pt.seller_name ? `<b style="color:#2563eb;">🏢 риелтор ${pt.seller_name}</b>` : '<b style="color:#2563eb;">🏢 риелтор</b>');
+        : (pt.seller_name ? `<span style="color:#000;">🏢 риелтор <b>${pt.seller_name}</b></span>` : '<span style="color:#000;">🏢 риелтор</span>');
       const cxLabel = pt.complex && /^\s*(жк|кг)\b/i.test(pt.complex) ? pt.complex : `ЖК ${pt.complex}`;
       const cxLine = pt.complex
         ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}</div>`
-        : '<div style="font-size:12.5px;color:#b45309;margin-top:7px;">🏢 ЖК не определён</div>';
+        : '';
+      const descId = 'desc-' + pt.id;
+      const descHtml = pt.description ? `
+<div style="font-size:12.5px;color:#555;margin-top:6px;">
+  <div id="${descId}" style="max-height:2.8em;overflow:hidden;line-height:1.4;white-space:pre-wrap;">${escapeHtml(pt.description)}</div>
+  <span onclick="event.stopPropagation();toggleDesc('${descId}', this)" style="color:#2563eb;cursor:pointer;font-weight:600;font-size:11.5px;">развернуть ▾</span>
+</div>` : '';
+      const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+      // 4 ключевых показателя — по ним считаем ширину попапа (см. popupWidthForPills)
+      const corePills = [`${pt.rooms || '?'}-комн`, `${areaTxt} м²`];
+      if (pt.price && pt.area) corePills.push(Math.round(pt.price/pt.area/1000) + ' тыс ₸/м²');
+      corePills.push(`на рынке: ${ageText}`);
+      const pillList = corePills.slice();
+      if (pt.ceiling_height) pillList.splice(pillList.length - 1, 0, `Потолок ${pt.ceiling_height} м`);
+      const pillsHtml = pillList.map(t => `<span style="${pillStyle}">${t}</span>`).join('');
+      const popupW = popupWidthForPills(corePills);
       m.bindPopup(`
-<div style="min-width:340px;max-width:480px;font-family:inherit;">
+<div style="width:${popupW}px;font-family:inherit;">
   ${carHtml}
   <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
   <div style="cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
       <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
-      <div style="font-size:16px;color:#374151;margin-top:3px;white-space:nowrap;">${pt.rooms || '?'}-комн · <b style="font-size:17px;">${areaTxt}</b> м²<span style="font-size:13px;color:#888;">${ppm}</span><span style="font-size:13px;color:#888;"> · на рынке: ${ageText}</span></div>
+      <div style="margin-top:6px;">${pillsHtml}</div>
   </div>
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
   <div style="font-size:12.5px;margin-top:3px;">Смарт рейтинг: <a href="/admin/analytics/${pt.id}" onclick="event.stopPropagation()" title="${scoreExplainText(pt.score_bd)}" style="color:${sc};font-weight:800;text-decoration:none;border-bottom:1px dashed ${sc};">${pt.score}</a></div>
@@ -482,17 +590,21 @@ function applyFilters() {
   ${(priceTrend || pt.views) ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend ? priceTrend.replace(/^ · /, '') : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>` : ''}
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${cxLine}
+  ${descHtml}
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
     <a href="javascript:void(0)" onclick="openDetailModal('${pt.id}', event)" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Подробнее</a>
     <a href="/admin/analytics/${pt.id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Аналитика</a>
     <a href="${pt.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Крыша</a>
   </div>
   </div>
-</div>`);
-      m.on('popupopen', () => { loadPriceHistory(pt.id); loadBargainCaption(pt.id); });
+</div>`, {maxWidth: popupW, minWidth: popupW, autoPan: false});
+      m.on('popupopen', () => {
+        map.panTo([pt.lat, pt.lon], {animate: true});
+        loadPriceHistory(pt.id);
+        loadBargainCaption(pt.id);
+      });
     });
-    document.getElementById('result-count').textContent = visiblePoints.length + ' объектов' + (drawnPolygon ? ' · в области' : '');
-    lastPoints = visiblePoints;
+    document.getElementById('result-count').textContent = lastPoints.length + ' объектов' + (d.has_more ? '…' : '') + (drawnPolygon ? ' · в области' : '');
     if (d.coverage) {
       hexEdge = d.coverage.hex_edge || 50;
       const pct = d.coverage.total ? Math.round(100*d.coverage.with_coords/d.coverage.total) : 0;
@@ -508,7 +620,6 @@ function applyFilters() {
       ]);
       if (hexOn) drawHexGrid();
     }
-  });
 }
 function mkStats(items) {
   return items.map(([v,l]) => `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 14px;text-align:center;"><div style="font-size:17px;font-weight:800;line-height:1.1;">${v}</div><div style="font-size:11px;color:#888;">${l}</div></div>`).join('');
@@ -574,6 +685,14 @@ function escapeHtml(s) {
   d.textContent = s == null ? '' : String(s);
   return d.innerHTML;
 }
+function toggleDesc(id, btn) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const collapsed = el.dataset.expanded !== '1';
+  el.style.maxHeight = collapsed ? 'none' : '2.8em';
+  el.dataset.expanded = collapsed ? '1' : '0';
+  btn.textContent = collapsed ? 'свернуть ▴' : 'развернуть ▾';
+}
 function toggleBargainExplain(uid, ev) {
   if (ev) ev.stopPropagation();
   const box = document.getElementById('bgx-' + uid);
@@ -602,47 +721,61 @@ function loadBargainCaption(id) {
 // Мини-карта с гексагонами в попапе: цена/м² продажи и аренды в гексагоне
 // объявления и 6 смежных — переиспользует /admin/api/hex-prices (та же логика,
 // что и на странице ЖК).
-function drawHexPriceMini(divId, cells) {
+function drawHexPriceMini(divId, cells, valueField, fmt) {
+  valueField = valueField || 'avg_m2';
+  fmt = fmt || (v => Math.round(v/1000) + 'к/м²');
   const el = document.getElementById(divId);
   if (!el) return;
-  if (!cells || !cells.length || !cells.some(c => c.avg_m2)) {
+  if (!cells || !cells.length || !cells.some(c => c[valueField])) {
     el.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#888;font-size:10.5px;">нет данных</div>';
     return;
   }
   const self_ = cells.find(c => c.is_self);
   const hmap = L.map(divId, {zoomControl:false, attributionControl:false, dragging:false, scrollWheelZoom:false, doubleClickZoom:false, boxZoom:false, touchZoom:false}).setView([self_.corners[0][0], self_.corners[0][1]], 14);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:0.5}).addTo(hmap);
-  const vals = cells.filter(c => c.avg_m2).map(c => c.avg_m2);
+  const vals = cells.filter(c => c[valueField]).map(c => c[valueField]);
   const lo = Math.min(...vals), hi = Math.max(...vals);
   const bounds = [];
   cells.forEach(c => {
-    const t = (hi > lo && c.avg_m2) ? (c.avg_m2 - lo) / (hi - lo) : 0.5;
-    L.polygon(c.corners, {
+    const v = c[valueField];
+    const t = (hi > lo && v) ? (v - lo) / (hi - lo) : 0.5;
+    const poly = L.polygon(c.corners, {
       color: c.is_self ? '#1e3a8a' : '#fff', weight: c.is_self ? 2 : 0.8,
-      fillColor: c.avg_m2 ? heatColor(t) : '#e5e7eb', fillOpacity: c.avg_m2 ? 0.75 : 0.25,
-    }).bindTooltip(`${c.label}: ${c.avg_m2 ? Math.round(c.avg_m2/1000) + ' тыс ₸/м²' : 'нет данных'} (${c.count})`, {sticky:true}).addTo(hmap);
+      fillColor: v ? heatColor(t) : '#e5e7eb', fillOpacity: v ? 0.75 : 0.25,
+    });
+    if (v) {
+      poly.bindTooltip(fmt(v), {permanent:true, direction:'center', className:'hex-price-label'});
+    } else {
+      poly.bindTooltip(`${c.label}: нет данных`, {sticky:true});
+    }
+    poly.addTo(hmap);
     c.corners.forEach(p => bounds.push(p));
   });
   hmap.fitBounds(bounds, {padding:[2,2]});
   setTimeout(() => hmap.invalidateSize(), 50);
 }
-function loadHexPriceMini(id, lat, lon) {
+function loadHexPriceMini(id, lat, lon, rooms) {
   const wrap = document.getElementById('hexwrap-' + id);
   if (!wrap || wrap.dataset.loaded || lat == null || lon == null) return;
   wrap.dataset.loaded = '1';
   wrap.innerHTML = `
-<div style="font-size:10px;color:#888;margin-bottom:3px;">₸/м²: этот гексагон + 6 соседних</div>
+<div style="font-size:10px;color:#888;margin-bottom:3px;">этот гексагон + 6 соседних</div>
 <div style="display:flex;gap:6px;">
-  <div style="flex:1;"><div style="font-size:9.5px;color:#888;text-align:center;">продажа</div><div id="hexmini-sale-${id}" style="aspect-ratio:1/1;width:100%;border-radius:6px;"></div></div>
-  <div style="flex:1;"><div style="font-size:9.5px;color:#888;text-align:center;">аренда</div><div id="hexmini-rental-${id}" style="aspect-ratio:1/1;width:100%;border-radius:6px;"></div></div>
+  <div style="flex:1;"><div style="font-size:28.5px;font-weight:800;text-align:center;">продажа рядом</div><div id="hexmini-sale-${id}" style="aspect-ratio:1/1;width:100%;border-radius:6px;"></div></div>
+  <div style="flex:1;"><div style="font-size:28.5px;font-weight:800;text-align:center;">аренда рядом</div><div id="hexmini-rental-${id}" style="aspect-ratio:1/1;width:100%;border-radius:6px;"></div></div>
 </div>`;
-  fetch(`/admin/api/hex-prices?lat=${lat}&lon=${lon}`).then(r => r.json()).then(d => {
-    drawHexPriceMini('hexmini-sale-' + id, d.sale);
-    drawHexPriceMini('hexmini-rental-' + id, d.rental);
+  const roomsQ = rooms ? `&rooms=${rooms}` : '';
+  fetch(`/admin/api/hex-prices?lat=${lat}&lon=${lon}${roomsQ}`).then(r => r.json()).then(d => {
+    drawHexPriceMini('hexmini-sale-' + id, d.sale, 'avg_m2', v => Math.round(v/1000) + 'к/м²');
+    // Аренда — средняя ИТОГОВАЯ аренда квартиры такой же комнатности в
+    // месяц (не ₸/м², который путали с итоговой ценой).
+    drawHexPriceMini('hexmini-rental-' + id, d.rental, 'avg_price', v => Math.round(v/1000) + 'к/мес');
   }).catch(() => { wrap.innerHTML = ''; });
 }
 
 let lastPoints = [], hexOn = false, hexEdge = 50;
+let applyFiltersSeq = 0;  // растёт при каждом applyFilters() — обрывает устаревшие цепочки батчей
+let topOnlyFilter = false;  // чекбокс "⭐ Только топ-10 по скору" на главной карте
 const hexLayer = L.layerGroup();
 const LAT0 = 51.128, LON0 = 71.430,
       MLAT = 110574.0, MLON = 111320.0 * Math.cos(LAT0 * Math.PI/180);
@@ -716,8 +849,16 @@ function median(arr) {
   return s.length % 2 ? s[mid] : (s[mid-1]+s[mid])/2;
 }
 
-function drawPriceHeat(points) {
+function drawPriceHeat(points, archivedPoints) {
   const buckets = hexBucket(points.filter(p => p.price > 0), p => [p.lat, p.lon]);
+  // Гексагоны без активных объявлений — подстрахуем последними ценами
+  // проданного (архив), вместо того чтобы оставлять клетку пустой.
+  if (archivedPoints && archivedPoints.length) {
+    const archBuckets = hexBucket(archivedPoints.filter(p => p.price > 0), p => [p.lat, p.lon]);
+    archBuckets.forEach((b, key) => {
+      if (!buckets.has(key)) { b.isArchived = true; buckets.set(key, b); }
+    });
+  }
   const medians = [];
   buckets.forEach(b => { b.value = median(b.items.map(i => i.price)); medians.push(b.value); });
   if (!medians.length) return;
@@ -725,9 +866,20 @@ function drawPriceHeat(points) {
   buckets.forEach(b => {
     const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
     const priceTxt = b.value >= 1e6 ? (b.value/1e6).toFixed(1) + ' М' : (b.value/1e3).toFixed(0) + 'K';
+    // По комнатности — если есть данные по рукам (rooms), покажем разбивку
+    const byRooms = {};
+    b.items.forEach(i => { if (i.rooms) (byRooms[i.rooms] = byRooms[i.rooms] || []).push(i.price); });
+    const roomsTxt = Object.keys(byRooms).sort().map(rm => {
+      const med = median(byRooms[rm]);
+      const t2 = med >= 1e6 ? (med/1e6).toFixed(1) + 'М' : (med/1e3).toFixed(0) + 'K';
+      return `${rm}к: ${t2}`;
+    }).join(' · ');
+    const archNote = b.isArchived ? ' (по последним продажам, архив)' : '';
     L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
-      color: '#fff', weight: 0.5, fillColor: heatColor(t), fillOpacity: 0.55,
-    }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.`, {sticky:true}).addTo(heatLayer);
+      color: b.isArchived ? '#8b5cf6' : '#fff', weight: b.isArchived ? 1.2 : 0.5,
+      dashArray: b.isArchived ? '3,3' : null,
+      fillColor: heatColor(t), fillOpacity: 0.55,
+    }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatLayer);
   });
 }
 
@@ -816,8 +968,12 @@ function drawRoadHeat(roads) {
 async function loadHeatData(mode) {
   if (heatCache[mode]) return heatCache[mode];
   if (mode === 'sale') {
-    const d = await (await fetch('/admin/api/map-points?type=sale')).json();
+    const [d, archived] = await Promise.all([
+      (await fetch('/admin/api/map-points?type=sale')).json(),
+      (await fetch('/admin/api/archived-sale-points')).json(),
+    ]);
     heatCache.sale = d.points || [];
+    heatCache.saleArchived = archived.points || [];
   } else if (mode === 'rental') {
     const d = await (await fetch('/admin/api/map-points?type=rental')).json();
     heatCache.rental = d.points || [];
@@ -848,7 +1004,7 @@ async function toggleHeat(mode) {
   if (!map.hasLayer(heatLayer)) heatLayer.addTo(map);
   const data = await loadHeatData(mode);
   if (heatMode !== mode) return;  // успели переключиться, пока грузилось
-  if (mode === 'sale' || mode === 'rental') drawPriceHeat(data);
+  if (mode === 'sale' || mode === 'rental') drawPriceHeat(data, mode === 'sale' ? heatCache.saleArchived : null);
   else if (mode === 'schools') drawCountHeat(data, p => [p.lat, p.lon], 'школ/садиков');
   else if (mode === 'noise') drawRoadHeat(data);
 }
@@ -980,7 +1136,7 @@ ${nearbyHtml}
       if (mainImg) mainImg.onclick = () => { carIdx[id] = modalPhotoIdx; openLightbox(id, event); };
     }
 
-    if (d.lat != null && d.lon != null) loadHexPriceMini('modal', d.lat, d.lon);
+    if (d.lat != null && d.lon != null) loadHexPriceMini('modal', d.lat, d.lon, d.rooms);
 
     fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(dh => {
       const wrap = document.getElementById('modal-price-history-wrap');

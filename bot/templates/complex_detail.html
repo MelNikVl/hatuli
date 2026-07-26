@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-title">🏢 {{ cx.name }} <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% endif %}</small></div>
+<div class="page-title">🏢 {{ cx.name }}
+  {% if developer %}<small style="font-size:14px;font-weight:400;">· 🏗 {% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}">{{ developer }}</a>{% else %}{{ developer }}{% endif %}</small>{% endif %}
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% endif %}</small></div>
 {% if cx.is_street %}
 <div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:14px;">
   ⚠️ <b>Это улица, а не ЖК.</b> Аудит определил, что под этим названием Крыша группирует дома по улице. Объявления отвязаны, из карт и подборок запись исключена.

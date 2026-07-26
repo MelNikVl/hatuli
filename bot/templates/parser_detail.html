@@ -21,12 +21,63 @@
   {% endfor %}
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px;font-size:13px;line-height:1.7;">
+  <b style="font-size:14px;display:block;margin-bottom:4px;">🔁 Полный обход Крыши</b>
+  {% if full_cycle_hours %}
+  Последний круг глубокого обхода занял <b>{{ full_cycle_hours }} ч</b> — это время, за которое парсер сверяет
+  все объявления в базе и находит новые по всей выдаче Крыши (не только свежие страницы).
+  Завершён: {{ full_cycle_completed_at[:16].replace('T', ' ') if full_cycle_completed_at else '—' }} UTC.
+  {% else %}
+  Ещё не накопилось ни одного полного круга — метрика появится после первого прохода глубокого обхода
+  (страница за страницей до конца выдачи и обратно).
+  {% endif %}
+  <br><b>👁 Просмотры (микросервис krisha-viewcount, Playwright):</b>
+  покрыто {{ "{:,}".format(viewcount_total).replace(",", " ") }} объявлений,
+  {{ "{:,}".format(viewcount_fresh).replace(",", " ") }} обновлено за последние 6 часов
+  {% if viewcount_last_at %}(последнее обновление: {{ viewcount_last_at }}){% endif %}.
+  Работает пачками (по умолчанию 20 объявлений), пачка запускается раз в ~50-70 минут.
+  <br><b>⭐ Топ-10 по скору:</b> пересчитывается каждый цикл парсера квартир (те же ~50-80 минут, что и обычный обход)
+  {% if top10_recalc_at %} — последний пересчёт: {{ top10_recalc_at[:16].replace('T', ' ') }} UTC{% endif %}.
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;">
   <b style="font-size:14px;">Добавлено объявлений по часам — продажа и аренда</b>
   <canvas id="chart" height="90"></canvas>
 </div>
 
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
+  <b style="font-size:14px;">Доля активных объявлений с известным этажом, во времени</b>
+  <span style="font-size:11.5px;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж; этаж приходит только с детальной страницы</span>
+  <canvas id="floor-chart" height="90"></canvas>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+fetch('/admin/api/floor-history?days=30').then(r => r.json()).then(d => {
+  const pts = d.points || [];
+  if (pts.length < 2) {
+    document.getElementById('floor-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек</div>';
+    return;
+  }
+  new Chart(document.getElementById('floor-chart'), {
+    type: 'line',
+    data: {
+      labels: pts.map(p => p.at),
+      datasets: [{
+        label: '% с известным этажом', data: pts.map(p => p.pct),
+        borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.25, pointRadius: 2,
+      }],
+    },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 12, font: { size: 10 } }, grid: { display: false } },
+        y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+      },
+    },
+  });
+}).catch(() => {});
+</script>
 <script>
 const labels = {{ chart_labels | tojson }};
 {% if sale_values is defined %}

@@ -130,7 +130,7 @@ tr:last-child td{border-bottom:none}
           <a href="/admin/complex/{{ c.id }}" style="font-weight:700;font-size:13.5px;line-height:1.25;color:var(--text);text-decoration:none;">{{ c.name }}</a>
           {% if c.avg_score %}<span style="flex-shrink:0;background:#2563eb;color:#fff;border-radius:8px;padding:2px 7px;font-weight:800;font-size:13px;">{{ c.avg_score|round|int }}</span>{% endif %}
         </div>
-        <div style="font-size:11.5px;color:#888;">{% if c.developer_name %}{{ c.developer_name }}{% else %}застройщик не определён{% endif %}</div>
+        <div style="font-size:11.5px;color:#888;">{% if c.developer_name %}🏗 {% if c.developer_id %}<a href="/admin/developer/{{ c.developer_id }}" style="color:inherit;">{{ c.developer_name }}</a>{% else %}{{ c.developer_name }}{% endif %}{% else %}застройщик не определён{% endif %}</div>
         <div style="font-size:11px;color:#888;display:flex;gap:6px;flex-wrap:wrap;margin-top:2px;">
           <span>{{ c.district or '—' }}</span>
           {% if c.year_built %}<span>· {{ c.year_built }} г.</span>{% endif %}

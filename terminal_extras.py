@@ -45,7 +45,16 @@ SLIDER_SETTINGS = {
     "MORTGAGE_DOWN_PCT": ("Первоначальный взнос", 10, 50, 5, "%", "💰 Финансовые допущения"),
     "REALTOR_FEE_PCT":   ("Комиссия риелтора", 0, 5, 0.5, "%", "💰 Финансовые допущения"),
     "ALERT_THRESHOLD":   ("Порог скора для алертов", 50, 90, 1, "баллов", "🎯 Скоринг"),
-    "HEX_EDGE_M":        ("Гексагон-сетка: ребро (м)", 30, 200, 10, "м", "🎯 Скоринг"),
+    "HEX_EDGE_M":        ("Гексагон-сетка: ребро (м)", 30, 200, 10, "м", "⬡ Гексагоны"),
+    "SCORE_W_PRICE":     ("Вес: цена vs локальный рынок", 0, 100, 5, "%", "⚖️ Веса Deal Score"),
+    "SCORE_W_LOCATION":  ("Вес: локация + инфраструктура", 0, 100, 5, "%", "⚖️ Веса Deal Score"),
+    "SCORE_W_QUALITY":   ("Вес: качество ЖК (класс/год/рейтинг)", 0, 100, 5, "%", "⚖️ Веса Deal Score"),
+    "SCORE_W_MARKET":    ("Вес: доходность аренды + ликвидность", 0, 100, 5, "%", "⚖️ Веса Deal Score"),
+    "SCORE_W_RISK":      ("Вес: риск (этаж/риелтор)", 0, 100, 5, "%", "⚖️ Веса Deal Score"),
+    "VIEWCOUNT_BATCH":   ("Просмотров за цикл (Playwright, ~раз в час)", 0, 100, 5, "шт.", "👁 Просмотры (Playwright)"),
+    "VIEWCOUNT_DELAY_MIN": ("Задержка между запросами — мин", 3, 30, 1, "с", "👁 Просмотры (Playwright)"),
+    "VIEWCOUNT_DELAY_MAX": ("Задержка между запросами — макс", 5, 45, 1, "с", "👁 Просмотры (Playwright)"),
+    "VIEWCOUNT_MIN_AGE_HOURS": ("Не повторять чаще, чем раз в N часов", 1, 72, 1, "ч", "👁 Просмотры (Playwright)"),
     "PARSER_MAX_PAGES":  ("Страниц Krisha за цикл (свежие)", 1, 40, 1, "стр.", "🕷 Обход парсера"),
     "RENTAL_MAX_PAGES":  ("Страниц Крыши за цикл аренды (было 10 — покрывало ~5% рынка)", 5, 100, 5, "стр.", "🕷 Обход парсера"),
     "DEEP_SWEEP_BATCH":  ("Глубокий обход: доп. страниц за цикл (0=выкл)", 0, 20, 1, "стр.", "🕷 Обход парсера"),
@@ -56,22 +65,63 @@ SLIDER_SETTINGS = {
     "COORD_FETCH_DELAY_MAX": ("Задержка между запросами деталей — макс", 5, 45, 1, "с", "🕷 Обход парсера"),
 }
 
+# Пояснения к отдельным ползункам (только там, где смысл не очевиден из
+# названия) — показываются под ползунком на /admin/settings.
+SLIDER_DESCRIPTIONS = {
+    "DEEP_SWEEP_BATCH": (
+        "Постепенный обход всей выдачи Крыши вглубь (не только свежие "
+        "объявления) — парсер запоминает позицию между циклами и с каждым "
+        "циклом читает ещё DEEP_SWEEP_BATCH страниц дальше, постепенно "
+        "закрывая весь бэклог, а не только свежие страницы."
+    ),
+    "DETAIL_FETCH_BATCH": (
+        "Из объявлений, спарсенных за этот цикл, столько получают дорогой "
+        "запрос детальной страницы (координаты/фото/этаж и т.п.): половина — "
+        "топ по предварительному скору, половина — случайные, чтобы на карте "
+        "были видны не только «хорошие» объявления."
+    ),
+    "COORD_BACKFILL_BATCH": (
+        "Отдельно от обычного обхода — досасывает координаты/ЖК/фото по ВСЕЙ "
+        "базе (для любых объявлений, где их до сих пор нет), в порядке "
+        "старых→новых, независимо от того, когда объявление было спаршено. "
+        "Сейчас может быть принудительно выставлено в 0, если идёт "
+        "трёхдневный массовый backfill-скрипт — по завершении он сам вернёт "
+        "это значение обратно."
+    ),
+}
 
-async def hex_price_cells(lat0: float, lon0: float) -> tuple[list[dict], list[dict]]:
+
+async def hex_price_cells(lat0: float, lon0: float, rooms: int | None = None) -> tuple[list[dict], list[dict]]:
     """Цена/м² по гексагону (edge 300м) вокруг точки + 6 соседей — отдельно
     продажа и аренда. Общая логика для страницы ЖК и мини-карты в попапе
-    объявления на дашборде."""
+    объявления на дашборде.
+
+    rooms: если задан — аренда считается ТОЛЬКО по объявлениям с такой же
+    комнатностью, и дополнительно считается avg_price (средняя итоговая
+    аренда в месяц, не ₸/м²) — ₸/м² для аренды путают с итоговой ценой
+    (видно как "5 тыс." и кажется багом, хотя это ₸/м²/мес)."""
     from bot.core.hexgrid import (
         hex_id as _hex_id, neighbors as _hex_neighbors, hex_corners as _hex_corners,
     )
     HEX_EDGE = 300.0
     dlat, dlon = 0.012, 0.019  # ~1.3км в каждую сторону — с запасом на 2 кольца гекса
 
-    def _build(rows) -> list[dict]:
+    def _build(rows, with_total=False, archive_rows=None) -> list[dict]:
         buckets: dict[str, list[float]] = {}
+        totals: dict[str, list[float]] = {}
         for r in rows:
             hid = _hex_id(float(r["lat"]), float(r["lon"]), HEX_EDGE)
             buckets.setdefault(hid, []).append(float(r["price"]) / float(r["area"]))
+            if with_total:
+                totals.setdefault(hid, []).append(float(r["price"]))
+        # Гексагоны без АКТИВНЫХ объявлений — не обязательно "нет данных":
+        # если там что-то продалось (ушло в архив), последняя цена перед
+        # архивацией всё ещё полезный ориентир вместо пустой серой клетки.
+        archive_buckets: dict[str, list[float]] = {}
+        if archive_rows:
+            for r in archive_rows:
+                hid = _hex_id(float(r["lat"]), float(r["lon"]), HEX_EDGE)
+                archive_buckets.setdefault(hid, []).append(float(r["price"]) / float(r["area"]))
         self_hid = _hex_id(lat0, lon0, HEX_EDGE)
         wanted = [("здесь", self_hid)] + [
             (f"сосед {i+1}", h) for i, h in enumerate(_hex_neighbors(self_hid))
@@ -79,11 +129,18 @@ async def hex_price_cells(lat0: float, lon0: float) -> tuple[list[dict], list[di
         cells = []
         for label, hid in wanted:
             vals = buckets.get(hid, [])
+            tvals = totals.get(hid, [])
+            is_archived = False
+            if not vals and archive_buckets.get(hid):
+                vals = archive_buckets[hid]
+                is_archived = True
             cells.append({
                 "label": label,
                 "avg_m2": round(sum(vals) / len(vals)) if vals else None,
+                "avg_price": round(sum(tvals) / len(tvals)) if tvals else None,
                 "count": len(vals),
                 "is_self": label == "здесь",
+                "is_archived": is_archived,
                 "corners": [list(c) for c in _hex_corners(hid, HEX_EDGE)],
             })
         return cells
@@ -94,13 +151,27 @@ async def hex_price_cells(lat0: float, lon0: float) -> tuple[list[dict], list[di
           AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
           AND price > 500000 AND area > 0
     """, lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon)
-    nearby_rental = await fetch("""
+    nearby_sale_archived = await fetch("""
+        SELECT lat, lon, price, area FROM apartment_listings
+        WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
+          AND is_active = FALSE AND archived_at IS NOT NULL
+          AND COALESCE(is_duplicate, FALSE) = FALSE
+          AND price > 500000 AND area > 0
+          AND archived_at > now() - interval '180 days'
+    """, lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon)
+    rental_params = [lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon]
+    rental_room_cond = ""
+    if rooms:
+        rental_room_cond = "AND rooms = $5"
+        rental_params.append(rooms)
+    nearby_rental = await fetch(f"""
         SELECT lat, lon, price, area FROM rental_listings
         WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
           AND price > 0 AND area > 0
           AND last_seen > now() - interval '30 days'
-    """, lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon)
-    return _build(nearby_sale), _build(nearby_rental)
+          {rental_room_cond}
+    """, *rental_params)
+    return _build(nearby_sale, archive_rows=nearby_sale_archived), _build(nearby_rental, with_total=True)
 
 
 _UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "static", "uploads")
@@ -206,6 +277,7 @@ def make_extras_router(templates) -> APIRouter:
                 "key": key, "label": label, "min": mn, "max": mx,
                 "step": step, "unit": unit,
                 "value": current.get(key, "0"),
+                "desc": SLIDER_DESCRIPTIONS.get(key),
             })
         sliders = [s for g in groups.values() for s in g]  # обратная совместимость
 
@@ -411,6 +483,26 @@ def make_extras_router(templates) -> APIRouter:
         today_new_rental = await pg_fetchval(
             "SELECT COUNT(*) FROM rental_listings WHERE found_at::date = CURRENT_DATE") or 0
 
+        # Время полного обхода Крыши (см. service_apartments.py: DEEP_SWEEP_*) —
+        # длина одного круга глубокого обхода = время, за которое сверяются
+        # все объявления в базе + парсятся новые.
+        from bot.db import settings as app_settings
+        await app_settings.load()
+        full_cycle_sec = app_settings.get_int("DEEP_SWEEP_CIRCLE_DURATION_SEC", 0)
+        full_cycle_completed_at = app_settings.get("DEEP_SWEEP_CIRCLE_COMPLETED_AT", "")
+        full_cycle_hours = round(full_cycle_sec / 3600, 1) if full_cycle_sec else None
+
+        # Просмотры (микросервис krisha-viewcount, Playwright)
+        viewcount_total = await pg_fetchval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE views_count IS NOT NULL") or 0
+        viewcount_fresh = await pg_fetchval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE views_count_updated_at > now() - interval '6 hours'") or 0
+        viewcount_last_at = await pg_fetchval(
+            "SELECT MAX(views_count_updated_at) FROM apartment_listings")
+
+        # Частота пересчёта топ-10 по скору (Deal Score v3, apply_deal_scores)
+        top10_recalc_at = app_settings.get("DEAL_SCORE_LAST_RUN_AT", "")
+
         stats = [
             {"label": "продажа: активных в мониторинге", "value": f"{total_active:,}".replace(",", " ")},
             {"label": "продажа: спаршено сегодня", "value": today_new_sale},
@@ -420,6 +512,9 @@ def make_extras_router(templates) -> APIRouter:
             {"label": "аренда: живых (видели за 3 дня)", "value": f"{rental_fresh:,}".replace(",", " ")},
             {"label": "аренда: всего в базе", "value": f"{rental_total:,}".replace(",", " ")},
             {"label": "аренда: спаршено сегодня", "value": today_new_rental},
+            {"label": "полный обход Крыши: последний круг", "value": f"{full_cycle_hours} ч" if full_cycle_hours else "считается…"},
+            {"label": "просмотры: покрыто объявлений", "value": f"{viewcount_total:,}".replace(",", " ")},
+            {"label": "просмотры: обновлено за 6 ч", "value": f"{viewcount_fresh:,}".replace(",", " ")},
         ]
         return templates.TemplateResponse("parser_detail.html", {
             "request": request, "title": "🕷 Парсер — продажа и аренда",
@@ -427,6 +522,12 @@ def make_extras_router(templates) -> APIRouter:
             "days": days, "stats": stats,
             "chart_labels": labels,
             "sale_values": sale_values, "rental_values": rental_values,
+            "full_cycle_hours": full_cycle_hours,
+            "full_cycle_completed_at": full_cycle_completed_at,
+            "viewcount_total": viewcount_total,
+            "viewcount_fresh": viewcount_fresh,
+            "viewcount_last_at": viewcount_last_at.strftime("%d.%m %H:%M") if viewcount_last_at else None,
+            "top10_recalc_at": top10_recalc_at,
         })
 
     @router.get("/admin/duplicates", response_class=HTMLResponse)
@@ -621,6 +722,7 @@ def make_extras_router(templates) -> APIRouter:
             "photo": cx["photo_url"],
             "housing_class": cx["housing_class"],
             "developer": developer or "",
+            "developer_id": cx["developer_id"],
             "year_built": cx["year_built"],
             "avg_price_m2": round(float(cx["avg_price_m2"])) if cx["avg_price_m2"] else None,
             "description": cx["residents_notes"] or "",
@@ -698,7 +800,8 @@ def make_extras_router(templates) -> APIRouter:
     async def map_points(request: Request, type: str = "sale", rooms: str = "",
                          price_min: float = 0, price_max: float = 0,
                          area_min: float = 0, area_max: float = 0,
-                         min_score: int = 0, seller: str = "", market: str = ""):
+                         min_score: int = 0, seller: str = "", market: str = "",
+                         offset: int = 0, limit: int = 15000):
         # публичный (карта на главной без логина); coverage — только админу
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
 
@@ -779,12 +882,17 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse({"points": pts, "mode": "rental",
                                  "count": len(pts), "no_geo": no_geo})
 
-        total_active = await pg_fetchval2(
-            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
-            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
-        with_coords = await pg_fetchval2(
-            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
-            "AND COALESCE(is_duplicate, FALSE) = FALSE AND lat IS NOT NULL") or 0
+        # Статистика по всей базе не зависит от offset/limit батча — считаем
+        # только на первом запросе страницы, чтобы не дублировать тяжёлые COUNT(*)
+        # на каждый догоняющий батч.
+        total_active = with_coords = 0
+        if offset == 0:
+            total_active = await pg_fetchval2(
+                "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+                "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+            with_coords = await pg_fetchval2(
+                "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+                "AND COALESCE(is_duplicate, FALSE) = FALSE AND lat IS NOT NULL") or 0
         conds, params, i = [], [], 1
         if rooms:
             conds.append(f"AND rooms = ${i}"); params.append(int(rooms)); i += 1
@@ -809,10 +917,18 @@ def make_extras_router(templates) -> APIRouter:
             conds.append("AND a.market_type = 'primary'")
         elif market == "secondary":
             conds.append("AND COALESCE(a.market_type, 'secondary') <> 'primary'")
+        # Пагинация: главная страница подгружает точки батчами (см. dashboard.html
+        # applyFilters) — сперва первые ~300 для мгновенной отрисовки, остальное
+        # довозится в фоне без блокировки первой отрисовки карты.
+        limit = max(1, min(limit, 15000))
+        offset = max(0, offset)
+        limit_idx, offset_idx = i, i + 1
+        params.append(limit); params.append(offset)
         rows = await pg_fetch(f"""
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
                    a.is_owner, a.seller_name, a.year_built, a.views_count,
+                   a.description, a.ceiling_height,
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
@@ -836,7 +952,7 @@ def make_extras_router(templates) -> APIRouter:
               AND a.last_seen > now() - interval '14 days'
               {' '.join(conds)}
             ORDER BY eff_score DESC
-            LIMIT 15000
+            LIMIT ${limit_idx} OFFSET ${offset_idx}
         """, *params)
         import json as _json_ph
         def _photos_of(r):
@@ -857,6 +973,8 @@ def make_extras_router(templates) -> APIRouter:
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
             "address": r["address"] or "", "complex": r["complex_name"] or "",
             "year_built": r["year_built"],
+            "description": r["description"] or "",
+            "ceiling_height": float(r["ceiling_height"]) if r["ceiling_height"] is not None else None,
             "url": r["url"] or "",
             "market": r["market_type"] or "",
             "geo": r["geo_source"] or "",
@@ -873,10 +991,10 @@ def make_extras_router(templates) -> APIRouter:
             # последняя смена цены (если была) — для попапа на карте
             "prev_price": r["prev_price"],
             "price_changed": r["price_changed_at"].strftime("%d.%m.%Y") if r["price_changed_at"] else None,
-            "top": idx < 10,   # топ-10 лучших — сердечки на карте
+            "top": (offset + idx) < 10,   # топ-10 лучших — сердечки на карте (абсолютный ранг с учётом offset)
         } for idx, r in enumerate(rows)]
-        resp = {"points": pts, "count": len(pts)}
-        if is_authed(request):
+        resp = {"points": pts, "count": len(pts), "offset": offset, "limit": limit, "has_more": len(pts) == limit}
+        if is_authed(request) and offset == 0:
             dups_active = await pg_fetchval2(
                 "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE "
                 "AND is_active IS NOT FALSE") or 0
@@ -905,13 +1023,35 @@ def make_extras_router(templates) -> APIRouter:
             }
         return JSONResponse(resp)
 
+    @router.get("/admin/api/archived-sale-points")
+    async def archived_sale_points(request: Request):
+        """Последняя цена перед уходом в архив (за последние 180 дней) — для
+        теплокарты продаж на дашборде: гексагоны без активных объявлений
+        сейчас не обязаны быть пустыми, если там недавно что-то продалось."""
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT id, lat, lon, price, rooms
+            FROM apartment_listings
+            WHERE is_active = FALSE AND archived_at IS NOT NULL
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND lat IS NOT NULL AND lon IS NOT NULL
+              AND price > 500000
+              AND archived_at > now() - interval '180 days'
+        """)
+        return JSONResponse({"points": [{
+            "id": r["id"], "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "price": r["price"], "rooms": r["rooms"],
+        } for r in rows]})
+
     # ── Скор: полное описание модели (сердце проекта) ────────────────────
 
     @router.get("/admin/score-explained", response_class=HTMLResponse)
     async def score_explained(request: Request):
+        # Объединено с /admin/info в одну страницу с вкладками (Общая
+        # информация / Скор) — старая ссылка остаётся рабочей.
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("score_explained.html", {"request": request})
+        return RedirectResponse(url="/admin/info#score", status_code=301)
 
     # ── Зоны приоритета: карта с рисованием полигонов ────────────────────
 
@@ -1467,6 +1607,28 @@ def make_extras_router(templates) -> APIRouter:
             "no_photo": r["no_photo"],
         } for r in rows]})
 
+    @router.get("/admin/api/floor-history")
+    async def floor_history(request: Request, days: int = 30):
+        """Снимки floor_stats_history — доля активных объявлений с известным
+        этажом во времени (записывается раз в цикл парсера продаж, см.
+        service_apartments.py). Этаж, как и фото, приходит только с детальной
+        страницы объявления, поэтому покрытие растёт постепенно."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT at, total_active, with_floor
+            FROM floor_stats_history
+            WHERE at > now() - ($1 || ' days')::interval
+            ORDER BY at ASC
+        """, str(days))
+        return JSONResponse({"points": [{
+            "at": r["at"].strftime("%d.%m %H:%M"),
+            "total_active": r["total_active"],
+            "with_floor": r["with_floor"],
+            "pct": round(100 * r["with_floor"] / r["total_active"], 1) if r["total_active"] else 0,
+        } for r in rows]})
+
     @router.get("/admin/api/price-drops-history")
     async def price_drops_history(request: Request, days: int = 30):
         """Сколько объявлений снизили цену по дням, по комнатности (1/2/3+),
@@ -1501,6 +1663,42 @@ def make_extras_router(templates) -> APIRouter:
             "days": [d.strftime("%d.%m") for d in days_set],
             "series": series,
             "amounts": amounts,
+        })
+
+    @router.get("/admin/api/price-trend-history")
+    async def price_trend_history(request: Request, days: int = 30, rooms: str = ""):
+        """Динамика роста/снижения цен по дням (сколько объявлений подняли
+        цену и сколько снизили, + средняя сумма изменения) — для графика
+        на /admin/analytics/prices. rooms: "" (все), "1".."3", "4" (4+)."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        room_cond = ""
+        params: list = [str(days)]
+        if rooms == "4":
+            room_cond = "AND a.rooms >= 4"
+        elif rooms in ("1", "2", "3"):
+            room_cond = "AND a.rooms = $2"
+            params.append(int(rooms))
+        rows = await pg_fetch(f"""
+            SELECT ph.changed_at::date AS d,
+                   COUNT(*) FILTER (WHERE ph.new_price > ph.old_price) AS cnt_up,
+                   COUNT(*) FILTER (WHERE ph.new_price < ph.old_price) AS cnt_down,
+                   AVG(ph.new_price - ph.old_price) FILTER (WHERE ph.new_price > ph.old_price) AS avg_up,
+                   AVG(ph.old_price - ph.new_price) FILTER (WHERE ph.new_price < ph.old_price) AS avg_down
+            FROM price_history ph
+            JOIN apartment_listings a ON a.id = ph.listing_id
+            WHERE ph.changed_at > now() - ($1 || ' days')::interval
+              {room_cond}
+            GROUP BY 1
+            ORDER BY 1
+        """, *params)
+        return JSONResponse({
+            "days": [r["d"].strftime("%d.%m") for r in rows],
+            "cnt_up": [r["cnt_up"] or 0 for r in rows],
+            "cnt_down": [r["cnt_down"] or 0 for r in rows],
+            "avg_up": [int(r["avg_up"] or 0) for r in rows],
+            "avg_down": [int(r["avg_down"] or 0) for r in rows],
         })
 
     # ── Ушедшие в архив: динамика по дням, по комнатности ──────────────────
@@ -1585,17 +1783,22 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/unbound-points")
     async def unbound_points(request: Request):
-        """Активные объявления без ЖК. Координаты свои, иначе центроид района."""
+        """Активные объявления без ЖК И без точных координат — те, что
+        реально нуждаются во внимании. Объявления, у которых уже ЕСТЬ точные
+        координаты (просто ЖК не извлёкся), сюда больше не попадают: они и
+        так полностью видны на главной карте, дублировать их здесь незачем
+        (раньше показывались с оранжевой меткой "точно" — было наглядно
+        задвоение с дашбордом)."""
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
-            SELECT id, url, title, price, rooms, area, address, district,
-                   lat, lon, first_seen
+            SELECT id, url, title, price, rooms, area, address, district, first_seen
             FROM apartment_listings
             WHERE is_active IS NOT FALSE
               AND COALESCE(is_duplicate, FALSE) = FALSE
               AND (complex_name IS NULL OR btrim(complex_name) = '')
+              AND lat IS NULL
             ORDER BY first_seen DESC LIMIT 3000
         """)
         district_geo = {r2["district"]: (float(r2["lat"]), float(r2["lon"]))
@@ -1608,16 +1811,13 @@ def make_extras_router(templates) -> APIRouter:
         pts, no_geo = [], 0
         for r in rows:
             d = dict(r)
-            if d["lat"] is not None:
-                lat, lon, binding = float(d["lat"]), float(d["lon"]), "точно"
-            else:
-                dg = district_geo.get(d.get("district") or "")
-                if not dg:
-                    no_geo += 1
-                    continue
-                lat, lon, binding = dg[0], dg[1], "район"
-                lat += _rnd.uniform(-0.004, 0.004)
-                lon += _rnd.uniform(-0.006, 0.006)
+            dg = district_geo.get(d.get("district") or "")
+            if not dg:
+                no_geo += 1
+                continue
+            lat, lon, binding = dg[0], dg[1], "район"
+            lat += _rnd.uniform(-0.004, 0.004)
+            lon += _rnd.uniform(-0.006, 0.006)
             pts.append({
                 "id": d["id"], "url": d["url"] or "",
                 "title": d["title"] or "",
@@ -1671,10 +1871,11 @@ def make_extras_router(templates) -> APIRouter:
         return result
 
     @router.get("/admin/api/hex-prices")
-    async def hex_prices_api(request: Request, lat: float, lon: float):
+    async def hex_prices_api(request: Request, lat: float, lon: float, rooms: int = 0):
         """Цена/м² по гексагону вокруг точки + 6 соседей (продажа/аренда) —
-        для мини-карты в попапе объявления на дашборде."""
-        sale, rental = await hex_price_cells(lat, lon)
+        для мини-карты в попапе объявления на дашборде. rooms (опц.) — аренда
+        считается по той же комнатности, что и у самого объявления."""
+        sale, rental = await hex_price_cells(lat, lon, rooms or None)
         return JSONResponse({"sale": sale, "rental": rental})
 
     @router.get("/admin/api/unbound-history")

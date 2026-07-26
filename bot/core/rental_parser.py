@@ -278,7 +278,14 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                 ON CONFLICT (id) DO UPDATE SET
                     price        = EXCLUDED.price,
                     last_seen    = EXCLUDED.last_seen,
-                    complex_name = COALESCE(rental_listings.complex_name, EXCLUDED.complex_name)
+                    complex_name = COALESCE(rental_listings.complex_name, EXCLUDED.complex_name),
+                    title        = EXCLUDED.title,
+                    area         = EXCLUDED.area,
+                    rooms        = EXCLUDED.rooms,
+                    floor        = EXCLUDED.floor,
+                    floors_total = EXCLUDED.floors_total,
+                    address      = EXCLUDED.address,
+                    district     = EXCLUDED.district
                 """,
                 l.id, l.url, l.title, l.price, l.area, l.rooms, l.floor, l.floors_total,
                 l.address, l.district, complex_name, l.city, l.prop_type,

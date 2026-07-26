@@ -100,6 +100,19 @@ async def run_cycle():
                 log.info("Deep sweep: страница %d (последняя ~%d по счётчику "
                          "Крыши) — круг завершён, cursor → %d", cursor,
                          max_deep_page, next_cursor)
+                # Метрика "за сколько мы обходим всю Крышу": засекаем момент
+                # завершения полного круга глубокого обхода и считаем дельту
+                # с предыдущим завершением — это и есть время полного обхода.
+                now_iso = datetime.now(timezone.utc).isoformat()
+                prev_completed = app_settings.get("DEEP_SWEEP_CIRCLE_COMPLETED_AT")
+                if prev_completed:
+                    try:
+                        prev_dt = datetime.fromisoformat(prev_completed)
+                        duration_sec = (datetime.now(timezone.utc) - prev_dt).total_seconds()
+                        await app_settings.set("DEEP_SWEEP_CIRCLE_DURATION_SEC", str(int(duration_sec)))
+                    except Exception as e:
+                        log.warning("circle duration calc failed: %s", e)
+                await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_AT", now_iso)
             await app_settings.set("DEEP_SWEEP_PAGE", str(next_cursor))
             await app_settings.set("DEEP_SWEEP_LAST_AT",
                                    datetime.now(timezone.utc).isoformat())
@@ -156,12 +169,12 @@ async def run_cycle():
                          year_built, building_type, renovation, furniture,
                          is_new_build, developer_name, seller_type, is_owner,
                          rent_source, bargain_target, bargain_discount_pct, bargain_rec,
-                         details_fetched, first_seen, last_seen, notified)
+                         details_fetched, ceiling_height, first_seen, last_seen, notified)
                     VALUES
                         ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
                          $13,$14,$15,$16,$17,$18,$19,$20,
                          $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-                         $31,$32,$33,$34,$35,$36,$37,NOW(),NOW(),FALSE)
+                         $31,$32,$33,$34,$35,$36,$37,$38,NOW(),NOW(),FALSE)
                     ON CONFLICT (id) DO NOTHING
                 """,
                     r["id"], r.get("url"), r.get("title"), r.get("price"), r.get("area"),
@@ -178,7 +191,7 @@ async def run_cycle():
                     r.get("seller_type"), r.get("is_owner"),
                     r.get("rent_source"), bargain.get("target_price"),
                     bargain.get("discount_pct"), bargain.get("recommendation"),
-                    r.get("details_fetched", False),
+                    r.get("details_fetched", False), r.get("ceiling_height"),
                 )
                 new_cnt += 1
             else:
@@ -210,29 +223,40 @@ async def run_cycle():
                                 r["id"], bonus)
                         except Exception as e:
                             log.warning("price_drop_bonus update failed %s: %s", r["id"], e)
+                # score_total и breakdown НЕ трогаем здесь — реальный скор
+                # (Deal Score v3) считается отдельно в deal_score.apply_deal_scores()
+                # для всей базы; перезапись их плейсхолдером 0 на каждый re-parse
+                # обнуляла бы уже посчитанный скор до следующего прохода v3.
+                # ВАЖНО: title/rooms/area/address/district тоже обновляем —
+                # продавец может отредактировать объявление (сменить площадь,
+                # число комнат и т.п.), оставив тот же URL/ID. Раньше эти поля
+                # писались только при первой вставке и потом никогда не
+                # синхронизировались, из-за чего карточка навсегда застревала
+                # на комнатности/площади с момента первого скана (баг с
+                # расхождением комнатности между Крышей и нашей аналитикой).
                 await pg_exec("""
                     UPDATE apartment_listings SET
                         price=$2, est_rent=$3, yield_pct=$4, payback_years=$5,
-                        score_total=$6, score_yield=$7, score_price_market=$8,
-                        score_location=$9, score_apt_type=$10, score_floor=$11,
-                        score_complex=$12, score_supply=$13, reasons=$14,
-                        floor=$15, floors_total=$16, year_built=$17,
-                        complex_name=$18, seller_type=$19, is_owner=$20,
-                        rent_source=$21, bargain_target=$22,
-                        bargain_discount_pct=$23, bargain_rec=$24,
-                        details_fetched=$25, last_seen=NOW()
+                        reasons=$6,
+                        floor=$7, floors_total=$8, year_built=$9,
+                        complex_name=$10, seller_type=$11, is_owner=$12,
+                        rent_source=$13, bargain_target=$14,
+                        bargain_discount_pct=$15, bargain_rec=$16,
+                        details_fetched=$17, ceiling_height=COALESCE($18, ceiling_height),
+                        title=$19, rooms=$20, area=$21, address=$22, district=$23,
+                        last_seen=NOW()
                     WHERE id=$1
                 """,
                     r["id"], r.get("price"), r.get("est_rent", 0),
                     r.get("yield_pct", 0), r.get("payback_years"),
-                    sd.get("total_score", 0), bd.get("yield", 0), bd.get("price_market", 0),
-                    bd.get("location", 0), bd.get("apt_type", 0), bd.get("floor", 0),
-                    bd.get("complex", 0), bd.get("supply", 0), reasons_json,
+                    reasons_json,
                     r.get("floor"), r.get("floors_total"), r.get("year_built"),
                     r.get("complex_name"), r.get("seller_type"), r.get("is_owner"),
                     r.get("rent_source"), bargain.get("target_price"),
                     bargain.get("discount_pct"), bargain.get("recommendation"),
-                    r.get("details_fetched", False),
+                    r.get("details_fetched", False), r.get("ceiling_height"),
+                    r.get("title"), r.get("rooms"), r.get("area"),
+                    r.get("address"), r.get("district"),
                 )
                 upd_cnt += 1
 
@@ -334,6 +358,11 @@ async def run_cycle():
                 WHERE lat IS NOT NULL AND lon IS NOT NULL
                   AND address IS NOT NULL AND btrim(address) <> ''
                   AND COALESCE(geo_source, '') <> 'address'
+                  -- Sanity-пределы Астаны: без этого один "отравленный" геокод
+                  -- (координаты за сотни км от города — см. фикс в rebind.py)
+                  -- усреднялся сюда и разъезжался по ВСЕМ объявлениям с тем
+                  -- же текстом адреса, превращая один плохой геокод в десятки.
+                  AND lat BETWEEN 50.0 AND 53.0 AND lon BETWEEN 69.0 AND 73.0
                 GROUP BY 1
             ) s
             WHERE t.lat IS NULL
@@ -606,12 +635,30 @@ async def run_cycle():
     except Exception as e:
         log.warning("no_photo snapshot failed: %s", e)
 
+    try:
+        from bot.db.pg import execute as _pg_exec4, fetchval as _pg_fv4
+        _total_active2 = await _pg_fv4(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE") or 0
+        _with_floor = await _pg_fv4(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND floor IS NOT NULL") or 0
+        await _pg_exec4(
+            "INSERT INTO floor_stats_history (total_active, with_floor) VALUES ($1, $2)",
+            _total_active2, _with_floor)
+    except Exception as e:
+        log.warning("floor snapshot failed: %s", e)
+
     # Google Sheets sync
     try:
         # === Гексагональный анализ цены (микролокальный Deal Index) ===
         try:
             from bot.core.deal_score import apply_deal_scores
             await apply_deal_scores()
+            # Топ-10 по скору пересчитывается каждый цикл парсера квартир
+            # (см. app_settings.PARSE_INTERVAL_*/random.uniform(50,80) мин) —
+            # штамп нужен только чтобы показать "когда в последний раз" в аналитике.
+            await app_settings.set("DEAL_SCORE_LAST_RUN_AT",
+                                    datetime.now(timezone.utc).isoformat())
         except Exception as e:
             log.warning("hex price failed: %s", e)
 

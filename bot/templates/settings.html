@@ -3,12 +3,14 @@
 <div class="page-title">Настройки проекта</div>
 
 <style>
-.settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; margin-bottom: 24px; }
-.set-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+.settings-block { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px 20px; margin-bottom: 20px; }
+.settings-block h3 { margin: 0 0 14px; font-size: 16px; }
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.set-card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
 .set-label { font-weight: 600; font-size: 14px; margin-bottom: 4px; display: flex; justify-content: space-between; }
 .set-value { font-weight: 700; color: #2563eb; }
 .set-card input[type=range] { width: 100%; margin-top: 10px; accent-color: #2563eb; }
-.ctrl-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+.ctrl-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .btn-big { border: none; border-radius: 10px; padding: 14px 24px; font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity .15s; }
 .btn-big:hover { opacity: .85; }
 .btn-start { background: #22c55e; color: #fff; }
@@ -20,22 +22,39 @@
 .toast { position: fixed; bottom: 24px; right: 24px; background: #16a34a; color: #fff; padding: 12px 20px; border-radius: 10px; font-weight: 600; display: none; }
 </style>
 
-<div class="ctrl-row">
-  <button class="btn-big btn-start" id="btn-project" onclick="toggleProject()">…</button>
-  <button class="btn-big {{ 'btn-money-on' if monetization else 'btn-money-off' }}" id="btn-money" onclick="toggleMoney()">
-    {{ '💰 Монетизация: ВКЛ' if monetization else '💰 Монетизация: ВЫКЛ (всё бесплатно)' }}
-  </button>
-  <button class="btn-big {{ 'btn-money-on' if ai_analysis else 'btn-money-off' }}" id="btn-ai" onclick="toggleAi()" {{ 'disabled title="DEEPSEEK_API_KEY не задан в .env"' | safe if not deepseek_key_set else '' }}>
-    {{ '🤖 AI-анализ текста: ВКЛ' if ai_analysis else '🤖 AI-анализ текста: ВЫКЛ' }}
-  </button>
+<div class="settings-block">
+  <h3>🕹 Управление проектом</h3>
+  <div class="ctrl-row">
+    <button class="btn-big btn-start" id="btn-project" onclick="toggleProject()">…</button>
+  </div>
+  <div class="status-line" id="svc-status">Проверяю статус сервисов…</div>
 </div>
-{% if not deepseek_key_set %}<p style="font-size:12px;color:#f59e0b;margin-top:-10px;">DEEPSEEK_API_KEY не найден в .env — кнопка неактивна, пока ключ не прописан на сервере.</p>{% endif %}
-<div class="status-line" id="svc-status">Проверяю статус сервисов…</div>
 
-<div class="settings-grid">
-  {% for gname, gsliders in slider_groups.items() %}
-<h3 style="margin:22px 0 8px;font-size:15px;">{{ gname }}</h3>
-{% for s in gsliders %}
+<div class="settings-block">
+  <h3>👁 Настройки вида</h3>
+  <div class="ctrl-row" style="margin-bottom:0;">
+    <button class="btn-big {{ 'btn-money-on' if monetization else 'btn-money-off' }}" id="btn-money" onclick="toggleMoney()">
+      {{ '💰 Монетизация: ВКЛ' if monetization else '💰 Монетизация: ВЫКЛ (всё бесплатно)' }}
+    </button>
+    <button class="btn-big {{ 'btn-money-on' if ai_analysis else 'btn-money-off' }}" id="btn-ai" onclick="toggleAi()" {{ 'disabled title="DEEPSEEK_API_KEY не задан в .env"' | safe if not deepseek_key_set else '' }}>
+      {{ '🤖 AI-анализ текста: ВКЛ' if ai_analysis else '🤖 AI-анализ текста: ВЫКЛ' }}
+    </button>
+  </div>
+  {% if not deepseek_key_set %}<p style="font-size:12px;color:#f59e0b;margin:8px 0 0;">DEEPSEEK_API_KEY не найден в .env — кнопка неактивна, пока ключ не прописан на сервере.</p>{% endif %}
+</div>
+
+{% for gname, gsliders in slider_groups.items() %}
+<div class="settings-block">
+  <h3>{{ gname }}</h3>
+  {% if gname == '🕷 Обход парсера' %}
+  <p style="font-size:12.5px;color:#888;margin:0 0 14px;line-height:1.5;">
+    Периодичность циклов не привязана к ползункам ниже — она задана в коде: обход квартир на продажу
+    запускается раз в <b>~50-80 минут</b> (случайный интервал, чтобы не быть предсказуемыми для Крыши),
+    аренда — каждые <b>5-15 минут</b> (датасет меньше, оборот быстрее).
+  </p>
+  {% endif %}
+  <div class="settings-grid">
+  {% for s in gsliders %}
   <div class="set-card">
     <div class="set-label">
       <span>{{ s.label }}</span>
@@ -44,10 +63,12 @@
     <input type="range" min="{{ s.min }}" max="{{ s.max }}" step="{{ s.step }}"
            value="{{ s.value }}" data-key="{{ s.key }}"
            oninput="document.getElementById('val-{{ s.key }}').textContent = this.value">
+    {% if s.desc %}<div style="font-size:11.5px;color:#888;margin-top:8px;line-height:1.5;">{{ s.desc }}</div>{% endif %}
   </div>
   {% endfor %}
-{% endfor %}
+  </div>
 </div>
+{% endfor %}
 
 <button class="btn-big btn-save" onclick="saveSettings()">💾 Сохранить настройки</button>
 <div style="font-size:12px;color:#888;margin-top:10px;">

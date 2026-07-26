@@ -111,7 +111,10 @@ async def fetch_apartment_details(url: str) -> dict:
             params[key] = val
 
     # Infer from full text of all info items
-    all_info = " ".join(i.get_text(" ", strip=True)
+    # Разделитель — перевод строки, а не пробел: соседние info-item'ы иначе
+    # склеиваются без границы, и жадные regex (напр. поиск названия ЖК ниже)
+    # захватывают хвост следующего поля (см. кейс "Отау А105 Год Постройки 2021 Э").
+    all_info = "\n".join(i.get_text(" ", strip=True)
                         for i in soup.select("div.offer__info-item"))
 
     # Floor
@@ -129,9 +132,19 @@ async def fetch_apartment_details(url: str) -> dict:
         else:
             result["floor_position"] = "middle"
             result["floor_note"] = ""
+    else:
+        # Фолбэк: некоторые страницы пишут только "N этаж" (без "из M") —
+        # обычно в заголовке, напр. "· 3 этаж, Жирентаева 13/1". Этажность
+        # дома тогда неизвестна, но сам этаж — важный сигнал, грех терять.
+        floor_only = re.search(r"(\d+)\s*этаж", f"{title} {all_info}".lower())
+        if floor_only:
+            result["floor"] = int(floor_only.group(1))
 
-    # Year built
-    year_match = re.search(r"(\b20[0-2]\d\b|\b199\d\b|\b198\d\b)", all_info)
+    # Year built — раньше ловил только 1980-2029, а немало домов в Астане
+    # (особенно панельные/кирпичные хрущёвки) 1950-1970х годов постройки —
+    # именно поэтому у части объявлений год оставался NULL даже после
+    # успешного detail-fetch, хотя "Год постройки 1966" есть на странице.
+    year_match = re.search(r"\b(19[5-9]\d|20[0-2]\d)\b", all_info)
     if year_match:
         result["year_built"] = int(year_match.group(1))
         y = result["year_built"]
@@ -171,7 +184,11 @@ async def fetch_apartment_details(url: str) -> dict:
             k = dt.get_text(strip=True).lower()
             v = dd.get_text(strip=True)
             if "потолок" in k or "высота" in k:
-                result["ceiling_height"] = v
+                ch_m = re.search(r"(\d+(?:[.,]\d+)?)", v)
+                if ch_m:
+                    ch = float(ch_m.group(1).replace(",", "."))
+                    if 2.0 <= ch <= 5.0:  # разумный диапазон, отсекаем мусор разметки
+                        result["ceiling_height"] = ch
             elif "безопасность" in k or "охрана" in k:
                 result["security"] = v
             elif "мебел" in k:
@@ -188,8 +205,18 @@ async def fetch_apartment_details(url: str) -> dict:
                 result["has_exchange"] = v
 
     # ── Full description ──────────────────────────────────────────────────
+    # get_text("\n") instead of " ": preserves the paragraph/line breaks
+    # krisha uses (<br>, <p>) instead of squashing the whole description
+    # into one run-on line.
     desc_el = soup.select_one("div.offer__description")
-    desc_text = desc_el.get_text(" ", strip=True) if desc_el else ""
+    if desc_el:
+        for br in desc_el.find_all("br"):
+            br.replace_with("\n")
+        desc_text = desc_el.get_text("\n", strip=True)
+        desc_text = re.sub(r"[ \t]+", " ", desc_text)
+        desc_text = re.sub(r"\n{3,}", "\n\n", desc_text)
+    else:
+        desc_text = ""
     result["description"] = desc_text[:2000]
 
     combined = f"{title} {all_info} {desc_text}".lower()
@@ -256,6 +283,29 @@ async def fetch_apartment_details(url: str) -> dict:
             result["seller_note"] = "риелтор — есть комиссия"
         elif "застройщик" in st:
             result["seller_type"] = "developer"
+    if "seller_type" not in result:
+        # Фолбэк, если CSS-селекторы выше устарели (разметка Крыши меняется) —
+        # ищем метку "Автор объявления" в полном тексте страницы напрямую.
+        # Кейс, который это ловит: is_owner оставался NULL (а UI по умолчанию
+        # показывал "риелтор") для объявлений, где сработали только эти
+        # селекторы — хотя страница явно писала "Автор объявления: Хозяин
+        # недвижимости" (см. krisha.kz/a/show/1003475967).
+        page_text = soup.get_text(" ", strip=True).lower()
+        m = re.search(r"автор объявления\s+(хозяин[^.]{0,30}|риелтор[^.]{0,30}|агент[^.]{0,30}|застройщик[^.]{0,30})", page_text)
+        if m:
+            au = m.group(1)
+            if "хозяин" in au:
+                result["seller_type"] = "owner"
+                result["seller_note"] = "хозяин — можно торговаться"
+            elif "риелтор" in au or "агент" in au:
+                result["seller_type"] = "agent"
+                result["seller_note"] = "риелтор — есть комиссия"
+            elif "застройщик" in au:
+                result["seller_type"] = "developer"
+    if result.get("seller_type") == "owner":
+        result["is_owner"] = True
+    elif result.get("seller_type") in ("agent", "developer"):
+        result["is_owner"] = False
 
     # ── Renovation from text ──────────────────────────────────────────────
     for kw, val in RENOVATION_MAP.items():
@@ -394,7 +444,12 @@ async def fetch_apartment_details(url: str) -> dict:
         m = _re.search(pat, resp.text)
         if m:
             name = m.group(1).strip()
-            if name and len(name) <= 40:
+            # Если у продавца не задано отображаемое имя, Крыша иногда кладёт
+            # в это же JSON-поле служебный id вида "id24720171" — раньше
+            # регэксп его не отсеивал (проверял только что имя НЕ начинается
+            # с цифры, а "id..." начинается с буквы) и такой id уходил в
+            # seller_name, а оттуда — в UI как будто это имя риелтора.
+            if name and len(name) <= 40 and not _re.fullmatch(r"id\d+", name, _re.IGNORECASE):
                 result["seller_name"] = name
             break
 

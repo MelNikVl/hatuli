@@ -139,7 +139,7 @@
     <div class="nav-section">ИНСТРУМЕНТЫ</div>
     <a href="/admin/zones"       class="{% if 'zones' in request.url.path %}active{% endif %}"><span class="ico">📐</span> Зоны</a>
     <a href="/admin/info"        class="{% if request.url.path == '/admin/info' %}active{% endif %}"><span class="ico">ℹ️</span> Инфо</a>
-    <a href="/admin/score-explained" class="{% if 'score-explained' in request.url.path %}active{% endif %}" style="padding-left:34px;"><span class="ico">↳</span> Скор</a>
+    <a href="/admin/info#score" class="{% if 'score-explained' in request.url.path %}active{% endif %}" style="padding-left:34px;"><span class="ico">↳</span> Скор</a>
     {% endif %}
     <div class="nav-section">Управление</div>
     {% if admin %}
