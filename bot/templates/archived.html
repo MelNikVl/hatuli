@@ -76,6 +76,12 @@
               style="padding:5px 12px;border:1px solid var(--border);border-radius:7px;background:{{ 'var(--accent, #5865f2)' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:12px;cursor:pointer;">{{ label }}</button>
       {% endfor %}
     </div>
+    <div style="display:flex;gap:6px;">
+      {% for val, label in [(1, 'сегодня'), (3, '3 дня'), (7, '7 дней'), (30, '30 дней'), (180, 'всё (180д)')] %}
+      <button type="button" class="ah-days-btn" data-days="{{ val }}" onclick="setArchHexDays({{ val }})"
+              style="padding:5px 12px;border:1px solid var(--border);border-radius:7px;background:{{ 'var(--accent, #5865f2)' if val == 180 else 'var(--bg)' }};color:{{ '#fff' if val == 180 else 'var(--text)' }};font-size:12px;cursor:pointer;">{{ label }}</button>
+      {% endfor %}
+    </div>
   </div>
   <div id="arch-hex-map" style="aspect-ratio:16/9;width:100%;min-height:340px;border-radius:8px;"></div>
   <div id="arch-hex-status" style="font-size:12px;color:#888;margin-top:6px;"></div>
@@ -125,7 +131,16 @@ function archPercentile(arr, p) {
   return s[Math.min(Math.floor(s.length * p), s.length - 1)];
 }
 
-let archHexMetric = 'price', archHexType = 'sale', archHexRooms = '', archHexCache = {};
+let archHexMetric = 'price', archHexType = 'sale', archHexRooms = '', archHexDays = 180, archHexCache = {};
+function setArchHexDays(d) {
+  archHexDays = d;
+  document.querySelectorAll('.ah-days-btn').forEach(b => {
+    const active = parseInt(b.dataset.days) === d;
+    b.style.background = active ? 'var(--accent, #5865f2)' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  loadArchHexPoints(false);
+}
 function setArchHexMetric(m) {
   archHexMetric = m;
   document.querySelectorAll('.ah-metric-btn').forEach(b => {
@@ -154,10 +169,10 @@ function setArchHexRooms(r) {
   loadArchHexPoints(false);
 }
 function loadArchHexPoints(fit) {
-  const key = archHexType + ':' + archHexRooms;
+  const key = archHexType + ':' + archHexRooms + ':' + archHexDays;
   const status = document.getElementById('arch-hex-status');
   status.textContent = 'загрузка…';
-  fetch(`/admin/api/archived-hex-points?type=${archHexType}&rooms=${archHexRooms}`).then(r => r.json()).then(d => {
+  fetch(`/admin/api/archived-hex-points?type=${archHexType}&rooms=${archHexRooms}&days=${archHexDays}`).then(r => r.json()).then(d => {
     archHexCache[key] = d.points || [];
     drawArchHex(fit);
   }).catch(() => { status.textContent = 'не удалось загрузить'; });
@@ -165,7 +180,7 @@ function loadArchHexPoints(fit) {
 let archHexEverFit = false;
 function drawArchHex(fit) {
   archHexLayer.clearLayers();
-  const key = archHexType + ':' + archHexRooms;
+  const key = archHexType + ':' + archHexRooms + ':' + archHexDays;
   const points = archHexCache[key];
   const status = document.getElementById('arch-hex-status');
   if (!points) { loadArchHexPoints(fit); return; }

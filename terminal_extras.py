@@ -1882,21 +1882,24 @@ def make_extras_router(templates) -> APIRouter:
         })
 
     @router.get("/admin/api/archived-hex-points")
-    async def archived_hex_points(request: Request, type: str = "sale", rooms: str = ""):
+    async def archived_hex_points(request: Request, type: str = "sale", rooms: str = "",
+                                  days: int = 180):
         """Точки для гекс-карт на /admin/archived: последняя цена и скорость
         ухода (дни от появления до архива) для каждого ушедшего объявления.
         type: sale|rental. rooms: "" (все), "1".."3", "4" (4+).
+        days: за какой период считать "ушедшим" (1/3/7/30/180 — фильтр в UI).
         Бакетирование в гексагоны и агрегация (среднее по гексу) — на клиенте,
         тем же кодом, что и тепловые карты на дашборде."""
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
+        days = days if days in (1, 3, 7, 30, 180) else 180
         from bot.db.pg import fetch as pg_fetch
         room_cond = ""
-        params: list = []
+        params: list = [str(days)]
         if rooms == "4":
             room_cond = "AND rooms >= 4"
         elif rooms in ("1", "2", "3"):
-            room_cond = "AND rooms = $1"
+            room_cond = "AND rooms = $2"
             params.append(int(rooms))
         if type == "rental":
             rows = await pg_fetch(f"""
@@ -1904,7 +1907,7 @@ def make_extras_router(templates) -> APIRouter:
                        EXTRACT(EPOCH FROM (last_seen - found_at)) / 86400.0 AS days
                 FROM rental_listings
                 WHERE last_seen < now() - interval '3 days'
-                  AND last_seen > now() - interval '180 days'
+                  AND last_seen > now() - ($1 || ' days')::interval
                   AND lat IS NOT NULL AND lon IS NOT NULL
                   AND price > 0
                   {room_cond}
@@ -1915,7 +1918,7 @@ def make_extras_router(templates) -> APIRouter:
                        EXTRACT(EPOCH FROM (archived_at - first_seen)) / 86400.0 AS days
                 FROM apartment_listings
                 WHERE is_active = FALSE AND archived_at IS NOT NULL
-                  AND archived_at > now() - interval '180 days'
+                  AND archived_at > now() - ($1 || ' days')::interval
                   AND lat IS NOT NULL AND lon IS NOT NULL
                   AND price > 0
                   {room_cond}
