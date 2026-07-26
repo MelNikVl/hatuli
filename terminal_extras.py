@@ -1143,6 +1143,47 @@ def make_extras_router(templates) -> APIRouter:
 
     # ── Карточка ЖК: объявления, аренда, ОСИ/УК/чаты ─────────────────────
 
+    @router.get("/admin/complexes/audit", response_class=HTMLResponse)
+    async def complexes_audit(request: Request, limit: int = 300):
+        """Таблица по всем ЖК: где какие данные удалось вытащить (застройщик,
+        описание, фото, цена/м²), а где нет — чтобы разбираться точечно."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        limit = max(50, min(limit, 5000))
+        rows = await fetch("""
+            SELECT c.id, c.name, c.developer_id, d.name AS developer_name,
+                   c.residents_notes, c.photo_url, c.photos, c.avg_price_m2,
+                   c.housing_class, c.year_built, c.korter_url,
+                   COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE
+                       AND COALESCE(a.is_duplicate, FALSE) = FALSE) AS active_cnt
+            FROM complexes c
+            LEFT JOIN developers d ON d.id = c.developer_id
+            LEFT JOIN apartment_listings a ON lower(trim(a.complex_name)) = lower(trim(c.name))
+            WHERE COALESCE(c.is_street, FALSE) = FALSE
+            GROUP BY c.id, d.name
+            ORDER BY active_cnt DESC
+            LIMIT $1
+        """, limit)
+        out = []
+        for r in rows:
+            d = dict(r)
+            out.append({
+                "id": d["id"], "name": d["name"], "active_cnt": d["active_cnt"],
+                "has_developer": bool(d["developer_name"]),
+                "developer_name": d["developer_name"] or "",
+                "has_desc": bool(d["residents_notes"]),
+                "has_photo": bool(d["photo_url"] or d["photos"]),
+                "has_price_m2": bool(d["avg_price_m2"]),
+                "has_class": bool(d["housing_class"]),
+                "has_year": bool(d["year_built"]),
+                "has_korter": bool(d["korter_url"]),
+            })
+        total_cx = await fetch("SELECT COUNT(*) AS n FROM complexes WHERE COALESCE(is_street, FALSE) = FALSE")
+        return templates.TemplateResponse("complexes_audit.html", {
+            "request": request, "rows": out, "limit": limit,
+            "total_cx": total_cx[0]["n"] if total_cx else 0,
+        })
+
     @router.get("/admin/complex/{complex_id}", response_class=HTMLResponse)
     async def complex_detail(request: Request, complex_id: int):
         if not is_authed(request):

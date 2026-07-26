@@ -154,6 +154,7 @@
         <div style="font-size:13.5px;font-weight:700;">{{ '%.1f'|format((s.median_price or 0)/1e6) }}</div>
         <div style="width:70%;background:#2563eb;border-radius:4px 4px 0 0;height:{{ ((s.median_price or 0)/max_p*120)|round(0,'floor')|int }}px;"></div>
         <div style="font-size:13.5px;color:#888;margin-top:3px;">{{ s.rooms or '?' }}к</div>
+        <div style="font-size:11.5px;color:#2563eb;font-weight:600;margin-top:1px;">{{ (s.median_m2/1000)|round|int if s.median_m2 else '—' }} тыс ₸/м²</div>
       </div>
       {% endfor %}
     </div>

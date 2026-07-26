@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🧾 Аудит данных по ЖК
+  <small style="font-size:13px;color:#888;font-weight:400;">показано {{ rows|length }} из {{ total_cx }} ЖК, по числу активных объявлений</small>
+</div>
+<p style="font-size:13px;color:#888;max-width:900px;margin-bottom:14px;">
+  Где что удалось вытащить (застройщик, описание, фото, цена/м², класс, год постройки) — чтобы разбираться точечно,
+  а не искать пробелы вручную по каждому ЖК. ✅ — данные есть, ✕ — нет.
+</p>
+<style>
+.aud-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.aud-table th { text-align: left; color: #888; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 11.5px; text-transform: uppercase; position: sticky; top: 0; background: var(--surface); }
+.aud-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.aud-table tr:hover td { background: var(--bg); }
+.aud-ok { color: #16a34a; font-weight: 700; }
+.aud-no { color: #ef4444; }
+.aud-wrap { max-height: 80vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+</style>
+<div class="aud-wrap">
+<table class="aud-table">
+  <tr>
+    <th>ЖК</th><th>Активных объявл.</th><th>Застройщик</th><th>Описание</th>
+    <th>Фото</th><th>Цена/м²</th><th>Класс жилья</th><th>Год постройки</th><th>Korter</th>
+  </tr>
+  {% for r in rows %}
+  <tr>
+    <td><a href="/admin/complex/{{ r.id }}" style="color:inherit;font-weight:600;">{{ r.name }}</a></td>
+    <td>{{ r.active_cnt }}</td>
+    <td class="{{ 'aud-ok' if r.has_developer else 'aud-no' }}">{{ '✅ ' + r.developer_name if r.has_developer else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_desc else 'aud-no' }}">{{ '✅' if r.has_desc else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_photo else 'aud-no' }}">{{ '✅' if r.has_photo else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_price_m2 else 'aud-no' }}">{{ '✅' if r.has_price_m2 else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_class else 'aud-no' }}">{{ '✅' if r.has_class else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_year else 'aud-no' }}">{{ '✅' if r.has_year else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_korter else 'aud-no' }}">{{ '✅' if r.has_korter else '✕' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% if rows|length >= limit %}
+<div style="margin-top:12px;"><a href="?limit={{ limit * 3 }}" style="color:#2563eb;">Показать больше →</a></div>
+{% endif %}
+{% endblock %}
