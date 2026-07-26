@@ -1084,6 +1084,76 @@ function hexNeighborsAxial(q, r) {
   return HEX_DIRS.map(([dq, dr]) => [q + dq, r + dr]);
 }
 
+// Фоновый слой шума на ВСЮ Астану, без дыр — крупный гекс (200м, тот же
+// порядок, что и HEAT_EDGE_M), т.к. на 30м-сетке (см. drawRoadHeat ниже)
+// замостить весь город невозможно по производительности (десятки тысяч
+// полигонов). Здесь на каждый гекс — обратно-взвешенная по расстоянию
+// оценка от ближайших дорог в радиусе 3 колец (~600м), а если рядом совсем
+// нет дорог — низкий фоновый уровень (не пусто, а честно "тихо").
+const NOISE_BG_EDGE_M = 200;
+const NOISE_BG_FLOOR = 4;   // минимальный фон вдали от дорог
+const NOISE_BG_RINGS = 3;   // радиус поиска ближайших дорог, в кольцах гекса
+
+function drawRoadHeatBackground(roads) {
+  if (!roads.length) return;
+  const roadBuckets = hexBucket(roads, r => [r.lat, r.lon], NOISE_BG_EDGE_M);
+  const roadHexScore = new Map();
+  roadBuckets.forEach((b, key) => {
+    let score = b.items.reduce((s, i) => s + roadNoiseScore(i), 0);
+    if (b.items.length >= 2) score += 10;
+    roadHexScore.set(key, score);
+  });
+  // Границы города — по фактическому охвату дорог в данных (+ запас в
+  // NOISE_BG_RINGS колец), а не по произвольным координатам.
+  let qMin = Infinity, qMax = -Infinity, rMin = Infinity, rMax = -Infinity;
+  roadBuckets.forEach(b => {
+    qMin = Math.min(qMin, b.q); qMax = Math.max(qMax, b.q);
+    rMin = Math.min(rMin, b.r); rMax = Math.max(rMax, b.r);
+  });
+  qMin -= NOISE_BG_RINGS; qMax += NOISE_BG_RINGS; rMin -= NOISE_BG_RINGS; rMax += NOISE_BG_RINGS;
+
+  // Кольца до NOISE_BG_RINGS вокруг (q,r) — для поиска ближайших дорожных гексов.
+  function ringsAround(q, r, maxRing) {
+    const out = [[q, r, 0]];
+    let frontier = [[q, r]];
+    for (let ring = 1; ring <= maxRing; ring++) {
+      const next = [];
+      const seen = new Set(frontier.map(([fq, fr]) => fq + ':' + fr));
+      frontier.forEach(([fq, fr]) => {
+        hexNeighborsAxial(fq, fr).forEach(([nq, nr]) => {
+          const k = nq + ':' + nr;
+          if (!seen.has(k)) { seen.add(k); next.push([nq, nr]); out.push([nq, nr, ring]); }
+        });
+      });
+      frontier = next;
+    }
+    return out;
+  }
+
+  const cells = [];
+  for (let q = qMin; q <= qMax; q++) {
+    for (let r = rMin; r <= rMax; r++) {
+      const own = roadHexScore.get(q + ':' + r);
+      if (own != null) { cells.push({q, r, score: own}); continue; }
+      // Ищем ближайший дорожный гекс в радиусе NOISE_BG_RINGS, вес по 1/(1+ring).
+      let best = 0;
+      for (const [nq, nr, ring] of ringsAround(q, r, NOISE_BG_RINGS)) {
+        const s = roadHexScore.get(nq + ':' + nr);
+        if (s != null) best = Math.max(best, s / (1 + ring * 0.8));
+      }
+      cells.push({q, r, score: Math.max(NOISE_BG_FLOOR, best)});
+    }
+  }
+  const scores = cells.map(c => c.score);
+  const hi = percentile(scores, 0.90) || Math.max(...scores) || 1;
+  cells.forEach(c => {
+    const t = Math.min(1, c.score / hi);
+    L.polygon(hexCorners(c.q, c.r, NOISE_BG_EDGE_M), {
+      color: 'transparent', weight: 0, fillColor: heatColor(t), fillOpacity: 0.30,
+    }).bindTooltip(`шум (фон): ~${c.score.toFixed(0)}`, {sticky:true}).addTo(heatLayer);
+  });
+}
+
 function drawRoadHeat(roads) {
   const buckets = hexBucket(roads, r => [r.lat, r.lon], NOISE_EDGE_M);
   // Базовый скор гекса = сумма скорингов дорог в нём + бонус за пересечение
@@ -1177,7 +1247,7 @@ async function toggleHeat(mode) {
   if (heatMode !== mode) return;  // успели переключиться, пока грузилось
   if (mode === 'sale' || mode === 'rental') drawPriceHeat(data, mode === 'sale' ? heatCache.saleArchived : null);
   else if (mode === 'schools') drawCountHeat(data, p => [p.lat, p.lon], 'школ/садиков');
-  else if (mode === 'noise') drawRoadHeat(data);
+  else if (mode === 'noise') { drawRoadHeatBackground(data); drawRoadHeat(data); }
 }
 
 function toggleHexGrid() {
