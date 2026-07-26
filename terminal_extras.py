@@ -828,6 +828,7 @@ def make_extras_router(templates) -> APIRouter:
                          price_min: float = 0, price_max: float = 0,
                          area_min: float = 0, area_max: float = 0,
                          min_score: int = 0, seller: str = "", market: str = "",
+                         price_change: str = "",
                          offset: int = 0, limit: int = 15000):
         # публичный (карта на главной без логина); coverage — только админу
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
@@ -944,6 +945,15 @@ def make_extras_router(templates) -> APIRouter:
             conds.append("AND a.market_type = 'primary'")
         elif market == "secondary":
             conds.append("AND COALESCE(a.market_type, 'secondary') <> 'primary'")
+        # Изменение цены сегодня — по последней записи в price_history за сутки.
+        if price_change == "dropped_today":
+            conds.append("""AND EXISTS (
+                SELECT 1 FROM price_history ph2 WHERE ph2.listing_id = a.id
+                AND ph2.changed_at >= CURRENT_DATE AND ph2.new_price < ph2.old_price)""")
+        elif price_change == "raised_today":
+            conds.append("""AND EXISTS (
+                SELECT 1 FROM price_history ph2 WHERE ph2.listing_id = a.id
+                AND ph2.changed_at >= CURRENT_DATE AND ph2.new_price > ph2.old_price)""")
         # Пагинация: главная страница подгружает точки батчами (см. dashboard.html
         # applyFilters) — сперва первые ~300 для мгновенной отрисовки, остальное
         # довозится в фоне без блокировки первой отрисовки карты.

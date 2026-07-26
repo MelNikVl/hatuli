@@ -47,6 +47,10 @@
     <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
       <option value="">все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
     </select></div>
+  <div id="f-pricechange-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Изменение цены</label>
+    <select id="f-pricechange" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+      <option value="">любое</option><option value="dropped_today">▼ снизили цену сегодня</option><option value="raised_today">▲ подняли цену сегодня</option>
+    </select></div>
   <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;" id="f-price-label">Цена (млн ₸ или ₸)</label>
     <div style="display:flex;gap:6px;align-items:center;">
       <input id="f-pmin" type="number" min="0" step="1" placeholder="от" style="width:50%;padding:9px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
@@ -456,9 +460,12 @@ function applyFilters() {
   if (seller && type === 'sale') p.set('seller', seller);
   const market = document.getElementById('f-market').value;
   if (market && type === 'sale') p.set('market', market);
+  const pricechange = document.getElementById('f-pricechange').value;
+  if (pricechange && type === 'sale') p.set('price_change', pricechange);
 
   document.getElementById('f-market-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
+  document.getElementById('f-pricechange-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
   if (type === 'rental') {
