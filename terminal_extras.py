@@ -1904,6 +1904,53 @@ def make_extras_router(templates) -> APIRouter:
             "days": round(float(r["days"]), 1) if r["days"] is not None and r["days"] >= 0 else None,
         } for r in rows]})
 
+    # ── Аналитика просмотров (krisha-viewcount.service, см. вкладку Инфо) ──
+
+    @router.get("/admin/analytics/views", response_class=HTMLResponse)
+    async def views_analytics_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("views_analytics.html", {
+            "request": request, "atab": "views",
+        })
+
+    @router.get("/admin/api/views-points")
+    async def views_points(request: Request, days: int = 7):
+        """Объявления с известным числом просмотров (views_count, см.
+        service_viewcount.py) — для гекс-карты медианных просмотров и топ-50.
+        views_count — накопительный счётчик с даты публикации (Крыша не даёт
+        историю по дням), поэтому "за N дней" здесь = первые N дней после
+        публикации, а не срез накопленного графика: так число просмотров
+        листинга целиком укладывается в выбранное окно, а не искажено более
+        старыми объявлениями с заведомо большим накопленным счётчиком."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        days = days if days in (1, 3, 7, 14) else 7
+        from bot.db.pg import fetch as pg_fetch
+
+        rows = await pg_fetch("""
+            SELECT id, url, lat, lon, price, rooms, area, address, complex_name,
+                   views_count, first_seen
+            FROM apartment_listings
+            WHERE is_active IS NOT FALSE
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND lat IS NOT NULL AND lon IS NOT NULL
+              AND views_count IS NOT NULL
+              AND first_seen > now() - ($1 || ' days')::interval
+            ORDER BY views_count DESC
+            LIMIT 5000
+        """, str(days))
+        pts = [{
+            "id": r["id"], "url": r["url"] or "",
+            "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "price": r["price"], "rooms": r["rooms"],
+            "area": float(r["area"]) if r["area"] else None,
+            "address": r["address"] or "", "complex_name": r["complex_name"] or "",
+            "views": r["views_count"],
+            "first_seen": r["first_seen"].strftime("%d.%m.%Y") if r["first_seen"] else None,
+        } for r in rows]
+        return JSONResponse({"points": pts, "days": days})
+
     # ── Объявления без привязки к ЖК ──────────────────────────────────────
 
     @router.get("/admin/unbound", response_class=HTMLResponse)

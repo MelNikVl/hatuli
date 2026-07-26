@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">👁 Аналитика просмотров
+  <small style="font-size:13px;color:#888;font-weight:400;">
+    Счётчик просмотров — микросервис <code>krisha-viewcount</code> (Playwright), см. вкладку <a href="/admin/info">ℹ️ Инфо</a>.
+  </small>
+</div>
+<p style="font-size:13px;color:#888;max-width:900px;">
+  <b>views_count — накопительный счётчик</b> с даты публикации объявления (Крыша не отдаёт историю просмотров по дням).
+  Поэтому фильтр «за N дней» ниже — это НЕ график изменения просмотров во времени, а срез объявлений,
+  <b>опубликованных за последние N дней</b>: у них весь накопленный счётчик целиком укладывается в это окно,
+  так что сравнение между объявлениями честное (иначе объявление, висящее месяц, всегда обгоняло бы вчерашнее).
+</p>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+  <div style="display:flex;gap:6px;">
+    <button type="button" class="vdays-btn" data-days="1" onclick="setDays(1)" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">за 1 день</button>
+    <button type="button" class="vdays-btn" data-days="3" onclick="setDays(3)" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">за 3 дня</button>
+    <button type="button" class="vdays-btn active" data-days="7" onclick="setDays(7)" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">за 7 дней</button>
+    <button type="button" class="vdays-btn" data-days="14" onclick="setDays(14)" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">за 2 недели</button>
+  </div>
+  <label style="font-size:12.5px;color:#888;margin-left:16px;">Сторона гексагона (м):
+    <input id="v-hex-edge" type="number" min="30" max="1000" step="10" value="200" style="width:70px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);margin-left:4px;">
+  </label>
+  <span id="v-result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
+</div>
+
+<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+  <div style="flex:1 1 600px;min-width:320px;">
+    <div id="views-map" style="height:640px;border-radius:12px;border:1px solid var(--border);"></div>
+    <div id="v-hex-detail" style="display:none;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;max-height:260px;overflow-y:auto;"></div>
+  </div>
+  <div style="flex:0 0 380px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+    <div style="font-weight:700;font-size:14px;margin-bottom:8px;">🏆 Топ-50 по просмотрам</div>
+    <div id="v-top50" style="max-height:600px;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<script>
+const map = L.map('views-map').setView([51.128, 71.430], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(map);
+const hexLayer = L.layerGroup().addTo(map);
+let currentDays = 7, currentPoints = [];
+
+const LAT0 = 51.128, LON0 = 71.430,
+      MLAT = 110574.0, MLON = 111320.0 * Math.cos(LAT0 * Math.PI/180);
+function hexAxial(lat, lon, edge) {
+  const x = (lon - LON0) * MLON, y = (lat - LAT0) * MLAT;
+  let q = (Math.sqrt(3)/3 * x - y/3) / edge, r = (2/3 * y) / edge;
+  const s = -q - r;
+  let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+  const dq = Math.abs(rq-q), dr = Math.abs(rr-r), ds = Math.abs(rs-s);
+  if (dq > dr && dq > ds) rq = -rr - rs; else if (dr > ds) rr = -rq - rs;
+  return [rq, rr];
+}
+function hexCenter(q, r, edge) {
+  const x = edge * Math.sqrt(3) * (q + r/2), y = edge * 1.5 * r;
+  return [LAT0 + y/MLAT, LON0 + x/MLON];
+}
+function hexCorners(q, r, edge) {
+  const [clat, clon] = hexCenter(q, r, edge);
+  const out = [];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI/180 * (60*i - 30);
+    out.push([clat + (edge*Math.sin(a))/MLAT, clon + (edge*Math.cos(a))/MLON]);
+  }
+  return out;
+}
+function median(arr) {
+  const s = [...arr].sort((a,b) => a-b);
+  const mid = Math.floor(s.length/2);
+  return s.length % 2 ? s[mid] : (s[mid-1]+s[mid])/2;
+}
+// Серый (мало просмотров) -> оранжевый (много) — отдельная палитра для этой
+// страницы, т.к. смысл (интенсивность интереса) другой, чем цена/шум.
+function viewsColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const from = [156,163,175], to = [234,88,12];
+  const c = from.map((f,i) => Math.round(f + (to[i]-f)*t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+function renderTop50(points) {
+  const top = [...points].sort((a,b) => (b.views||0) - (a.views||0)).slice(0, 50);
+  document.getElementById('v-top50').innerHTML = top.map((p, i) => `
+    <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">
+      <div style="display:flex;justify-content:space-between;gap:8px;">
+        <span style="color:#888;">#${i+1}</span>
+        <span style="font-weight:700;color:#ea580c;">👁 ${(p.views||0).toLocaleString('ru')}</span>
+      </div>
+      <div style="margin-top:2px;"><a href="/admin/analytics/${p.id}">${p.rooms || '?'}-комн, ${p.area || '?'} м² — ${(p.price/1e6).toFixed(1)} млн ₸</a></div>
+      <div style="color:#888;font-size:11.5px;">${escapeHtml(p.complex_name || p.address)} · ${p.first_seen || ''}</div>
+    </div>`).join('') || '<div style="color:#888;font-size:13px;">нет данных за этот период</div>';
+}
+
+function renderHexes(points, edge) {
+  hexLayer.clearLayers();
+  const buckets = new Map();
+  points.forEach(p => {
+    const [q, r] = hexAxial(p.lat, p.lon, edge);
+    const key = q + ':' + r;
+    if (!buckets.has(key)) buckets.set(key, {q, r, items: []});
+    buckets.get(key).items.push(p);
+  });
+  const medians = [];
+  buckets.forEach(b => { b.value = median(b.items.map(i => i.views || 0)); medians.push(b.value); });
+  if (!medians.length) return;
+  const hi = Math.max(...medians) || 1;
+  buckets.forEach(b => {
+    const t = b.value / hi;
+    L.polygon(hexCorners(b.q, b.r, edge), {
+      color: '#fff', weight: 0.5, fillColor: viewsColor(t), fillOpacity: 0.6,
+    }).bindTooltip(`медиана: 👁 ${Math.round(b.value)} · ${b.items.length} объявл.`, {sticky:true})
+      .on('click', () => showHexDetail(b))
+      .addTo(hexLayer);
+  });
+}
+
+function showHexDetail(b) {
+  const el = document.getElementById('v-hex-detail');
+  el.style.display = 'block';
+  const items = [...b.items].sort((a,c) => (c.views||0) - (a.views||0));
+  el.innerHTML = `<div style="font-weight:700;margin-bottom:8px;">Гексагон: ${items.length} объявл., медиана 👁 ${Math.round(b.value)}</div>` +
+    items.map(p => `<div style="font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--border);">
+      👁 ${(p.views||0).toLocaleString('ru')} — <a href="/admin/analytics/${p.id}">${p.rooms || '?'}-комн, ${(p.price/1e6).toFixed(1)} млн ₸</a>
+      <span style="color:#888;"> · ${escapeHtml(p.complex_name || p.address)}</span>
+    </div>`).join('');
+}
+
+function setDays(d) {
+  currentDays = d;
+  document.querySelectorAll('.vdays-btn').forEach(b => {
+    const active = parseInt(b.dataset.days) === d;
+    b.classList.toggle('active', active);
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  load();
+}
+
+function load() {
+  fetch('/admin/api/views-points?days=' + currentDays).then(r => r.json()).then(d => {
+    currentPoints = d.points || [];
+    document.getElementById('v-result-count').textContent = currentPoints.length + ' объявлений с известными просмотрами';
+    renderHexes(currentPoints, parseFloat(document.getElementById('v-hex-edge').value) || 200);
+    renderTop50(currentPoints);
+    document.getElementById('v-hex-detail').style.display = 'none';
+  });
+}
+document.getElementById('v-hex-edge').addEventListener('change', () => renderHexes(currentPoints, parseFloat(document.getElementById('v-hex-edge').value) || 200));
+load();
+</script>
+{% endblock %}
