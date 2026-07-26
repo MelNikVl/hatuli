@@ -1,8 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-title">🏢 {{ cx.name }}
-  {% if developer %}<small style="font-size:14px;font-weight:400;">· 🏗 {% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}">{{ developer }}</a>{% else %}{{ developer }}{% endif %}</small>{% endif %}
+  {% if developer %}<small style="font-size:14px;font-weight:800;">· 🏗 {% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer }}</span>{% endif %}</small>{% endif %}
   <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% endif %}</small></div>
+{% if stats %}
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+  {% for s in stats %}
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 14px;">
+    <div style="font-size:11px;color:#888;">{{ s.rooms or '?' }}-комн, медиана</div>
+    <div style="font-size:16px;font-weight:800;">{{ '%.1f'|format((s.median_price or 0)/1e6) }} млн ₸</div>
+    {% if s.median_m2 %}<div style="font-size:11px;color:#2563eb;font-weight:600;">{{ (s.median_m2/1000)|round|int }} тыс ₸/м²</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 {% if cx.is_street %}
 <div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:14px;">
   ⚠️ <b>Это улица, а не ЖК.</b> Аудит определил, что под этим названием Крыша группирует дома по улице. Объявления отвязаны, из карт и подборок запись исключена.
@@ -18,8 +29,8 @@
 .cx-col-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
 .cx-listing-mini { display:flex; gap:10px; align-items:center; padding:7px 0; border-bottom:1px solid var(--border); text-decoration:none; color:inherit; }
 .cx-listing-mini:last-child { border-bottom:none; }
-.chart-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
-.bar-row { display:flex; align-items:flex-end; gap:6px; height:90px; margin-top:8px; }
+.chart-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; }
+.bar-row { display:flex; align-items:flex-end; gap:6px; flex:1; min-height:170px; margin-top:8px; }
 .bar-col { flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; height:100%; }
 .hex-cell { flex:1; min-width:70px; text-align:center; padding:8px 4px; border-radius:8px; background:var(--bg); }
 .hex-cell.self { background:#dbeafe; border:2px solid #2563eb; }
@@ -34,6 +45,18 @@
       {% if live_no_coords %} · <span style="color:#f59e0b;">{{ live_no_coords }} ждут докачки координат</span>{% endif %}
     </div>
     <script>
+    // Пины и попап — как на главном дашборде (цена/комнатность на синем
+    // фоне, полное превью по клику), а не голые цветные точки.
+    function cxProxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
+    function cxFmtPriceShort(v) {
+      if (!v) return '—';
+      return v >= 1e6 ? (v/1e6).toFixed(1) + ' М' : (v/1e3).toFixed(1) + 'K';
+    }
+    function cxEscapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
     document.addEventListener('DOMContentLoaded', function() {
       const map = L.map('cx-map').setView([{{ geo.lat }}, {{ geo.lon }}], 15);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
@@ -41,18 +64,61 @@
       const bounds = [];
       pts.forEach(p => {
         if (!p.lat) return;
-        const col = p.is_active === false ? '#9ca3af' : (p.is_dup ? '#f59e0b' : '#22c55e');
-        const m = L.circleMarker([p.lat, p.lon], {radius:6, fillColor:col, color:'#fff', weight:1, fillOpacity:.9}).addTo(map);
-        m.bindPopup(`<b>${(p.price/1e6).toFixed(1)} млн ₸</b> · ${p.rooms || '?'}-комн${p.area ? ', ' + p.area + ' м²' : ''}` +
-          `${p.is_active === false ? '<br><span style="color:#888;">архив</span>' : ''}` +
-          `${p.is_dup ? '<br><span style="color:#f59e0b;">дубль</span>' : ''}` +
-          `<br><a href="/admin/analytics/${p.id}">Карточка</a>` +
-          (p.url ? ` · <a href="${p.url}" target="_blank">Крыша ↗</a>` : ''));
+        const isArch = p.is_active === false, isDup = !!p.is_dup;
+        const bg = isArch ? '#9ca3af' : (isDup ? '#f59e0b' : '#0077FF');
+        const pinHtml = `
+<div style="transform:translate(-50%,-100%);">
+  <div style="background:${bg};color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:inline-flex;align-items:center;gap:5px;">
+    <span>${p.rooms || '?'}к</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${cxFmtPriceShort(p.price)}</span>
+  </div>
+  <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid ${bg};margin:0 auto;"></div>
+</div>`;
+        const m = L.marker([p.lat, p.lon], {
+          icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
+        }).addTo(map);
+        m.bindPopup(`<div id="cxpop-${p.id}" style="min-width:260px;padding:8px 0 2px;">Загрузка…</div>`, {maxWidth: 380, autoPan: false});
+        m.on('popupopen', () => cxLoadPopup(p.id));
         bounds.push([p.lat, p.lon]);
       });
       if (bounds.length > 1) map.fitBounds(bounds, {padding: [24, 24]});
       setTimeout(() => map.invalidateSize(), 200);
     });
+    const cxPopLoaded = {};
+    function cxLoadPopup(id) {
+      if (cxPopLoaded[id]) return;
+      cxPopLoaded[id] = true;
+      fetch('/admin/api/listing/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
+        const el = document.getElementById('cxpop-' + id);
+        if (!el || d.error) return;
+        const priceM = d.price ? (d.price/1e6).toFixed(1) : '—';
+        const priceM2 = (d.price && d.area) ? Math.round(d.price/d.area/1000) + ' тыс ₸/м²' : '';
+        const photo = (d.photos && d.photos[0]) ? `<img src="${cxProxyImg(d.photos[0])}" style="width:100%;height:150px;object-fit:cover;border-radius:8px 8px 0 0;margin:-8px 0 8px;display:block;">` : '';
+        const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+        const ownerPill = d.is_owner
+          ? `<span style="display:inline-block;background:#dcfce7;color:#166534;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;">👤 собственник</span>`
+          : `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;">🏢 риелтор</span>`;
+        const areaTxt = d.area ? Math.round(d.area) : '?';
+        const floorTxt = d.floor ? `${d.floor}/${d.floors_total || '?'} эт.` : '';
+        const dealScore = (d.deal_score && d.deal_score.deal != null)
+          ? `<div style="font-size:12px;margin-top:4px;">🎯 Deal Score: <b>${d.deal_score.deal}/100</b></div>` : '';
+        el.innerHTML = `
+          ${photo}
+          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+            <div style="font-size:20px;font-weight:800;">${priceM} <span style="font-size:14px;font-weight:700;">млн ₸</span></div>
+            ${priceM2 ? `<span style="${pillStyle}margin:0;">${priceM2}</span>` : ''}
+          </div>
+          <div style="margin-top:6px;">
+            <span style="${pillStyle}">${d.rooms || '?'}-комн</span>${ownerPill}<span style="${pillStyle}">${areaTxt} м²</span>${floorTxt ? `<span style="${pillStyle}">${floorTxt}</span>` : ''}
+          </div>
+          <div style="font-size:12px;color:#555;margin-top:4px;">${cxEscapeHtml(d.address || '')}</div>
+          ${dealScore}
+          <div style="margin-top:8px;padding-top:6px;border-top:1px solid #eee;display:flex;gap:8px;font-size:12.5px;">
+            <a href="/admin/analytics/${id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;border-radius:7px;text-decoration:none;">Аналитика</a>
+            ${d.url ? `<a href="${d.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;border-radius:7px;text-decoration:none;">Крыша</a>` : ''}
+          </div>
+        `;
+      }).catch(() => {});
+    }
     </script>
     {% else %}
     <div style="aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;color:#888;font-size:13px;text-align:center;padding:20px;">🗺 Карта появится после докачки координат объявлений этого ЖК</div>
@@ -63,13 +129,59 @@
     {% set photos = (cx.photos or ([cx.photo_url] if cx.photo_url else [])) %}
     <div id="cx-photos-view">
       {% if photos %}
-      <div style="display:grid;grid-template-columns:repeat({{ photos|length if photos|length <= 3 else 3 }},1fr);gap:6px;margin-bottom:10px;">
-        {% for ph in photos[:3] %}
-        <img src="{{ ph }}" loading="lazy" style="width:100%;height:110px;object-fit:cover;border-radius:8px;">
-        {% endfor %}
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <img id="cx-main-photo" src="{{ photos[0] }}" loading="lazy" onclick="cxOpenLightbox(0)"
+             style="flex:1;min-width:0;height:150px;object-fit:cover;border-radius:8px;cursor:zoom-in;">
+        {% if photos|length > 1 %}
+        <div style="display:flex;flex-direction:column;gap:6px;width:56px;flex-shrink:0;overflow-y:auto;max-height:150px;">
+          {% for ph in photos[1:6] %}
+          <img src="{{ ph }}" loading="lazy" onclick="cxSetMain({{ loop.index }})"
+               style="width:56px;height:42px;object-fit:cover;border-radius:6px;cursor:pointer;flex-shrink:0;">
+          {% endfor %}
+        </div>
+        {% endif %}
       </div>
       {% endif %}
     </div>
+    <script>
+    const CX_PHOTOS = {{ photos | tojson }};
+    function cxSetMain(idx) {
+      const img = document.getElementById('cx-main-photo');
+      if (img && CX_PHOTOS[idx]) img.src = CX_PHOTOS[idx];
+      img.onclick = () => cxOpenLightbox(idx);
+    }
+    let cxLbIdx = 0;
+    function cxOpenLightbox(idx) {
+      if (!CX_PHOTOS.length) return;
+      cxLbIdx = idx;
+      cxRenderLightbox();
+    }
+    function cxRenderLightbox() {
+      let box = document.getElementById('cx-lightbox');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'cx-lightbox';
+        box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;';
+        box.onclick = (e) => { if (e.target === box) cxCloseLightbox(); };
+        document.body.appendChild(box);
+      }
+      const thumbs = CX_PHOTOS.map((p, i) => `<img src="${p}" onclick="cxLbIdx=${i};cxRenderLightbox();" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === cxLbIdx ? '1' : '.5'};border:2px solid ${i === cxLbIdx ? '#fff' : 'transparent'};">`).join('');
+      box.innerHTML = `
+        <div style="position:relative;width:92vw;height:78vh;display:flex;align-items:center;justify-content:center;">
+          <img src="${CX_PHOTOS[cxLbIdx]}" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;">
+          ${CX_PHOTOS.length > 1 ? `
+          <button onclick="cxLbIdx=(cxLbIdx-1+${CX_PHOTOS.length})%${CX_PHOTOS.length};cxRenderLightbox();" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">‹</button>
+          <button onclick="cxLbIdx=(cxLbIdx+1)%${CX_PHOTOS.length};cxRenderLightbox();" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">›</button>` : ''}
+        </div>
+        <div style="display:flex;gap:6px;margin-top:14px;max-width:92vw;overflow-x:auto;padding:4px;">${thumbs}</div>
+        <button onclick="cxCloseLightbox()" style="position:absolute;top:16px;right:20px;background:#fff;border:none;border-radius:50%;color:#000;width:38px;height:38px;font-size:24px;cursor:pointer;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.5);">×</button>
+      `;
+    }
+    function cxCloseLightbox() {
+      const box = document.getElementById('cx-lightbox');
+      if (box) box.remove();
+    }
+    </script>
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <b style="font-size:15px;">Основная информация</b>
       <button type="button" onclick="togglePhotoEdit()" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);cursor:pointer;">🖼 фото</button>
@@ -90,7 +202,7 @@
     </div>
     <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">
       <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx.address or cx_address or 'не определён' }}</b></td></tr>
-      <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:inherit;">{{ developer }}</a>{% else %}{{ developer or '—' }}{% endif %}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer or '—' }}</span>{% endif %}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Год постройки/сдачи</td><td><b>{{ cx.year_built or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Район</td><td><b>{{ cx.district or '—' }}</b></td></tr>
@@ -202,30 +314,33 @@
   </div>
 </div>
 <script>
-function drawHexPriceMap(divId, cells) {
-  if (!cells || !cells.length || !cells.some(c => c.avg_m2)) {
+function drawHexPriceMap(divId, cells, field, fmt) {
+  field = field || 'avg_m2';
+  fmt = fmt || (v => Math.round(v/1000) + ' тыс ₸/м²');
+  if (!cells || !cells.length || !cells.some(c => c[field])) {
     document.getElementById(divId).innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#888;font-size:12px;">нет данных</div>';
     return;
   }
   const self_ = cells.find(c => c.is_self);
   const map = L.map(divId, {zoomControl:false, attributionControl:false, dragging:false, scrollWheelZoom:false, doubleClickZoom:false, boxZoom:false}).setView([self_.corners[0][0], self_.corners[0][1]], 14);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:0.5}).addTo(map);
-  const vals = cells.filter(c => c.avg_m2).map(c => c.avg_m2);
+  const vals = cells.filter(c => c[field]).map(c => c[field]);
   const lo = Math.min(...vals), hi = Math.max(...vals);
   const bounds = [];
   cells.forEach(c => {
-    const t = (hi > lo && c.avg_m2) ? (c.avg_m2 - lo) / (hi - lo) : 0.5;
-    const color = c.avg_m2 ? `rgb(${Math.round(34+(239-34)*t)},${Math.round(197+(68-197)*t)},${Math.round(94+(68-94)*t)})` : '#e5e7eb';
+    const v = c[field];
+    const t = (hi > lo && v) ? (v - lo) / (hi - lo) : 0.5;
+    const color = v ? `rgb(${Math.round(34+(239-34)*t)},${Math.round(197+(68-197)*t)},${Math.round(94+(68-94)*t)})` : '#e5e7eb';
     const poly = L.polygon(c.corners, {
       color: c.is_self ? '#1e3a8a' : '#fff', weight: c.is_self ? 2.5 : 1,
-      fillColor: color, fillOpacity: c.avg_m2 ? 0.75 : 0.25,
+      fillColor: color, fillOpacity: v ? 0.75 : 0.25,
     }).addTo(map);
-    poly.bindTooltip(`${c.label}: ${c.avg_m2 ? Math.round(c.avg_m2/1000) + ' тыс ₸/м²' : 'нет данных'} (${c.count})`, {sticky:true});
-    if (c.avg_m2) {
+    poly.bindTooltip(`${c.label}: ${v ? fmt(v) : 'нет данных'} (${c.count})`, {sticky:true});
+    if (v) {
       const cLat = c.corners.reduce((s,p)=>s+p[0],0)/c.corners.length;
       const cLon = c.corners.reduce((s,p)=>s+p[1],0)/c.corners.length;
       L.marker([cLat, cLon], {
-        icon: L.divIcon({className:'', html:`<div style="font-size:11px;font-weight:800;color:#111;text-shadow:0 1px 2px rgba(255,255,255,.6);white-space:nowrap;transform:translate(-50%,-50%);">${Math.round(c.avg_m2/1000)}к</div>`, iconSize:[0,0]}),
+        icon: L.divIcon({className:'', html:`<div style="font-size:11px;font-weight:800;color:#111;text-shadow:0 1px 2px rgba(255,255,255,.6);white-space:nowrap;transform:translate(-50%,-50%);">${fmt(v)}</div>`, iconSize:[0,0]}),
         interactive: false,
       }).addTo(map);
     }
@@ -233,8 +348,9 @@ function drawHexPriceMap(divId, cells) {
   });
   map.fitBounds(bounds, {padding:[4,4]});
 }
-drawHexPriceMap('hex-map-sale', {{ hex_cells_sale | tojson }});
-drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }});
+drawHexPriceMap('hex-map-sale', {{ hex_cells_sale | tojson }}, 'avg_m2', v => Math.round(v/1000) + 'к/м²');
+// Аренда — средняя ИТОГОВАЯ аренда в месяц (не ₸/м², который путали с итоговой ценой)
+drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }}, 'avg_price', v => Math.round(v/1000) + 'к/мес');
 </script>
 {% endif %}
 
@@ -272,23 +388,6 @@ drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }});
       {% endfor %}
     </table>
     <p style="font-size:12px;color:#888;">«Ушло» = объявление не появлялось в выдаче парсера больше 3 дней (сдано или снято). Малое «дней в экспозиции» = высокий арендный спрос в этом ЖК. Метрика начнёт наполняться с 12.07.2026.</p>
-  </div>
-
-  <div class="cx-card">
-    <h3>🏠 Все объявления о продаже ({{ sales|length }})</h3>
-    <table class="cx-table">
-      <tr><th></th><th>Объект</th><th>Цена</th><th>Yield</th><th>Скор</th><th></th></tr>
-      {% for l in sales %}
-      <tr class="{{ 'dead' if l.is_active == False else '' }}">
-        <td>{% if l.is_active == False %}<span class="badge-arch">архив</span>{% else %}<span class="badge-live">live</span>{% endif %}</td>
-        <td><a href="/admin/analytics/{{ l.id }}" style="color:inherit;">{{ l.rooms or '?' }}к · {{ l.area or '?' }}м² · {{ l.floor or '?' }}/{{ l.floors_total or '?' }}эт</a></td>
-        <td><b>{{ '{:,.0f}'.format(l.price or 0).replace(',', ' ') }}</b></td>
-        <td>{{ '%.1f'|format(l.yield_pct or 0) }}%</td>
-        <td><b>{{ l.score_total or '—' }}</b></td>
-        <td><a href="{{ l.url }}" target="_blank">↗</a></td>
-      </tr>
-      {% endfor %}
-    </table>
   </div>
 
   <div class="cx-card">
