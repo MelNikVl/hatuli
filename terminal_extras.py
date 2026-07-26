@@ -1169,8 +1169,8 @@ def make_extras_router(templates) -> APIRouter:
 
     # ── Карточка ЖК: объявления, аренда, ОСИ/УК/чаты ─────────────────────
 
-    @router.get("/admin/complexes/audit", response_class=HTMLResponse)
-    async def complexes_audit(request: Request, limit: int = 300):
+    @router.get("/admin/complexes/data-audit", response_class=HTMLResponse)
+    async def complexes_data_audit(request: Request, limit: int = 300):
         """Таблица по всем ЖК: где какие данные удалось вытащить (застройщик,
         описание, фото, цена/м²), а где нет — чтобы разбираться точечно."""
         if not is_authed(request):
