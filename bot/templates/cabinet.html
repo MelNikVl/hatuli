@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">👤 Личный кабинет</div>
+
+<style>
+.cab-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px 24px; margin-bottom: 20px; max-width: 640px; }
+.cab-row { margin-bottom: 14px; }
+.cab-row label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+.cab-row input, .cab-row select { width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 14px; }
+.fav-item { display: flex; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.fav-item img { width: 64px; height: 48px; object-fit: cover; border-radius: 6px; }
+</style>
+
+{% if not user %}
+<div class="cab-card">
+  <p style="margin-bottom:14px;">Вход только через Telegram — без паролей.</p>
+  <button id="login-btn" class="btn-big btn-save" style="border:none;border-radius:10px;padding:14px 24px;font-size:15px;font-weight:700;cursor:pointer;background:#2563eb;color:#fff;">Войти через Telegram</button>
+  <div id="login-status" style="margin-top:14px;font-size:13.5px;color:#888;"></div>
+</div>
+<script>
+document.getElementById('login-btn').onclick = async function() {
+  const btn = this;
+  btn.disabled = true;
+  const r = await fetch('/api/auth/start', {method: 'POST'}).then(r => r.json());
+  const status = document.getElementById('login-status');
+  status.innerHTML = `Открой <a href="${r.deep_link}" target="_blank">этот диалог в Telegram</a> и нажми Start — окно обновится само.`;
+  window.open(r.deep_link, '_blank');
+  const poll = setInterval(async () => {
+    const p = await fetch('/api/auth/poll?token=' + r.token).then(x => x.json());
+    if (p.status === 'verified') { clearInterval(poll); location.reload(); }
+    else if (p.status === 'not_subscribed') { status.textContent = 'Нужно подписаться на канал t.me/hatuliapp и нажать Start ещё раз в боте.'; }
+    else if (p.status === 'expired' || p.status === 'not_found') { clearInterval(poll); status.textContent = 'Ссылка устарела, нажми кнопку ещё раз.'; btn.disabled = false; }
+  }, 2000);
+};
+</script>
+{% else %}
+<div class="cab-card">
+  <h3 style="margin-bottom:14px;">Профиль</h3>
+  <div class="cab-row"><label>Telegram</label><input value="@{{ user.username or user.user_id }}" disabled></div>
+  <div class="cab-row"><label>Имя</label><input id="cab-name" value="{{ user.full_name or '' }}"></div>
+  <div class="cab-row"><label>Email для уведомлений</label><input id="cab-email" type="email" value="{{ user.email or '' }}"></div>
+  <div class="cab-row"><label>Частота уведомлений в Telegram</label>
+    <select id="cab-freq">
+      <option value="daily" {{ 'selected' if user.notify_frequency == 'daily' }}>Ежедневно</option>
+      <option value="weekly" {{ 'selected' if user.notify_frequency == 'weekly' }}>Раз в неделю</option>
+      <option value="off" {{ 'selected' if user.notify_frequency == 'off' }}>Не присылать</option>
+    </select>
+  </div>
+  <button onclick="saveProfile()" style="border:none;border-radius:10px;padding:12px 22px;font-size:14px;font-weight:700;cursor:pointer;background:#2563eb;color:#fff;">Сохранить</button>
+  <span id="cab-saved" style="margin-left:10px;color:#16a34a;font-size:13px;display:none;">Сохранено ✓</span>
+  <div style="margin-top:16px;"><a href="javascript:void(0)" onclick="logout()" style="color:#ef4444;font-size:13px;">Выйти</a></div>
+</div>
+
+<div class="cab-card">
+  <h3 style="margin-bottom:14px;">⭐ Избранное ({{ favorites|length }})</h3>
+  {% if not favorites %}
+  <p style="color:#888;font-size:13.5px;">Пока пусто — добавляй объявления звёздочкой на карте.</p>
+  {% endif %}
+  {% for f in favorites %}
+  <div class="fav-item">
+    {% if f.first_photo %}<img src="{{ f.first_photo }}">{% endif %}
+    <div style="flex:1;">
+      <div>{{ f.rooms or '?' }}-комн, {{ f.area or '?' }} м² — {{ '{:,.1f}'.format(f.price / 1e6) if f.price else '?' }} млн ₸
+        {% if f.is_active == false %}<span style="color:#ef4444;font-size:11.5px;"> · снято с публикации</span>{% endif %}</div>
+      <div style="font-size:11.5px;color:#888;">{{ f.complex_name or f.address or '' }}</div>
+    </div>
+    <button onclick="removeFav('{{ f.listing_id }}', this)" style="border:none;background:none;color:#ef4444;cursor:pointer;font-size:18px;">✕</button>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+async function saveProfile() {
+  await fetch('/api/me', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      full_name: document.getElementById('cab-name').value,
+      email: document.getElementById('cab-email').value,
+      notify_frequency: document.getElementById('cab-freq').value,
+    }),
+  });
+  const s = document.getElementById('cab-saved');
+  s.style.display = 'inline'; setTimeout(() => s.style.display = 'none', 2000);
+}
+async function logout() { await fetch('/api/auth/logout', {method: 'POST'}); location.reload(); }
+async function removeFav(id, btn) {
+  await fetch('/api/favorites/' + encodeURIComponent(id), {method: 'DELETE'});
+  btn.closest('.fav-item').remove();
+}
+</script>
+{% endif %}
+{% endblock %}

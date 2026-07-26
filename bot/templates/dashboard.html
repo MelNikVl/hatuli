@@ -721,6 +721,7 @@ function renderSaleBatch(d) {
   ${cxLine}
   ${descHtml}
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
+    <span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" style="flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:34px;background:#f3f4f6;color:#ccc;font-size:18px;line-height:1;border-radius:7px;cursor:pointer;">☆</span>
     <a href="javascript:void(0)" onclick="openDetailModal('${pt.id}', event)" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Подробнее</a>
     <a href="/admin/analytics/${pt.id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Аналитика</a>
     <a href="${pt.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Крыша</a>
@@ -731,6 +732,7 @@ function renderSaleBatch(d) {
         map.panTo([pt.lat, pt.lon], {animate: true});
         loadPriceHistory(pt.id);
         loadListingExtras(pt.id);
+        checkFavoriteState(pt.id);
       });
     });
     document.getElementById('result-count').textContent = lastPoints.length + ' объектов' + (d.has_more ? '…' : '') + (drawnPolygon ? ' · в области' : '');
@@ -826,6 +828,34 @@ function toggleBargainExplain(uid, ev) {
 // Один запрос к /admin/api/listing/{id} (та же ручка, что и у модалки
 // "Подробнее") наполняет 3 блока попапа: основная информация (адрес/этаж),
 // реальная цена (торг) и Deal Score (гексагональный индекс).
+// ── Избранное (требует входа через Telegram, см. /cabinet) ──────────────
+async function checkFavoriteState(id) {
+  const el = document.getElementById('fav-' + id);
+  if (!el) return;
+  try {
+    const d = await (await fetch('/api/favorites/ids?ids=' + encodeURIComponent(id))).json();
+    setFavStar(el, d.ids && d.ids.includes(id));
+  } catch (e) {}
+}
+function setFavStar(el, active) {
+  el.textContent = active ? '★' : '☆';
+  el.style.color = active ? '#f59e0b' : '#ccc';
+  el.dataset.active = active ? '1' : '0';
+}
+async function toggleFavorite(id, ev) {
+  if (ev) ev.stopPropagation();
+  const el = document.getElementById('fav-' + id);
+  if (!el) return;
+  const active = el.dataset.active === '1';
+  const method = active ? 'DELETE' : 'POST';
+  const r = await fetch('/api/favorites/' + encodeURIComponent(id), {method});
+  if (r.status === 401) {
+    if (confirm('Чтобы добавить в избранное, нужно войти через Telegram. Перейти в личный кабинет?')) location.href = '/cabinet';
+    return;
+  }
+  setFavStar(el, !active);
+}
+
 function loadListingExtras(id) {
   const el = document.getElementById('bg-' + id);
   if (!el || el.dataset.loaded) return;

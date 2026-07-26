@@ -304,6 +304,136 @@ def make_extras_router(templates) -> APIRouter:
             "project_size_gb": float(r["project_size_gb"]) if r["project_size_gb"] is not None else None,
         } for r in rows]})
 
+    # ── Личный кабинет посетителя сайта (вход через Telegram, см.
+    # bot/core/site_auth.py + service_site_bot.py) — отдельно от admin_auth ──
+
+    def _site_session_cookie(request: Request) -> str | None:
+        return request.cookies.get("site_session")
+
+    @router.get("/cabinet", response_class=HTMLResponse)
+    async def cabinet_page(request: Request):
+        from bot.core.site_auth import get_user_by_session, list_favorites
+        user = await get_user_by_session(_site_session_cookie(request))
+        favorites = await list_favorites(user["user_id"]) if user else []
+        return templates.TemplateResponse("cabinet.html", {
+            "request": request, "user": user, "favorites": favorites,
+            "bot_username": os.getenv("SITE_BOT_USERNAME", "nik_us_bot"),
+        })
+
+    @router.post("/api/auth/start")
+    async def api_auth_start(request: Request):
+        from bot.core.site_auth import create_login_token
+        token = await create_login_token()
+        bot_username = os.getenv("SITE_BOT_USERNAME", "nik_us_bot")
+        return JSONResponse({
+            "token": token,
+            "deep_link": f"https://t.me/{bot_username}?start={token}",
+        })
+
+    @router.get("/api/auth/poll")
+    async def api_auth_poll(request: Request, token: str):
+        from bot.core.site_auth import get_token_status, create_session
+        status = await get_token_status(token)
+        if not status:
+            return JSONResponse({"status": "not_found"})
+        if status["status"] == "verified":
+            session_id = await create_session(status["telegram_id"])
+            resp = JSONResponse({"status": "verified"})
+            resp.set_cookie("site_session", session_id, httponly=True, max_age=180 * 86400)
+            return resp
+        return JSONResponse({"status": status["status"]})
+
+    @router.post("/api/auth/logout")
+    async def api_auth_logout(request: Request):
+        from bot.core.site_auth import destroy_session
+        await destroy_session(_site_session_cookie(request))
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie("site_session")
+        return resp
+
+    @router.post("/api/me")
+    async def api_update_profile(request: Request):
+        from bot.core.site_auth import get_user_by_session, update_profile
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"error": "auth"}, status_code=401)
+        body = await request.json()
+        await update_profile(
+            user["user_id"],
+            (body.get("full_name") or "").strip() or None,
+            (body.get("email") or "").strip() or None,
+            body.get("notify_frequency") if body.get("notify_frequency") in ("daily", "weekly", "off") else None,
+        )
+        return JSONResponse({"ok": True})
+
+    @router.get("/api/favorites")
+    async def api_list_favorites(request: Request):
+        from bot.core.site_auth import get_user_by_session, list_favorites
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"error": "auth"}, status_code=401)
+        favs = await list_favorites(user["user_id"])
+        return JSONResponse({"favorites": favs})
+
+    @router.get("/api/favorites/ids")
+    async def api_favorite_ids(request: Request, ids: str = ""):
+        """Проверить, какие из перечисленных id уже в избранном — для звёздочек
+        на карточках дашборда (публичный запрос, но без user'а всегда пусто)."""
+        from bot.core.site_auth import get_user_by_session, is_favorite_ids
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"ids": []})
+        listing_ids = [i for i in ids.split(",") if i]
+        found = await is_favorite_ids(user["user_id"], listing_ids)
+        return JSONResponse({"ids": list(found)})
+
+    @router.post("/api/favorites/{listing_id}")
+    async def api_add_favorite(request: Request, listing_id: str):
+        from bot.core.site_auth import get_user_by_session, add_favorite
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await add_favorite(user["user_id"], listing_id)
+        return JSONResponse({"ok": True})
+
+    @router.delete("/api/favorites/{listing_id}")
+    async def api_remove_favorite(request: Request, listing_id: str):
+        from bot.core.site_auth import get_user_by_session, remove_favorite
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await remove_favorite(user["user_id"], listing_id)
+        return JSONResponse({"ok": True})
+
+    # ── Админ: управление пользователями сайта (отдельно от /admin/users —
+    # те аккаунты для входа в саму админку) ────────────────────────────────
+
+    @router.get("/admin/site-users", response_class=HTMLResponse)
+    async def admin_site_users_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.core.site_auth import list_site_users
+        users = await list_site_users()
+        return templates.TemplateResponse("site_users.html", {
+            "request": request, "site_users": users,
+        })
+
+    @router.post("/admin/api/site-users/{user_id}/block")
+    async def admin_block_site_user(request: Request, user_id: int, blocked: bool = True):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.site_auth import set_user_blocked
+        await set_user_blocked(user_id, blocked)
+        return JSONResponse({"ok": True})
+
+    @router.delete("/admin/api/site-users/{user_id}")
+    async def admin_delete_site_user(request: Request, user_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.site_auth import delete_site_user
+        await delete_site_user(user_id)
+        return JSONResponse({"ok": True})
+
     @router.get("/admin/settings", response_class=HTMLResponse)
     async def settings_page(request: Request):
         if not is_authed(request):

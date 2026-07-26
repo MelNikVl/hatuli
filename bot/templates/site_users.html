@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">👥 Пользователи сайта
+  <small style="font-size:13px;color:#888;font-weight:400;">Личный кабинет/избранное (вход через Telegram) — отдельно от аккаунтов админки в Настройках.</small>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+<table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+  <tr style="text-align:left;color:#888;font-size:11.5px;text-transform:uppercase;">
+    <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Telegram</th>
+    <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Имя</th>
+    <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Email</th>
+    <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Уведомления</th>
+    <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Подписан на канал</th>
+    <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Избранного</th>
+    <th style="padding:8px 12px;border-bottom:1px solid var(--border);">Создан</th>
+    <th style="padding:8px 12px;border-bottom:1px solid var(--border);"></th>
+  </tr>
+  {% for u in site_users %}
+  <tr id="su-row-{{ u.user_id }}" style="{{ 'opacity:.5;' if u.is_blocked }}">
+    <td style="padding:8px 12px;border-bottom:1px solid var(--border);">@{{ u.username or u.user_id }}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid var(--border);">{{ u.full_name or '—' }}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid var(--border);">{{ u.email or '—' }}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid var(--border);">{{ u.notify_frequency or 'daily' }}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid var(--border);">{{ '✅' if u.channel_subscribed else '—' }}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid var(--border);">{{ u.favorites_count }}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid var(--border);font-size:11.5px;color:#888;">{{ u.created_at.strftime('%d.%m.%Y') if u.created_at else '—' }}</td>
+    <td style="padding:8px 12px;border-bottom:1px solid var(--border);white-space:nowrap;">
+      <a href="javascript:void(0)" onclick="toggleBlock({{ u.user_id }}, {{ 'false' if u.is_blocked else 'true' }})" style="color:{{ '#16a34a' if u.is_blocked else '#f59e0b' }};font-size:12px;margin-right:10px;">{{ 'разблокировать' if u.is_blocked else 'заблокировать' }}</a>
+      <a href="javascript:void(0)" onclick="deleteUser({{ u.user_id }})" style="color:#ef4444;font-size:12px;">удалить</a>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="8" style="padding:20px;text-align:center;color:#888;">Пока никто не вошёл через Telegram.</td></tr>
+  {% endfor %}
+</table>
+</div>
+
+<script>
+async function toggleBlock(userId, blocked) {
+  await fetch(`/admin/api/site-users/${userId}/block?blocked=${blocked}`, {method: 'POST'});
+  location.reload();
+}
+async function deleteUser(userId) {
+  if (!confirm('Удалить пользователя и всё его избранное?')) return;
+  await fetch(`/admin/api/site-users/${userId}`, {method: 'DELETE'});
+  document.getElementById('su-row-' + userId).remove();
+}
+</script>
+{% endblock %}

@@ -162,6 +162,7 @@
         or 'duplicates' in request.url.path
         or 'archived' in request.url.path or 'unbound' in request.url.path) %}
     <a href="/admin"             class="{% if request.url.path == '/admin' %}active{% endif %}"><span class="ico">🗺</span> Карта</a>
+    <a href="/cabinet"           class="{% if request.url.path == '/cabinet' %}active{% endif %}"><span class="ico">👤</span> Личный кабинет</a>
     <a href="/admin/analytics"   class="{% if analytics_family %}active{% endif %}"><span class="ico">📊</span> Аналитика</a>
     <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}"><span class="ico">🏢</span> Жилые комплексы</a>
     <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}"><span class="ico">🏗</span> Застройщики</a>
@@ -173,6 +174,7 @@
     <div class="nav-section">Управление</div>
     {% if admin %}
     <a href="/admin/settings"    class="{% if 'settings' in request.url.path or 'logs' in request.url.path or 'issues' in request.url.path %}active{% endif %}"><span class="ico">⚙️</span> Настройки</a>
+    <a href="/admin/site-users"  class="{% if request.url.path == '/admin/site-users' %}active{% endif %}"><span class="ico">👥</span> Пользователи сайта</a>
     {% endif %}
     {# <a href="/admin/users" class="{% if request.url.path == '/admin/users' %}active{% endif %}"><span class="ico">👥</span> Пользователи</a> #}
     {# <a href="/admin/users/stats" class="{% if 'users/stats' in request.url.path %}active{% endif %}"><span class="ico">📈</span> Стат. пользователей</a> #}
