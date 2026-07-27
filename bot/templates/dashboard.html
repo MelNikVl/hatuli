@@ -172,9 +172,25 @@ function openMiniClusterPin(id) {
 // Кеширующий прокси фото (см. /img-proxy на бэкенде) — первый показ идёт на
 // источник и кэшируется на диске сервера, дальше отдаётся с диска.
 function proxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
-const map = L.map('objects-map').setView([51.128, 71.43], 13);
+// preferCanvas: тепловые карты — это тысячи гекс-полигонов (особенно шум:
+// детальный слой у дорог + фоновый на весь город); SVG-рендерер Леافлета по
+// умолчанию создаёт отдельный DOM-узел на каждый — на таком количестве это
+// заметно тормозит отрисовку/зум/пан. Canvas рисует все фигуры в один
+// растровый слой, на порядок быстрее для большого числа фигур; подсказки
+// (bindTooltip) и клики по гексам продолжают работать как обычно.
+const map = L.map('objects-map', {preferCanvas: true}).setView([51.128, 71.43], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
 const pointsLayer = L.layerGroup().addTo(map);  // аренда: обычные circleMarker (маркер-кластер их не поддерживает)
+
+// Ниже этого зума отдельные точки всё равно склеены в кластеры одной
+// циферкой — см. использование в loadSaleBatch.
+const ZOOM_GATE = 12;
+let pendingBatchResume = null;
+map.on('zoomend', () => {
+  if (pendingBatchResume && map.getZoom() >= ZOOM_GATE) {
+    const fn = pendingBatchResume; pendingBatchResume = null; fn();
+  }
+});
 
 // ── Кнопки прямо на карте (как на Zillow): нарисовать область, школы ──────
 const MapButtons = L.Control.extend({
@@ -649,8 +665,19 @@ function applyFilters() {
       // Топ-10 всегда попадают в первый батч (ORDER BY eff_score DESC) —
       // при включённом фильтре остальные тысячи объектов грузить незачем.
       if (d.has_more && !topOnlyFilter) {
-        loadSaleBatch(offset + BATCH);
+        // На сильно отдалённом виде (весь город) отдельные точки всё равно
+        // не видны — они уже внутри кластеров с одной циферкой. Догружать
+        // тысячи полных карточек (цена/фото/скор на каждую), которые пока
+        // никто не увидит, — чистый расход CPU/сети. Ставим догрузку на
+        // паузу до тех пор, пока пользователь реально не приблизится;
+        // первый батч (лучшие по скору) уже на карте и виден в кластерах.
+        if (map.getZoom() < ZOOM_GATE) {
+          pendingBatchResume = () => loadSaleBatch(offset + BATCH);
+        } else {
+          loadSaleBatch(offset + BATCH);
+        }
       } else {
+        pendingBatchResume = null;
         setTimeout(() => { if (filterSeq === applyFiltersSeq) progWrap.style.display = 'none'; }, 600);
       }
     });
@@ -1356,7 +1383,10 @@ async function loadHeatData(mode) {
     heatCache.schools = (d.poi || []).filter(p => p.kind === 'school' || p.kind === 'kindergarten');
   } else if (mode === 'noise') {
     const d = await (await fetch('/admin/api/city-roads')).json();
-    heatCache.noise = d.roads || [];
+    // /admin/api/city-roads теперь отдаёт компактные массивы [lat,lon,lanes,highway]
+    // (~39к точек — именованные ключи в каждой раздували ответ вдвое), разворачиваем
+    // обратно в объекты один раз здесь, а не переписываем все функции ниже под индексы.
+    heatCache.noise = (d.roads || []).map(r => ({lat: r[0], lon: r[1], lanes: r[2], highway: r[3]}));
   }
   return heatCache[mode];
 }

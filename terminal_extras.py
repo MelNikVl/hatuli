@@ -808,9 +808,13 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/city-poi")
     async def city_poi(request: Request):
-        """Школы/садики/вузы города для отображения на картах."""
-        if not is_authed(request):
-            return JSONResponse({"error": "auth"}, status_code=401)
+        """Школы/садики/вузы города — для тепловой карты школ и для отдельного
+        слоя меток "🏫 Школы" на главном дашборде.
+        БАГ (найден): эта ручка требовала админ-логин, хотя сам дашборд и обе
+        кнопки ("Школы" на карте, "Школы" в тепловых картах) публичны — для
+        не залогиненного посетителя они молча ничего не показывали (401 без
+        видимой ошибки в UI). Публичная, как /admin/api/city-roads и
+        /admin/api/map-points рядом — ничего чувствительного тут нет."""
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch(
             "SELECT kind, name, lat, lon, address FROM city_poi LIMIT 3000")
@@ -1728,12 +1732,18 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/city-roads")
     async def city_roads(request: Request):
+        """Точки дорог для карты шума. Массивы [lat, lon, lanes, highway]
+        вместо объектов с именованными ключами — при 30м-семплировании вдоль
+        каждой дороги (см. road_import.py) это ~39к точек, и повторяющиеся
+        ключи "lat"/"lon"/"lanes"/"highway" в каждой из них раздували ответ
+        почти вдвое против самих данных (~2.4МБ -> заметная пауза перед тем,
+        как вообще можно начать считать гексы шума)."""
         from bot.db.pg import fetch as pg_fetch
         try:
             rows = await pg_fetch("SELECT lat, lon, lanes, highway FROM city_roads")
         except Exception:
             rows = []
-        return JSONResponse({"roads": [dict(r) for r in rows]})
+        return JSONResponse({"roads": [[float(r["lat"]), float(r["lon"]), r["lanes"], r["highway"]] for r in rows]})
 
     # ── Детали объявления для модального окна на дашборде ──────────────────
 
