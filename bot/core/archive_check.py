@@ -60,12 +60,21 @@ async def check_archived(limit: int = 20) -> dict:
     Проверить limit лучших активных объявлений, которые давно не проверялись.
     Возвращает {"checked": n, "archived": n}.
     """
+    # БАГ (найден): сортировка по score_total DESC ставила уже проверенные
+    # вчера высокобалльные объявления впереди НИКОГДА не проверенных с чуть
+    # меньшим скором — при том, что новых объявлений в базу приходит больше,
+    # чем ARCHIVE_CHECK_BATCH способен обработать за цикл (единичные секунды
+    # на объявление, намеренно медленно), очередь никогда не догоняла саму
+    # себя: часть базы (десятки тысяч активных) годами оставалась вообще
+    # непроверенной. Теперь сперва ВСЕГДА добираем никогда не проверенные
+    # (archive_checked_at IS NULL), и только когда таких не осталось —
+    # самые старые по последней проверке; скор — уже вторичный тай-брейк.
     rows = await fetch("""
         SELECT id, url FROM apartment_listings
         WHERE is_active IS NOT FALSE
           AND url IS NOT NULL
           AND (archive_checked_at IS NULL OR archive_checked_at < now() - interval '24 hours')
-        ORDER BY score_total DESC NULLS LAST
+        ORDER BY archive_checked_at ASC NULLS FIRST, score_total DESC NULLS LAST
         LIMIT $1
     """, limit)
 
