@@ -481,6 +481,22 @@ function percentile(arr, p) {
   return s[Math.min(Math.floor(s.length * p), s.length - 1)];
 }
 
+// Попап открывается НАД точкой маркера и центрируется по ней же — на карте
+// это ставит сам маркер в центр экрана, а карточка (высокая — фото/пилюли/
+// кнопки) при этом торчит вверх и обрезается сверху вместо того, чтобы вся
+// целиком быть в кадре. Вместо geo-точки маркера центрируем на "виртуальной"
+// точке, сдвинутой вниз на половину высоты попапа — тогда в центре экрана
+// оказывается центр самой карточки, а не голая точка маркера.
+function centerOnPopup(popup, lat, lon) {
+  requestAnimationFrame(() => {
+    const el = popup.getElement ? popup.getElement() : null;
+    const h = el ? el.offsetHeight : 0;
+    if (!h) { map.panTo([lat, lon], {animate: true}); return; }
+    const pt = map.project([lat, lon], map.getZoom()).subtract([0, h / 2]);
+    map.panTo(map.unproject(pt, map.getZoom()), {animate: true});
+  });
+}
+
 // Двойной range-слайдер <-> текстовые поля от/до — держим оба способа
 // ввода в синхроне. Слайдер триггерит applyFilters только на отпускание
 // (change), текстовое поле обновляется на каждое движение (input), чтобы
@@ -588,7 +604,7 @@ function applyFilters() {
           priceTrend = ` · <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(0)} тыс${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
         }
         m.bindPopup(`<div style="min-width:250px;"><b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн${priceTrend}<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}</div>`, {autoPan: false});
-        m.on('popupopen', () => map.panTo([pt.lat, pt.lon], {animate: true}));
+        m.on('popupopen', (e) => centerOnPopup(e.popup, pt.lat, pt.lon));
       });
       document.getElementById('result-count').textContent = lastPoints.length + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без привязки)` : '') + (drawnPolygon ? ' · в области' : '');
       if (hexOn) drawHexGrid();
@@ -725,10 +741,9 @@ function renderSaleBatch(d) {
   </div>
   <div id="info-${pt.id}" style="font-size:12.5px;color:#555;margin-top:4px;"></div>
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
-  <div style="font-size:12.5px;margin-top:3px;">Смарт рейтинг: <a href="/admin/analytics/${pt.id}" onclick="event.stopPropagation()" title="${scoreExplainText(pt.score_bd)}" style="color:${sc};font-weight:800;text-decoration:none;border-bottom:1px dashed ${sc};">${pt.score}</a> ${scoreInfoIcon('smart-' + pt.id)}
+  <div style="font-size:12.5px;margin-top:3px;">Смарт рейтинг: <a href="/admin/analytics/${pt.id}" onclick="event.stopPropagation()" title="${scoreExplainText(pt.score_bd)}" style="color:${sc};font-weight:800;text-decoration:none;border-bottom:1px dashed ${sc};">${pt.score}</a> ${scoreInfoIcon('smart-' + pt.id)}<span id="dealscore-${pt.id}"></span>
     <div id="scx-smart-${pt.id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:12.5px;line-height:1.4;color:#444;">Смарт рейтинг = Deal Score (см. ниже) + бонусы: зона приоритета, доп. слои данных, недавнее снижение цены. Полная раскладка — по клику на число или на вкладке ❤️ Скор в Инфо.</div>
   </div>
-  <div id="dealscore-${pt.id}" style="font-size:12.5px;margin-top:3px;"></div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
   ${(priceTrend || pt.views) ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend ? priceTrend.replace(/^ · /, '') : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>` : ''}
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
@@ -742,8 +757,8 @@ function renderSaleBatch(d) {
   </div>
   </div>
 </div>`, {maxWidth: POPUP_WIDTH, minWidth: Math.min(POPUP_WIDTH, 260), autoPan: false});
-      m.on('popupopen', () => {
-        map.panTo([pt.lat, pt.lon], {animate: true});
+      m.on('popupopen', (e) => {
+        centerOnPopup(e.popup, pt.lat, pt.lon);
         loadPriceHistory(pt.id);
         loadListingExtras(pt.id);
         checkFavoriteState(pt.id);
@@ -910,7 +925,7 @@ function loadListingExtras(id) {
         + 'Локация+инфраструктура (20%), Качество ЖК: класс/год/рейтинг (20%), '
         + 'Доходность+ликвидность (15%), Риск: этаж/риелтор (5%). '
         + 'Уверенность — какая доля факторов посчитана на реальных данных (а не на дефолте), а не риск сделки.';
-      dsEl.innerHTML = `🎯 Deal Score: <b>${d.deal_score.deal}/100</b> <span style="color:#888;">· уверенность ${d.deal_score.confidence}%</span> ${scoreInfoIcon('deal-' + id)}
+      dsEl.innerHTML = ` · Deal Score <b>${d.deal_score.deal}/100</b> <span style="color:#888;">· уверенность ${d.deal_score.confidence}%</span> ${scoreInfoIcon('deal-' + id)}
         <div id="scx-deal-${id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:12.5px;line-height:1.4;color:#444;">${escapeHtml(dsExplain)}</div>`;
     }
 
