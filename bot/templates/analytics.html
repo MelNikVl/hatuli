@@ -54,14 +54,10 @@ tr:last-child td { border-bottom: none; }
 .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
 
 .container { max-width: 100%; padding: 0; }
-/* 2 колонки: слева графики/KPI, справа фильтр + топ-объявления (по образцу .cx-grid) */
-.an-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 16px; align-items: start; }
-@media (max-width: 1150px) { .an-grid { grid-template-columns: 1fr; } }
 </style>
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">📊 Аналитика квартир</div>
 <div class="container">
-<div class="an-grid">
 <div>
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;">
     <b style="font-size:13.5px;">📉 Объявления без фото во времени</b>
@@ -203,6 +199,12 @@ tr:last-child td { border-bottom: none; }
   {% endif %}
 
   <div class="stats-bar">
+    {% if coverage %}
+    <div class="stat-card"><div class="val">{{ coverage.total }}</div><div class="lbl">активных объявлений</div></div>
+    <div class="stat-card"><div class="val">{{ coverage.complexes }}</div><div class="lbl">ЖК в базе</div></div>
+    <div class="stat-card"><div class="val">{{ coverage.krisha_total or '—' }}</div><div class="lbl">всего в источнике (≤ потолка цены)</div></div>
+    {% endif %}
+    <a href="https://docs.google.com/spreadsheets/d/1KaHKjg70JEfX3kLc7A8ZtNPJwsp108iSA8kIqVfrtdI/edit" target="_blank" class="stat-card" style="text-decoration:none;display:flex;align-items:center;justify-content:center;color:var(--text);font-weight:600;">📗 Google Sheets</a>
     <div class="stat-card"><div class="val">{{ total }}</div><div class="lbl">Объектов</div></div>
     {% set avg_score = (listings | map(attribute='score_total') | select | list | sum / (listings | length)) | round(1) if listings else 0 %}
     {% set avg_yield = (listings | map(attribute='yield_pct') | select | list | sum / (listings | length)) | round(1) if listings else 0 %}
@@ -222,147 +224,5 @@ tr:last-child td { border-bottom: none; }
     <span class="legend-item"><span class="legend-dot" style="background:#607d8b"></span>Supply</span>
   </div>
 </div><!-- /левая колонка -->
-
-<div style="max-height:90vh;overflow-y:auto;">
-  <form method="get" action="/admin/analytics">
-    <div class="filters">
-      <div class="filter-group">
-        <label>Район</label>
-        <select name="district">
-          <option value="" {% if not filters.district %}selected{% endif %}>Все</option>
-          <option value="Есильский" {% if filters.district == 'Есильский' %}selected{% endif %}>Есиль</option>
-          <option value="Алматы" {% if filters.district == 'Алматы' %}selected{% endif %}>Алматы р-н</option>
-          <option value="Сарыарка" {% if filters.district == 'Сарыарка' %}selected{% endif %}>Сарыарка</option>
-          <option value="Сарайшык" {% if filters.district == 'Сарайшык' %}selected{% endif %}>Сарайшык</option>
-          <option value="Нура" {% if filters.district == 'Нура' %}selected{% endif %}>Нура</option>
-          <option value="Байконур" {% if filters.district == 'Байконур' %}selected{% endif %}>Байконур</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label>Комнаты</label>
-        <select name="rooms">
-          <option value="" {% if not filters.rooms %}selected{% endif %}>Все</option>
-          <option value="1" {% if filters.rooms == '1' %}selected{% endif %}>1к</option>
-          <option value="2" {% if filters.rooms == '2' %}selected{% endif %}>2к</option>
-          <option value="3" {% if filters.rooms == '3' %}selected{% endif %}>3к</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label>Продавец</label>
-        <select name="seller">
-          <option value="" {% if not filters.seller %}selected{% endif %}>Все</option>
-          <option value="owner" {% if filters.seller == 'owner' %}selected{% endif %}>От хозяина</option>
-          <option value="agent" {% if filters.seller == 'agent' %}selected{% endif %}>От агента</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label title="Скрывает объекты со скором ниже порога. 0 = показывать все. Гистограмма ниже его игнорирует — клик по столбику ставит порог.">Мин. скор ⓘ</label>
-        <input type="number" name="min_score" value="{{ filters.min_score }}" min="0" max="100" style="width:80px"
-               title="Скрывает объекты со скором ниже порога. 0 = показывать все.">
-      </div>
-      <div class="filter-group">
-        <label>Сортировка</label>
-        <select name="sort">
-          <option value="score_total" {% if filters.sort == 'score_total' %}selected{% endif %}>По скору</option>
-          <option value="yield_pct" {% if filters.sort == 'yield_pct' %}selected{% endif %}>По yield</option>
-          <option value="bargain_discount_pct" {% if filters.sort == 'bargain_discount_pct' %}selected{% endif %}>По торгу</option>
-          <option value="price" {% if filters.sort == 'price' %}selected{% endif %}>По цене</option>
-        </select>
-      </div>
-      <div class="filter-group">
-        <label>Показать лучших</label>
-        <select name="limit">
-          <option value="10" {% if filters.limit == 10 %}selected{% endif %}>топ-10</option>
-          <option value="20" {% if filters.limit == 20 %}selected{% endif %}>топ-20</option>
-          <option value="30" {% if filters.limit == 30 %}selected{% endif %}>топ-30</option>
-        </select>
-      </div>
-      <button type="submit" class="btn">Применить</button>
-    </div>
-  </form>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Скор</th>
-        <th>Breakdown</th>
-        <th>Объект</th>
-        <th>Цена</th>
-        <th>Аренда</th>
-        <th>Yield</th>
-        <th>Торг</th>
-        <th>Продавец</th>
-        <th>Ссылка</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for l in listings %}
-    {% set sc = l.score_total or 0 %}
-    {% set score_class = 'score-high' if sc >= 75 else ('score-mid' if sc >= 60 else 'score-low') %}
-    {% set yld = l.yield_pct or 0 %}
-    {% set yield_class = 'yield-high' if yld >= 13 else ('yield-mid' if yld >= 8 else 'yield-low') %}
-    <tr>
-      <td><span class="score-badge {{ score_class }}">{{ sc }}</span></td>
-      <td>
-        {% set sy = l.score_yield or 0 %}
-        {% set spm = l.score_price_market or 0 %}
-        {% set sl = l.score_location or 0 %}
-        {% set sa = l.score_apt_type or 0 %}
-        {% set sf = l.score_floor or 0 %}
-        {% set scx = l.score_complex or 0 %}
-        {% set ss = l.score_supply or 0 %}
-        {% set tot = sy + spm + sl + sa + sf + scx + ss %}
-        {% if tot > 0 %}
-        <div class="bar-wrap" title="Y:{{sy}} PM:{{spm}} L:{{sl}} AT:{{sa}} F:{{sf}} C:{{scx}} S:{{ss}}">
-          <div class="bar-seg s-yield" style="flex:{{sy}}">{% if sy >= 4 %}{{sy}}{% endif %}</div>
-          <div class="bar-seg s-pm"    style="flex:{{spm}}">{% if spm >= 4 %}{{spm}}{% endif %}</div>
-          <div class="bar-seg s-loc"   style="flex:{{sl}}">{% if sl >= 4 %}{{sl}}{% endif %}</div>
-          <div class="bar-seg s-apt"   style="flex:{{sa}}">{% if sa >= 4 %}{{sa}}{% endif %}</div>
-          <div class="bar-seg s-floor" style="flex:{{sf}}">{% if sf >= 4 %}{{sf}}{% endif %}</div>
-          <div class="bar-seg s-cplx"  style="flex:{{scx}}">{% if scx >= 4 %}{{scx}}{% endif %}</div>
-          <div class="bar-seg s-sup"   style="flex:{{ss}}">{% if ss >= 4 %}{{ss}}{% endif %}</div>
-        </div>
-        {% endif %}
-      </td>
-      <td>
-        <a href="/admin/analytics/{{ l.id }}" class="link-btn">
-          {{ l.rooms }}к {{ l.area | round(0) | int }}м²
-          {% if l.floor and l.floors_total %}· {{ l.floor }}/{{ l.floors_total }}эт{% endif %}
-        </a><br>
-        <span style="color:#666;font-size:11px;">{{ l.district }}</span>
-        {% if l.complex_name %}<br><a href="/admin/complex/find?name={{ l.complex_name | urlencode }}" style="font-size:11px;font-weight:500;">🏢 {{ l.complex_name }}</a>{% endif %}
-      </td>
-      <td style="font-weight:600;">{{ "{:,.0f}".format(l.price / 1000000) }}М₸</td>
-      <td>
-        {% if l.est_rent %}
-          {{ "{:,.0f}".format(l.est_rent / 1000) }}к/мес
-          {% if l.rent_source %}<br><span style="color:#888;font-size:10px;">{{ l.rent_source }}</span>{% endif %}
-        {% else %}-{% endif %}
-      </td>
-      <td><span class="yield-tag {{ yield_class }}">{{ yld | round(1) }}%</span>
-        {% if l.payback_years %}<br><span style="color:#888;font-size:10px;">{{ l.payback_years | round(1) }} лет</span>{% endif %}
-      </td>
-      <td>
-        {% if l.bargain_discount_pct %}
-          <span class="bargain-tag">-{{ l.bargain_discount_pct }}%</span><br>
-          <span style="font-size:10px;color:#555;">{{ l.bargain_rec | truncate(40) if l.bargain_rec }}</span>
-        {% else %}-{% endif %}
-      </td>
-      <td>
-        {% if l.is_owner %}
-          <span class="owner-tag">хозяин</span>
-        {% elif l.is_owner == false %}
-          <span class="agent-tag">риелтор</span>
-        {% else %}
-          <span style="color:#aaa;font-size:11px;">?</span>
-        {% endif %}
-      </td>
-      <td><a href="{{ l.url }}" target="_blank" style="color:#d4af37;font-weight:800;font-size:11px;">krisha↗</a></td>
-    </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-</div><!-- /правая колонка -->
-</div><!-- /.an-grid -->
 </div>
 {% endblock %}

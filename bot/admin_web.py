@@ -344,6 +344,21 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 rental_summary[k] = {"price": r["median_price"], "n": 0}
             rental_summary[k]["n"] += r["sample_count"] or 0
 
+        # Общее покрытие данными — раньше жило тайлами на главной карте,
+        # перенесено сюда (главная карта — рабочий инструмент поиска, не
+        # витрина статистики).
+        from bot.db import settings as _app_settings2
+        await _app_settings2.load()
+        coverage_total = await pg_fetch(
+            "SELECT COUNT(*) AS c FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE")
+        coverage_complexes = await pg_fetch("SELECT COUNT(*) AS c FROM complexes")
+        coverage = {
+            "total": coverage_total[0]["c"] if coverage_total else 0,
+            "complexes": coverage_complexes[0]["c"] if coverage_complexes else 0,
+            "krisha_total": _app_settings2.get_int("KRISHA_TOTAL_FOUND", 0),
+        }
+
         return templates.TemplateResponse(
             "analytics.html",
             {
@@ -353,6 +368,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "score_hist": [dict(r) for r in hist_rows],
                 "price_hist": price_hist,
                 "rental_summary": rental_summary,
+                "coverage": coverage,
                 "filters": {
                     "district": district,
                     "rooms": rooms,

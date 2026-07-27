@@ -996,7 +996,7 @@ def make_extras_router(templates) -> APIRouter:
                          price_min: float = 0, price_max: float = 0,
                          area_min: float = 0, area_max: float = 0,
                          min_score: int = 0, seller: str = "", market: str = "",
-                         price_change: str = "", finish: str = "",
+                         price_change: str = "", finish: str = "", cheapest_only: bool = False,
                          offset: int = 0, limit: int = 15000):
         # публичный (карта на главной без логина); coverage — только админу
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
@@ -1129,8 +1129,12 @@ def make_extras_router(templates) -> APIRouter:
         # Пагинация: главная страница подгружает точки батчами (см. dashboard.html
         # applyFilters) — сперва первые ~300 для мгновенной отрисовки, остальное
         # довозится в фоне без блокировки первой отрисовки карты.
-        limit = max(1, min(limit, 15000))
-        offset = max(0, offset)
+        if cheapest_only:
+            limit, offset = 10, 0
+        else:
+            limit = max(1, min(limit, 15000))
+            offset = max(0, offset)
+        order_by = "a.price ASC" if cheapest_only else "eff_score DESC"
         limit_idx, offset_idx = i, i + 1
         params.append(limit); params.append(offset)
         rows = await pg_fetch(f"""
@@ -1162,8 +1166,9 @@ def make_extras_router(templates) -> APIRouter:
               AND a.is_active IS NOT FALSE
               AND COALESCE(a.is_duplicate, FALSE) = FALSE
               AND a.last_seen > now() - interval '14 days'
+              {"AND a.price > 0" if cheapest_only else ""}
               {' '.join(conds)}
-            ORDER BY eff_score DESC
+            ORDER BY {order_by}
             LIMIT ${limit_idx} OFFSET ${offset_idx}
         """, *params)
         # Настоящий топ-10 сайта — БЕЗ учёта текущих фильтров, отдельным
@@ -1227,7 +1232,8 @@ def make_extras_router(templates) -> APIRouter:
             "price_changed": r["price_changed_at"].strftime("%d.%m.%Y") if r["price_changed_at"] else None,
             "top": r["id"] in top10_ids,  # настоящий топ-10 сайта, не первые 10 текущей (отфильтрованной) выдачи
         } for idx, r in enumerate(rows)]
-        resp = {"points": pts, "count": len(pts), "offset": offset, "limit": limit, "has_more": len(pts) == limit}
+        resp = {"points": pts, "count": len(pts), "offset": offset, "limit": limit,
+                "has_more": (len(pts) == limit) and not cheapest_only}
         if is_authed(request) and offset == 0:
             dups_active = await pg_fetchval2(
                 "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE "

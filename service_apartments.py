@@ -686,11 +686,23 @@ async def run_cycle():
         except Exception as e:
             log.warning("Apartment deduplication failed: %s", e)
 
-        await sync_apartments_to_sheets_pg()
-        log.info("Google Sheets: Квартиры synced")
+        # Раньше синкали КАЖДЫЙ цикл парсера (~50-80 мин, т.е. десятки раз в
+        # сутки) — Sheets не нужен настолько часто, а лишняя нагрузка на API
+        # Google (и на сам цикл) того не стоит. Раз в сутки достаточно.
         from datetime import datetime, timezone
-        await app_settings.set("SHEETS_APARTMENTS_SYNCED_AT",
-                               datetime.now(timezone.utc).isoformat())
+        last_sync = app_settings.get("SHEETS_APARTMENTS_SYNCED_AT", "")
+        needs_sync = True
+        if last_sync:
+            try:
+                last_dt = datetime.fromisoformat(last_sync)
+                needs_sync = (datetime.now(timezone.utc) - last_dt).total_seconds() > 20 * 3600
+            except ValueError:
+                needs_sync = True
+        if needs_sync:
+            await sync_apartments_to_sheets_pg()
+            log.info("Google Sheets: Квартиры synced")
+            await app_settings.set("SHEETS_APARTMENTS_SYNCED_AT",
+                                   datetime.now(timezone.utc).isoformat())
     except Exception as e:
         log.warning("Sheets sync failed: %s", e)
 

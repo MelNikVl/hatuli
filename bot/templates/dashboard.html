@@ -53,32 +53,25 @@
     </div>
     <div id="load-progress-label" style="font-size:11px;color:#888;margin-top:3px;text-align:right;">0%</div>
   </div>
-  <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Тип</label>
-    <select id="f-type" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
-      <option value="sale">Продажа</option><option value="rental">Аренда</option><option value="complex">ЖК</option>
-    </select></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+    <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Тип</label>
+      <select id="f-type" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+        <option value="sale">Продажа</option><option value="rental">Аренда</option><option value="complex">ЖК</option>
+      </select></div>
+    <div id="f-rooms-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Комнат</label>
+      <select id="f-rooms" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+        <option value="">любые</option><option>1</option><option>2</option><option>3</option><option>4</option>
+      </select></div>
+    <div id="f-market-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Рынок</label>
+      <select id="f-market" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+        <option value="">весь</option><option value="secondary">вторичка</option><option value="primary">первичка (в стройке)</option>
+      </select></div>
+    <div id="f-seller-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Продавец</label>
+      <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+        <option value="">все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
+      </select></div>
+  </div>
   <div id="f-listing-filters">
-  <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Комнат</label>
-    <select id="f-rooms" style="padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
-      <option value="">любые</option><option>1</option><option>2</option><option>3</option><option>4</option>
-    </select></div>
-  <div id="f-market-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Рынок</label>
-    <select id="f-market" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
-      <option value="">весь</option><option value="secondary">вторичка</option><option value="primary">первичка (в стройке)</option>
-    </select></div>
-  <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Продавец</label>
-    <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
-      <option value="">все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
-    </select></div>
-  <div id="f-pricechange-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Изменение цены</label>
-    <select id="f-pricechange" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
-      <option value="">любое</option><option value="dropped_today">▼ снизили цену сегодня</option><option value="raised_today">▲ подняли цену сегодня</option>
-    </select></div>
-  <div id="f-finish-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Отделка</label>
-    <select id="f-finish" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
-      <option value="">любая</option><option value="черновая">бетон (черновая)</option><option value="с отделкой">с отделкой</option><option value="с мебелью">с мебелью</option>
-    </select>
-    <span style="font-size:10.5px;color:#aaa;">по тексту объявления — не у всех определена</span></div>
   <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;" id="f-price-label">Цена (млн ₸ или ₸)</label>
     <div style="display:flex;gap:6px;align-items:center;">
       <input id="f-pmin" type="number" min="0" step="1" placeholder="от" style="width:50%;padding:9px 12px;font-size:14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
@@ -105,25 +98,42 @@
     </div></div>
   <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Минимальный смарт рейтинг</label>
     <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
-  <div id="f-top-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;">
-    <input id="f-top-only" type="checkbox" onchange="applyFilters()"> ⭐ Только топ-10 по скору</label></div>
+  <div id="f-top-wrap" style="display:flex;flex-direction:column;gap:6px;">
+    <label style="font-size:13.5px;color:var(--text);font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;">
+      <input id="f-top-only" type="checkbox" onchange="if(this.checked)document.getElementById('f-cheapest-only').checked=false;applyFilters()"> ⭐ Только топ-10 по скору</label>
+    <label style="font-size:13.5px;color:var(--text);font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;">
+      <input id="f-cheapest-only" type="checkbox" onchange="if(this.checked)document.getElementById('f-top-only').checked=false;applyFilters()"> 💸 Топ-10 самых дешёвых</label>
   </div>
-  <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;margin-bottom:4px;">Тепловые карты</label>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;">
-      <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">💰 Цены продажи</button>
-      <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🏠 Цены аренды</button>
-      <button type="button" class="heat-btn" data-mode="schools" onclick="toggleHeat('schools')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🏫 Школы</button>
-      <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🚗 Шум (предв.)</button>
+  </div>
+  <div>
+    <div onclick="toggleAdvancedFilters()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;font-size:13.5px;color:var(--text);font-weight:700;padding:6px 0;border-top:1px solid var(--border);">
+      <span>Расширенные фильтры</span>
+      <span id="adv-caret" style="transition:transform .15s;">▸</span>
+    </div>
+    <div id="advanced-filters" style="display:none;flex-direction:column;gap:12px;padding-top:6px;">
+      <div id="f-pricechange-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Изменение цены</label>
+        <select id="f-pricechange" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+          <option value="">любое</option><option value="dropped_today">▼ снизили цену сегодня</option><option value="raised_today">▲ подняли цену сегодня</option>
+        </select></div>
+      <div id="f-finish-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Отделка</label>
+        <select id="f-finish" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
+          <option value="">любая</option><option value="черновая">бетон (черновая)</option><option value="с отделкой">с отделкой</option><option value="с мебелью">с мебелью</option>
+        </select>
+        <span style="font-size:10.5px;color:#aaa;">по тексту объявления — не у всех определена</span></div>
+      <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;margin-bottom:4px;">Тепловые карты</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">💰 Цены продажи</button>
+          <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🏠 Цены аренды</button>
+          <button type="button" class="heat-btn" data-mode="schools" onclick="toggleHeat('schools')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🏫 Школы</button>
+          <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🚗 Шум (предв.)</button>
+        </div>
+        <label style="font-size:11.5px;color:#aaa;display:block;margin-top:6px;">Сторона гекса тепловых карт (м) — только для этой страницы
+          <input id="f-heat-edge" type="number" min="30" max="1000" step="10" value="250" onchange="setHeatEdge(this.value)" style="width:70px;padding:4px 8px;margin-left:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);"></label>
+      </div>
     </div>
   </div>
   <button onclick="applyFilters()" style="padding:11px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;">Показать</button>
-  <a href="https://docs.google.com/spreadsheets/d/1KaHKjg70JEfX3kLc7A8ZtNPJwsp108iSA8kIqVfrtdI/edit" target="_blank" style="text-align:center;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;text-decoration:none;">📗 Google Sheets</a>
   <span id="result-count" style="font-size:13px;color:#888;"></span>
-  {% if admin %}
-  <button id="hex-toggle" onclick="toggleHexGrid()" style="padding:9px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">⬡ Гекс-сетка: выкл</button>
-  <hr style="width:100%;border:none;border-top:1px solid var(--border);margin:2px 0;">
-  <div id="admin-stats" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
-  {% endif %}
 </div>
 
 <!-- Карта: слева, занимает всё свободное место, но не более 85% ширины блока
@@ -507,6 +517,8 @@ function applyFilters() {
   const type = document.getElementById('f-type').value;
   reconfigurePriceSlider(type);
   document.getElementById('f-listing-filters').style.display = type === 'complex' ? 'none' : '';
+  document.getElementById('f-rooms-wrap').style.display = type === 'complex' ? 'none' : '';
+  document.getElementById('f-seller-wrap').style.display = type === 'complex' ? 'none' : '';
   if (type === 'complex') {
     map.removeLayer(pointsLayer); map.removeLayer(topLayer); map.removeLayer(saleCluster);
     pointsLayer.clearLayers(); topLayer.clearLayers(); saleCluster.clearLayers();
@@ -542,6 +554,8 @@ function applyFilters() {
   if (pricechange && type === 'sale') p.set('price_change', pricechange);
   const finish = document.getElementById('f-finish').value;
   if (finish && type === 'sale') p.set('finish', finish);
+  const cheapestOnly = document.getElementById('f-cheapest-only').checked;
+  if (cheapestOnly && type === 'sale') p.set('cheapest_only', '1');
 
   document.getElementById('f-market-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
@@ -1000,8 +1014,8 @@ function drawHexGrid() {
   hexLayer.addTo(map);
 }
 // ── Тепловые карты (hexbin): цены продажи/аренды, школы, шум по полосам ───
-const HEAT_EDGE_M = 250;  // крупнее, чем гекс-сетка скоринга — это обзорный слой города
-const NOISE_EDGE_M = 30;  // шум — более мелкая сетка, ближе к масштабу отдельного дома/квартала
+let HEAT_EDGE_M = 250;  // крупнее, чем гекс-сетка скоринга — это обзорный слой города
+const NOISE_EDGE_M = 30;  // шум — более мелкая сетка, ближе к масштабу отдельного дома/квартала (фиксирована — детальный слой у самих дорог)
 const heatLayer = L.layerGroup();
 let heatMode = null;
 let heatCache = {sale: null, rental: null, schools: null, noise: null};
@@ -1120,7 +1134,27 @@ function hexNeighborsAxial(q, r) {
 // полигонов). Здесь на каждый гекс — обратно-взвешенная по расстоянию
 // оценка от ближайших дорог в радиусе 3 колец (~600м), а если рядом совсем
 // нет дорог — низкий фоновый уровень (не пусто, а честно "тихо").
-const NOISE_BG_EDGE_M = 200;
+let NOISE_BG_EDGE_M = 200;
+// Настройка "сторона гекса тепловых карт" в фильтрах — общий множитель для
+// обзорного слоя цен/школ/фона шума (детальный слой шума у дорог, 30м,
+// осознанно фиксирован — это разрешение самих данных о дорогах).
+function setHeatEdge(v) {
+  const edge = parseFloat(v) || 250;
+  HEAT_EDGE_M = edge;
+  NOISE_BG_EDGE_M = Math.max(60, Math.round(edge * 0.8));
+  if (heatMode) { heatLayer.clearLayers(); loadHeatData(heatMode).then(data => {
+    if (heatMode === 'sale' || heatMode === 'rental') drawPriceHeat(data, heatMode === 'sale' ? heatCache.saleArchived : null);
+    else if (heatMode === 'schools') drawCountHeat(data, p => [p.lat, p.lon], 'школ/садиков');
+    else if (heatMode === 'noise') { drawRoadHeatBackground(data); drawRoadHeat(data); }
+  }); }
+}
+function toggleAdvancedFilters() {
+  const el = document.getElementById('advanced-filters');
+  const caret = document.getElementById('adv-caret');
+  const open = el.style.display === 'flex';
+  el.style.display = open ? 'none' : 'flex';
+  caret.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
+}
 const NOISE_BG_FLOOR = 4;   // минимальный фон вдали от дорог
 const NOISE_BG_RINGS = 3;   // радиус поиска ближайших дорог, в кольцах гекса
 
