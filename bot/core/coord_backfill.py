@@ -51,7 +51,8 @@ async def backfill_coords_and_complex(limit: int, min_age_days: float = 3.0) -> 
         WHERE (lat IS NULL OR complex_name IS NULL OR btrim(complex_name) = ''
                OR (COALESCE(is_owner, FALSE) = FALSE AND (seller_name IS NULL OR btrim(seller_name) = ''))
                OR photos IS NULL OR photos::text IN ('[]', 'null')
-               OR description IS NULL OR btrim(description) = '')
+               OR description IS NULL OR btrim(description) = ''
+               OR floor IS NULL)
           AND is_active IS NOT FALSE AND url IS NOT NULL
           AND (coord_fetch_attempted_at IS NULL
                OR coord_fetch_attempted_at < now() - ($2 || ' days')::interval)
@@ -140,6 +141,39 @@ async def backfill_coords_and_complex(limit: int, min_age_days: float = 3.0) -> 
             await pg_exec(
                 "UPDATE apartment_listings SET description=$2 WHERE id=$1",
                 m["id"], details["description"])
+        if details.get("ceiling_height"):
+            await pg_exec(
+                "UPDATE apartment_listings SET ceiling_height=$2 WHERE id=$1",
+                m["id"], details["ceiling_height"])
+        if details.get("floor") is not None:
+            # БАГ (найден): fetch_apartment_details() всегда возвращал floor/
+            # floors_total за тот же запрос, что и координаты — но эта функция
+            # ни разу его не сохраняла. Раз именно coord_backfill — основной
+            # путь, которым бэклог (объявления вне первых страниц выдачи)
+            # вообще получает детальную страницу, отсутствие этой строки было
+            # главной причиной, почему этаж был известен лишь у ~7% активных
+            # объявлений, хотя у большинства из них уже ЕСТЬ координаты —
+            # то есть страница уже успешно скачивалась и парсилась.
+            await pg_exec(
+                "UPDATE apartment_listings SET floor=$2, floors_total=$3 WHERE id=$1",
+                m["id"], details["floor"], details.get("floors_total"))
+        if details.get("year_built"):
+            await pg_exec(
+                "UPDATE apartment_listings SET year_built=$2 WHERE id=$1",
+                m["id"], details["year_built"])
+        if details.get("building_type"):
+            await pg_exec(
+                "UPDATE apartment_listings SET building_type=$2 WHERE id=$1",
+                m["id"], details["building_type"])
+        if "is_owner" in details:
+            # Раньше detail-fetch мог определить реального хозяина/риелтора,
+            # но это НИКОГДА не сохранялось здесь — is_owner так и оставался
+            # NULL (грубая догадка с карточки списка) навсегда, даже когда
+            # детальная страница явно писала "Автор объявления: Хозяин
+            # недвижимости" (см. krisha.kz/a/show/1003475967).
+            await pg_exec(
+                "UPDATE apartment_listings SET is_owner=$2, seller_type=$3 WHERE id=$1",
+                m["id"], details["is_owner"], details.get("seller_type"))
 
     if missing:
         logger.info("coord_backfill: готово — координаты %d/%d, ЖК %d",
