@@ -64,7 +64,7 @@
       </select></div>
     <div id="f-market-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Готовность жилья</label>
       <select id="f-market" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
-        <option value="">весь</option><option value="secondary">вторичка</option><option value="primary">первичка (в стройке)</option>
+        <option value="">любая</option><option value="secondary">вторичка</option><option value="primary">первичка (в стройке)</option>
       </select></div>
     <div id="f-seller-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Продавец</label>
       <select id="f-seller" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
@@ -127,7 +127,6 @@
         <div style="display:flex;flex-wrap:wrap;gap:6px;">
           <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">💰 Цены продажи</button>
           <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🏠 Цены аренды</button>
-          <button type="button" class="heat-btn" data-mode="schools" onclick="toggleHeat('schools')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🏫 Школы</button>
           <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🚗 Шум (предв.)</button>
         </div>
         <label style="font-size:11.5px;color:#aaa;display:block;margin-top:6px;">Сторона гекса тепловых карт (м): <span id="f-heat-edge-val">250</span></label>
@@ -158,6 +157,19 @@ const POPUP_WIDTH = {{ popup_width | default(380) }};
 // маленького (<=3) кластера открывал попап именно этого объявления
 // напрямую, без spiderfy (см. openMiniClusterPin).
 const MINI_PIN_MARKERS = {};
+// MarkerClusterGroup пересчитывает кластеры на каждый addLayer — если в
+// это время у пользователя открыт попап на объекте из того же кластера,
+// Leaflet может убрать его маркер с карты (спрятать в кружок кластера) и
+// молча закрыть попап под ним ("превью появляется и пропадает"). Пока
+// попап открыт — новые маркеры для saleCluster копим в очереди и реально
+// добавляем на карту только после того, как попап закроют.
+let anyPopupOpen = false;
+let pendingClusterAdds = [];
+function flushPendingClusterAdds() {
+  if (!pendingClusterAdds.length) return;
+  saleCluster.addLayers(pendingClusterAdds);
+  pendingClusterAdds = [];
+}
 function openMiniClusterPin(id) {
   const m = MINI_PIN_MARKERS[id];
   if (!m) return;
@@ -198,11 +210,16 @@ const MapButtons = L.Control.extend({
   options: {position: 'topright'},
   onAdd: function() {
     const box = L.DomUtil.create('div', '');
-    box.style.cssText = 'display:flex;gap:8px;';
+    box.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
     box.innerHTML = `
-      <button id="btn-schools" type="button" style="padding:8px 14px;border:2px solid #2563eb;border-radius:20px;background:#fff;color:#2563eb;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">🏫 Школы</button>
-      <button id="btn-draw" type="button" style="padding:8px 14px;border:2px solid #2563eb;border-radius:20px;background:#fff;color:#2563eb;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✏️ Нарисовать область</button>
-      <button id="btn-draw-clear" type="button" style="display:none;padding:8px 14px;border:none;border-radius:20px;background:#ef4444;color:#fff;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕ Убрать область</button>
+      <div style="display:flex;gap:8px;">
+        <button id="btn-schools" type="button" style="padding:8px 14px;border:2px solid #2563eb;border-radius:20px;background:#fff;color:#2563eb;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">🏫 Школы</button>
+        <button id="btn-draw" type="button" style="padding:8px 14px;border:2px solid #2563eb;border-radius:20px;background:#fff;color:#2563eb;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✏️ Нарисовать область</button>
+        <button id="btn-draw-clear" type="button" style="display:none;padding:8px 14px;border:none;border-radius:20px;background:#ef4444;color:#fff;font-weight:700;font-size:13px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕ Убрать область</button>
+      </div>
+      <div id="map-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:rgba(255,255,255,.6);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.25);">
+        <div id="map-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
+      </div>
     `;
     L.DomEvent.disableClickPropagation(box);
     return box;
@@ -253,6 +270,19 @@ document.getElementById('btn-draw-clear').addEventListener('click', function() {
 // Продажа: кастомные HTML-плашки с ценой — без кластеризации сотни таких
 // пинов тормозят рендер/пан карты. Отдельный слой, т.к. L.markerClusterGroup
 // умеет клизировать только L.Marker, а не L.circleMarker (аренда выше).
+// Отдалённый вид (zoom < ZOOM_GATE): вместо пустой карты — просто кружки
+// с числом объявлений в каждом кластере, без полных карточек (см. #27).
+const liteCluster = L.markerClusterGroup({maxClusterRadius: 70, showCoverageOnHover: false});
+function loadLiteCluster(paramsObj) {
+  liteCluster.clearLayers();
+  const lp = new URLSearchParams(paramsObj);
+  fetch('/admin/api/map-points-lite?' + lp.toString()).then(r => r.json()).then(d => {
+    (d.points || []).forEach(([lat, lon]) => {
+      L.marker([lat, lon], {icon: L.divIcon({className:'', iconSize:[1,1]})}).addTo(liteCluster);
+    });
+    if (!map.hasLayer(liteCluster)) liteCluster.addTo(map);
+  }).catch(() => {});
+}
 const saleCluster = L.markerClusterGroup({
   maxClusterRadius: 45,
   spiderfyOnEveryZoom: true,  // без этого на макс. зуме близкие пины оставались нераздельными и накладывались друг на друга — по такому нельзя было кликнуть
@@ -418,10 +448,33 @@ function scoreExplainText(bd) {
 function scoreInfoIcon(uid) {
   return `<span onclick="toggleScoreExplain('${uid}', event)" style="display:inline-block;width:16px;height:16px;line-height:16px;text-align:center;border-radius:50%;background:#e5e7eb;color:#555;font-size:11px;font-weight:800;cursor:pointer;vertical-align:middle;">?</span>`;
 }
+// Подсказки "?" — маленькое плавающее окошко рядом со значком, а не блок,
+// который распирает попап по всей ширине/высоте (из-за роста попапа
+// съезжало центрирование и казалось, что подсказка "накрывает" превью).
+function positionFloatingTip(box, ev) {
+  const icon = ev ? ev.currentTarget || ev.target : null;
+  if (!icon) return;
+  const r = icon.getBoundingClientRect();
+  box.style.position = 'fixed';
+  box.style.zIndex = 10000;
+  box.style.maxWidth = '240px';
+  box.style.boxShadow = '0 4px 16px rgba(0,0,0,.25)';
+  let left = r.right + 6;
+  const maxLeft = window.innerWidth - 250;
+  if (left > maxLeft) left = r.left - 246;
+  left = Math.min(Math.max(6, left), Math.max(6, window.innerWidth - 250));
+  let top = r.top;
+  top = Math.min(Math.max(6, top), Math.max(6, window.innerHeight - 120));
+  box.style.left = left + 'px';
+  box.style.top = top + 'px';
+}
 function toggleScoreExplain(uid, ev) {
   if (ev) ev.stopPropagation();
   const box = document.getElementById('scx-' + uid);
-  if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  if (!box) return;
+  const opening = box.style.display === 'none';
+  if (opening) positionFloatingTip(box, ev);
+  box.style.display = opening ? 'block' : 'none';
 }
 
 // Фотокарусель в попапах
@@ -504,14 +557,34 @@ function percentile(arr, p) {
 // целиком быть в кадре. Вместо geo-точки маркера центрируем на "виртуальной"
 // точке, сдвинутой вниз на половину высоты попапа — тогда в центре экрана
 // оказывается центр самой карточки, а не голая точка маркера.
+// Попап наполняется асинхронно (фото, адрес/этаж, история цены, Deal Score
+// подгружаются отдельными fetch-ами после открытия) — высота растёт уже
+// ПОСЛЕ первого центрирования, из-за чего маркер уезжал под выросший попап
+// или совсем пропадал из вида. ResizeObserver перецентровывает при каждом
+// изменении высоты, пока попап открыт, а не только один раз на открытие.
 function centerOnPopup(popup, lat, lon) {
-  requestAnimationFrame(() => {
+  const doCenter = () => {
     const el = popup.getElement ? popup.getElement() : null;
     const h = el ? el.offsetHeight : 0;
     if (!h) { map.panTo([lat, lon], {animate: true}); return; }
     const pt = map.project([lat, lon], map.getZoom()).subtract([0, h / 2]);
     map.panTo(map.unproject(pt, map.getZoom()), {animate: true});
-  });
+  };
+  requestAnimationFrame(doCenter);
+  const el = popup.getElement ? popup.getElement() : null;
+  if (el && window.ResizeObserver) {
+    if (popup._centerObserver) popup._centerObserver.disconnect();
+    let first = true;
+    const ro = new ResizeObserver(() => {
+      if (first) { first = false; return; }  // первый вызов ResizeObserver — сразу после attach, дублирует rAF выше
+      doCenter();
+    });
+    ro.observe(el);
+    popup._centerObserver = ro;
+  }
+}
+function stopCenterObserver(popup) {
+  if (popup && popup._centerObserver) { popup._centerObserver.disconnect(); popup._centerObserver = null; }
 }
 
 // Двойной range-слайдер <-> текстовые поля от/до — держим оба способа
@@ -622,6 +695,7 @@ function applyFilters() {
         }
         m.bindPopup(`<div style="min-width:250px;"><b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн${priceTrend}<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}</div>`, {autoPan: false});
         m.on('popupopen', (e) => centerOnPopup(e.popup, pt.lat, pt.lon));
+        m.on('popupclose', (e) => stopCenterObserver(e.popup));
       });
       document.getElementById('result-count').textContent = lastPoints.length + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без привязки)` : '') + (drawnPolygon ? ' · в области' : '');
       if (hexOn) drawHexGrid();
@@ -637,6 +711,8 @@ function applyFilters() {
   if (!map.hasLayer(topLayer)) topLayer.addTo(map);
   saleCluster.clearLayers();
   topLayer.clearLayers();
+  map.removeLayer(liteCluster);
+  liteCluster.clearLayers();
   lastPoints = [];
   topOnlyFilter = document.getElementById('f-top-only').checked;
   const BATCH = 300;
@@ -645,9 +721,12 @@ function applyFilters() {
   const progWrap = document.getElementById('load-progress-wrap');
   const progBar = document.getElementById('load-progress-bar');
   const progLabel = document.getElementById('load-progress-label');
+  const mapBarWrap = document.getElementById('map-load-bar-wrap');
+  const mapBar = document.getElementById('map-load-bar');
   progWrap.style.display = '';
   progBar.style.width = '0%';
   progLabel.textContent = 'загрузка…';
+  if (mapBarWrap) { mapBarWrap.style.display = 'block'; mapBar.style.width = '0%'; }
   function loadSaleBatch(offset) {
     if (filterSeq !== applyFiltersSeq) return;  // фильтры сменились — бросаем старую цепочку батчей
     const bp = new URLSearchParams(p);
@@ -663,6 +742,7 @@ function applyFilters() {
       const pct = d.has_more ? Math.min(99, loadTarget ? Math.round(100 * lastPoints.length / loadTarget) : 0) : 100;
       progBar.style.width = pct + '%';
       progLabel.textContent = lastPoints.length.toLocaleString('ru') + (loadTarget ? ' / ' + loadTarget.toLocaleString('ru') : '') + ` (${pct}%)`;
+      if (mapBar) mapBar.style.width = pct + '%';
       // Топ-10 всегда попадают в первый батч (ORDER BY eff_score DESC) —
       // при включённом фильтре остальные тысячи объектов грузить незачем.
       if (d.has_more && !topOnlyFilter) {
@@ -679,7 +759,7 @@ function applyFilters() {
         }
       } else {
         pendingBatchResume = null;
-        setTimeout(() => { if (filterSeq === applyFiltersSeq) progWrap.style.display = 'none'; }, 600);
+        setTimeout(() => { if (filterSeq === applyFiltersSeq) { progWrap.style.display = 'none'; if (mapBarWrap) mapBarWrap.style.display = 'none'; } }, 600);
       }
     });
   }
@@ -688,15 +768,20 @@ function applyFilters() {
   // сперва только показываем количество и ждём, пока пользователь реально
   // приблизится (см. ZOOM_GATE), прежде чем качать реальные данные.
   if (map.getZoom() < ZOOM_GATE) {
+    loadLiteCluster(p);
     const cp = new URLSearchParams(p);
     cp.set('offset', 0); cp.set('limit', 1);
     fetch('/admin/api/map-points?' + cp.toString()).then(r => r.json()).then(d => {
       if (filterSeq !== applyFiltersSeq) return;
       const total = d.coverage ? d.coverage.total : null;
       progWrap.style.display = 'none';
+      if (mapBarWrap) mapBarWrap.style.display = 'none';
       document.getElementById('result-count').textContent =
-        (total != null ? total.toLocaleString('ru') : '?') + ' объявлений — приблизьте карту, чтобы увидеть их на карте';
-      pendingBatchResume = () => loadSaleBatch(0);
+        (total != null ? total.toLocaleString('ru') : '?') + ' объявлений — приблизьте карту для деталей';
+      pendingBatchResume = () => {
+        map.removeLayer(liteCluster);
+        loadSaleBatch(0);
+      };
     });
   } else {
     loadSaleBatch(0);
@@ -721,7 +806,10 @@ function renderSaleBatch(d) {
         icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
         zIndexOffset: isTop ? 1000 : 0,
         pinMeta: {pt, pinBg, isTop},
-      }).addTo(isTop ? topLayer : saleCluster);
+      });
+      if (isTop) { m.addTo(topLayer); }
+      else if (anyPopupOpen) { pendingClusterAdds.push(m); }
+      else { m.addTo(saleCluster); }
       MINI_PIN_MARKERS[pt.id] = m;
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
       const areaTxt = pt.area ? Math.round(pt.area) : '?';
@@ -734,9 +822,11 @@ function renderSaleBatch(d) {
       }
       const sc = scoreColor(pt.score, p10, p90);
       if (pt.photos && pt.photos.length) { ptPhotos[pt.id] = pt.photos; carIdx[pt.id] = 0; }
+      const favStarHtml = `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" data-active="0" style="position:absolute;top:8px;right:8px;font-size:24px;line-height:1;cursor:pointer;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 3px rgba(0,0,0,.6);z-index:2;">☆</span>`;
       const carHtml = pt.photos && pt.photos.length ? `
 <div style="position:relative;margin:-13px -19px 8px -19px;width:calc(100% + 38px);border-radius:11px 11px 0 0;overflow:hidden;cursor:pointer;" onclick="openLightbox('${pt.id}', event)">
   <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;display:block;border:none;" onerror="this.parentNode.style.display='none'">
+  ${favStarHtml}
   ${pt.photos.length > 1 ? `
   <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">‹</button>
   <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">›</button>
@@ -795,7 +885,7 @@ function renderSaleBatch(d) {
   ${cxLine}
   ${descHtml}
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
-    <span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" style="flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:34px;background:#f3f4f6;color:#ccc;font-size:18px;line-height:1;border-radius:7px;cursor:pointer;">☆</span>
+    ${!(pt.photos && pt.photos.length) ? `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" style="flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:34px;background:#f3f4f6;color:#ccc;font-size:18px;line-height:1;border-radius:7px;cursor:pointer;">☆</span>` : ''}
     <a href="javascript:void(0)" onclick="openDetailModal('${pt.id}', event)" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Подробнее</a>
     <a href="/admin/analytics/${pt.id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Аналитика</a>
     <a href="${pt.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Крыша</a>
@@ -803,10 +893,16 @@ function renderSaleBatch(d) {
   </div>
 </div>`, {maxWidth: POPUP_WIDTH, minWidth: Math.min(POPUP_WIDTH, 260), autoPan: false});
       m.on('popupopen', (e) => {
+        anyPopupOpen = true;
         centerOnPopup(e.popup, pt.lat, pt.lon);
         loadPriceHistory(pt.id);
         loadListingExtras(pt.id);
         checkFavoriteState(pt.id);
+      });
+      m.on('popupclose', (e) => {
+        stopCenterObserver(e.popup);
+        anyPopupOpen = false;
+        flushPendingClusterAdds();
       });
     });
     document.getElementById('result-count').textContent = lastPoints.length + ' объектов' + (d.has_more ? '…' : '') + (drawnPolygon ? ' · в области' : '');
@@ -897,7 +993,10 @@ function toggleDesc(id, btn) {
 function toggleBargainExplain(uid, ev) {
   if (ev) ev.stopPropagation();
   const box = document.getElementById('bgx-' + uid);
-  if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  if (!box) return;
+  const opening = box.style.display === 'none';
+  if (opening) positionFloatingTip(box, ev);
+  box.style.display = opening ? 'block' : 'none';
 }
 // Один запрос к /admin/api/listing/{id} (та же ручка, что и у модалки
 // "Подробнее") наполняет 3 блока попапа: основная информация (адрес/этаж),
@@ -913,7 +1012,7 @@ async function checkFavoriteState(id) {
 }
 function setFavStar(el, active) {
   el.textContent = active ? '★' : '☆';
-  el.style.color = active ? '#f59e0b' : '#ccc';
+  el.style.color = active ? '#f59e0b' : (el.style.position === 'absolute' ? '#fff' : '#ccc');
   el.dataset.active = active ? '1' : '0';
 }
 async function toggleFavorite(id, ev) {
@@ -935,13 +1034,10 @@ function loadListingExtras(id) {
   if (!el || el.dataset.loaded) return;
   el.dataset.loaded = '1';
   fetch('/admin/api/listing/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
-    // Основная информация: адрес + этаж
+    // Этаж — без адреса (адрес теперь только в большом попапе и на странице объявления)
     const infoEl = document.getElementById('info-' + id);
     if (infoEl) {
-      const parts = [];
-      if (d.address) parts.push(d.address);
-      if (d.floor) parts.push(`${d.floor}/${d.floors_total || '?'} эт.`);
-      infoEl.textContent = parts.join(' · ');
+      infoEl.textContent = d.floor ? `${d.floor}/${d.floors_total || '?'} эт.` : '';
     }
 
     // Реальная цена (торг)
@@ -1075,10 +1171,10 @@ function drawHexGrid() {
 }
 // ── Тепловые карты (hexbin): цены продажи/аренды, школы, шум по полосам ───
 let HEAT_EDGE_M = 250;  // крупнее, чем гекс-сетка скоринга — это обзорный слой города
-const NOISE_EDGE_M = 30;  // шум — более мелкая сетка, ближе к масштабу отдельного дома/квартала (фиксирована — детальный слой у самих дорог)
+let NOISE_EDGE_M = 250;  // раньше был фиксирован отдельно (30м) — теперь все гексы тепловых карт (цены/аренда/шум, фон и детальный слой) одного размера, из общего ползунка "сторона гекса"
 const heatLayer = L.layerGroup();
 let heatMode = null;
-let heatCache = {sale: null, rental: null, schools: null, noise: null};
+let heatCache = {sale: null, rental: null, noise: null};
 // Детальный слой шума (30м, по фактическим точкам дорог) при ~39к точек по
 // городу даёт под 100к+ отдельных гексов, если рисовать их все разом — это
 // и было главной причиной "тормозит при включении шума". Показываем его
@@ -1252,17 +1348,17 @@ function hexNeighborsAxial(q, r) {
 // полигонов). Здесь на каждый гекс — обратно-взвешенная по расстоянию
 // оценка от ближайших дорог в радиусе 3 колец (~600м), а если рядом совсем
 // нет дорог — низкий фоновый уровень (не пусто, а честно "тихо").
-let NOISE_BG_EDGE_M = 200;
+let NOISE_BG_EDGE_M = 250;
 // Настройка "сторона гекса тепловых карт" в фильтрах — общий множитель для
 // обзорного слоя цен/школ/фона шума (детальный слой шума у дорог, 30м,
 // осознанно фиксирован — это разрешение самих данных о дорогах).
 function setHeatEdge(v) {
   const edge = parseFloat(v) || 250;
   HEAT_EDGE_M = edge;
-  NOISE_BG_EDGE_M = Math.max(60, Math.round(edge * 0.8));
+  NOISE_BG_EDGE_M = edge;
+  NOISE_EDGE_M = edge;
   if (heatMode) { heatLayer.clearLayers(); loadHeatData(heatMode).then(data => {
     if (heatMode === 'sale' || heatMode === 'rental') drawPriceHeat(data, heatMode === 'sale' ? heatCache.saleArchived : null);
-    else if (heatMode === 'schools') drawCountHeat(data, p => [p.lat, p.lon], 'школ/садиков');
     else if (heatMode === 'noise') { drawRoadHeatBackground(data); drawRoadHeat(data); }
   }); }
 }
@@ -1432,9 +1528,6 @@ async function loadHeatData(mode) {
   } else if (mode === 'rental') {
     const d = await (await fetch('/admin/api/map-points?type=rental')).json();
     heatCache.rental = d.points || [];
-  } else if (mode === 'schools') {
-    const d = await (await fetch('/admin/api/city-poi')).json();
-    heatCache.schools = (d.poi || []).filter(p => p.kind === 'school' || p.kind === 'kindergarten');
   } else if (mode === 'noise') {
     const d = await (await fetch('/admin/api/city-roads')).json();
     // /admin/api/city-roads теперь отдаёт компактные массивы [lat,lon,lanes,highway]
@@ -1469,7 +1562,6 @@ async function toggleHeat(mode) {
   const data = await loadHeatData(mode);
   if (heatMode !== mode) return;  // успели переключиться, пока грузилось
   if (mode === 'sale' || mode === 'rental') drawPriceHeat(data, mode === 'sale' ? heatCache.saleArchived : null);
-  else if (mode === 'schools') drawCountHeat(data, p => [p.lat, p.lon], 'школ/садиков');
   else if (mode === 'noise') {
     drawRoadHeatBackground(data);
     if (!map.hasLayer(fineNoiseLayer)) fineNoiseLayer.addTo(map);
@@ -1522,6 +1614,15 @@ function modalPhotoNav(dir, ev) {
   const n = document.getElementById('modal-photo-n');
   if (n) n.textContent = (modalPhotoIdx + 1) + '/' + modalPhotos.length;
 }
+function modalGoTo(idx, ev) {
+  if (ev) ev.stopPropagation();
+  if (!modalPhotos.length) return;
+  modalPhotoIdx = ((idx % modalPhotos.length) + modalPhotos.length) % modalPhotos.length;
+  const img = document.getElementById('modal-photo-img');
+  if (img) img.src = proxyImg(modalPhotos[modalPhotoIdx]);
+  const n = document.getElementById('modal-photo-n');
+  if (n) n.textContent = (modalPhotoIdx + 1) + '/' + modalPhotos.length;
+}
 
 function openDetailModal(id, ev) {
   if (ev) ev.stopPropagation();
@@ -1536,13 +1637,30 @@ function openDetailModal(id, ev) {
     if (d.error) { content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:#888;">Не найдено</div>'; return; }
     modalPhotos = d.photos || [];
     const priceM = d.price ? (d.price/1e6).toFixed(1) : '—';
+    // Галерея в стиле Zillow: большое фото слева + сетка 2x2 миниатюр справа
+    // (последняя ячейка — "+N фото", если снимков больше, чем помещается).
+    const thumbs = modalPhotos.slice(1, 5);
+    const extraCount = modalPhotos.length - 5;
     const photoHtml = modalPhotos.length ? `
-<div style="position:relative;">
-  <img id="modal-photo-img" src="${proxyImg(modalPhotos[0])}" style="width:100%;height:420px;object-fit:cover;display:block;">
-  ${modalPhotos.length > 1 ? `
-  <button onclick="modalPhotoNav(-1,event)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">‹</button>
-  <button onclick="modalPhotoNav(1,event)" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">›</button>
-  <span id="modal-photo-n" style="position:absolute;right:12px;bottom:10px;background:rgba(0,0,0,.55);color:#fff;font-size:13px;border-radius:6px;padding:3px 10px;">1/${modalPhotos.length}</span>` : ''}
+<div style="display:flex;gap:4px;height:420px;">
+  <div style="position:relative;flex:${thumbs.length ? 2 : 1};min-width:0;">
+    <img id="modal-photo-img" src="${proxyImg(modalPhotos[0])}" style="width:100%;height:100%;object-fit:cover;display:block;">
+    ${modalPhotos.length > 1 ? `
+    <button onclick="modalPhotoNav(-1,event)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">‹</button>
+    <button onclick="modalPhotoNav(1,event)" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">›</button>
+    <span id="modal-photo-n" style="position:absolute;right:12px;bottom:10px;background:rgba(0,0,0,.55);color:#fff;font-size:13px;border-radius:6px;padding:3px 10px;">1/${modalPhotos.length}</span>` : ''}
+  </div>
+  ${thumbs.length ? `
+  <div style="flex:1;min-width:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:4px;">
+    ${thumbs.map((ph, idx) => {
+      const realIdx = idx + 1;
+      const isLastCell = idx === thumbs.length - 1 && extraCount > 0;
+      return `<div onclick="modalGoTo(${realIdx},event)" style="position:relative;cursor:pointer;overflow:hidden;">
+        <img src="${proxyImg(ph)}" style="width:100%;height:100%;object-fit:cover;display:block;">
+        ${isLastCell ? `<div style="position:absolute;inset:0;background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;">+${extraCount} фото</div>` : ''}
+      </div>`;
+    }).join('')}
+  </div>` : ''}
 </div>` : '<div style="height:60px;"></div>';
 
     const bargainHtml = (d.bargain && d.bargain.discount_pct > 0) ? `
@@ -1552,6 +1670,37 @@ function openDetailModal(id, ev) {
   </div>
   ${d.bargain.recommendation ? `<div style="font-size:13.5px;color:#555;margin-top:4px;">${escapeHtml(d.bargain.recommendation)}</div>` : ''}
 </div>` : '';
+
+    // То же, что на странице /admin/analytics/{id} — доходность (аренда/yield/
+    // окупаемость) и разбивка Смарт рейтинга по компонентам — теперь и в
+    // модалке на карте, оформлено полосками как на самой странице аналитики.
+    const yieldHtml = (d.yield_pct || d.est_rent) ? `
+<div style="margin:14px 22px 0;padding:12px 14px;background:var(--bg);border-radius:10px;display:flex;gap:22px;flex-wrap:wrap;">
+  <div><div style="font-size:11px;color:#888;">Аренда (оценка)</div><div style="font-weight:800;font-size:15px;color:#16a34a;">${d.est_rent ? Math.round(d.est_rent).toLocaleString('ru') + ' ₸/мес' : '—'}</div></div>
+  <div><div style="font-size:11px;color:#888;">Yield</div><div style="font-weight:800;font-size:15px;color:#16a34a;">${d.yield_pct || 0}%</div></div>
+  <div><div style="font-size:11px;color:#888;">Окупаемость</div><div style="font-weight:800;font-size:15px;">${d.payback_years || '—'} лет</div></div>
+  ${d.zone_name ? `<div><div style="font-size:11px;color:#888;">Зона</div><div style="font-weight:800;font-size:15px;color:${(d.zone_bonus||0) < 0 ? '#ef4444' : '#16a34a'};">${escapeHtml(d.zone_name)} (${d.zone_bonus > 0 ? '+' : ''}${d.zone_bonus || 0})</div></div>` : ''}
+</div>` : '';
+
+    const scoreBarsHtml = (d.score_breakdown) ? (() => {
+      const bd = d.score_breakdown;
+      const items = [
+        ['Yield', bd.yield, '#2196f3'], ['Цена/рынок', bd.price_market, '#4caf50'],
+        ['Локация', bd.location, '#ff9800'], ['Тип', bd.apt_type, '#9c27b0'],
+        ['Этаж', bd.floor, '#00bcd4'], ['ЖК', bd.complex, '#795548'], ['Supply', bd.supply, '#607d8b'],
+      ];
+      if (!items.some(([,v]) => v > 0)) return '';
+      return `
+<div style="margin:14px 22px 0;">
+  <div style="font-size:12px;color:#888;font-weight:700;margin-bottom:8px;">Смарт рейтинг — разбивка по компонентам</div>
+  ${items.map(([label, val, color]) => `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+      <span style="width:78px;font-size:12px;color:#555;flex-shrink:0;">${label}</span>
+      <div style="flex:1;height:9px;background:var(--bg);border-radius:5px;overflow:hidden;"><div style="width:${Math.min(100, val)}%;height:100%;background:${color};"></div></div>
+      <span style="width:26px;font-size:11.5px;color:#888;text-align:right;flex-shrink:0;">${val}</span>
+    </div>`).join('')}
+</div>`;
+    })() : '';
 
     const complexPhotosHtml = (d.complex_photos && d.complex_photos.length) ? `
 <div style="margin:14px 22px 0;">
@@ -1586,6 +1735,8 @@ ${photoHtml}
   ${d.views_count ? `<div style="font-size:13px;color:#888;margin-top:6px;">👁 просмотрели ${d.views_count.toLocaleString('ru')} раз${d.first_seen ? ' с ' + d.first_seen : ''}</div>` : ''}
 </div>
 ${bargainHtml}
+${yieldHtml}
+${scoreBarsHtml}
 ${complexPhotosHtml}
 ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:13px;color:#888;font-weight:700;margin-bottom:6px;">📝 Описание</div>
@@ -1666,6 +1817,14 @@ document.getElementById('btn-schools').addEventListener('click', function() {
     }
     poiLayer.addTo(map);
   } else { map.removeLayer(poiLayer); }
+});
+
+// Закрыть плавающие подсказки (?) по клику снаружи — иначе fixed-позиционированные
+// окошки остаются висеть поверх карты бесконечно.
+document.addEventListener('click', (ev) => {
+  document.querySelectorAll('[id^="scx-"], [id^="bgx-"]').forEach(box => {
+    if (box.style.display === 'block' && !box.contains(ev.target)) box.style.display = 'none';
+  });
 });
 </script>
 {% endblock %}

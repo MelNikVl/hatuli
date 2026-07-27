@@ -51,9 +51,15 @@
       <div style="font-size:11.5px;color:#888;margin-top:4px;" id="sys-project-detail"></div>
     </div>
   </div>
-  <div style="font-size:11px;color:#888;margin-bottom:6px;">CPU/память/диск обновляются каждые 5с (live), график ниже — раз в цикл парсера продаж (~50-80 мин).</div>
-  <canvas id="sys-chart" height="80"></canvas>
+  <div class="chart-box-1200">
+    <div style="font-size:0.85em;color:#888;margin-bottom:6px;">CPU/память/диск обновляются каждые 5с (live), график ниже — раз в цикл парсера продаж (~50-80 мин).</div>
+    <div class="chart-box-1200-inner"><canvas id="sys-chart"></canvas></div>
+  </div>
 </div>
+<style>
+.chart-box-1200 { width:1200px; max-width:100%; height:600px; box-sizing:border-box; font-size:1em; }
+.chart-box-1200-inner { position:relative; height:540px; }
+</style>
 
 <div class="settings-block">
   <h3>👁 Настройки вида</h3>
@@ -235,10 +241,11 @@ fetch('/admin/api/system-stats-history?hours=72').then(r => r.json()).then(d => 
       ],
     },
     options: {
-      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
+      maintainAspectRatio: false,
+      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 13 } } } },
       scales: {
-        x: { ticks: { maxTicksLimit: 12, font: { size: 10 } }, grid: { display: false } },
-        y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+        x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+        y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%', font: { size: 13 } } },
       },
     },
   });

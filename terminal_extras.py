@@ -218,6 +218,46 @@ _PHOTO_ALLOWED_HOSTS = ("kcdn.online", "krisha.kz")
 _PHOTO_EXT_WHITELIST = (".jpg", ".jpeg", ".png", ".webp")
 
 
+def _photo_cache_path(u: str) -> str | None:
+    """Тот же путь на диске, что использует /img-proxy для этого URL —
+    вынесено отдельно, чтобы прогрев кэша (см. prewarm_photo_cache) и сам
+    прокси не расходились в логике именования файла."""
+    from urllib.parse import urlparse
+    parsed = urlparse(u)
+    host = (parsed.hostname or "").lower()
+    if not any(host == h or host.endswith("." + h) for h in _PHOTO_ALLOWED_HOSTS):
+        return None
+    ext = os.path.splitext(parsed.path)[1].lower()
+    if ext not in _PHOTO_EXT_WHITELIST:
+        ext = ".jpg"
+    fname = hashlib.sha256(u.encode()).hexdigest() + ext
+    return os.path.join(_PHOTO_CACHE_DIR, fname)
+
+
+async def prewarm_photo_cache(u: str) -> bool:
+    """Скачивает и кэширует фото заранее (не по факту первого открытия
+    попапа пользователем, а сразу после парсинга) — раньше первая загрузка
+    любого ранее непросмотренного фото занимала 2-3с (синхронный fetch на
+    kcdn.online прямо во время открытия попапа). Возвращает True если файл
+    уже в кэше или успешно закэширован."""
+    fpath = _photo_cache_path(u)
+    if not fpath:
+        return False
+    if os.path.exists(fpath):
+        return True
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
+            resp = await c.get(u, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+            tmp_path = fpath + ".tmp"
+            with open(tmp_path, "wb") as f:
+                f.write(resp.content)
+            os.replace(tmp_path, fpath)
+        return True
+    except Exception:
+        return False
+
+
 def make_extras_router(templates) -> APIRouter:
     router = APIRouter()
 
@@ -236,28 +276,13 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/img-proxy")
     async def img_proxy(request: Request, u: str):
-        from urllib.parse import urlparse
-        parsed = urlparse(u)
-        host = (parsed.hostname or "").lower()
-        if not any(host == h or host.endswith("." + h) for h in _PHOTO_ALLOWED_HOSTS):
+        fpath = _photo_cache_path(u)
+        if not fpath:
             return JSONResponse({"error": "host not allowed"}, status_code=400)
 
-        ext = os.path.splitext(parsed.path)[1].lower()
-        if ext not in _PHOTO_EXT_WHITELIST:
-            ext = ".jpg"
-        fname = hashlib.sha256(u.encode()).hexdigest() + ext
-        fpath = os.path.join(_PHOTO_CACHE_DIR, fname)
-
         if not os.path.exists(fpath):
-            try:
-                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as c:
-                    resp = await c.get(u, headers={"User-Agent": "Mozilla/5.0"})
-                    resp.raise_for_status()
-                    tmp_path = fpath + ".tmp"
-                    with open(tmp_path, "wb") as f:
-                        f.write(resp.content)
-                    os.replace(tmp_path, fpath)
-            except Exception:
+            ok = await prewarm_photo_cache(u)
+            if not ok:
                 # источник недоступен — отдаём оригинал напрямую, чтобы фото
                 # хотя бы показалось (не кэшируем неудачу)
                 return RedirectResponse(url=u)
@@ -318,6 +343,17 @@ def make_extras_router(templates) -> APIRouter:
         return templates.TemplateResponse("cabinet.html", {
             "request": request, "user": user, "favorites": favorites,
             "bot_username": os.getenv("SITE_BOT_USERNAME", "nik_us_bot"),
+        })
+
+    @router.get("/favorites", response_class=HTMLResponse)
+    async def favorites_page(request: Request):
+        """Отдельная страница избранного (карточки + сравнение таблицей) —
+        раньше избранное было видно только внутри /cabinet одним списком."""
+        from bot.core.site_auth import get_user_by_session, list_favorites
+        user = await get_user_by_session(_site_session_cookie(request))
+        favorites = await list_favorites(user["user_id"]) if user else []
+        return templates.TemplateResponse("favorites.html", {
+            "request": request, "user": user, "favorites": favorites,
         })
 
     @router.post("/api/auth/start")
@@ -994,6 +1030,58 @@ def make_extras_router(templates) -> APIRouter:
             "batch": app_settings.get_int("DEEP_SWEEP_BATCH", 5),
             "last_at": app_settings.get("DEEP_SWEEP_LAST_AT", None),
         })
+
+    @router.get("/admin/api/map-points-lite")
+    async def map_points_lite(request: Request, type: str = "sale", rooms: str = "",
+                              price_min: float = 0, price_max: float = 0,
+                              area_min: float = 0, area_max: float = 0,
+                              seller: str = "", market: str = ""):
+        """Только id/lat/lon, без джойнов и фото — для отдалённого вида карты
+        (zoom < ZOOM_GATE в dashboard.html), где нужно просто показать, ГДЕ
+        есть объявления (кластерами-кружками с числом), а не тянуть полные
+        карточки, которые пока никто не увидит по отдельности."""
+        from bot.db.pg import fetch as pg_fetch
+
+        if type == "rental":
+            rows = await pg_fetch("""
+                SELECT lat, lon FROM rental_listings
+                WHERE lat IS NOT NULL AND lon IS NOT NULL
+                  AND last_seen > now() - interval '14 days'
+                  AND COALESCE(is_duplicate, FALSE) = FALSE
+                LIMIT 20000
+            """)
+            return JSONResponse({"points": [[float(r["lat"]), float(r["lon"])] for r in rows]})
+
+        conds, params, i = [], [], 1
+        if rooms:
+            conds.append(f"AND rooms = ${i}"); params.append(int(rooms)); i += 1
+        if price_min > 0:
+            conds.append(f"AND price >= ${i}"); params.append(int(price_min)); i += 1
+        if price_max > 0:
+            conds.append(f"AND price <= ${i}"); params.append(int(price_max)); i += 1
+        if area_min > 0:
+            conds.append(f"AND area >= ${i}"); params.append(area_min); i += 1
+        if area_max > 0:
+            conds.append(f"AND area <= ${i}"); params.append(area_max); i += 1
+        if seller == "owner":
+            conds.append("AND is_owner IS TRUE")
+        elif seller == "agent":
+            conds.append("AND is_owner IS DISTINCT FROM TRUE")
+        if market == "primary":
+            conds.append("AND market_type = 'primary'")
+        elif market == "secondary":
+            conds.append("AND COALESCE(market_type, 'secondary') <> 'primary'")
+
+        rows = await pg_fetch(f"""
+            SELECT lat, lon FROM apartment_listings
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+              AND is_active IS NOT FALSE
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND last_seen > now() - interval '14 days'
+              {' '.join(conds)}
+            LIMIT 20000
+        """, *params)
+        return JSONResponse({"points": [[float(r["lat"]), float(r["lon"])] for r in rows]})
 
     @router.get("/admin/api/map-points")
     async def map_points(request: Request, type: str = "sale", rooms: str = "",
@@ -1850,6 +1938,24 @@ def make_extras_router(templates) -> APIRouter:
             } if hd else None)(
                 (lambda v: (_json_ld.loads(v) if isinstance(v, str) else v) if v else None)(l.get("hex_details"))
             ),
+            # То же, что показывает страница /admin/analytics/{id} — доходность
+            # и разбивка скора по компонентам, теперь дублируется и в модалке
+            # на карте, чтобы не заставлять переходить на отдельную страницу.
+            "est_rent": l.get("est_rent"),
+            "yield_pct": l.get("yield_pct"),
+            "payback_years": l.get("payback_years"),
+            "rent_source": l.get("rent_source") or "",
+            "zone_name": l.get("zone_name") or "",
+            "zone_bonus": l.get("zone_bonus"),
+            "score_breakdown": {
+                "yield": l.get("score_yield") or 0,
+                "price_market": l.get("score_price_market") or 0,
+                "location": l.get("score_location") or 0,
+                "apt_type": l.get("score_apt_type") or 0,
+                "floor": l.get("score_floor") or 0,
+                "complex": l.get("score_complex") or 0,
+                "supply": l.get("score_supply") or 0,
+            },
         })
 
     # ── История цены объявления ───────────────────────────────────────────

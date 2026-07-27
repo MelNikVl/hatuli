@@ -308,6 +308,15 @@ async def run_cycle():
                     "UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
                     r["id"], json.dumps(r["photos"]),
                 )
+                # Прогреваем кэш первого фото сразу при парсинге, а не по
+                # факту первого открытия попапа пользователем — раньше это
+                # давало 2-3с задержку на каждое ранее непросмотренное фото
+                # (см. img-proxy/prewarm_photo_cache в terminal_extras.py).
+                try:
+                    from terminal_extras import prewarm_photo_cache
+                    asyncio.create_task(prewarm_photo_cache(r["photos"][0]))
+                except Exception:
+                    pass
             if r.get("seller_name"):
                 await pg_exec(
                     "UPDATE apartment_listings SET seller_name=$2 WHERE id=$1",

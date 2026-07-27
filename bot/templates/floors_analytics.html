@@ -19,14 +19,18 @@
   </div>
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;">
-  <b style="font-size:14px;">Сколько активных объявлений БЕЗ этажа — во времени</b>
+<style>
+.chart-box-1200 { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; width:1200px; max-width:100%; height:600px; box-sizing:border-box; font-size:1em; }
+.chart-box-1200-inner { position:relative; height:520px; }
+</style>
+<div class="chart-box-1200">
+  <b style="font-size:1em;">Сколько активных объявлений БЕЗ этажа — во времени</b>
   <div style="display:inline-flex;gap:6px;margin-left:12px;">
     {% for d in [7, 30, 90] %}
     <a href="?days={{ d }}" class="floors-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
     {% endfor %}
   </div>
-  <canvas id="floor-missing-chart" height="90"></canvas>
+  <div class="chart-box-1200-inner"><canvas id="floor-missing-chart"></canvas></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -52,10 +56,11 @@ fetch('/admin/api/floor-history?days=' + daysParam).then(r => r.json()).then(d =
       }],
     },
     options: {
+      maintainAspectRatio: false,
       plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { maxTicksLimit: 12, font: { size: 10 } }, grid: { display: false } },
-        y: { beginAtZero: true, ticks: { precision: 0 } },
+        x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
       },
     },
   });

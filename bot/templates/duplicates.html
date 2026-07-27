@@ -15,10 +15,10 @@
 
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
   <div style="order:1;flex:1 1 380px;min-width:250px;max-width:68%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
-    <div id="dup-map" style="height:calc(100vh - 210px);min-height:400px;width:100%;border-radius:8px;"></div>
+    <div id="dup-map" style="height:calc((100vh - 210px) * 0.667);min-height:280px;width:100%;border-radius:8px;"></div>
   </div>
 
-  <div style="order:2;flex:0 0 320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;max-height:calc(100vh - 210px);overflow-y:auto;">
+  <div style="order:2;flex:0 0 320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;max-height:calc((100vh - 210px) * 0.667);overflow-y:auto;">
     <b style="font-size:14px;">🏆 Топ по числу дублей</b>
     <div style="margin-top:10px;">
       {% for r in rows[:20] %}

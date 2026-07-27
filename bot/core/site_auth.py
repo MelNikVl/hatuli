@@ -82,7 +82,8 @@ async def list_favorites(user_id: int) -> list[dict]:
     import json
     rows = await fetch("""
         SELECT f.listing_id, f.saved_at, a.price, a.rooms, a.area, a.address,
-               a.complex_name, a.url, a.photos, a.is_active
+               a.complex_name, a.url, a.photos, a.is_active, a.floor, a.floors_total,
+               a.score_total, a.district
         FROM favorites f
         LEFT JOIN apartment_listings a ON a.id = f.listing_id
         WHERE f.user_id = $1

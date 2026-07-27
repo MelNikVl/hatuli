@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">⭐ Избранное
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ favorites|length }} объявлений</small>
+</div>
+
+{% if not user %}
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 24px;max-width:640px;">
+  <p style="margin-bottom:14px;">Вход только через Telegram — без паролей. Перейди в <a href="/cabinet">Личный кабинет</a>, чтобы войти и увидеть избранное.</p>
+</div>
+{% elif not favorites %}
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 24px;max-width:640px;color:#888;">
+  Пока пусто — добавляй объявления звёздочкой на фото в превью карточки на карте.
+</div>
+{% else %}
+
+<style>
+.fav-cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:14px; margin-bottom:24px; }
+.fav-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; text-decoration:none; color:inherit; display:block; position:relative; }
+.fav-card img { width:100%; height:140px; object-fit:cover; display:block; background:var(--bg); }
+.fav-card .fc-body { padding:10px 12px; }
+.fav-card .fc-price { font-weight:800; font-size:17px; }
+.fav-card .fc-meta { font-size:12.5px; color:#888; margin-top:2px; }
+.fav-card .fc-remove { position:absolute; top:8px; right:8px; width:28px; height:28px; border-radius:50%; background:rgba(0,0,0,.55); color:#fff; border:none; cursor:pointer; font-size:15px; line-height:1; z-index:2; }
+.fav-card .fc-inactive { color:#ef4444; font-size:11px; }
+.fav-compare-table { width:100%; border-collapse:collapse; background:var(--surface); border-radius:10px; overflow:hidden; }
+.fav-compare-table th { background:var(--bg); text-align:left; padding:9px 10px; font-size:12px; font-weight:600; border-bottom:1px solid var(--border); }
+.fav-compare-table td { padding:9px 10px; font-size:13px; border-bottom:1px solid var(--border); }
+.fav-compare-table tr:last-child td { border-bottom:none; }
+</style>
+
+<div class="fav-cards">
+  {% for f in favorites %}
+  <a class="fav-card" href="{{ f.url or '/admin/analytics/' + f.listing_id }}" target="{{ '_blank' if f.url else '_self' }}">
+    <button class="fc-remove" onclick="event.preventDefault();event.stopPropagation();removeFav('{{ f.listing_id }}', this)">✕</button>
+    {% if f.first_photo %}<img src="{{ f.first_photo }}">{% else %}<img src="">{% endif %}
+    <div class="fc-body">
+      <div class="fc-price">{{ "{:,.1f}".format(f.price / 1e6) if f.price else '?' }} млн ₸</div>
+      <div class="fc-meta">{{ f.rooms or '?' }}-комн, {{ f.area or '?' }} м²{% if f.floor %}, {{ f.floor }}/{{ f.floors_total or '?' }} эт.{% endif %}</div>
+      <div class="fc-meta">{{ f.complex_name or f.address or '' }}</div>
+      {% if f.is_active == false %}<div class="fc-inactive">снято с публикации</div>{% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+
+<h3 style="font-size:15px;margin-bottom:10px;">Сравнение</h3>
+<div style="overflow-x:auto;">
+<table class="fav-compare-table">
+  <thead>
+    <tr>
+      <th>Объект</th><th>Цена</th><th>₸/м²</th><th>Комнат</th><th>Площадь</th><th>Этаж</th><th>Скор</th><th>Район / ЖК</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in favorites %}
+    <tr>
+      <td><a href="{{ f.url or '/admin/analytics/' + f.listing_id }}" target="{{ '_blank' if f.url else '_self' }}" style="color:#d4af37;font-weight:700;">{{ f.listing_id }}</a></td>
+      <td>{{ "{:,.1f}".format(f.price / 1e6) if f.price else '?' }} млн</td>
+      <td>{{ (f.price / f.area) | round(0) | int if f.price and f.area else '—' }}</td>
+      <td>{{ f.rooms or '?' }}</td>
+      <td>{{ f.area or '?' }} м²</td>
+      <td>{{ (f.floor ~ '/' ~ (f.floors_total or '?')) if f.floor else '—' }}</td>
+      <td>{{ f.score_total or '—' }}</td>
+      <td>{{ f.complex_name or f.district or f.address or '—' }}</td>
+      <td><button onclick="removeFav('{{ f.listing_id }}', this)" style="border:none;background:none;color:#ef4444;cursor:pointer;font-size:15px;">✕</button></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<script>
+async function removeFav(id, btn) {
+  await fetch('/api/favorites/' + encodeURIComponent(id), {method: 'DELETE'});
+  location.reload();
+}
+</script>
+{% endif %}
+{% endblock %}

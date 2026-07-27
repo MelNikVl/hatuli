@@ -54,25 +54,27 @@ tr:last-child td { border-bottom: none; }
 .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
 
 .container { max-width: 100%; padding: 0; }
+.chart-box-1200 { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:14px; width:1200px; max-width:100%; height:600px; overflow-y:auto; box-sizing:border-box; font-size:1em; }
+.chart-box-1200-inner { margin-top:8px; width:100%; height:540px; }
 </style>
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">📊 Аналитика квартир</div>
 <div class="container">
-<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;flex:1 1 0;min-width:320px;">
-    <b style="font-size:13.5px;">📉 Объявления без фото во времени</b>
-    <span style="font-size:11.5px;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж</span>
-    <div id="no-photo-chart" style="margin-top:8px;width:100%;"></div>
+<div>
+  <div class="chart-box-1200">
+    <b style="font-size:1em;">📉 Объявления без фото во времени</b>
+    <span style="font-size:0.85em;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж</span>
+    <div id="no-photo-chart" class="chart-box-1200-inner"></div>
   </div>
 
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;flex:1 1 0;min-width:320px;">
-    <b style="font-size:13.5px;">💸 Снижения цены по дням, по комнатности</b>
+  <div class="chart-box-1200">
+    <b style="font-size:1em;">💸 Снижения цены по дням, по комнатности</b>
     <div style="display:flex;gap:14px;font-size:11px;color:#888;margin:6px 0;">
       <span><span style="display:inline-block;width:9px;height:9px;background:#3b82f6;border-radius:2px;"></span> 1-комн</span>
       <span><span style="display:inline-block;width:9px;height:9px;background:#22c55e;border-radius:2px;"></span> 2-комн</span>
       <span><span style="display:inline-block;width:9px;height:9px;background:#f59e0b;border-radius:2px;"></span> 3+-комн</span>
     </div>
-    <div id="price-drops-chart" style="overflow-x:auto;"></div>
+    <div id="price-drops-chart" class="chart-box-1200-inner" style="overflow-x:auto;"></div>
   </div>
 
   <script>
@@ -112,7 +114,7 @@ tr:last-child td { border-bottom: none; }
   fetch('/admin/api/no-photo-history?days=30').then(r => r.json()).then(d => {
     const npEl = document.getElementById('no-photo-chart');
     const npW = Math.max(280, npEl.parentElement.clientWidth - 4);
-    unboundStyleLineChart('no-photo-chart', d.points || [], 'no_photo', npW, 130);
+    unboundStyleLineChart('no-photo-chart', d.points || [], 'no_photo', npW, 480);
   }).catch(() => {});
 
   fetch('/admin/api/price-drops-history?days=30').then(r => r.json()).then(d => {
@@ -121,7 +123,7 @@ tr:last-child td { border-bottom: none; }
     const colors = {1:'#3b82f6', 2:'#22c55e', 3:'#f59e0b'};
     const maxTotal = Math.max(1, ...d.days.map((_,i)=>d.series['1'][i]+d.series['2'][i]+d.series['3'][i]));
     const barW = Math.max(32, Math.min(60, Math.floor(960/d.days.length)));
-    const H = 260;
+    const H = 480;
     const bars = d.days.map((label,i)=>{
       const v1=d.series['1'][i], v2=d.series['2'][i], v3=d.series['3'][i];
       const a1=d.amounts['1'][i], a2=d.amounts['2'][i], a3=d.amounts['3'][i];
