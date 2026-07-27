@@ -1061,6 +1061,15 @@ const NOISE_EDGE_M = 30;  // шум — более мелкая сетка, бл
 const heatLayer = L.layerGroup();
 let heatMode = null;
 let heatCache = {sale: null, rental: null, schools: null, noise: null};
+// Детальный слой шума (30м, по фактическим точкам дорог) при ~39к точек по
+// городу даёт под 100к+ отдельных гексов, если рисовать их все разом — это
+// и было главной причиной "тормозит при включении шума". Показываем его
+// только при приближении (видно отдельные дома) и только в границах
+// текущего вида карты + запас, а не по всему городу сразу; фон (200м)
+// по-прежнему кроет весь город и виден на любом масштабе.
+const NOISE_DETAIL_ZOOM = 14;
+const fineNoiseLayer = L.layerGroup();
+let noiseViewHandler = null;
 
 // Абсолютные потолки шкалы шума (не перцентиль — см. drawRoadHeat/
 // drawRoadHeatBackground). Подробный разбор чисел — вкладка Инфо → Шум.
@@ -1258,14 +1267,33 @@ function drawRoadHeatBackground(roads) {
     if (b.items.length >= 2) score += 10;
     roadHexScore.set(key, score);
   });
-  // Границы города — по фактическому охвату дорог в данных (+ запас в
-  // NOISE_BG_RINGS колец), а не по произвольным координатам.
-  let qMin = Infinity, qMax = -Infinity, rMin = Infinity, rMax = -Infinity;
-  roadBuckets.forEach(b => {
-    qMin = Math.min(qMin, b.q); qMax = Math.max(qMax, b.q);
-    rMin = Math.min(rMin, b.r); rMax = Math.max(rMax, b.r);
-  });
+  // БАГ (найден): границы раньше брались по фактическому охвату ВСЕХ точек
+  // дорог в данных — если хоть одна точка (из OSM-импорта) лежит далеко за
+  // городом, bbox раздувается на неё и заливает гексами всё пустое
+  // пространство между городом и этим выбросом. На реальных данных это дало
+  // 80k+ гексов вместо разумных нескольких тысяч в видимой области.
+  // Берём вместо этого границы ТЕКУЩЕГО вида карты (+запас) — фон должен
+  // покрывать то, что видно, а не весь датасет целиком.
+  const vb = map.getBounds().pad(0.2);
+  const corners = [
+    hexAxial(vb.getNorth(), vb.getWest(), NOISE_BG_EDGE_M),
+    hexAxial(vb.getNorth(), vb.getEast(), NOISE_BG_EDGE_M),
+    hexAxial(vb.getSouth(), vb.getWest(), NOISE_BG_EDGE_M),
+    hexAxial(vb.getSouth(), vb.getEast(), NOISE_BG_EDGE_M),
+  ];
+  let qMin = Math.min(...corners.map(c => c[0])), qMax = Math.max(...corners.map(c => c[0]));
+  let rMin = Math.min(...corners.map(c => c[1])), rMax = Math.max(...corners.map(c => c[1]));
   qMin -= NOISE_BG_RINGS; qMax += NOISE_BG_RINGS; rMin -= NOISE_BG_RINGS; rMax += NOISE_BG_RINGS;
+  // Предохранитель: даже если что-то пойдёт не так с границами, не уходим
+  // в миллион итераций — обрежем и покажем что успели.
+  const MAX_BG_CELLS = 20000;
+  if ((qMax - qMin) * (rMax - rMin) > MAX_BG_CELLS) {
+    const shrink = Math.sqrt(MAX_BG_CELLS / ((qMax - qMin) * (rMax - rMin)));
+    const qc = (qMin + qMax) / 2, rc = (rMin + rMax) / 2;
+    const qh = (qMax - qMin) / 2 * shrink, rh = (rMax - rMin) / 2 * shrink;
+    qMin = Math.round(qc - qh); qMax = Math.round(qc + qh);
+    rMin = Math.round(rc - rh); rMax = Math.round(rc + rh);
+  }
 
   // Кольца до NOISE_BG_RINGS вокруг (q,r) — для поиска ближайших дорожных гексов.
   function ringsAround(q, r, maxRing) {
@@ -1316,6 +1344,14 @@ function drawRoadHeatBackground(roads) {
 }
 
 function drawRoadHeat(roads) {
+  fineNoiseLayer.clearLayers();
+  if (map.getZoom() < NOISE_DETAIL_ZOOM) return;  // видно только при приближении, см. NOISE_DETAIL_ZOOM
+  // Только точки в текущей области видимости (+запас) — иначе даже на
+  // приближённом виде обрабатываем и рисуем гексы по всем ~39к точек
+  // города разом, а не по паре сотен, которые реально видны на экране.
+  const b = map.getBounds().pad(0.3);
+  roads = roads.filter(r => b.contains([r.lat, r.lon]));
+  if (!roads.length) return;
   const buckets = hexBucket(roads, r => [r.lat, r.lon], NOISE_EDGE_M);
   // Базовый скор гекса = сумма скорингов дорог в нём + бонус за пересечение
   // (2+ разных участка дороги рядом друг с другом в одном 30м гексе —
@@ -1362,7 +1398,7 @@ function drawRoadHeat(roads) {
         ? `шум: ${c.score.toFixed(0)} (${c.roadCount} уч. дорог${c.roadCount >= 2 ? ' · пересечение' : ''})`
         : `шум (по соседству с дорогой): ~${c.score.toFixed(0)}`,
       {sticky:true}
-    ).addTo(heatLayer);
+    ).addTo(fineNoiseLayer);
   });
 }
 
@@ -1398,11 +1434,17 @@ async function toggleHeat(mode) {
     heatMode = null;
     map.removeLayer(heatLayer);
     heatLayer.clearLayers();
+    map.removeLayer(fineNoiseLayer);
+    fineNoiseLayer.clearLayers();
+    if (noiseViewHandler) { map.off('moveend zoomend', noiseViewHandler); noiseViewHandler = null; }
     document.querySelectorAll('.heat-btn').forEach(b => { b.style.background = 'var(--bg)'; b.style.color = 'var(--text)'; });
     return;
   }
   document.querySelectorAll('.heat-btn').forEach(b => { b.style.background = 'var(--bg)'; b.style.color = 'var(--text)'; });
   if (btn) { btn.style.background = '#2563eb'; btn.style.color = '#fff'; }
+  if (noiseViewHandler) { map.off('moveend zoomend', noiseViewHandler); noiseViewHandler = null; }
+  map.removeLayer(fineNoiseLayer);
+  fineNoiseLayer.clearLayers();
   heatMode = mode;
   heatLayer.clearLayers();
   if (!map.hasLayer(heatLayer)) heatLayer.addTo(map);
@@ -1410,7 +1452,20 @@ async function toggleHeat(mode) {
   if (heatMode !== mode) return;  // успели переключиться, пока грузилось
   if (mode === 'sale' || mode === 'rental') drawPriceHeat(data, mode === 'sale' ? heatCache.saleArchived : null);
   else if (mode === 'schools') drawCountHeat(data, p => [p.lat, p.lon], 'школ/садиков');
-  else if (mode === 'noise') { drawRoadHeatBackground(data); drawRoadHeat(data); }
+  else if (mode === 'noise') {
+    drawRoadHeatBackground(data);
+    if (!map.hasLayer(fineNoiseLayer)) fineNoiseLayer.addTo(map);
+    drawRoadHeat(data);
+    // Догружаем/чистим детальный слой при панорамировании/зуме, пока режим
+    // шума активен — debounce, чтобы не пересчитывать на каждый пиксель драга.
+    let t;
+    noiseViewHandler = () => { clearTimeout(t); t = setTimeout(() => {
+      heatLayer.clearLayers();
+      drawRoadHeatBackground(heatCache.noise);
+      drawRoadHeat(heatCache.noise);
+    }, 200); };
+    map.on('moveend zoomend', noiseViewHandler);
+  }
 }
 
 function toggleHexGrid() {
