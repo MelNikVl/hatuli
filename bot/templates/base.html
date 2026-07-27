@@ -4,6 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Hatuli — Admin</title>
+  <link rel="icon" type="image/png" href="/static/branding/favicon.png"/>
   <script>
   // Применяем сохранённую тему ДО отрисовки — иначе была бы вспышка тёмной
   // темы на белом фоне при каждой загрузке страницы в светлом режиме.
@@ -156,7 +157,7 @@
 
 <aside class="sidebar">
   <div class="sidebar-logo">
-    <a href="/admin" class="title" style="text-decoration:none;color:inherit;display:block;">🏘 Hatuli</a>
+    <a href="/admin" class="title" style="text-decoration:none;color:inherit;display:flex;align-items:center;gap:8px;"><img src="/static/branding/logo-icon.png" alt="" style="width:28px;height:28px;object-fit:contain;border-radius:5px;"> Hatuli</a>
     <div class="sub">Admin Panel</div>
     <button id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button"
       style="margin-top:8px;width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">

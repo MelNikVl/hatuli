@@ -1233,7 +1233,7 @@ def make_extras_router(templates) -> APIRouter:
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
                    a.is_owner, a.seller_name, a.year_built, a.views_count,
-                   a.description, a.ceiling_height, a.finish_type,
+                   a.description, a.ceiling_height, a.finish_type, a.floor, a.floors_total,
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
@@ -1300,6 +1300,7 @@ def make_extras_router(templates) -> APIRouter:
             "score": int(r["eff_score"] or 0),
             "photos": _photos_of(r),
             "price": r["price"], "rooms": r["rooms"], "area": float(r["area"] or 0),
+            "floor": r["floor"], "floors_total": r["floors_total"],
             "address": r["address"] or "", "complex": r["complex_name"] or "",
             "finish_type": r["finish_type"] or "",
             "developer_id": r["developer_id"], "developer_name": r["developer_name"] or "",
@@ -1864,6 +1865,10 @@ def make_extras_router(templates) -> APIRouter:
         )
         bargain = analyze_bargain(l.get("price", 0), comps, l.get("is_owner"), l.get("is_urgent") is True, comps_meta)
 
+        from bot.core.listing_intel import build_negotiation_points, build_seller_questions
+        negotiation_points = build_negotiation_points(l, bargain, len(comps))
+        seller_questions = build_seller_questions(l)
+
         # Фото ЖК — для галереи в модалке объявления (переиспользуем то же
         # поле photos, что и на карточке ЖК)
         complex_photos = []
@@ -1956,6 +1961,8 @@ def make_extras_router(templates) -> APIRouter:
                 "complex": l.get("score_complex") or 0,
                 "supply": l.get("score_supply") or 0,
             },
+            "negotiation_points": negotiation_points,
+            "seller_questions": seller_questions,
         })
 
     # ── История цены объявления ───────────────────────────────────────────
