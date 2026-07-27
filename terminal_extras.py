@@ -1166,6 +1166,26 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY eff_score DESC
             LIMIT ${limit_idx} OFFSET ${offset_idx}
         """, *params)
+        # Настоящий топ-10 сайта — БЕЗ учёта текущих фильтров, отдельным
+        # быстрым запросом. Раньше "top" считался как "первые 10 строк ЭТОЙ
+        # выдачи" ((offset+idx)<10) — при узком фильтре (например, только
+        # снизившие цену сегодня, 7-12 объявлений) это помечало ⭐-топом
+        # почти все результаты, что выглядело как "фильтр работает только
+        # для топ-10" и путало и звёздочку с реальным рейтингом сайта.
+        top10_ids: set = set()
+        if offset == 0:
+            top10_rows = await pg_fetch("""
+                SELECT id FROM apartment_listings a
+                WHERE a.lat IS NOT NULL AND a.is_active IS NOT FALSE
+                  AND COALESCE(a.is_duplicate, FALSE) = FALSE
+                  AND a.last_seen > now() - interval '14 days'
+                ORDER BY (CASE WHEN a.market_type = 'primary' AND a.primary_score_total IS NOT NULL
+                               THEN a.primary_score_total ELSE COALESCE(a.score_total,0) END
+                          + COALESCE(a.zone_bonus,0) + COALESCE(a.layer_bonus,0)
+                          + COALESCE(a.price_drop_bonus,0)) DESC
+                LIMIT 10
+            """)
+            top10_ids = {r["id"] for r in top10_rows}
         import json as _json_ph
         def _photos_of(r):
             ph = r["photos"]
@@ -1205,7 +1225,7 @@ def make_extras_router(templates) -> APIRouter:
             # последняя смена цены (если была) — для попапа на карте
             "prev_price": r["prev_price"],
             "price_changed": r["price_changed_at"].strftime("%d.%m.%Y") if r["price_changed_at"] else None,
-            "top": (offset + idx) < 10,   # топ-10 лучших — сердечки на карте (абсолютный ранг с учётом offset)
+            "top": r["id"] in top10_ids,  # настоящий топ-10 сайта, не первые 10 текущей (отфильтрованной) выдачи
         } for idx, r in enumerate(rows)]
         resp = {"points": pts, "count": len(pts), "offset": offset, "limit": limit, "has_more": len(pts) == limit}
         if is_authed(request) and offset == 0:
