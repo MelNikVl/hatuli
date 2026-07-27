@@ -40,10 +40,25 @@ dp = Dispatcher()
 
 
 async def _check_subscribed(bot: Bot, telegram_id: int) -> bool:
+    """True/False — реально известный статус. None — Telegram не дал
+    проверить (бот не админ канала: 'member list is inaccessible' — типичная
+    ошибка ИМЕННО для каналов, Bot API требует прав администратора канала,
+    чтобы читать чужое членство; для обычных групп этого ограничения нет).
+    Раз бот НЕ администратор @hatuliapp, эта проверка сейчас всегда падает —
+    поэтому по умолчанию НЕ блокируем вход при недоступной проверке (иначе
+    никто вообще не сможет войти), только логируем предупреждение."""
     try:
         member = await bot.get_chat_member(HATULI_CHANNEL, telegram_id)
         return member.status in ("member", "administrator", "creator")
     except TelegramBadRequest as e:
+        if "inaccessible" in str(e).lower() or "not enough rights" in str(e).lower():
+            log.warning(
+                "get_chat_member недоступен для %s (%s) — бот, вероятно, НЕ "
+                "администратор канала %s. Добавь бота в администраторы "
+                "канала, чтобы проверка подписки реально работала. "
+                "Пока считаем подписку неизвестной и НЕ блокируем вход.",
+                telegram_id, e, HATULI_CHANNEL)
+            return None
         log.warning("get_chat_member failed for %s: %s", telegram_id, e)
         return False
 
@@ -80,7 +95,8 @@ async def cmd_start(message: Message, bot: Bot) -> None:
             updated_at = now()
     """, telegram_id, message.from_user.username or "", message.from_user.full_name or "", subscribed)
 
-    if not subscribed:
+    if subscribed is False:
+        # Точно НЕ подписан (Telegram подтвердил статус left/kicked) — блокируем.
         await execute(
             "UPDATE login_tokens SET status = 'not_subscribed', telegram_id = $2 WHERE token = $1",
             token, telegram_id)
@@ -89,6 +105,10 @@ async def cmd_start(message: Message, bot: Bot) -> None:
             "и снова нажми на ссылку входа с сайта."
         )
         return
+    # subscribed is True или None (Telegram не дал проверить — бот не админ
+    # канала, см. _check_subscribed) — в обоих случаях пускаем. Блокировать
+    # реальных пользователей из-за нашей же незавершённой настройки бота
+    # хуже, чем временно пропустить проверку.
 
     await execute(
         "UPDATE login_tokens SET status = 'verified', telegram_id = $2, verified_at = now() WHERE token = $1",
