@@ -2448,6 +2448,27 @@ def make_extras_router(templates) -> APIRouter:
             "confidence": r["deal_confidence"], "score": r["score_total"],
         } for r in rows]})
 
+    @router.get("/admin/api/ceiling-history")
+    async def ceiling_history(request: Request, days: int = 30):
+        """Снимки ceiling_stats_history — доля активных объявлений с
+        известной высотой потолка во времени (см. /admin/analytics/ceiling).
+        Потолок, как и этаж, приходит только с детальной страницы."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT at, total_active, with_ceiling
+            FROM ceiling_stats_history
+            WHERE at > now() - ($1 || ' days')::interval
+            ORDER BY at ASC
+        """, str(days))
+        return JSONResponse({"points": [{
+            "at": r["at"].strftime("%d.%m %H:%M"),
+            "total_active": r["total_active"],
+            "with_ceiling": r["with_ceiling"],
+            "pct": round(100 * r["with_ceiling"] / r["total_active"], 1) if r["total_active"] else 0,
+        } for r in rows]})
+
     @router.get("/admin/api/floor-sold-counts")
     async def floor_sold_counts(request: Request, period: str = "month"):
         """Этаж vs количество проданных (ушедших в архив) квартир за период —

@@ -105,8 +105,6 @@
       <input id="f-amin-rng" type="range" min="0" max="300" step="1" value="0">
       <input id="f-amax-rng" type="range" min="0" max="300" step="1" value="300">
     </div></div>
-  <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Минимальный смарт рейтинг</label>
-    <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
   <div id="f-top-wrap" style="display:flex;flex-direction:column;gap:6px;">
     <label style="font-size:13.5px;color:var(--text);font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;">
       <input id="f-top-only" type="checkbox" onchange="if(this.checked)document.getElementById('f-cheapest-only').checked=false;applyFilters()"> ⭐ Только топ-10 по скору</label>
@@ -141,6 +139,8 @@
         <label style="font-size:11.5px;color:#aaa;display:block;margin-top:6px;">Сторона гекса тепловых карт (м): <span id="f-heat-edge-val">250</span></label>
         <input id="f-heat-edge" type="range" min="30" max="1000" step="10" value="250" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
       </div>
+      <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Минимальный смарт рейтинг</label>
+        <input id="f-score" type="number" min="0" max="100" step="5" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
     </div>
   </div>
 </div>
@@ -215,15 +215,23 @@ map.on('zoomend', () => {
 });
 // Пользователь мог приблизиться к одному кварталу, но раньше всё равно
 // постепенно догружался весь город батчами по 300, невзирая на то, куда
-// он реально смотрит. Теперь при zoom >= ZOOM_GATE догружаем/перегружаем
-// объекты ТОЛЬКО в текущей видимой области — на пан/зум (с debounce, чтобы
-// не долбить запросами каждый пиксель драга).
+// он реально смотрит — это исправили viewport-фильтром на сервере. НО
+// первая версия перезапрашивала данные на КАЖДЫЙ moveend, т.е. буквально
+// на каждый пиксель панорамирования — постоянные перезагрузки. Теперь
+// грузим область "с запасом" (padded), а на пан/зум просто проверяем,
+// вышел ли видимый участок за пределы уже загруженного буфера — если нет,
+// вообще ничего не перезапрашиваем (маркеры уже на карте).
+let loadedViewBounds = null;
+function viewportNeedsReload() {
+  if (document.getElementById('f-type').value === 'complex') return false;
+  if (map.getZoom() < ZOOM_GATE) return false;
+  return !(loadedViewBounds && loadedViewBounds.contains(map.getBounds()));
+}
 let viewportReloadTimer = null;
 map.on('moveend', () => {
-  if (document.getElementById('f-type').value === 'complex') return;
-  if (map.getZoom() < ZOOM_GATE) return;
+  if (!viewportNeedsReload()) return;
   clearTimeout(viewportReloadTimer);
-  viewportReloadTimer = setTimeout(() => applyFilters(), 300);
+  viewportReloadTimer = setTimeout(() => applyFilters(), 250);
 });
 
 // ── Кнопки прямо на карте (как на Zillow): нарисовать область, школы ──────
@@ -664,9 +672,15 @@ function applyFilters() {
   }
   const p = new URLSearchParams({type});
   if (map.getZoom() >= ZOOM_GATE) {
-    const b = map.getBounds();
+    // Грузим область с запасом (pad 0.6 ~= в 2.2 раза больше видимого) —
+    // обычное панорамирование в пределах этого буфера больше не требует
+    // нового запроса вообще (см. viewportNeedsReload/moveend выше).
+    const b = map.getBounds().pad(0.6);
+    loadedViewBounds = b;
     p.set('min_lat', b.getSouth()); p.set('max_lat', b.getNorth());
     p.set('min_lon', b.getWest()); p.set('max_lon', b.getEast());
+  } else {
+    loadedViewBounds = null;
   }
   const rooms = document.getElementById('f-rooms').value;
   // цена: принимаем и "25" (млн), и "25000000" (тенге); аренда — "300" (тыс) или "300000"
@@ -1365,6 +1379,10 @@ function drawCountHeat(items, latLonFn, label) {
 // Базовый рейтинг шума участка дороги: магистраль (motorway/trunk) — 30
 // всегда, иначе по числу полос: 3+ полосы — 20, 2 (или меньше/неизвестно) — 10.
 function roadNoiseScore(r) {
+  // Поезда (ЖД, реальные данные OSM railway=rail) — шумнее любой дороги;
+  // ЛРТ отдельно не учитываем: в OSM для Астаны нет light_rail/tram
+  // данных (система не была физически построена/введена в эксплуатацию).
+  if (r.highway === 'railway') return 35;
   if (r.highway === 'motorway' || r.highway === 'trunk') return 30;
   if ((r.lanes || 0) >= 3) return 20;
   return 10;

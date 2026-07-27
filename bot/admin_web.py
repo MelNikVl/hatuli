@@ -416,6 +416,22 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "total_active": total_active, "missing_floor": missing_floor,
         })
 
+    @app.get("/admin/analytics/ceiling", response_class=HTMLResponse)
+    async def ceiling_analytics_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetchval as pg_fv
+        total_active = await pg_fv(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+        missing_ceiling = await pg_fv(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE AND ceiling_height IS NULL") or 0
+        return templates.TemplateResponse("ceiling_analytics.html", {
+            "request": request, "atab": "ceiling",
+            "total_active": total_active, "missing_ceiling": missing_ceiling,
+        })
+
     @app.get("/admin/analytics/floor-performance", response_class=HTMLResponse)
     async def floor_performance_page(request: Request):
         # ВАЖНО: тот же паттерн, что views/floors — этот роут ДОЛЖЕН стоять

@@ -656,6 +656,22 @@ async def run_cycle():
     except Exception as e:
         log.warning("floor snapshot failed: %s", e)
 
+    # Снимок для графика "покрытие данными о высоте потолка во времени"
+    # (/admin/analytics/ceiling) — тот же принцип, что и floor_stats_history:
+    # потолок тоже приходит только с детальной страницы объявления.
+    try:
+        from bot.db.pg import execute as _pg_exec_ceil, fetchval as _pg_fv_ceil
+        _total_active3 = await _pg_fv_ceil(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE") or 0
+        _with_ceiling = await _pg_fv_ceil(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND ceiling_height IS NOT NULL") or 0
+        await _pg_exec_ceil(
+            "INSERT INTO ceiling_stats_history (total_active, with_ceiling) VALUES ($1, $2)",
+            _total_active3, _with_ceiling)
+    except Exception as e:
+        log.warning("ceiling snapshot failed: %s", e)
+
     # Снимок просмотров по комнатности во времени (/admin/analytics/views) —
     # views_count накопительный с даты публикации, поэтому график по факту
     # показывает суммарный накопленный интерес по типам квартир на срезах
