@@ -1035,6 +1035,10 @@ const heatLayer = L.layerGroup();
 let heatMode = null;
 let heatCache = {sale: null, rental: null, schools: null, noise: null};
 
+// Абсолютные потолки шкалы шума (не перцентиль — см. drawRoadHeat/
+// drawRoadHeatBackground). Подробный разбор чисел — вкладка Инфо → Шум.
+const NOISE_FINE_MAX = 50;
+const NOISE_BG_MAX = 300;
 // Расширенная палитра: зелёный (дёшево/тихо) -> жёлто-зелёный -> жёлтый ->
 // оранжевый -> красный -> бордовый (дорого/шумно) — 6 стопов вместо 2,
 // чтобы верхний край шкалы (самые дорогие/шумные гексы) отличался от
@@ -1113,17 +1117,62 @@ function drawPriceHeat(points, archivedPoints) {
   });
 }
 
+// Тепловая карта плотности точек (школы/сады) — ИНВЕРТИРОВАННЫЙ цвет
+// относительно шума/цены: много рядом — хорошо (зелёный), мало — плохо
+// (красный/бордовый), а не наоборот. Покрывает весь bbox загруженных точек
+// целиком (как фон шума, см. drawRoadHeatBackground) — иначе гексы рисуются
+// только там, где есть хоть одна школа, а всё остальное остаётся пустым,
+// хотя "мало школ" — это тоже содержательный результат, который надо видеть.
 function drawCountHeat(items, latLonFn, label) {
-  const buckets = hexBucket(items, latLonFn);
-  const counts = [];
-  buckets.forEach(b => { b.value = b.items.length; counts.push(b.value); });
-  if (!counts.length) return;
-  const hi = Math.max(...counts);
+  const buckets = hexBucket(items, latLonFn, HEAT_EDGE_M);
+  const hexCount = new Map();
+  buckets.forEach((b, key) => hexCount.set(key, b.items.length));
+
+  let qMin = Infinity, qMax = -Infinity, rMin = Infinity, rMax = -Infinity;
   buckets.forEach(b => {
-    const t = hi > 0 ? b.value / hi : 0;
-    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
-      color: '#fff', weight: 0.5, fillColor: heatColor(t), fillOpacity: 0.5,
-    }).bindTooltip(`${label}: ${b.value}`, {sticky:true}).addTo(heatLayer);
+    qMin = Math.min(qMin, b.q); qMax = Math.max(qMax, b.q);
+    rMin = Math.min(rMin, b.r); rMax = Math.max(rMax, b.r);
+  });
+  if (!isFinite(qMin)) return;
+  const RINGS = 3;
+  qMin -= RINGS; qMax += RINGS; rMin -= RINGS; rMax += RINGS;
+
+  function ringsAround(q, r, maxRing) {
+    const out = [[q, r, 0]];
+    let frontier = [[q, r]];
+    for (let ring = 1; ring <= maxRing; ring++) {
+      const next = [];
+      const seen = new Set(frontier.map(([fq, fr]) => fq + ':' + fr));
+      frontier.forEach(([fq, fr]) => {
+        hexNeighborsAxial(fq, fr).forEach(([nq, nr]) => {
+          const k = nq + ':' + nr;
+          if (!seen.has(k)) { seen.add(k); next.push([nq, nr]); out.push([nq, nr, ring]); }
+        });
+      });
+      frontier = next;
+    }
+    return out;
+  }
+
+  const cells = [];
+  for (let q = qMin; q <= qMax; q++) {
+    for (let r = rMin; r <= rMax; r++) {
+      const own = hexCount.get(q + ':' + r);
+      if (own != null) { cells.push({q, r, value: own}); continue; }
+      let best = 0;
+      for (const [nq, nr, ring] of ringsAround(q, r, RINGS)) {
+        const c = hexCount.get(nq + ':' + nr);
+        if (c != null) best = Math.max(best, c / (1 + ring * 0.8));
+      }
+      cells.push({q, r, value: best});
+    }
+  }
+  const hi = Math.max(...cells.map(c => c.value)) || 1;
+  cells.forEach(c => {
+    const t = 1 - Math.min(1, c.value / hi);  // инверсия: мало рядом -> t~1 -> красный/бордовый
+    L.polygon(hexCorners(c.q, c.r, HEAT_EDGE_M), {
+      color: 'transparent', weight: 0, fillColor: heatColor(t), fillOpacity: 0.4,
+    }).bindTooltip(`${label} рядом: ${c.value.toFixed(1)}`, {sticky:true}).addTo(heatLayer);
   });
 }
 
@@ -1223,13 +1272,19 @@ function drawRoadHeatBackground(roads) {
       cells.push({q, r, score: Math.max(NOISE_BG_FLOOR, best)});
     }
   }
-  const scores = cells.map(c => c.score);
-  const hi = percentile(scores, 0.90) || Math.max(...scores) || 1;
+  // Абсолютный, а не перцентильный потолок: перцентиль "плавает" от того,
+  // что вообще попало в текущий вид/фильтр, из-за чего одни и те же
+  // абсолютные значения шума в разных кадрах красились по-разному, а
+  // по-настоящему тихие места (близко к NOISE_BG_FLOOR) на фоне более
+  // громких соседей всё равно выглядели жёлто-розовыми, а не зелёными.
+  // NOISE_BG_MAX подобран по масштабу самих чисел (см. вкладку Инфо →
+  // "Как считается шум"): 200м-гекс на загруженной дороге легко набирает
+  // 150-400 (несколько точек семплирования по 10-30 + бонус за пересечение).
   cells.forEach(c => {
-    const t = Math.min(1, c.score / hi);
+    const t = Math.min(1, c.score / NOISE_BG_MAX);
     L.polygon(hexCorners(c.q, c.r, NOISE_BG_EDGE_M), {
       color: 'transparent', weight: 0, fillColor: heatColor(t), fillOpacity: 0.30,
-    }).bindTooltip(`шум (фон): ~${c.score.toFixed(0)}`, {sticky:true}).addTo(heatLayer);
+    }).bindTooltip(`шум (фон): ~${c.score.toFixed(0)} из ${NOISE_BG_MAX} (см. Инфо → Шум)`, {sticky:true}).addTo(heatLayer);
   });
 }
 
@@ -1271,9 +1326,8 @@ function drawRoadHeat(roads) {
   }
   const scores = [...spread.values()].map(c => c.score);
   if (!scores.length) return;
-  const hi = percentile(scores, 0.90) || Math.max(...scores);
   spread.forEach(c => {
-    const t = hi > 0 ? c.score / hi : 0;
+    const t = Math.min(1, c.score / NOISE_FINE_MAX);
     L.polygon(hexCorners(c.q, c.r, NOISE_EDGE_M), {
       color: '#fff', weight: 0.4, fillColor: heatColor(t), fillOpacity: c.isRoad ? 0.55 : 0.35,
     }).bindTooltip(
