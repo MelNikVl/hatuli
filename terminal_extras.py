@@ -2178,6 +2178,64 @@ def make_extras_router(templates) -> APIRouter:
 
     # ── Объявления без привязки к ЖК ──────────────────────────────────────
 
+    # ── Аналитика: этаж vs скорость ухода в архив / просмотры ──────────────
+
+    @router.get("/admin/api/floor-performance-data")
+    async def floor_performance_data(request: Request):
+        """Этаж vs скорость ухода в архив (прокси продажи) и просмотры.
+        floor_position нет отдельной колонкой в БД (считается на лету при
+        парсинге, но никуда не сохраняется) — выводим её тем же правилом
+        прямо в SQL: floor=1 -> первый, floor=floors_total -> последний,
+        иначе средний."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+
+        by_position = await pg_fetch("""
+            SELECT
+                CASE WHEN floor = 1 THEN 'первый'
+                     WHEN floor = floors_total THEN 'последний'
+                     ELSE 'средний' END AS position,
+                COUNT(*) FILTER (WHERE archived_at IS NOT NULL) AS archived_cnt,
+                AVG(EXTRACT(EPOCH FROM (archived_at - first_seen)) / 86400)
+                    FILTER (WHERE archived_at IS NOT NULL) AS avg_days_to_archive,
+                COUNT(*) FILTER (WHERE is_active IS NOT FALSE AND views_count IS NOT NULL) AS views_cnt,
+                AVG(views_count) FILTER (WHERE is_active IS NOT FALSE AND views_count IS NOT NULL) AS avg_views
+            FROM apartment_listings
+            WHERE floor IS NOT NULL AND floors_total IS NOT NULL
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+            GROUP BY 1
+        """)
+
+        by_floor = await pg_fetch("""
+            SELECT
+                LEAST(floor, 20) AS floor_bucket,
+                COUNT(*) FILTER (WHERE archived_at IS NOT NULL) AS archived_cnt,
+                AVG(EXTRACT(EPOCH FROM (archived_at - first_seen)) / 86400)
+                    FILTER (WHERE archived_at IS NOT NULL) AS avg_days_to_archive,
+                COUNT(*) FILTER (WHERE is_active IS NOT FALSE AND views_count IS NOT NULL) AS views_cnt,
+                AVG(views_count) FILTER (WHERE is_active IS NOT FALSE AND views_count IS NOT NULL) AS avg_views
+            FROM apartment_listings
+            WHERE floor IS NOT NULL AND floor > 0
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+            GROUP BY 1
+            ORDER BY 1
+        """)
+
+        def _fmt(rows, key):
+            return [{
+                key: r[key] if key != "floor_bucket" else (str(r[key]) if r[key] < 20 else "20+"),
+                "archived_cnt": r["archived_cnt"] or 0,
+                "avg_days_to_archive": round(float(r["avg_days_to_archive"]), 1) if r["avg_days_to_archive"] is not None else None,
+                "views_cnt": r["views_cnt"] or 0,
+                "avg_views": round(float(r["avg_views"]), 0) if r["avg_views"] is not None else None,
+            } for r in rows]
+
+        return JSONResponse({
+            "by_position": _fmt(by_position, "position"),
+            "by_floor": _fmt(by_floor, "floor_bucket"),
+        })
+
     @router.get("/admin/unbound", response_class=HTMLResponse)
     async def unbound_page(request: Request):
         if not is_authed(request):

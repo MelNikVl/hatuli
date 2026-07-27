@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🏢 Этаж vs скорость продажи и просмотры</div>
+<p style="font-size:13px;color:#888;max-width:900px;">
+  «Скорость продажи» — прокси, не факт продажи: считаем дни от появления объявления до ухода в архив
+  (архив = мы перестали видеть объявление активным, не обязательно именно продажа — см. вкладку
+  <a href="/admin/archived">Ушедшие в архив</a>). Оба графика — только по объявлениям, где известен этаж
+  (сейчас их меньшинство базы, см. вкладку <a href="/admin/analytics/floors">Этажи</a>), поэтому выборка
+  растёт по мере докачки данных, а не разовая.
+</p>
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:14px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:1 1 420px;min-width:320px;">
+    <b style="font-size:14px;">По позиции этажа (первый / средний / последний)</b>
+    <canvas id="chart-position" height="200"></canvas>
+    <div id="table-position" style="margin-top:10px;font-size:12.5px;"></div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:1 1 420px;min-width:320px;">
+    <b style="font-size:14px;">По конкретному этажу дома</b>
+    <canvas id="chart-floor" height="200"></canvas>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+fetch('/admin/api/floor-performance-data').then(r => r.json()).then(d => {
+  const order = {'первый': 0, 'средний': 1, 'последний': 2};
+  const byPos = [...(d.by_position || [])].sort((a, b) => (order[a.position] ?? 9) - (order[b.position] ?? 9));
+
+  if (byPos.length) {
+    new Chart(document.getElementById('chart-position'), {
+      type: 'bar',
+      data: {
+        labels: byPos.map(p => p.position),
+        datasets: [
+          { label: 'Дней до архива (в среднем)', data: byPos.map(p => p.avg_days_to_archive), backgroundColor: '#2563eb', yAxisID: 'y' },
+          { label: 'Просмотров (в среднем)', data: byPos.map(p => p.avg_views), backgroundColor: '#f59e0b', yAxisID: 'y1' },
+        ],
+      },
+      options: {
+        scales: {
+          y: { position: 'left', title: { display: true, text: 'дней' } },
+          y1: { position: 'right', title: { display: true, text: 'просмотров' }, grid: { drawOnChartArea: false } },
+        },
+      },
+    });
+    document.getElementById('table-position').innerHTML = byPos.map(p =>
+      `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
+        <b>${escapeHtml(p.position)}</b> этаж —
+        ${p.avg_days_to_archive != null ? p.avg_days_to_archive + ' дн. до архива (n=' + p.archived_cnt + ')' : 'нет данных по архиву'},
+        ${p.avg_views != null ? p.avg_views + ' просмотров в среднем (n=' + p.views_cnt + ')' : 'нет данных по просмотрам'}
+      </div>`).join('');
+  } else {
+    document.getElementById('chart-position').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока недостаточно данных по этажу</div>';
+  }
+
+  const byFloor = (d.by_floor || []).filter(f => f.floor_bucket !== '0');
+  if (byFloor.length) {
+    new Chart(document.getElementById('chart-floor'), {
+      type: 'line',
+      data: {
+        labels: byFloor.map(f => f.floor_bucket),
+        datasets: [
+          { label: 'Дней до архива', data: byFloor.map(f => f.avg_days_to_archive), borderColor: '#2563eb', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.25 },
+          { label: 'Просмотров', data: byFloor.map(f => f.avg_views), borderColor: '#f59e0b', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.25 },
+        ],
+      },
+      options: {
+        scales: {
+          x: { title: { display: true, text: 'этаж (20+ — всё выше 20-го)' } },
+          y: { position: 'left', title: { display: true, text: 'дней' } },
+          y1: { position: 'right', title: { display: true, text: 'просмотров' }, grid: { drawOnChartArea: false } },
+        },
+      },
+    });
+  } else {
+    document.getElementById('chart-floor').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока недостаточно данных по этажу</div>';
+  }
+}).catch(() => {});
+</script>
+{% endblock %}

@@ -416,6 +416,17 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "total_active": total_active, "missing_floor": missing_floor,
         })
 
+    @app.get("/admin/analytics/floor-performance", response_class=HTMLResponse)
+    async def floor_performance_page(request: Request):
+        # ВАЖНО: тот же паттерн, что views/floors — этот роут ДОЛЖЕН стоять
+        # выше catch-all /admin/analytics/{listing_id} ниже, иначе "floor-
+        # performance" матчится туда как несуществующий listing_id ("Not found").
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("floor_performance.html", {
+            "request": request, "atab": "floor_performance",
+        })
+
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
     async def analytics_detail(request: Request, listing_id: str):
         if not is_authed(request):
