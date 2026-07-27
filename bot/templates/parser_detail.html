@@ -55,9 +55,67 @@
   <span style="font-size:0.85em;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж; этаж приходит только с детальной страницы</span>
   <div class="chart-box-1200-inner"><canvas id="floor-chart"></canvas></div>
 </div>
+
+<div class="chart-box-1200">
+  <b style="font-size:1em;">Сколько времени занимает цикл парсера</b>
+  <span style="font-size:0.85em;color:#888;margin-left:6px;">от старта до конца одного прохода (~раз в 50-80 минут)</span>
+  <div class="chart-box-1200-inner"><canvas id="cycle-duration-chart"></canvas></div>
+</div>
+
+<div class="chart-box-1200">
+  <b style="font-size:1em;">Примерная нагрузка на Крышу — HTTP-запросов за цикл</b>
+  <span style="font-size:0.85em;color:#888;margin-left:6px;">поиск (страницы выдачи) + детальные страницы объявлений</span>
+  <div class="chart-box-1200-inner"><canvas id="cycle-requests-chart"></canvas></div>
+</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+fetch('/admin/api/parser-cycle-history?days=14').then(r => r.json()).then(d => {
+  const pts = d.points || [];
+  if (pts.length < 2) {
+    document.getElementById('cycle-duration-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 циклов</div>';
+    document.getElementById('cycle-requests-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 циклов</div>';
+    return;
+  }
+  new Chart(document.getElementById('cycle-duration-chart'), {
+    type: 'line',
+    data: {
+      labels: pts.map(p => p.at),
+      datasets: [{
+        label: 'мин.', data: pts.map(p => p.duration_min),
+        borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.25, pointRadius: 2,
+      }],
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+        y: { beginAtZero: true, title: { display: true, text: 'минут' }, ticks: { font: { size: 13 } } },
+      },
+    },
+  });
+  new Chart(document.getElementById('cycle-requests-chart'), {
+    type: 'bar',
+    data: {
+      labels: pts.map(p => p.at),
+      datasets: [
+        { label: 'поиск (страницы выдачи)', data: pts.map(p => p.search_requests), backgroundColor: 'rgba(37,99,235,.75)', borderRadius: 3 },
+        { label: 'детальные страницы', data: pts.map(p => p.detail_requests), backgroundColor: 'rgba(245,158,11,.75)', borderRadius: 3 },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 14 } } } },
+      scales: {
+        x: { stacked: true, ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+        y: { stacked: true, beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
+      },
+    },
+  });
+}).catch(() => {});
+</script>
 <script>
 fetch('/admin/api/floor-history?days=30').then(r => r.json()).then(d => {
   const pts = d.points || [];

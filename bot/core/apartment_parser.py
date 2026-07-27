@@ -15,6 +15,11 @@ import httpx
 import re as _re_mod
 
 LAST_TOTAL_FOUND: int | None = None
+# Счётчик реальных HTTP-запросов к Крыше за текущий цикл — приблизительная
+# оценка нагрузки на источник (см. /admin/api/parser-cycle-history).
+# Сбрасывается в service_apartments.run_cycle() перед каждым проходом.
+REQUEST_COUNTS = {'search': 0}
+
 _re_total = _re_mod.compile(r"Найдено[^\d]{0,20}([\d\s\xa0\u2009]{1,12})")
 _re_total_clean = _re_mod.compile(r"\D")
 from bs4 import BeautifulSoup
@@ -83,6 +88,7 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
             try:
                 resp = await client.get(url)
                 resp.raise_for_status()
+                REQUEST_COUNTS['search'] += 1
             except Exception as exc:
                 logger.warning("apt_parser: page %d failed: %s", page, exc)
                 continue

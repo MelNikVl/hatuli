@@ -1089,7 +1089,9 @@ def make_extras_router(templates) -> APIRouter:
                          area_min: float = 0, area_max: float = 0,
                          min_score: int = 0, seller: str = "", market: str = "",
                          price_change: str = "", finish: str = "", cheapest_only: bool = False,
-                         offset: int = 0, limit: int = 15000):
+                         offset: int = 0, limit: int = 15000,
+                         min_lat: float = 0, max_lat: float = 0,
+                         min_lon: float = 0, max_lon: float = 0):
         # публичный (карта на главной без логина); coverage — только админу
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
 
@@ -1218,6 +1220,14 @@ def make_extras_router(templates) -> APIRouter:
         # покрывает только объявления с явным сигналом в описании.
         if finish in ("черновая", "с отделкой", "с мебелью"):
             conds.append(f"AND a.finish_type = ${i}"); params.append(finish); i += 1
+        # Ограничение по текущей видимой области карты — вместо того чтобы
+        # тянуть весь город (тысячи объектов), когда пользователь смотрит
+        # на один квартал. Приходит от dashboard.html при zoom >= ZOOM_GATE.
+        if min_lat and max_lat and min_lon and max_lon:
+            conds.append(f"AND a.lat BETWEEN ${i} AND ${i+1} AND a.lon BETWEEN ${i+2} AND ${i+3}")
+            params.append(min_lat); params.append(max_lat)
+            params.append(min_lon); params.append(max_lon)
+            i += 4
         # Пагинация: главная страница подгружает точки батчами (см. dashboard.html
         # applyFilters) — сперва первые ~300 для мгновенной отрисовки, остальное
         # довозится в фоне без блокировки первой отрисовки карты.
@@ -2390,6 +2400,53 @@ def make_extras_router(templates) -> APIRouter:
             "by_position": _fmt(by_position, "position"),
             "by_floor": _fmt(by_floor, "floor_bucket"),
         })
+
+    @router.get("/admin/api/parser-cycle-history")
+    async def parser_cycle_history(request: Request, days: int = 14):
+        """Снимки parser_cycle_history — сколько времени занимает цикл
+        парсера и сколько реальных HTTP-запросов к Крыше он делает
+        (search+detail) — для графиков на /admin/parser."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT at, duration_sec, search_requests, detail_requests
+            FROM parser_cycle_history
+            WHERE at > now() - ($1 || ' days')::interval
+            ORDER BY at ASC
+        """, str(days))
+        return JSONResponse({"points": [{
+            "at": r["at"].strftime("%d.%m %H:%M"),
+            "duration_min": round((r["duration_sec"] or 0) / 60, 1),
+            "search_requests": r["search_requests"] or 0,
+            "detail_requests": r["detail_requests"] or 0,
+            "total_requests": (r["search_requests"] or 0) + (r["detail_requests"] or 0),
+        } for r in rows]})
+
+    @router.get("/admin/api/score-confidence-points")
+    async def score_confidence_points(request: Request, rooms: str = ""):
+        """Точки для гекс-карты уверенности Смарт рейтинга на /admin/analytics —
+        confidence (0-100%, см. bot/core/deal_score.py) по каждому активному
+        объявлению с координатами, опционально по комнатности."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        conds = ["a.lat IS NOT NULL", "a.lon IS NOT NULL", "a.is_active IS NOT FALSE",
+                 "COALESCE(a.is_duplicate, FALSE) = FALSE", "a.deal_confidence IS NOT NULL"]
+        params = []
+        if rooms:
+            conds.append(f"a.rooms = ${len(params)+1}")
+            params.append(int(rooms))
+        rows = await pg_fetch(f"""
+            SELECT a.lat, a.lon, a.deal_confidence, a.score_total, a.rooms
+            FROM apartment_listings a
+            WHERE {' AND '.join(conds)}
+            LIMIT 20000
+        """, *params)
+        return JSONResponse({"points": [{
+            "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "confidence": r["deal_confidence"], "score": r["score_total"],
+        } for r in rows]})
 
     @router.get("/admin/api/floor-sold-counts")
     async def floor_sold_counts(request: Request, period: str = "month"):

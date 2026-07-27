@@ -742,14 +742,47 @@ async def run_cycle():
     log.info("=== Apartment cycle done ===\n")
 
 
+async def _run_cycle_timed():
+    """run_cycle() обёрнутый таймингом + счётчиком реальных HTTP-запросов
+    к Крыше за цикл — снимок в parser_cycle_history для графиков
+    "сколько идёт парсинг" и "нагрузка на Крышу" на /admin/parser."""
+    import time as _time
+    from bot.core.apartment_parser import REQUEST_COUNTS as _search_counts
+    from bot.core.apartment_details import REQUEST_COUNTS as _detail_counts
+    _search_counts["search"] = 0
+    _detail_counts["detail"] = 0
+    started = _time.monotonic()
+    try:
+        await run_cycle()
+    finally:
+        duration_sec = _time.monotonic() - started
+        try:
+            from bot.db.pg import execute as _pg_exec_cycle
+            await _pg_exec_cycle(
+                "INSERT INTO parser_cycle_history (duration_sec, search_requests, detail_requests) "
+                "VALUES ($1, $2, $3)",
+                round(duration_sec), _search_counts["search"], _detail_counts["detail"])
+        except Exception as e:
+            log.warning("parser_cycle_history snapshot failed: %s", e)
+
+
 async def main():
-    from bot.db.pg import init_pool
+    from bot.db.pg import init_pool, execute as _pg_exec_init
     await init_pool(DATABASE_URL)
+    await _pg_exec_init("""
+        CREATE TABLE IF NOT EXISTS parser_cycle_history (
+            id SERIAL PRIMARY KEY,
+            at TIMESTAMPTZ DEFAULT now(),
+            duration_sec INT,
+            search_requests INT,
+            detail_requests INT
+        )
+    """)
     log.info("=== Apartment service started ===")
 
     # Первый цикл сразу
     try:
-        await run_cycle()
+        await _run_cycle_timed()
     except Exception as e:
         log.error("First cycle error: %s", e, exc_info=True)
 
@@ -758,7 +791,7 @@ async def main():
         log.info("Next cycle in %.0f min...", sleep_min)
         await asyncio.sleep(sleep_min * 60)
         try:
-            await run_cycle()
+            await _run_cycle_timed()
         except Exception as e:
             log.error("Cycle error: %s", e, exc_info=True)
 

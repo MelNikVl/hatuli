@@ -8,6 +8,10 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
+# Счётчик запросов детальных страниц за текущий цикл (см. apartment_parser.REQUEST_COUNTS
+# и /admin/api/parser-cycle-history) — сбрасывается в service_apartments.run_cycle().
+REQUEST_COUNTS = {"detail": 0}
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept-Language": "ru-RU,ru;q=0.9",
@@ -68,6 +72,7 @@ async def fetch_apartment_details(url: str) -> dict:
     async with httpx.AsyncClient(headers=HEADERS, timeout=30.0, follow_redirects=True) as c:
         try:
             resp = await c.get(url)
+            REQUEST_COUNTS["detail"] += 1
             if resp.status_code in (403, 429):
                 logger.warning("blocked: %s", url)
                 return {}

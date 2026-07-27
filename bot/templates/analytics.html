@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 
 
@@ -60,6 +62,19 @@ tr:last-child td { border-bottom: none; }
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">📊 Аналитика квартир</div>
 <div class="container">
+
+<div class="chart-box-1200" style="height:auto;">
+  <b style="font-size:1em;">🎯 Уверенность Смарт рейтинга по гексам</b>
+  <span style="font-size:0.85em;color:#888;margin-left:6px;">% факторов, посчитанных на реальных данных (не риск сделки) — см. подсказку "?" у скора в превью</span>
+  <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;">
+    {% for val, label in [('', 'Все'), ('1', '1-комн'), ('2', '2-комн'), ('3', '3-комн'), ('4', '4+-комн')] %}
+    <button type="button" class="conf-rooms-btn" data-rooms="{{ val }}" onclick="loadConfidenceHex('{{ val }}')"
+            style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:13px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+    <span id="conf-hex-count" style="font-size:12px;color:#888;margin-left:auto;align-self:center;"></span>
+  </div>
+  <div id="conf-hex-map" style="height:25vh;min-height:220px;border-radius:8px;"></div>
+</div>
 <div>
   <div class="chart-box-1200">
     <b style="font-size:1em;">📉 Объявления без фото во времени</b>
@@ -116,6 +131,66 @@ tr:last-child td { border-bottom: none; }
     const npW = Math.max(280, npEl.parentElement.clientWidth - 4);
     unboundStyleLineChart('no-photo-chart', d.points || [], 'no_photo', npW, 480);
   }).catch(() => {});
+
+  // ── Гекс-карта уверенности Смарт рейтинга ──────────────────────────────
+  const confMap = L.map('conf-hex-map', {zoomControl: false}).setView([51.128, 71.430], 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(confMap);
+  const confHexLayer = L.layerGroup().addTo(confMap);
+  const CONF_LAT0 = 51.128, CONF_LON0 = 71.430,
+        CONF_MLAT = 110574.0, CONF_MLON = 111320.0 * Math.cos(CONF_LAT0 * Math.PI/180);
+  const CONF_EDGE_M = 400;
+  function confHexAxial(lat, lon) {
+    const x = (lon - CONF_LON0) * CONF_MLON, y = (lat - CONF_LAT0) * CONF_MLAT;
+    let q = (Math.sqrt(3)/3 * x - y/3) / CONF_EDGE_M, r = (2/3 * y) / CONF_EDGE_M;
+    const sAx = -q - r;
+    let rq = Math.round(q), rr = Math.round(r), rs = Math.round(sAx);
+    const dq = Math.abs(rq-q), dr = Math.abs(rr-r), ds = Math.abs(rs-sAx);
+    if (dq > dr && dq > ds) rq = -rr - rs; else if (dr > ds) rr = -rq - rs;
+    return [rq, rr];
+  }
+  function confHexCorners(q, r) {
+    const cx = CONF_EDGE_M * Math.sqrt(3) * (q + r/2), cy = CONF_EDGE_M * 1.5 * r;
+    const clat = CONF_LAT0 + cy/CONF_MLAT, clon = CONF_LON0 + cx/CONF_MLON;
+    const out = [];
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI/180 * (60*i - 30);
+      out.push([clat + (CONF_EDGE_M*Math.sin(a))/CONF_MLAT, clon + (CONF_EDGE_M*Math.cos(a))/CONF_MLON]);
+    }
+    return out;
+  }
+  function confColor(t) {
+    t = Math.max(0, Math.min(1, t));
+    const from = [239,68,68], to = [22,163,74];  // красный (низкая увер.) -> зелёный (высокая)
+    const c = from.map((f,i) => Math.round(f + (to[i]-f)*t));
+    return `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+  function loadConfidenceHex(rooms) {
+    document.querySelectorAll('.conf-rooms-btn').forEach(b => {
+      const active = b.dataset.rooms === rooms;
+      b.style.background = active ? '#2563eb' : 'var(--bg)';
+      b.style.color = active ? '#fff' : 'var(--text)';
+    });
+    const qs = rooms ? ('?rooms=' + encodeURIComponent(rooms)) : '';
+    fetch('/admin/api/score-confidence-points' + qs).then(r => r.json()).then(d => {
+      confHexLayer.clearLayers();
+      const pts = d.points || [];
+      document.getElementById('conf-hex-count').textContent = pts.length.toLocaleString('ru') + ' объявлений';
+      const buckets = new Map();
+      pts.forEach(p => {
+        const [q, r] = confHexAxial(p.lat, p.lon);
+        const key = q + ':' + r;
+        if (!buckets.has(key)) buckets.set(key, {q, r, items: []});
+        buckets.get(key).items.push(p.confidence);
+      });
+      buckets.forEach(b => {
+        const avg = b.items.reduce((s,v) => s+v, 0) / b.items.length;
+        L.polygon(confHexCorners(b.q, b.r), {
+          color: '#fff', weight: 0.5, fillColor: confColor(avg/100), fillOpacity: 0.65,
+        }).bindTooltip(`уверенность: ${Math.round(avg)}% · ${b.items.length} объявл.`, {sticky:true}).addTo(confHexLayer);
+      });
+    }).catch(() => {});
+  }
+  loadConfidenceHex('');
 
   fetch('/admin/api/price-drops-history?days=30').then(r => r.json()).then(d => {
     const el = document.getElementById('price-drops-chart');

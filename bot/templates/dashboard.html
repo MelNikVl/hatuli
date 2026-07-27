@@ -213,6 +213,18 @@ map.on('zoomend', () => {
     const fn = pendingBatchResume; pendingBatchResume = null; fn();
   }
 });
+// Пользователь мог приблизиться к одному кварталу, но раньше всё равно
+// постепенно догружался весь город батчами по 300, невзирая на то, куда
+// он реально смотрит. Теперь при zoom >= ZOOM_GATE догружаем/перегружаем
+// объекты ТОЛЬКО в текущей видимой области — на пан/зум (с debounce, чтобы
+// не долбить запросами каждый пиксель драга).
+let viewportReloadTimer = null;
+map.on('moveend', () => {
+  if (document.getElementById('f-type').value === 'complex') return;
+  if (map.getZoom() < ZOOM_GATE) return;
+  clearTimeout(viewportReloadTimer);
+  viewportReloadTimer = setTimeout(() => applyFilters(), 300);
+});
 
 // ── Кнопки прямо на карте (как на Zillow): нарисовать область, школы ──────
 const MapButtons = L.Control.extend({
@@ -651,6 +663,11 @@ function applyFilters() {
     map.removeLayer(complexLayer); complexLayer.clearLayers();
   }
   const p = new URLSearchParams({type});
+  if (map.getZoom() >= ZOOM_GATE) {
+    const b = map.getBounds();
+    p.set('min_lat', b.getSouth()); p.set('max_lat', b.getNorth());
+    p.set('min_lon', b.getWest()); p.set('max_lon', b.getEast());
+  }
   const rooms = document.getElementById('f-rooms').value;
   // цена: принимаем и "25" (млн), и "25000000" (тенге); аренда — "300" (тыс) или "300000"
   const toTenge = v => {
