@@ -4,47 +4,52 @@
   Застройщики
   <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} компаний</small>
 </div>
+<p style="font-size:13px;color:#888;max-width:900px;margin-bottom:14px;">
+  Какие данные удалось собрать по каждому застройщику — чтобы разбираться точечно, а не искать пробелы вручную.
+  ✅ — данные есть, ✕ — нет.
+</p>
 
-<form method="get" action="/admin/developers" style="margin-bottom:16px;display:flex;gap:8px;">
-  <input type="text" name="search" value="{{ search }}" placeholder="Поиск по названию..."
-         style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;width:280px;">
-  <button type="submit" style="padding:8px 16px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">Найти</button>
+<form method="get" action="/admin/developers" style="margin-bottom:14px;display:flex;gap:8px;align-items:center;">
+  <label style="font-size:13px;color:#888;">Мин. активных объявлений:
+    <input type="number" name="min_active" value="{{ min_active }}" min="0" step="1"
+           style="width:80px;padding:6px 10px;margin-left:6px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;">
+  </label>
+  <button type="submit" style="padding:6px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">Показать</button>
 </form>
 
 <style>
-.dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;}
-.dev-card{display:block;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;text-decoration:none;color:inherit;transition:box-shadow .15s,transform .15s;}
-.dev-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.12);transform:translateY(-2px);}
-.dev-photo{width:100%;height:130px;object-fit:cover;display:block;background:#e2e8f0;}
-.dev-no-photo{width:100%;height:130px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;font-size:38px;font-weight:800;}
-.dev-body{padding:12px 14px;}
-.dev-name{font-weight:700;font-size:14.5px;line-height:1.25;margin-bottom:6px;}
-.dev-stats{display:flex;flex-wrap:wrap;gap:5px;font-size:11px;color:#666;}
-.dev-chip{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:2px 8px;}
+.aud-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.aud-table th { text-align: left; color: #888; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 11.5px; text-transform: uppercase; position: sticky; top: 0; background: var(--surface); }
+.aud-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.aud-table tr:hover td { background: var(--bg); }
+.aud-ok { color: #16a34a; font-weight: 700; }
+.aud-no { color: #ef4444; }
+.aud-wrap { max-height: 80vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
 </style>
 
-<div class="dev-grid">
+<div class="aud-wrap">
+<table class="aud-table">
+  <tr>
+    <th>Застройщик</th><th>Активных объявл.</th><th>ЖК</th><th>Год основания</th>
+    <th>Сайт</th><th>Описание</th><th>Рейтинг</th><th>Просрочки</th><th>Суд. дела</th><th>Homsters</th>
+  </tr>
   {% for d in developers %}
-  <a class="dev-card" href="/admin/developer/{{ d.id }}">
-    {% if d.photo %}
-      <img class="dev-photo" src="{{ d.photo }}" loading="lazy" onerror="this.outerHTML='<div class=dev-no-photo>{{ d.name[:1] }}</div>'">
-    {% else %}
-      <div class="dev-no-photo">{{ d.name[:1] }}</div>
-    {% endif %}
-    <div class="dev-body">
-      <div class="dev-name">{{ d.name }}</div>
-      <div class="dev-stats">
-        <span class="dev-chip">🏢 {{ d.projects }} ЖК</span>
-        {% if d.listings %}<span class="dev-chip">📋 {{ d.listings }} объявл.</span>{% endif %}
-        {% if d.years %}<span class="dev-chip">📅 {{ d.years }}</span>{% endif %}
-        {% if d.price_m2 %}<span class="dev-chip">💰 {{ (d.price_m2/1000)|round|int }} тыс ₸/м²</span>{% endif %}
-        {% if d.yield_pct %}<span class="dev-chip">📈 {{ d.yield_pct }}%</span>{% endif %}
-      </div>
-    </div>
-  </a>
+  <tr>
+    <td><a href="/admin/developer/{{ d.id }}" style="color:inherit;font-weight:600;">{{ d.name }}</a></td>
+    <td>{{ d.active_cnt }}</td>
+    <td>{{ d.cx_cnt }}</td>
+    <td class="{{ 'aud-ok' if d.has_founded else 'aud-no' }}">{{ d.founded_year if d.has_founded else '✕' }}</td>
+    <td class="{{ 'aud-ok' if d.has_website else 'aud-no' }}">{{ '✅' if d.has_website else '✕' }}</td>
+    <td class="{{ 'aud-ok' if d.has_description else 'aud-no' }}">{{ '✅' if d.has_description else '✕' }}</td>
+    <td class="{{ 'aud-ok' if d.has_score else 'aud-no' }}">{{ d.score_total if d.has_score else '✕' }}</td>
+    <td class="{{ 'aud-ok' if d.has_delay_data else 'aud-no' }}">{{ (d.avg_delay_months ~ ' мес.') if d.has_delay_data else '✕' }}</td>
+    <td class="{{ 'aud-no' if d.has_court_cases else 'aud-ok' }}">{{ d.court_cases_count if d.has_court_cases else '—' }}</td>
+    <td class="{{ 'aud-ok' if d.has_homsters else 'aud-no' }}">{{ '✅' if d.has_homsters else '✕' }}</td>
+  </tr>
   {% endfor %}
+</table>
 </div>
 {% if not developers %}
-<p style="padding:30px;text-align:center;color:#888;">Застройщики не найдены{% if search %} по запросу «{{ search }}»{% endif %}.</p>
+<p style="padding:30px;text-align:center;color:#888;">Застройщики не найдены{% if min_active %} с {{ min_active }}+ активными объявлениями{% endif %}.</p>
 {% endif %}
 {% endblock %}

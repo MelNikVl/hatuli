@@ -11,6 +11,16 @@
   <button onclick="auditCx(true)" style="padding:8px 14px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">🧹 Отвязать улицы от ЖК</button>
   <a href="/admin/complexes/data-audit" style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;text-decoration:none;">🧾 Аудит данных по ЖК</a>
   <span id="audit-status" style="font-size:13px;color:#888;"></span>
+  <form method="get" action="/admin/complexes" style="display:flex;gap:8px;align-items:center;margin-left:auto;">
+    <select name="sort" onchange="this.form.submit()">
+      <option value="listings" {% if filters.sort == 'listings' %}selected{% endif %}>По объявлениям</option>
+      <option value="yield" {% if filters.sort == 'yield' %}selected{% endif %}>По yield</option>
+      <option value="price" {% if filters.sort == 'price' %}selected{% endif %}>По цене/м²</option>
+      <option value="year" {% if filters.sort == 'year' %}selected{% endif %}>По году</option>
+    </select>
+    <input type="text" name="search" value="{{ filters.search }}" placeholder="Поиск по названию..." style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;">
+    <button type="submit" style="padding:6px 14px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">Найти</button>
+  </form>
 </div>
 <script>
 async function auditCx(apply) {
@@ -106,26 +116,13 @@ tr:last-child td{border-bottom:none}
 </style>
 
 <div style="order:2;flex:1 1 0;min-width:300px;max-height:calc(864px + 46px);display:flex;flex-direction:column;gap:12px;">
-  <form method="get" action="/admin/complexes" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;">
-    <div class="filters" style="flex-direction:column;align-items:stretch;">
-      <select name="sort" onchange="this.form.submit()">
-        <option value="listings" {% if filters.sort == 'listings' %}selected{% endif %}>По объявлениям</option>
-        <option value="yield" {% if filters.sort == 'yield' %}selected{% endif %}>По yield</option>
-        <option value="price" {% if filters.sort == 'price' %}selected{% endif %}>По цене/м²</option>
-        <option value="year" {% if filters.sort == 'year' %}selected{% endif %}>По году</option>
-      </select>
-      <input type="text" name="search" value="{{ filters.search }}" placeholder="Поиск по названию...">
-      <button type="submit">Найти</button>
-    </div>
-  </form>
-
   {% macro complex_card(c) %}
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
       <a href="/admin/complex/{{ c.id }}" style="display:block;">
         {% if c.photo_url %}
-        <img src="{{ c.photo_url }}" style="width:100%;height:100px;object-fit:cover;display:block;" onerror="this.style.display='none'">
+        <img src="{{ c.photo_url }}" style="width:100%;height:130px;object-fit:cover;display:block;" onerror="this.style.display='none'">
         {% else %}
-        <div style="width:100%;height:100px;background:var(--bg);"></div>
+        <div style="width:100%;height:130px;background:var(--bg);"></div>
         {% endif %}
       </a>
       <div style="padding:10px 12px;flex:1;display:flex;flex-direction:column;gap:4px;">
@@ -151,14 +148,32 @@ tr:last-child td{border-bottom:none}
   {% if complexes %}
   <div>
     <div style="font-size:12px;color:#888;font-weight:700;margin-bottom:6px;">🏆 Топ-10 по числу объявлений</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(286px,1fr));gap:13px;">
       {% for c in complexes[:10] %}{{ complex_card(c) }}{% endfor %}
     </div>
   </div>
   {% if complexes|length > 10 %}
-  <div style="overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));grid-auto-rows:min-content;align-content:start;gap:10px;padding-right:2px;flex:1 1 0;min-height:0;">
-    {% for c in complexes[10:] %}{{ complex_card(c) }}{% endfor %}
+  <div id="cx-more-wrap" style="overflow-y:auto;display:flex;flex-direction:column;gap:8px;flex:1 1 0;min-height:0;padding-right:2px;">
+    <div id="cx-more-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(286px,1fr));grid-auto-rows:min-content;align-content:start;gap:13px;">
+      {% for c in complexes[10:] %}<div class="cx-more-card" data-idx="{{ loop.index0 }}" style="display:none;">{{ complex_card(c) }}</div>{% endfor %}
+    </div>
+    <button id="cx-load-more-btn" onclick="loadMoreComplexes()" style="padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;cursor:pointer;">Показать ещё ↓</button>
   </div>
+  <script>
+  (function() {
+    const BATCH = 30;
+    let shown = 0;
+    const cards = document.querySelectorAll('#cx-more-grid .cx-more-card');
+    const btn = document.getElementById('cx-load-more-btn');
+    window.loadMoreComplexes = function() {
+      const next = Math.min(cards.length, shown + BATCH);
+      for (let i = shown; i < next; i++) cards[i].style.display = '';
+      shown = next;
+      if (shown >= cards.length) btn.style.display = 'none';
+    };
+    loadMoreComplexes();
+  })();
+  </script>
   {% endif %}
   {% else %}
   <p style="padding:20px;text-align:center;color:#888;">Ничего не найдено — попробуйте сбросить фильтры.</p>

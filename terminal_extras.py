@@ -1758,11 +1758,16 @@ def make_extras_router(templates) -> APIRouter:
     # ── Застройщики: список и карточка ────────────────────────────────────
 
     @router.get("/admin/developers", response_class=HTMLResponse)
-    async def developers_page(request: Request):
+    async def developers_page(request: Request, min_active: int = 0):
+        """Таблица по всем застройщикам: сколько объектов и какие данные о
+        них известны (тот же формат, что и Аудит данных по ЖК) — фильтр по
+        числу активных объявлений, название ссылкой на карточку."""
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
-            SELECT d.id, d.name, d.founded_year, d.projects_active,
-                   d.projects_total, d.homsters_slug,
+            SELECT d.id, d.name, d.founded_year, d.website, d.description,
+                   d.projects_active, d.projects_total, d.projects_delivered,
+                   d.projects_delayed, d.avg_delay_months, d.has_court_cases,
+                   d.court_cases_count, d.score_total, d.homsters_slug,
                    COUNT(c.id) AS cx_cnt,
                    COALESCE(SUM(c.listings_count), 0) AS active_cnt,
                    COALESCE(SUM(c.sold_count), 0) AS sold_cnt
@@ -1770,13 +1775,27 @@ def make_extras_router(templates) -> APIRouter:
             LEFT JOIN complexes c ON c.developer_id = d.id
                                  AND COALESCE(c.is_street, FALSE) = FALSE
             GROUP BY d.id
-            ORDER BY cx_cnt DESC, active_cnt DESC, d.name
-            LIMIT 500
+            ORDER BY active_cnt DESC, cx_cnt DESC, d.name
         """)
+        out = []
+        for r in rows:
+            d = dict(r)
+            if d["active_cnt"] < min_active:
+                continue
+            out.append({
+                **d,
+                "has_founded": d["founded_year"] is not None,
+                "has_website": bool(d["website"]),
+                "has_description": bool(d["description"]),
+                "has_score": d["score_total"] is not None,
+                "has_homsters": bool(d["homsters_slug"]),
+                "has_delay_data": d["avg_delay_months"] is not None,
+            })
         return templates.TemplateResponse("developers.html", {
             "request": request,
-            "developers": [dict(r) for r in rows],
-            "total": len(rows),
+            "developers": out,
+            "total": len(out),
+            "min_active": min_active,
         })
 
     @router.get("/admin/developer/{dev_id}", response_class=HTMLResponse)
