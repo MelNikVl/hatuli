@@ -187,6 +187,21 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1):
         district = s.get("district", "")
         d = _norm_district(district)
 
+        # Этаж почти всегда виден прямо в заголовке карточки ("8/9 этаж"
+        # или просто "9 этаж") — парсим его тут, не дожидаясь медленного
+        # fetch_apartment_details (тот идёт лишь для DETAIL_FETCH_BATCH
+        # объявлений за проход и раньше был единственным источником floor).
+        if s.get("floor") is None:
+            title_text = s.get("title", "") or ""
+            fm = re.search(r"(\d+)\s*/\s*(\d+)\s*эт", title_text)
+            if fm:
+                s["floor"] = int(fm.group(1))
+                s["floors_total"] = int(fm.group(2))
+            else:
+                fm2 = re.search(r"(\d+)\s*эт", title_text)
+                if fm2:
+                    s["floor"] = int(fm2.group(1))
+
         # Lookup реальной аренды из PostgreSQL rental_index
         complex_name = s.get("complex_name") or s.get("address", "").split(",")[0].strip()
         rent_data = await lookup_rental_estimate(

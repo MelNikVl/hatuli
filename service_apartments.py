@@ -647,6 +647,30 @@ async def run_cycle():
     except Exception as e:
         log.warning("floor snapshot failed: %s", e)
 
+    # Снимок просмотров по комнатности во времени (/admin/analytics/views) —
+    # views_count накопительный с даты публикации, поэтому график по факту
+    # показывает суммарный накопленный интерес по типам квартир на срезах
+    # раз в цикл, а не прирост за конкретный день.
+    try:
+        from bot.db.pg import execute as _pg_exec5, fetchval as _pg_fv5
+        _v1 = await _pg_fv5(
+            "SELECT COALESCE(SUM(views_count),0) FROM apartment_listings "
+            "WHERE is_active IS NOT FALSE AND rooms = 1") or 0
+        _v2 = await _pg_fv5(
+            "SELECT COALESCE(SUM(views_count),0) FROM apartment_listings "
+            "WHERE is_active IS NOT FALSE AND rooms = 2") or 0
+        _v3 = await _pg_fv5(
+            "SELECT COALESCE(SUM(views_count),0) FROM apartment_listings "
+            "WHERE is_active IS NOT FALSE AND rooms = 3") or 0
+        _v4p = await _pg_fv5(
+            "SELECT COALESCE(SUM(views_count),0) FROM apartment_listings "
+            "WHERE is_active IS NOT FALSE AND rooms >= 4") or 0
+        await _pg_exec5(
+            "INSERT INTO views_stats_history (views_1, views_2, views_3, views_4p) VALUES ($1, $2, $3, $4)",
+            _v1, _v2, _v3, _v4p)
+    except Exception as e:
+        log.warning("views snapshot failed: %s", e)
+
     # === Мониторинг сервера/проекта (CPU/память/диск/размер) — снимок раз
     # в цикл, см. /admin/settings ===
     try:

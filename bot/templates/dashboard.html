@@ -62,7 +62,7 @@
       <select id="f-rooms" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
         <option value="">любые</option><option>1</option><option>2</option><option>3</option><option>4</option>
       </select></div>
-    <div id="f-market-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Рынок</label>
+    <div id="f-market-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Готовность жилья</label>
       <select id="f-market" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
         <option value="">весь</option><option value="secondary">вторичка</option><option value="primary">первичка (в стройке)</option>
       </select></div>
@@ -105,12 +105,15 @@
       <input id="f-cheapest-only" type="checkbox" onchange="if(this.checked)document.getElementById('f-top-only').checked=false;applyFilters()"> 💸 Топ-10 самых дешёвых</label>
   </div>
   </div>
-  <div>
-    <div onclick="toggleAdvancedFilters()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;font-size:13.5px;color:var(--text);font-weight:700;padding:6px 0;border-top:1px solid var(--border);">
+  <button onclick="applyFilters()" style="padding:11px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;">Показать</button>
+  <span id="result-count" style="font-size:13px;color:#888;"></span>
+
+  <div style="background:rgba(37,99,235,0.045);border:1px solid var(--border);border-radius:10px;padding:2px 12px;">
+    <div onclick="toggleAdvancedFilters()" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;font-size:13.5px;color:var(--text);font-weight:700;padding:8px 0;">
       <span>Расширенные фильтры</span>
       <span id="adv-caret" style="transition:transform .15s;">▸</span>
     </div>
-    <div id="advanced-filters" style="display:none;flex-direction:column;gap:12px;padding-top:6px;">
+    <div id="advanced-filters" style="display:none;flex-direction:column;gap:12px;padding-bottom:10px;">
       <div id="f-pricechange-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;">Изменение цены</label>
         <select id="f-pricechange" style="width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);">
           <option value="">любое</option><option value="dropped_today">▼ снизили цену сегодня</option><option value="raised_today">▲ подняли цену сегодня</option>
@@ -127,13 +130,11 @@
           <button type="button" class="heat-btn" data-mode="schools" onclick="toggleHeat('schools')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🏫 Школы</button>
           <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">🚗 Шум (предв.)</button>
         </div>
-        <label style="font-size:11.5px;color:#aaa;display:block;margin-top:6px;">Сторона гекса тепловых карт (м) — только для этой страницы
-          <input id="f-heat-edge" type="number" min="30" max="1000" step="10" value="250" onchange="setHeatEdge(this.value)" style="width:70px;padding:4px 8px;margin-left:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);"></label>
+        <label style="font-size:11.5px;color:#aaa;display:block;margin-top:6px;">Сторона гекса тепловых карт (м): <span id="f-heat-edge-val">250</span></label>
+        <input id="f-heat-edge" type="range" min="30" max="1000" step="10" value="250" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
       </div>
     </div>
   </div>
-  <button onclick="applyFilters()" style="padding:11px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;">Показать</button>
-  <span id="result-count" style="font-size:13px;color:#888;"></span>
 </div>
 
 <!-- Карта: слева, занимает всё свободное место, но не более 85% ширины блока
@@ -184,7 +185,7 @@ const pointsLayer = L.layerGroup().addTo(map);  // аренда: обычные 
 
 // Ниже этого зума отдельные точки всё равно склеены в кластеры одной
 // циферкой — см. использование в loadSaleBatch.
-const ZOOM_GATE = 12;
+const ZOOM_GATE = 15;  // дефолтный зум карты — 13, т.е. это +2 клика приближения
 let pendingBatchResume = null;
 map.on('zoomend', () => {
   if (pendingBatchResume && map.getZoom() >= ZOOM_GATE) {
@@ -682,7 +683,24 @@ function applyFilters() {
       }
     });
   }
-  loadSaleBatch(0);
+  // На отдалённом виде (весь город, zoom < ZOOM_GATE) полные карточки
+  // (цена/фото/скор на каждый объект) пока никто не увидит по отдельности —
+  // сперва только показываем количество и ждём, пока пользователь реально
+  // приблизится (см. ZOOM_GATE), прежде чем качать реальные данные.
+  if (map.getZoom() < ZOOM_GATE) {
+    const cp = new URLSearchParams(p);
+    cp.set('offset', 0); cp.set('limit', 1);
+    fetch('/admin/api/map-points?' + cp.toString()).then(r => r.json()).then(d => {
+      if (filterSeq !== applyFiltersSeq) return;
+      const total = d.coverage ? d.coverage.total : null;
+      progWrap.style.display = 'none';
+      document.getElementById('result-count').textContent =
+        (total != null ? total.toLocaleString('ru') : '?') + ' объявлений — приблизьте карту, чтобы увидеть их на карте';
+      pendingBatchResume = () => loadSaleBatch(0);
+    });
+  } else {
+    loadSaleBatch(0);
+  }
 }
 function renderSaleBatch(d) {
     let visiblePoints = d.points;

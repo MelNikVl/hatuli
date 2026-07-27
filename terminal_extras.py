@@ -1924,6 +1924,29 @@ def make_extras_router(templates) -> APIRouter:
             "pct": round(100 * r["with_floor"] / r["total_active"], 1) if r["total_active"] else 0,
         } for r in rows]})
 
+    @router.get("/admin/api/views-history")
+    async def views_history(request: Request, days: int = 1):
+        """Снимки views_stats_history — суммарные просмотры по комнатности
+        во времени (записывается раз в цикл парсера продаж, см.
+        service_apartments.py). views_count накопительный, так что график
+        показывает динамику накопленного интереса, а не просмотры "за день"."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT at, views_1, views_2, views_3, views_4p
+            FROM views_stats_history
+            WHERE at > now() - ($1 || ' days')::interval
+            ORDER BY at ASC
+        """, str(days))
+        return JSONResponse({"points": [{
+            "at": r["at"].strftime("%d.%m %H:%M"),
+            "v1": r["views_1"] or 0,
+            "v2": r["views_2"] or 0,
+            "v3": r["views_3"] or 0,
+            "v4p": r["views_4p"] or 0,
+        } for r in rows]})
+
     @router.get("/admin/api/price-drops-history")
     async def price_drops_history(request: Request, days: int = 30):
         """Сколько объявлений снизили цену по дням, по комнатности (1/2/3+),
@@ -2235,6 +2258,41 @@ def make_extras_router(templates) -> APIRouter:
             "by_position": _fmt(by_position, "position"),
             "by_floor": _fmt(by_floor, "floor_bucket"),
         })
+
+    @router.get("/admin/api/floor-sold-counts")
+    async def floor_sold_counts(request: Request, period: str = "month"):
+        """Этаж vs количество проданных (ушедших в архив) квартир за период —
+        для графика на /admin/analytics/floor-performance. \"Продано\" тут —
+        та же прокси, что и в floor-performance-data: уход в архив
+        (archived_at), не гарантированный факт продажи."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+
+        intervals = {
+            "today": "archived_at::date = CURRENT_DATE",
+            "3d": "archived_at > now() - interval '3 days'",
+            "7d": "archived_at > now() - interval '7 days'",
+            "month": "archived_at > now() - interval '30 days'",
+            "3m": "archived_at > now() - interval '90 days'",
+            "6m": "archived_at > now() - interval '180 days'",
+        }
+        cond = intervals.get(period, intervals["month"])
+
+        rows = await pg_fetch(f"""
+            SELECT LEAST(floor, 20) AS floor_bucket, COUNT(*) AS sold_cnt
+            FROM apartment_listings
+            WHERE floor IS NOT NULL AND floor > 0
+              AND archived_at IS NOT NULL AND {cond}
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+            GROUP BY 1
+            ORDER BY 1
+        """)
+        points = [{
+            "floor": str(r["floor_bucket"]) if r["floor_bucket"] < 20 else "20+",
+            "sold_cnt": r["sold_cnt"] or 0,
+        } for r in rows]
+        return JSONResponse({"points": points, "period": period})
 
     @router.get("/admin/unbound", response_class=HTMLResponse)
     async def unbound_page(request: Request):

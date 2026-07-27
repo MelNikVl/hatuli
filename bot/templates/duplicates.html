@@ -68,7 +68,7 @@ document.addEventListener('DOMContentLoaded', function() {
       ? `<img src="${d.photo}" style="width:85px;height:65px;object-fit:cover;display:block;border-radius:4px;flex-shrink:0;">`
       : `<div style="width:85px;height:65px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:16px;border-radius:4px;flex-shrink:0;">🏠</div>`;
     return `
-<a href="${d.url ? d.url : '/admin/analytics/' + d.id}" target="${d.url ? '_blank' : '_self'}" style="display:flex;gap:10px;align-items:center;text-decoration:none;color:inherit;border:1px solid ${isPrimary ? '#2563eb' : '#eee'};border-radius:6px;overflow:hidden;background:#fff;padding:7px;">
+<a href="${d.url ? d.url : '/admin/analytics/' + d.id}" target="${d.url ? '_blank' : '_self'}" style="display:flex;gap:8px;align-items:center;text-decoration:none;color:inherit;border:1px solid ${isPrimary ? '#2563eb' : '#eee'};border-radius:6px;overflow:hidden;background:#fff;padding:7px;flex:0 0 180px;width:180px;">
   ${photoHtml}
   <div style="min-width:0;">
     ${isPrimary ? '<div style="font-size:8.25px;color:#2563eb;font-weight:800;">ОСНОВНАЯ</div>' : ''}
@@ -88,8 +88,8 @@ document.addEventListener('DOMContentLoaded', function() {
       iconSize:[24,24], iconAnchor:[12,12]})})
       .bindPopup(`<b>×${p.n} — это ${p.n + 1} объявлений ОДНОГО объекта</b>` +
         `${p.complex ? `<br><span style="color:#888;font-size:12px;">🏢 ${p.complex}</span>` : ''}` +
-        `<div style="display:flex;flex-direction:column;gap:5px;overflow-y:auto;max-height:250px;margin-top:8px;padding-right:2px;">${cards}</div>`,
-        {maxWidth: 280, minWidth: 260})
+        `<div style="display:flex;gap:6px;overflow-x:auto;max-width:${Math.min(3, p.n + 1) * 188}px;margin-top:8px;padding-bottom:4px;">${cards}</div>`,
+        {maxWidth: 600, minWidth: 260})
       .addTo(map);
   });
 });

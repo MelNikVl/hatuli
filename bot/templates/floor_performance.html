@@ -22,6 +22,18 @@
   </div>
 </div>
 
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-top:14px;">
+  <b style="font-size:14px;">Этаж vs количество проданных квартир</b>
+  <span style="font-size:11.5px;color:#888;margin-left:6px;">"продано" — прокси через уход в архив, см. пояснение выше</span>
+  <div style="display:flex;gap:6px;margin:10px 0;flex-wrap:wrap;">
+    {% for val, label in [('today', 'Сегодня'), ('3d', '3 дня'), ('7d', '7 дней'), ('month', 'Месяц'), ('3m', '3 месяца'), ('6m', 'Пол года')] %}
+    <button type="button" class="fs-period-btn" data-period="{{ val }}" onclick="loadFloorSold('{{ val }}')"
+            style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:{{ '#2563eb' if val == 'month' else 'var(--bg)' }};color:{{ '#fff' if val == 'month' else 'var(--text)' }};font-size:13px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+  </div>
+  <canvas id="chart-floor-sold" height="90"></canvas>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 function escapeHtml(s) {
@@ -83,5 +95,37 @@ fetch('/admin/api/floor-performance-data').then(r => r.json()).then(d => {
     document.getElementById('chart-floor').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока недостаточно данных по этажу</div>';
   }
 }).catch(() => {});
+
+let floorSoldChart = null;
+function loadFloorSold(period) {
+  document.querySelectorAll('.fs-period-btn').forEach(b => {
+    const active = b.dataset.period === period;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  fetch('/admin/api/floor-sold-counts?period=' + period).then(r => r.json()).then(d => {
+    const pts = d.points || [];
+    if (floorSoldChart) { floorSoldChart.destroy(); floorSoldChart = null; }
+    if (!pts.length) {
+      document.getElementById('chart-floor-sold').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">нет данных за этот период</div>';
+      return;
+    }
+    floorSoldChart = new Chart(document.getElementById('chart-floor-sold'), {
+      type: 'bar',
+      data: {
+        labels: pts.map(p => p.floor),
+        datasets: [{ label: 'Продано квартир', data: pts.map(p => p.sold_cnt), backgroundColor: '#16a34a', borderRadius: 3 }],
+      },
+      options: {
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { title: { display: true, text: 'этаж (20+ — всё выше 20-го)' }, ticks: { font: { size: 12 } } },
+          y: { beginAtZero: true, ticks: { precision: 0, font: { size: 12 } } },
+        },
+      },
+    });
+  }).catch(() => {});
+}
+loadFloorSold('month');
 </script>
 {% endblock %}

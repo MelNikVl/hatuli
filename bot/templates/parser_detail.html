@@ -40,15 +40,17 @@
   {% if top10_recalc_at %} — последний пересчёт: {{ top10_recalc_at[:16].replace('T', ' ') }} UTC{% endif %}.
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:16px;">
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;min-width:0;">
   <b style="font-size:14px;">Добавлено объявлений по часам — продажа и аренда</b>
-  <canvas id="chart" height="90"></canvas>
+  <canvas id="chart" height="110"></canvas>
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;min-width:0;">
   <b style="font-size:14px;">Доля активных объявлений с известным этажом, во времени</b>
   <span style="font-size:11.5px;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж; этаж приходит только с детальной страницы</span>
-  <canvas id="floor-chart" height="90"></canvas>
+  <canvas id="floor-chart" height="110"></canvas>
+</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -71,8 +73,8 @@ fetch('/admin/api/floor-history?days=30').then(r => r.json()).then(d => {
     options: {
       plugins: { legend: { display: false } },
       scales: {
-        x: { ticks: { maxTicksLimit: 12, font: { size: 10 } }, grid: { display: false } },
-        y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%' } },
+        x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+        y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%', font: { size: 13 } } },
       },
     },
   });
@@ -93,10 +95,10 @@ new Chart(document.getElementById('chart'), {
     ]
   },
   options: {
-    plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 11 } } } },
+    plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 14 } } } },
     scales: {
-      x: { stacked: true, ticks: { maxTicksLimit: 24, font: { size: 10 } }, grid: { display: false } },
-      y: { stacked: true, beginAtZero: true, ticks: { precision: 0 } }
+      x: { stacked: true, ticks: { maxTicksLimit: 24, font: { size: 13 } }, grid: { display: false } },
+      y: { stacked: true, beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } }
     }
   }
 });

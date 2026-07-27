@@ -58,14 +58,14 @@ tr:last-child td { border-bottom: none; }
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">📊 Аналитика квартир</div>
 <div class="container">
-<div>
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;flex:1 1 0;min-width:320px;">
     <b style="font-size:13.5px;">📉 Объявления без фото во времени</b>
     <span style="font-size:11.5px;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж</span>
-    <div id="no-photo-chart" style="margin-top:8px;"></div>
+    <div id="no-photo-chart" style="margin-top:8px;width:100%;"></div>
   </div>
 
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;flex:1 1 0;min-width:320px;">
     <b style="font-size:13.5px;">💸 Снижения цены по дням, по комнатности</b>
     <div style="display:flex;gap:14px;font-size:11px;color:#888;margin:6px 0;">
       <span><span style="display:inline-block;width:9px;height:9px;background:#3b82f6;border-radius:2px;"></span> 1-комн</span>
@@ -110,7 +110,9 @@ tr:last-child td { border-bottom: none; }
       `<div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:2px;"><span>${points[0].at}</span><span>${points[points.length-1].at}</span></div>`;
   }
   fetch('/admin/api/no-photo-history?days=30').then(r => r.json()).then(d => {
-    unboundStyleLineChart('no-photo-chart', d.points || [], 'no_photo', Math.max(300, 480), 130);
+    const npEl = document.getElementById('no-photo-chart');
+    const npW = Math.max(280, npEl.parentElement.clientWidth - 4);
+    unboundStyleLineChart('no-photo-chart', d.points || [], 'no_photo', npW, 130);
   }).catch(() => {});
 
   fetch('/admin/api/price-drops-history?days=30').then(r => r.json()).then(d => {
