@@ -37,7 +37,6 @@
       --blue:     #3498db;
       --text:     #e8eaf6;
       --muted:    #8892b0;
-      --sidebar-w: 220px;
       --logo-color: #8b9bff;
     }
     /* Светлая тема — переключается через /admin/settings, хранится в
@@ -57,22 +56,23 @@
       --muted:    #6b7280;
       --logo-color: #4752c4;
     }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
 
-    /* sidebar */
-    .sidebar { width: var(--sidebar-w); min-height: 100vh; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: fixed; top: 0; left: 0; bottom: 0; }
-    .sidebar-logo { padding: 22px 20px 16px; border-bottom: 1px solid var(--border); }
-    .sidebar-logo .title { font-size: 22px; font-weight: 800; color: var(--logo-color); letter-spacing: .3px; }
-    .sidebar-logo .sub   { font-size: 11px; color: var(--muted); margin-top: 3px; }
-    .nav { padding: 10px 0; flex: 1; }
-    .nav a { display: flex; align-items: center; gap: 10px; padding: 10px 20px; color: var(--muted); text-decoration: none; font-size: 13.5px; border-left: 3px solid transparent; transition: all .15s; }
-    .nav a:hover  { color: var(--text); background: var(--surface2); }
-    .nav a.active { color: var(--accent2); border-left-color: var(--accent); background: rgba(88,101,242,.1); }
-    .nav a .ico   { font-size: 16px; width: 20px; text-align: center; }
-    .nav-section  { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); padding: 14px 20px 6px; }
-    .sidebar-footer { padding: 14px 20px; border-top: 1px solid var(--border); }
-    .sidebar-footer a { font-size: 12px; color: var(--muted); text-decoration: none; }
-    .sidebar-footer a:hover { color: var(--red); }
+    /* верхнее меню — тот же паттерн, что на публичной карте (base_public.html) */
+    .pub-header { background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 500; }
+    .pub-row1 { display: flex; align-items: center; justify-content: space-between; padding: 10px 24px; border-bottom: 1px solid var(--border); }
+    .pub-logo { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; font-size: 19px; font-weight: 800; color: var(--logo-color); letter-spacing: .3px; }
+    .pub-logo img { width: 26px; height: 26px; object-fit: contain; border-radius: 5px; }
+    .pub-row1-right { display: flex; align-items: center; gap: 14px; }
+    .pub-theme-btn { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--text); cursor: pointer; }
+    .pub-row2 { display: flex; align-items: center; gap: 4px; padding: 0 24px; overflow-x: auto; }
+    .pub-nav { display: flex; align-items: center; width: 100%; }
+    .pub-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 11px 14px; color: var(--text); text-decoration: none; font-size: 13.5px; font-weight: 600; border-bottom: 2px solid transparent; white-space: nowrap; }
+    .pub-nav a:hover { color: var(--text); }
+    .pub-nav a.active { color: var(--accent2); border-bottom-color: var(--accent); }
+    .pub-nav .spacer { flex: 1; }
+    .pub-nav a.admin-panel-link { background: rgba(88,101,242,.12); border-radius: 8px; margin: 6px 0; padding: 7px 14px; }
+    .pub-nav a.admin-panel-link:hover { background: rgba(88,101,242,.22); }
 
     /* вкладки раздела АНАЛИТИКА (Продажи/Аренда/Дубли/Архив/Без ЖК) */
     .atabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -81,7 +81,7 @@
     .atabs a.active { color: var(--accent2); border-bottom-color: var(--accent); }
 
     /* main */
-    .main { margin-left: var(--sidebar-w); flex: 1; padding: 32px 36px; }
+    .main { padding: 32px 36px; }
     .page-title { font-size: 22px; font-weight: 700; color: var(--text); margin-bottom: 24px; }
     .page-title small { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 10px; }
 
@@ -155,46 +155,36 @@
 </head>
 <body>
 
-<aside class="sidebar">
-  <div class="sidebar-logo">
-    <a href="/admin" class="title" style="text-decoration:none;color:inherit;display:flex;align-items:center;gap:8px;"><img src="/static/branding/logo-icon.png" alt="" style="width:28px;height:28px;object-fit:contain;border-radius:5px;"> Hatuli</a>
-    <div class="sub">Admin Panel</div>
-    <button id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button"
-      style="margin-top:8px;width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12px;cursor:pointer;">
-      🌓 Тема: <span id="sidebar-theme-label">тёмная</span>
-    </button>
+{% set admin = is_admin(request) %}
+{% set panel_family = ('analytics' in request.url.path or 'parser' in request.url.path
+    or 'duplicates' in request.url.path or 'archived' in request.url.path or 'unbound' in request.url.path
+    or 'zones' in request.url.path or 'settings' in request.url.path or 'logs' in request.url.path
+    or 'issues' in request.url.path or request.url.path == '/admin/site-users' or request.url.path == '/admin/panel') %}
+<header class="pub-header">
+  <div class="pub-row1">
+    <a href="/admin" class="pub-logo"><img src="/static/branding/logo-icon.png" alt=""> Hatuli</a>
+    <div class="pub-row1-right">
+      <button class="pub-theme-btn" id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button">🌓 <span id="sidebar-theme-label">тёмная</span></button>
+      <a href="/favorites" class="pub-fav-icon" title="Избранное" style="font-size:19px;text-decoration:none;color:var(--text);">♡</a>
+      {% if admin %}<a href="/admin/logout" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Выйти</a>
+      {% else %}<a href="/cabinet" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Войти</a>{% endif %}
+    </div>
   </div>
-  <nav class="nav">
-    <div class="nav-section">Мониторинг</div>
-    {% set admin = is_admin(request) %}
-    {% set analytics_family = ('analytics' in request.url.path or 'parser' in request.url.path
-        or 'duplicates' in request.url.path
-        or 'archived' in request.url.path or 'unbound' in request.url.path) %}
-    <a href="/admin"             class="{% if request.url.path == '/admin' %}active{% endif %}"><span class="ico">🗺</span> Карта</a>
-    <a href="/cabinet"           class="{% if request.url.path == '/cabinet' %}active{% endif %}"><span class="ico">👤</span> Личный кабинет</a>
-    <a href="/favorites"         class="{% if request.url.path == '/favorites' %}active{% endif %}"><span class="ico">⭐</span> Избранное</a>
-    <a href="/admin/analytics"   class="{% if analytics_family %}active{% endif %}"><span class="ico">📊</span> Аналитика</a>
-    <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}"><span class="ico">🏢</span> Жилые комплексы</a>
-    <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}"><span class="ico">🏗</span> Застройщики</a>
-    {% if admin %}
-    <a href="/admin/info"        class="{% if 'info' in request.url.path or 'score-explained' in request.url.path %}active{% endif %}"><span class="ico">ℹ️</span> Инфо</a>
-    <div class="nav-section">ИНСТРУМЕНТЫ</div>
-    <a href="/admin/zones"       class="{% if 'zones' in request.url.path %}active{% endif %}"><span class="ico">📐</span> Зоны</a>
-    {% endif %}
-    <div class="nav-section">Управление</div>
-    {% if admin %}
-    <a href="/admin/settings"    class="{% if 'settings' in request.url.path or 'logs' in request.url.path or 'issues' in request.url.path %}active{% endif %}"><span class="ico">⚙️</span> Настройки</a>
-    <a href="/admin/site-users"  class="{% if request.url.path == '/admin/site-users' %}active{% endif %}"><span class="ico">👥</span> Пользователи сайта</a>
-    {% endif %}
-    {# <a href="/admin/users" class="{% if request.url.path == '/admin/users' %}active{% endif %}"><span class="ico">👥</span> Пользователи</a> #}
-    {# <a href="/admin/users/stats" class="{% if 'users/stats' in request.url.path %}active{% endif %}"><span class="ico">📈</span> Стат. пользователей</a> #}
-    {# <a href="/admin/subscriptions" class="{% if 'subscriptions' in request.url.path %}active{% endif %}"><span class="ico">🔑</span> Подписки</a> #}
-    {# <a href="/admin/parser/stats" class="{% if 'parser/stats' in request.url.path %}active{% endif %}"><span class="ico">🤖</span> Стат. парсера</a> #}
-  </nav>
-  <div class="sidebar-footer">
-    {% if admin %}<a href="/admin/logout">⬅ Выйти</a>{% else %}<a href="/admin/login">🔑 Войти</a>{% endif %}
+  <div class="pub-row2">
+    <nav class="pub-nav">
+      <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">🗺 Карта</a>
+      <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
+      <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>
+      <a href="/admin/banks" class="{% if 'banks' in request.url.path %}active{% endif %}">Банки</a>
+      <a href="/admin/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
+      {% if admin %}<a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path %}active{% endif %}">Инфо</a>{% endif %}
+      <span class="spacer"></span>
+      {% if admin %}
+      <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">🛠 Админ панель</a>
+      {% endif %}
+    </nav>
   </div>
-</aside>
+</header>
 
 <main class="main">
 {% block content %}{% endblock %}

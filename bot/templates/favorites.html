@@ -1,8 +1,31 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-title">⭐ Избранное
-  <small style="font-size:13px;color:#888;font-weight:400;">{{ favorites|length }} объявлений</small>
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ favorites|length }} объявлений{% if favorite_complexes %} · {{ favorite_complexes|length }} ЖК{% endif %}</small>
 </div>
+
+{% if user and favorite_complexes %}
+<div style="margin-bottom:20px;">
+  <b style="font-size:14px;">🏢 Избранные ЖК</b>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:10px;margin-top:8px;">
+    {% for c in favorite_complexes %}
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px;position:relative;">
+      <button onclick="removeFavComplex('{{ c.complex_id }}', this)" style="position:absolute;top:8px;right:8px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.4);color:#fff;border:none;cursor:pointer;font-size:13px;line-height:1;">✕</button>
+      <a href="/admin/complex/{{ c.complex_id }}" style="text-decoration:none;color:inherit;">
+        <div style="font-weight:800;font-size:14px;padding-right:20px;">{{ c.name or ('ЖК #' + c.complex_id|string) }}</div>
+        <div style="font-size:11.5px;color:#888;margin-top:2px;">{{ c.district or '' }}{% if c.year_built %} · {{ c.year_built }} г.{% endif %}</div>
+      </a>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+<script>
+async function removeFavComplex(id, btn) {
+  await fetch('/api/favorite-complexes/' + encodeURIComponent(id), {method: 'DELETE'});
+  location.reload();
+}
+</script>
+{% endif %}
 
 {% if not user %}
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px 24px;max-width:640px;">
@@ -27,6 +50,10 @@
 .fav-compare-table th { background:var(--bg); text-align:left; padding:9px 10px; font-size:12px; font-weight:600; border-bottom:1px solid var(--border); }
 .fav-compare-table td { padding:9px 10px; font-size:13px; border-bottom:1px solid var(--border); }
 .fav-compare-table tr:last-child td { border-bottom:none; }
+.fav-compare-obj { display:flex; align-items:center; gap:10px; min-width:220px; text-decoration:none; color:inherit; }
+.fav-compare-obj img { width:56px; height:42px; object-fit:cover; border-radius:6px; flex-shrink:0; background:var(--bg); }
+.fav-compare-obj .fco-price { font-weight:800; font-size:14px; }
+.fav-compare-obj .fco-meta { font-size:11.5px; color:#888; }
 </style>
 
 <div class="fav-cards">
@@ -49,20 +76,30 @@
 <table class="fav-compare-table">
   <thead>
     <tr>
-      <th>Объект</th><th>Цена</th><th>₸/м²</th><th>Комнат</th><th>Площадь</th><th>Этаж</th><th>Скор</th><th>Район / ЖК</th><th></th>
+      <th>Объект</th><th>Цена</th><th>₸/м²</th><th>Комнат</th><th>Площадь</th><th>Этаж</th><th>Потолок</th><th>Скор</th><th>Район / ЖК</th><th>Застройщик</th><th></th>
     </tr>
   </thead>
   <tbody>
     {% for f in favorites %}
     <tr>
-      <td><a href="{{ f.url or '/admin/analytics/' + f.listing_id }}" target="{{ '_blank' if f.url else '_self' }}" style="color:#d4af37;font-weight:700;">{{ f.listing_id }}</a></td>
-      <td>{{ "{:,.1f}".format(f.price / 1e6) if f.price else '?' }} млн</td>
+      <td>
+        <a class="fav-compare-obj" href="{{ f.url or '/admin/analytics/' + f.listing_id }}" target="{{ '_blank' if f.url else '_self' }}">
+          {% if f.first_photo %}<img src="{{ f.first_photo }}">{% else %}<img src="">{% endif %}
+          <div>
+            <div class="fco-price">{{ "{:,.1f}".format(f.price / 1e6) if f.price else '?' }} млн ₸</div>
+            <div class="fco-meta">{{ f.rooms or '?' }}-комн, {{ f.area or '?' }} м²</div>
+          </div>
+        </a>
+      </td>
+      <td><b>{{ "{:,.1f}".format(f.price / 1e6) if f.price else '?' }} млн</b></td>
       <td>{{ (f.price / f.area) | round(0) | int if f.price and f.area else '—' }}</td>
       <td>{{ f.rooms or '?' }}</td>
-      <td>{{ f.area or '?' }} м²</td>
+      <td><b>{{ f.area or '?' }} м²</b></td>
       <td>{{ (f.floor ~ '/' ~ (f.floors_total or '?')) if f.floor else '—' }}</td>
+      <td>{{ f.ceiling_height ~ ' м' if f.ceiling_height else '—' }}</td>
       <td>{{ f.score_total or '—' }}</td>
       <td>{{ f.complex_name or f.district or f.address or '—' }}</td>
+      <td>{{ f.developer_name or '—' }}</td>
       <td><button onclick="removeFav('{{ f.listing_id }}', this)" style="border:none;background:none;color:#ef4444;cursor:pointer;font-size:15px;">✕</button></td>
     </tr>
     {% endfor %}

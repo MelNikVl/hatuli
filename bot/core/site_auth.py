@@ -83,9 +83,11 @@ async def list_favorites(user_id: int) -> list[dict]:
     rows = await fetch("""
         SELECT f.listing_id, f.saved_at, a.price, a.rooms, a.area, a.address,
                a.complex_name, a.url, a.photos, a.is_active, a.floor, a.floors_total,
-               a.score_total, a.district
+               a.score_total, a.district, a.ceiling_height, dv.name AS developer_name
         FROM favorites f
         LEFT JOIN apartment_listings a ON a.id = f.listing_id
+        LEFT JOIN complexes cx ON lower(trim(cx.name)) = lower(trim(a.complex_name))
+        LEFT JOIN developers dv ON dv.id = cx.developer_id
         WHERE f.user_id = $1
         ORDER BY f.saved_at DESC
     """, user_id)
@@ -127,6 +129,63 @@ async def is_favorite_ids(user_id: int, listing_ids: list[str]) -> set[str]:
     return {r["listing_id"] for r in rows}
 
 
+# ── Избранные ЖК (не квартиры) — уведомления по любым изменениям в ЖК ──────
+
+async def _ensure_complex_favorites_table() -> None:
+    await execute("""
+        CREATE TABLE IF NOT EXISTS complex_favorites (
+            user_id BIGINT NOT NULL,
+            complex_id INT NOT NULL,
+            saved_at TIMESTAMPTZ DEFAULT now(),
+            PRIMARY KEY (user_id, complex_id)
+        )
+    """)
+
+
+async def list_favorite_complexes(user_id: int) -> list[dict]:
+    await _ensure_complex_favorites_table()
+    rows = await fetch("""
+        SELECT cf.complex_id, cf.saved_at, c.name, c.district, c.housing_class,
+               c.year_built, c.photo_url
+        FROM complex_favorites cf
+        LEFT JOIN complexes c ON c.id = cf.complex_id
+        WHERE cf.user_id = $1
+        ORDER BY cf.saved_at DESC
+    """, user_id)
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("saved_at") is not None:
+            d["saved_at"] = d["saved_at"].isoformat()
+        out.append(d)
+    return out
+
+
+async def add_favorite_complex(user_id: int, complex_id: int) -> None:
+    await _ensure_complex_favorites_table()
+    await execute("""
+        INSERT INTO complex_favorites (user_id, complex_id, saved_at) VALUES ($1, $2, now())
+        ON CONFLICT (user_id, complex_id) DO NOTHING
+    """, user_id, complex_id)
+
+
+async def remove_favorite_complex(user_id: int, complex_id: int) -> None:
+    await _ensure_complex_favorites_table()
+    await execute(
+        "DELETE FROM complex_favorites WHERE user_id = $1 AND complex_id = $2",
+        user_id, complex_id)
+
+
+async def is_favorite_complex_ids(user_id: int, complex_ids: list[int]) -> set[int]:
+    if not complex_ids:
+        return set()
+    await _ensure_complex_favorites_table()
+    rows = await fetch(
+        "SELECT complex_id FROM complex_favorites WHERE user_id = $1 AND complex_id = ANY($2::int[])",
+        user_id, complex_ids)
+    return {r["complex_id"] for r in rows}
+
+
 # ── Админ: управление пользователями сайта (отдельно от admin_users) ───────
 
 async def list_site_users() -> list[dict]:
@@ -146,5 +205,6 @@ async def set_user_blocked(user_id: int, blocked: bool) -> None:
 
 async def delete_site_user(user_id: int) -> None:
     await execute("DELETE FROM favorites WHERE user_id = $1", user_id)
+    await execute("DELETE FROM complex_favorites WHERE user_id = $1", user_id)
     await execute("DELETE FROM site_sessions WHERE user_id = $1", user_id)
     await execute("DELETE FROM users WHERE user_id = $1", user_id)

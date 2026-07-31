@@ -67,7 +67,7 @@ GEOCODE_BATCH = 200            # адресов за цикл (Nominatim 1 req/s
 
 async def run_cycle() -> None:
     from bot.core.rebind import run_rebind, geocode_missing_coords
-    from bot.core.complex_audit import purge_street_complexes
+    from bot.core.complex_audit import purge_street_complexes, backfill_year_built
     from bot.db.pg import execute, fetch
 
     log.info("=== Geobind cycle start ===")
@@ -86,6 +86,12 @@ async def run_cycle() -> None:
                   res["flagged"], res["unbound"], res["coords_recomputed"])
     except Exception as e:
         log.error("complex_audit stage failed: %s", e, exc_info=True)
+
+    try:
+        n = await backfill_year_built()
+        log.info("year_built backfilled: %d", n)
+    except Exception as e:
+        log.error("year_built backfill stage failed: %s", e, exc_info=True)
 
     try:
         from complex_coords import fill_from_centroids, fill_from_pages

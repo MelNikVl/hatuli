@@ -116,18 +116,41 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     await message.answer("Готово! Возвращайся на сайт — вход выполнен автоматически. ✅")
 
 
+async def _ensure_watch_state_table() -> None:
+    from bot.db.pg import execute
+    # Состояние "что видел этот пользователь в последний раз" — ПЕРСОНАЛЬНОЕ
+    # (не общее на объявление), т.к. частота дайджеста своя у каждого
+    # (daily/weekly) — сравнивать нужно с моментом ЕГО последнего уведомления,
+    # а не глобального последнего скана.
+    await execute("""
+        CREATE TABLE IF NOT EXISTS favorite_watch_state (
+            user_id BIGINT NOT NULL,
+            listing_id TEXT NOT NULL,
+            last_description TEXT,
+            last_is_active BOOLEAN,
+            PRIMARY KEY (user_id, listing_id)
+        )
+    """)
+
+
 async def _send_digest_cycle(bot: Bot) -> None:
-    """Раз в цикл: пользователям с избранным и notify_frequency != 'off',
-    у кого подошёл срок (daily/weekly), шлём изменения цены по избранному
-    с момента последнего уведомления."""
+    """Раз в цикл: пользователям с избранным (квартиры и/или ЖК) и
+    notify_frequency != 'off', у кого подошёл срок (daily/weekly), шлём
+    изменения цены/описания/архивации — по избранным квартирам напрямую и
+    по любым квартирам в избранных ЖК."""
     from bot.db.pg import fetch, execute
+
+    await _ensure_watch_state_table()
+    from bot.core.site_auth import _ensure_complex_favorites_table
+    await _ensure_complex_favorites_table()
 
     rows = await fetch("""
         SELECT user_id, notify_frequency, last_notified_at
         FROM users
         WHERE COALESCE(is_blocked, 0) = 0
           AND COALESCE(notify_frequency, 'daily') != 'off'
-          AND EXISTS (SELECT 1 FROM favorites f WHERE f.user_id = users.user_id)
+          AND (EXISTS (SELECT 1 FROM favorites f WHERE f.user_id = users.user_id)
+               OR EXISTS (SELECT 1 FROM complex_favorites cf WHERE cf.user_id = users.user_id))
     """)
     for r in rows:
         freq = r["notify_frequency"] or "daily"
@@ -138,19 +161,40 @@ async def _send_digest_cycle(bot: Bot) -> None:
                 f"SELECT (now() - $1::timestamptz) > interval '{interval}' AS due", last)
             if not due[0]["due"]:
                 continue
-        lines = []
-        favs = await fetch("""
-            SELECT f.listing_id, a.price, a.url, a.rooms, a.area,
-                   ph.old_price, ph.changed_at
-            FROM favorites f
-            JOIN apartment_listings a ON a.id = f.listing_id
+
+        # Наблюдаемые квартиры: избранные напрямую + все живые квартиры в
+        # избранных ЖК (сравнение по нормализованному имени, как везде в проекте).
+        watched = await fetch("""
+            SELECT a.id AS listing_id, a.price, a.url, a.rooms, a.area,
+                   a.description, a.is_active, a.complex_name,
+                   ph.old_price
+            FROM apartment_listings a
             LEFT JOIN LATERAL (
-                SELECT old_price, changed_at FROM price_history h
+                SELECT old_price FROM price_history h
                 WHERE h.listing_id = a.id ORDER BY changed_at DESC LIMIT 1
             ) ph ON TRUE
-            WHERE f.user_id = $1
+            WHERE a.id IN (SELECT listing_id FROM favorites WHERE user_id = $1)
+               OR lower(trim(regexp_replace(a.complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i'))) IN (
+                    SELECT lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
+                    FROM complex_favorites cf JOIN complexes c ON c.id = cf.complex_id
+                    WHERE cf.user_id = $1
+               )
         """, r["user_id"])
-        for f in favs:
+
+        if not watched:
+            await execute("UPDATE users SET last_notified_at = now() WHERE user_id = $1", r["user_id"])
+            continue
+
+        state_rows = await fetch(
+            "SELECT listing_id, last_description, last_is_active FROM favorite_watch_state WHERE user_id = $1",
+            r["user_id"])
+        state = {s["listing_id"]: s for s in state_rows}
+
+        lines = []
+        for f in watched:
+            lid = f["listing_id"]
+            prev = state.get(lid)
+            price_lines_added = False
             if f["old_price"] and f["old_price"] != f["price"]:
                 direction = "снизилась" if f["price"] < f["old_price"] else "выросла"
                 lines.append(
@@ -158,6 +202,24 @@ async def _send_digest_cycle(bot: Bot) -> None:
                     f"{f['area'] or '?'} м² — цена {direction}: "
                     f"{f['old_price']/1e6:.1f} → {f['price']/1e6:.1f} млн ₸\n{f['url']}"
                 )
+                price_lines_added = True
+            if prev is not None:
+                if prev["last_is_active"] is True and f["is_active"] is False:
+                    lines.append(
+                        f"🗄 {f['rooms'] or '?'}-комн, {f['area'] or '?'} м² — ушло в архив (снято с публикации)\n{f['url']}"
+                    )
+                elif (prev["last_description"] is not None and f["description"]
+                        and prev["last_description"] != f["description"] and not price_lines_added):
+                    lines.append(
+                        f"📝 {f['rooms'] or '?'}-комн, {f['area'] or '?'} м² — изменилось описание\n{f['url']}"
+                    )
+            await execute("""
+                INSERT INTO favorite_watch_state (user_id, listing_id, last_description, last_is_active)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (user_id, listing_id) DO UPDATE SET
+                    last_description = EXCLUDED.last_description, last_is_active = EXCLUDED.last_is_active
+            """, r["user_id"], lid, f["description"], f["is_active"])
+
         if lines:
             text = "Изменения по вашему избранному:\n\n" + "\n\n".join(lines)
             try:

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🛠 Админ панель</div>
+
+<style>
+.ap-grid { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; margin-bottom: 24px; }
+.ap-card { flex: 1 1 260px; min-width: 240px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+.ap-card h3 { font-size: 14px; font-weight: 700; margin-bottom: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.ap-card a { display: block; padding: 7px 0; font-size: 14px; color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); }
+.ap-card a:last-child { border-bottom: none; }
+.ap-card a:hover { color: var(--accent2); }
+</style>
+
+<div class="ap-grid">
+  <div class="ap-card">
+    <h3>Управление</h3>
+    <a href="/admin/settings">⚙️ Настройки</a>
+    <a href="/admin/site-users">👥 Пользователи сайта</a>
+    <a href="/admin/zones">📐 Зоны приоритета</a>
+  </div>
+  <div class="ap-card">
+    <h3>Аналитика</h3>
+    <a href="/admin/analytics">Продажи</a>
+    <a href="/admin/analytics/prices">Цены</a>
+    <a href="/admin/parser">Парсеры</a>
+    <a href="/admin/duplicates">Дубли</a>
+    <a href="/admin/archived">Ушедшие в архив</a>
+    <a href="/admin/unbound">Квартиры без координат</a>
+  </div>
+  <div class="ap-card">
+    <h3>Аналитика (ещё)</h3>
+    <a href="/admin/analytics/views">👁 Просмотры</a>
+    <a href="/admin/analytics/floors">Этажи</a>
+    <a href="/admin/analytics/ceiling">Потолок</a>
+    <a href="/admin/analytics/floor-performance">Этаж vs продажи</a>
+    <a href="/admin/analytics/hype">🔥 Хайп</a>
+    <a href="/admin/analytics/transport">🚌 Транспорт</a>
+  </div>
+</div>
+{% endblock %}

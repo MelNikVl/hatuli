@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Hatuli — карта квартир Астаны</title>
+  <link rel="icon" type="image/png" href="/static/branding/favicon.png"/>
+  <script>
+  (function() {
+    const saved = localStorage.getItem('hatuli-theme');
+    if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  })();
+  </script>
+  <style>
+  html { font-size: 16px; } body { font-size: 16.5px; }
+    @media (min-width: 2200px) { html { zoom: 1.15; } }
+    @media (min-width: 2700px) { html { zoom: 1.3; } }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --surface2: #22253a;
+      --border:   #2e3150;
+      --accent:   #5865f2;
+      --accent2:  #7289da;
+      --green:    #2ecc71;
+      --red:      #e74c3c;
+      --yellow:   #f39c12;
+      --blue:     #3498db;
+      --text:     #e8eaf6;
+      --muted:    #8892b0;
+      --logo-color: #8b9bff;
+    }
+    :root[data-theme="light"] {
+      --bg:       #f5f6fa;
+      --surface:  #ffffff;
+      --surface2: #eef0f5;
+      --border:   #dde1ea;
+      --accent:   #5865f2;
+      --accent2:  #4752c4;
+      --green:    #16a34a;
+      --red:      #dc2626;
+      --yellow:   #d97706;
+      --blue:     #2563eb;
+      --text:     #1a1d27;
+      --muted:    #6b7280;
+      --logo-color: #4752c4;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    /* шапка в 2 строки — логотип+вход сверху, меню снизу (как у Циан) */
+    .pub-header { background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 500; }
+    .pub-row1 { display: flex; align-items: center; justify-content: space-between; padding: 10px 24px; border-bottom: 1px solid var(--border); }
+    .pub-logo { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; font-size: 19px; font-weight: 800; color: var(--logo-color); letter-spacing: .3px; }
+    .pub-logo img { width: 26px; height: 26px; object-fit: contain; border-radius: 5px; }
+    .pub-row1-right { display: flex; align-items: center; gap: 14px; }
+    .pub-fav-icon { font-size: 21px; text-decoration: none; color: var(--text); line-height: 1; position: relative; }
+    .pub-login-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 18px; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 700; font-size: 13.5px; text-decoration: none; border: none; cursor: pointer; }
+    .pub-user-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 8px; background: var(--surface2); color: var(--text); font-weight: 600; font-size: 13px; text-decoration: none; }
+    .pub-theme-btn { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--text); cursor: pointer; }
+    .pub-row2 { display: flex; align-items: center; gap: 4px; padding: 0 24px; overflow-x: auto; }
+    .pub-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 11px 14px; color: var(--text); text-decoration: none; font-size: 13.5px; font-weight: 600; border-bottom: 2px solid transparent; white-space: nowrap; }
+    .pub-nav a:hover { color: var(--text); }
+    .pub-nav a.active { color: var(--accent2); border-bottom-color: var(--accent); }
+    .pub-nav .sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
+    .pub-nav .spacer { flex: 1; }
+    .pub-nav a.admin-panel-link { background: rgba(88,101,242,.12); border-radius: 8px; margin: 6px 0; padding: 7px 14px; }
+    .pub-nav a.admin-panel-link:hover { background: rgba(88,101,242,.22); }
+
+    .pub-main { padding: 18px 24px 32px; }
+    .page-title { font-size: 22px; font-weight: 700; color: var(--text); margin-bottom: 24px; }
+    .page-title small { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 10px; }
+
+    /* переиспользуем те же классы карточек/таблиц/кнопок, что и в base.html,
+       чтобы страницы аналитики/ЖК и т.п., если когда-нибудь тоже перейдут
+       на эту шапку, не ломались; сама карта их не использует. */
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .card-label { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 8px; }
+    .card-value { font-size: 30px; font-weight: 700; color: var(--text); }
+    .card-sub   { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; border: none; cursor: pointer; text-decoration: none; transition: all .15s; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    select, input[type="number"], input[type="password"], input[type="text"] {
+      background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 6px 10px; font-size: 13px;
+    }
+    select:focus, input:focus { outline: 1px solid var(--accent); }
+  </style>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
+</head>
+<body>
+
+{% set admin = is_admin(request) %}
+{% set panel_family = ('analytics' in request.url.path or 'parser' in request.url.path
+    or 'duplicates' in request.url.path or 'archived' in request.url.path or 'unbound' in request.url.path
+    or 'zones' in request.url.path or 'settings' in request.url.path or 'logs' in request.url.path
+    or 'issues' in request.url.path or request.url.path == '/admin/site-users' or request.url.path == '/admin/panel') %}
+<header class="pub-header">
+  <div class="pub-row1">
+    <a href="/admin" class="pub-logo"><img src="/static/branding/logo-icon.png" alt=""> Hatuli</a>
+    <div class="pub-row1-right">
+      <button class="pub-theme-btn" id="pub-theme-toggle" onclick="togglePubTheme()" type="button">🌓 <span id="pub-theme-label">тёмная</span></button>
+      <a href="/favorites" class="pub-fav-icon" title="Избранное">♡</a>
+      {% if site_user %}
+      <a href="/cabinet" class="pub-user-chip">{{ site_user.full_name or ('@' + (site_user.username or site_user.user_id|string)) }}</a>
+      {% if admin %}<a href="/admin/logout" class="pub-fav-icon" title="Выйти" style="font-size:13px;font-weight:600;">Выйти</a>{% endif %}
+      {% else %}
+      <a href="/cabinet" class="pub-login-btn">Войти</a>
+      {% endif %}
+    </div>
+  </div>
+  <div class="pub-row2">
+    <nav class="pub-nav">
+      <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Карта</a>
+      <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
+      <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>
+      {% if admin %}
+      <a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path %}active{% endif %}">Инфо</a>
+      <span class="spacer"></span>
+      <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">🛠 Админ панель</a>
+      {% endif %}
+    </nav>
+  </div>
+</header>
+
+<main class="pub-main">
+{% block content %}{% endblock %}
+</main>
+<script>
+function _applyPubTheme(theme) {
+  if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  else document.documentElement.removeAttribute('data-theme');
+  const lbl = document.getElementById('pub-theme-label');
+  if (lbl) lbl.textContent = theme === 'light' ? 'светлая' : 'тёмная';
+}
+function togglePubTheme() {
+  const current = localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark';
+  const next = current === 'light' ? 'dark' : 'light';
+  localStorage.setItem('hatuli-theme', next);
+  _applyPubTheme(next);
+}
+_applyPubTheme(localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark');
+</script>
+</body>
+</html>

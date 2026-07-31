@@ -16,6 +16,13 @@
   1) UUID первой фотографии (один и тот же файл = одно и то же жильё)
   2) адрес + комнаты + площадь ±3 м²
   3) адрес + цена (округлена до 100к) + этаж
+  4) координаты (в пределах ~60м) + комнаты + этаж + площадь ±3 м² + цена
+     (округлена до 100к) — запасной вариант для случаев, когда правила
+     2/3 не сработали из-за того, что разные агенты пишут адрес одного и
+     того же дома по-разному: у улиц Астаны часто есть и имя, и индекс
+     (напр. "Сыганак" он же "Е-10"), а район иногда указывают неверно —
+     нормализация адреса это не ловит, а координаты с детальной страницы
+     объявления — надёжнее текста.
 Приоритет: если новое объявление от хозяина, а существующий primary —
 риелтор, primary переназначается на хозяйское.
 """
@@ -63,14 +70,40 @@ def find_duplicates(listings: list[dict],
     photo_idx: dict[str, str] = {}
     addr_idx: dict[tuple, list[str]] = {}
     price_addr_idx: dict[tuple, str] = {}
+    geo_idx: dict[tuple, list[str]] = {}
+    # ~0.00055° по широте/долготе в Астане — примерно 55-60м, т.е. один дом
+    # или соседние подъезды, не соседний квартал.
+    GEO_EPS = 0.00055
 
     def is_owner(l: dict) -> bool:
         return l.get("is_owner") is True
 
+    def _compatible(a_id: str, b_id: str) -> bool:
+        """Тот же физический юнит: этаж, если известен у обоих, ДОЛЖЕН совпадать
+        (иначе это гарантированно другая квартира), и площадь — в пределах ±3м²."""
+        a, b = by_id.get(a_id), by_id.get(b_id)
+        if not a or not b:
+            return False
+        af, bf = a.get("floor"), b.get("floor")
+        if af is not None and bf is not None and af != bf:
+            return False
+        aa, ba = float(a.get("area") or 0), float(b.get("area") or 0)
+        if aa > 0 and ba > 0 and abs(aa - ba) > 3:
+            return False
+        return True
+
     def mark(dup_id: str, primary_id: str, rule: str = ""):
-        # если дубль сам был primary для кого-то — переподвесим тех на нового primary
+        # Если дубль сам был primary для кого-то — переподвешиваем ИХ на нового
+        # primary, но ТОЛЬКО если они реально совпадают и с новым primary тоже
+        # (этаж/площадь) — иначе получится транзитивное склеивание случайных
+        # квартир того же дома через цепочку переподвязок (было: владелец
+        # "перехватывает" primary у чужого объявления, и с ним утаскивает ВСЕХ
+        # прежних дублей того primary, включая квартиры с других этажей).
+        # Несовместимых просто оставляем как есть (дублями старого primary),
+        # чтобы они не терялись из is_duplicate, но и не показывались в чужой
+        # группе на странице /admin/duplicates.
         for d, p in list(duplicates.items()):
-            if p == dup_id:
+            if p == dup_id and _compatible(d, primary_id):
                 duplicates[d] = primary_id
         duplicates[dup_id] = primary_id
         if rule:
@@ -88,6 +121,10 @@ def find_duplicates(listings: list[dict],
         floor = lst.get("floor")
         uuid = _extract_photo_uuid(lst.get("url"))
         cur_owner = is_owner(lst)
+        lat = lst.get("lat")
+        lon = lst.get("lon")
+        lat = float(lat) if lat is not None else None
+        lon = float(lon) if lon is not None else None
 
         matched_primary: str | None = None
         matched_rule = ""
@@ -114,12 +151,39 @@ def find_duplicates(listings: list[dict],
                 matched_rule = "addr_area"
                 break
 
-        # 3. адрес + цена + этаж (запасной)
-        if matched_primary is None and addr and price > 0 and floor is not None:
-            key2 = (addr, round(price / 100_000) * 100_000, floor)
+        # 3. адрес + цена + этаж + КОМНАТЫ (запасной). Раньше не проверяли
+        # комнатность вообще — две РАЗНЫЕ квартиры на одном этаже одного
+        # дома с похожей ценой (округлённой до 100к) склеивались в дубль
+        # (видели на скрине: 9 "дублей" одной однушки, среди них квартира
+        # с другой планировкой). Комнаты — самый дешёвый и надёжный
+        # дополнительный сигнал "это точно другая квартира".
+        if (matched_primary is None and addr and price > 0 and floor is not None
+                and rooms is not None):
+            key2 = (addr, round(price / 100_000) * 100_000, floor, rooms)
             if key2 in price_addr_idx and price_addr_idx[key2] != lid:
                 matched_primary = price_addr_idx[key2]
                 matched_rule = "addr_price"
+
+        # 4. координаты + комнаты + этаж + площадь + цена (см. docstring —
+        # ловит те же дубли, что и правила 2/3, но независимо от текста
+        # адреса, который у разных агентов на один и тот же дом расходится).
+        if (matched_primary is None and lat is not None and lon is not None
+                and rooms is not None and floor is not None and price > 0):
+            geo_key = (rooms, floor, round(price / 100_000) * 100_000)
+            for ex_id in geo_idx.get(geo_key, []):
+                ex = by_id.get(ex_id)
+                if not ex:
+                    continue
+                ex_lat, ex_lon = ex.get("lat"), ex.get("lon")
+                if ex_lat is None or ex_lon is None:
+                    continue
+                if abs(float(ex_lat) - lat) > GEO_EPS or abs(float(ex_lon) - lon) > GEO_EPS:
+                    continue
+                if abs(float(ex.get("area") or 0) - area) > 3:
+                    continue
+                matched_primary = ex_id
+                matched_rule = "geo"
+                break
 
         if matched_primary:
             ex = by_id.get(matched_primary)
@@ -137,9 +201,11 @@ def find_duplicates(listings: list[dict],
             photo_idx[uuid] = lid
         if addr and rooms is not None and area > 0:
             addr_idx.setdefault((addr, rooms, round(area / 5) * 5), []).append(lid)
-        if addr and price > 0 and floor is not None:
+        if addr and price > 0 and floor is not None and rooms is not None:
             price_addr_idx.setdefault(
-                (addr, round(price / 100_000) * 100_000, floor), lid)
+                (addr, round(price / 100_000) * 100_000, floor, rooms), lid)
+        if lat is not None and lon is not None and rooms is not None and floor is not None and price > 0:
+            geo_idx.setdefault((rooms, floor, round(price / 100_000) * 100_000), []).append(lid)
 
     return duplicates, match_rules
 
@@ -162,9 +228,13 @@ async def _dedup_table(table: str, order_col: str) -> int:
     await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS dup_marked_at TIMESTAMPTZ")
     # по какому правилу признан дублем: photo / addr_area / addr_price
     await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS dup_match TEXT")
+    # цена primary и дубля разошлась больше чем на 1 млн ₸ — подозрительно,
+    # возможно это НЕ одна и та же квартира (см. duplicates.html — такие
+    # группы подсвечиваются отдельно, "присмотреться подробнее").
+    await execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS dup_needs_review BOOLEAN DEFAULT FALSE")
 
     have = await _table_columns(table)
-    want = ["id", "url", "address", "rooms", "area", "price", "floor", "is_owner"]
+    want = ["id", "url", "address", "rooms", "area", "price", "floor", "is_owner", "lat", "lon"]
     cols = [c for c in want if c in have]
 
     rows = await fetch(f"""
@@ -172,16 +242,41 @@ async def _dedup_table(table: str, order_col: str) -> int:
         WHERE COALESCE(is_duplicate, FALSE) = FALSE
         ORDER BY {order_col} ASC
     """)
-    duplicates, match_rules = find_duplicates([dict(r) for r in rows])
+    row_dicts = [dict(r) for r in rows]
+    by_id = {str(r["id"]): r for r in row_dicts}
+    duplicates, match_rules = find_duplicates(row_dicts)
     logger.info("%s: found %d duplicates", table, len(duplicates))
 
+    PRICE_REVIEW_THRESHOLD = 1_000_000
+    needs_review_cnt = 0
     for dup_id, primary_id in duplicates.items():
+        dup_row, primary_row = by_id.get(dup_id), by_id.get(primary_id)
+        needs_review = False
+        if dup_row and primary_row and dup_row.get("price") and primary_row.get("price"):
+            needs_review = abs(int(dup_row["price"]) - int(primary_row["price"])) > PRICE_REVIEW_THRESHOLD
+        if needs_review:
+            needs_review_cnt += 1
         await execute(
             f"UPDATE {table} SET is_duplicate=TRUE, duplicate_of=$1, "
             f"dup_marked_at=COALESCE(dup_marked_at, NOW()), "
-            f"dup_match=COALESCE(dup_match, $3) WHERE id=$2",
-            primary_id, dup_id, match_rules.get(dup_id) or None)
+            f"dup_match=COALESCE(dup_match, $3), dup_needs_review=$4 WHERE id=$2",
+            primary_id, dup_id, match_rules.get(dup_id) or None, needs_review)
     # ВАЖНО: is_active НЕ трогаем — иначе затирался бы архив.
+
+    await execute("""
+        CREATE TABLE IF NOT EXISTS dedup_scan_log (
+            id SERIAL PRIMARY KEY,
+            table_name TEXT NOT NULL,
+            scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            listings_scanned INT NOT NULL,
+            duplicates_found INT NOT NULL,
+            needs_review_found INT NOT NULL DEFAULT 0
+        )
+    """)
+    await execute(
+        "INSERT INTO dedup_scan_log (table_name, listings_scanned, duplicates_found, needs_review_found) "
+        "VALUES ($1, $2, $3, $4)",
+        table, len(row_dicts), len(duplicates), needs_review_cnt)
     return len(duplicates)
 
 

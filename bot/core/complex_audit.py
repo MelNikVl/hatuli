@@ -144,6 +144,40 @@ async def recompute_complex_coords() -> int:
     return n
 
 
+async def backfill_year_built() -> int:
+    """Год постройки ЖК по данным Korter/Homster почти не покрыт (страницы
+    списка не отдают год — нужна отдельная страница ЖК). Зато ~17% объявлений
+    с Крыши уже несут year_built на самой карточке квартиры. Берём МОДУ
+    (самый частый год) среди объявлений, привязанных к ЖК, и подставляем её
+    туда, где у ЖК год ещё не проставлен вручную/из другого источника."""
+    from bot.db.pg import execute
+    res = await execute("""
+        WITH norm AS (
+            SELECT lower(trim(regexp_replace(complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i'))) AS key,
+                   year_built
+            FROM apartment_listings
+            WHERE year_built IS NOT NULL AND complex_name IS NOT NULL AND is_active IS NOT FALSE
+        ),
+        modes AS (
+            SELECT DISTINCT ON (key) key, year_built
+            FROM (
+                SELECT key, year_built, count(*) AS cnt
+                FROM norm
+                GROUP BY key, year_built
+            ) g
+            ORDER BY key, cnt DESC
+        )
+        UPDATE complexes c
+        SET year_built = m.year_built
+        FROM modes m
+        WHERE lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i'))) = m.key
+          AND c.year_built IS NULL
+    """)
+    n = int((res or "").split()[-1] or 0)
+    logger.info("complex year_built backfilled: %d", n)
+    return n
+
+
 async def street_names() -> set[str]:
     """Множество нормализованных названий, помеченных как улицы."""
     from bot.db.pg import fetch

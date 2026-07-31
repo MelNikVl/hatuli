@@ -258,6 +258,22 @@ async def prewarm_photo_cache(u: str) -> bool:
         return False
 
 
+
+def _load_db_url(db_name: str) -> str:
+    from pathlib import Path
+    env = Path("/home/nik/krisha_bot/.env")
+    if env.exists():
+        for line in env.read_text(encoding="utf-8").splitlines():
+            if line.startswith("DATABASE_URL="):
+                return line.split("=", 1)[1].strip().rsplit("/", 1)[0] + "/" + db_name
+    return f"postgresql://krisha@localhost/{db_name}"
+
+
+def _hype_db_conn():
+    import psycopg2
+    return psycopg2.connect(_load_db_url("hype_tracker"))
+
+
 def make_extras_router(templates) -> APIRouter:
     router = APIRouter()
 
@@ -267,6 +283,153 @@ def make_extras_router(templates) -> APIRouter:
     # Доступно во всех шаблонах: {{ is_admin(request) }} — для скрытия
     # админ-элементов на публичных страницах
     templates.env.globals["is_admin"] = is_authed
+    @router.get("/admin/analytics/hype", response_class=HTMLResponse)
+    async def hype_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("hype_analytics.html", {"request": request})
+
+    @router.get("/admin/api/hype-hexes")
+    async def hype_hexes(request: Request):
+        from bot.db.pg import fetch as pg_fetch
+        from bot.core.hexgrid import hex_id, hex_center
+        rows = await pg_fetch("""
+            SELECT name, lat, lon, listings_count, rental_listings_count, sold_count, avg_price_m2
+            FROM complexes
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+              AND COALESCE(listings_count,0) + COALESCE(rental_listings_count,0) + COALESCE(sold_count,0) > 0
+        """)
+        import re as _re
+        junk = _re.compile(r"(?i)^(жк|жк |апартаменты|квартиры|дом|улица|район|жилой комплекс|жил|новостройк)[\s\-\W]*$|^[^а-яёa-z]+$|^[\w\s]{1,2}$")
+        recs = [dict(r) for r in rows if not junk.search(str(r["name"] or ""))]
+        if not recs:
+            return JSONResponse({"hexes": []})
+        n = len(recs)
+        def rank_norm(vals):
+            order = sorted(range(n), key=lambda i: vals[i])
+            out = [0.0] * n
+            for k, i in enumerate(order):
+                out[i] = k / (n - 1) if n > 1 else 0.5
+            return out
+        volume = [1.5 * (r["sold_count"] or 0) + (r["listings_count"] or 0) + 0.5 * (r["rental_listings_count"] or 0) for r in recs]
+        prices = [r["avg_price_m2"] or 0 for r in recs]
+        rv = rank_norm(volume)
+        rp = rank_norm(prices)
+        scores = [0.65 * rv[i] + 0.35 * rp[i] for i in range(n)]
+        rs = rank_norm(scores)
+
+        # ЖК рисовались гексагонами ПРЯМО вокруг своих координат (не привязка
+        # к общей сетке) — у соседних домов гексы визуально перекрывались.
+        # Правильный гекс-слой (как у цены/шума) — снэпим каждый ЖК к общей
+        # сетке (тот же hex_id/hex_center, что и остальные гекс-слои проекта)
+        # и агрегируем несколько ЖК в одной ячейке взвешенным средним по объёму.
+        EDGE_M = 100.0
+        cells: dict[str, dict] = {}
+        for i in range(n):
+            hid = hex_id(float(recs[i]["lat"]), float(recs[i]["lon"]), EDGE_M)
+            cell = cells.setdefault(hid, {"names": [], "wsum": 0.0, "vsum": 0.0})
+            w = max(volume[i], 0.1)
+            cell["wsum"] += (0.24 + 0.75 * rs[i]) * w
+            cell["vsum"] += w
+            cell["names"].append(recs[i]["name"])
+        hexes = []
+        for hid, cell in cells.items():
+            clat, clon = hex_center(hid, EDGE_M)
+            label = cell["names"][0] + (f" +{len(cell['names'])-1}" if len(cell["names"]) > 1 else "")
+            hexes.append({"name": label, "lat": clat, "lon": clon,
+                          "score": round(cell["wsum"] / cell["vsum"], 4) if cell["vsum"] else 0.24})
+        hexes.sort(key=lambda h: h["score"], reverse=True)
+        return JSONResponse({"hexes": hexes})
+
+    @router.get("/admin/api/hype-tracker")
+    async def hype_tracker_info(request: Request):
+        db = _hype_db_conn()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT h.id, h.name, h.url, h.rtype,
+                   (SELECT COUNT(*) FROM hype_resource_runs r WHERE r.resource_id = h.id) AS runs,
+                   (SELECT COALESCE(SUM(items_found),0) FROM hype_resource_runs r WHERE r.resource_id = h.id) AS total_items
+            FROM hype_resources h ORDER BY h.name""")
+        cols = [d[0] for d in cur.description]
+        resources = [dict(zip(cols, row)) for row in cur.fetchall()]
+        cur.execute("""
+            SELECT s.id, s.ts, s.period,
+                   (SELECT COUNT(*) FROM hype_resource_runs r WHERE r.snapshot_id = s.id) AS resources_used,
+                   (SELECT COALESCE(SUM(items_found),0) FROM hype_resource_runs r WHERE r.snapshot_id = s.id) AS items_total
+            FROM hype_snapshots s ORDER BY s.ts DESC LIMIT 60""")
+        cols2 = [d[0] for d in cur.description]
+        snapshots = [dict(zip(cols2, row)) for row in cur.fetchall()]
+        for s in snapshots:
+            if s.get("ts") is not None:
+                s["ts"] = str(s["ts"])
+        cur.execute("""
+            SELECT COALESCE(run.created_at, s.ts) AS ts, r.name, run.items_found
+            FROM hype_resource_runs run
+            JOIN hype_resources r ON r.id = run.resource_id
+            LEFT JOIN hype_snapshots s ON s.id = run.snapshot_id
+            WHERE r.rtype = 'news' AND run.items_found > 0
+            ORDER BY ts DESC LIMIT 400""")
+        cols3 = [d[0] for d in cur.description]
+        media_runs = [dict(zip(cols3, row)) for row in cur.fetchall()]
+        for m in media_runs:
+            if m.get("ts") is not None:
+                m["ts"] = str(m["ts"])
+        cur.close(); db.close()
+        return JSONResponse({"resources": resources, "snapshots": snapshots, "media_runs": media_runs})
+
+    @router.get("/admin/banks", response_class=HTMLResponse)
+    async def banks_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+        banks = [dict(r) for r in await pg_fetch(
+            "SELECT id, slug, name, short_name, description, website, phone, program_type, notes, sort_order FROM banks ORDER BY sort_order, name")]
+        progs = await pg_fetch("SELECT * FROM mortgage_programs ORDER BY id")
+        by_bank: dict = {}
+        for p in progs:
+            by_bank.setdefault(p["bank_id"], []).append(p)
+        for b in banks:
+            b["programs"] = by_bank.get(b["id"], [])
+        return templates.TemplateResponse("banks.html", {"request": request, "banks": banks})
+
+    @router.get("/admin/banks/{slug}", response_class=HTMLResponse)
+    async def bank_detail(request: Request, slug: str):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch, fetchrow
+        bank = await fetchrow("SELECT * FROM banks WHERE slug = $1", slug)
+        if not bank:
+            return HTMLResponse("Банк не найден", status_code=404)
+        programs = await fetch("SELECT * FROM mortgage_programs WHERE bank_id = $1 ORDER BY id", bank["id"])
+        return templates.TemplateResponse("bank_detail.html", {"request": request, "bank": bank, "programs": programs})
+
+    @router.get("/admin/news", response_class=HTMLResponse)
+    async def news_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+        news = [dict(r) for r in await pg_fetch(
+            "SELECT id, ts, title, source, url, image_url FROM news ORDER BY ts DESC LIMIT 30")]
+        return templates.TemplateResponse("news.html", {"request": request, "news": news})
+
+    @router.get("/admin/analytics/transport", response_class=HTMLResponse)
+    async def transport_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("transport_analytics.html", {"request": request})
+
+    @router.get("/admin/api/transport-hexes")
+    async def transport_hexes_api(request: Request):
+        import psycopg2
+        db = psycopg2.connect(_load_db_url("krisha_bot"))
+        cur = db.cursor()
+        cur.execute("SELECT lat, lon, score, dist_lrt, dist_bus FROM transport_hexes ORDER BY score DESC")
+        cols = [d[0] for d in cur.description]
+        hexes = [dict(zip(cols, row)) for row in cur.fetchall()]
+        cur.close(); db.close()
+        return JSONResponse({"hexes": hexes})
+
+
 
     # ── Кеширующий прокси для фото объявлений/ЖК ────────────────────────────
     # Krisha сама раздаёт фото через свой CDN (kcdn.online) — мы их не
@@ -337,11 +500,13 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/cabinet", response_class=HTMLResponse)
     async def cabinet_page(request: Request):
-        from bot.core.site_auth import get_user_by_session, list_favorites
+        from bot.core.site_auth import get_user_by_session, list_favorites, list_favorite_complexes
         user = await get_user_by_session(_site_session_cookie(request))
         favorites = await list_favorites(user["user_id"]) if user else []
+        favorite_complexes = await list_favorite_complexes(user["user_id"]) if user else []
         return templates.TemplateResponse("cabinet.html", {
             "request": request, "user": user, "favorites": favorites,
+            "favorite_complexes": favorite_complexes,
             "bot_username": os.getenv("SITE_BOT_USERNAME", "nik_us_bot"),
         })
 
@@ -349,12 +514,43 @@ def make_extras_router(templates) -> APIRouter:
     async def favorites_page(request: Request):
         """Отдельная страница избранного (карточки + сравнение таблицей) —
         раньше избранное было видно только внутри /cabinet одним списком."""
-        from bot.core.site_auth import get_user_by_session, list_favorites
+        from bot.core.site_auth import get_user_by_session, list_favorites, list_favorite_complexes
         user = await get_user_by_session(_site_session_cookie(request))
         favorites = await list_favorites(user["user_id"]) if user else []
+        favorite_complexes = await list_favorite_complexes(user["user_id"]) if user else []
         return templates.TemplateResponse("favorites.html", {
             "request": request, "user": user, "favorites": favorites,
+            "favorite_complexes": favorite_complexes,
         })
+
+    # ── Избранные ЖК — те же ручки, что у избранных квартир, но по complex_id ──
+    @router.get("/api/favorite-complexes/ids")
+    async def api_favorite_complex_ids(request: Request, ids: str = ""):
+        from bot.core.site_auth import get_user_by_session, is_favorite_complex_ids
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"ids": []})
+        complex_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
+        found = await is_favorite_complex_ids(user["user_id"], complex_ids)
+        return JSONResponse({"ids": list(found)})
+
+    @router.post("/api/favorite-complexes/{complex_id}")
+    async def api_add_favorite_complex(request: Request, complex_id: int):
+        from bot.core.site_auth import get_user_by_session, add_favorite_complex
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await add_favorite_complex(user["user_id"], complex_id)
+        return JSONResponse({"ok": True})
+
+    @router.delete("/api/favorite-complexes/{complex_id}")
+    async def api_remove_favorite_complex(request: Request, complex_id: int):
+        from bot.core.site_auth import get_user_by_session, remove_favorite_complex
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await remove_favorite_complex(user["user_id"], complex_id)
+        return JSONResponse({"ok": True})
 
     @router.post("/api/auth/start")
     async def api_auth_start(request: Request):
@@ -770,22 +966,43 @@ def make_extras_router(templates) -> APIRouter:
         # колонка появляется после первого прогона дедупа — создаём сами,
         # чтобы страница не падала на свежей базе
         await pg_exec2("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS dup_match TEXT")
+        await pg_exec2("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS dup_needs_review BOOLEAN DEFAULT FALSE")
+        await pg_exec2("""
+            CREATE TABLE IF NOT EXISTS dedup_scan_log (
+                id SERIAL PRIMARY KEY, table_name TEXT NOT NULL,
+                scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                listings_scanned INT NOT NULL, duplicates_found INT NOT NULL,
+                needs_review_found INT NOT NULL DEFAULT 0
+            )
+        """)
         rows = await pg_fetch("""
             SELECT p.id, p.address, p.price, p.rooms, p.area, p.is_owner,
                    p.seller_name, p.lat, p.lon, p.complex_name, p.floor, p.floors_total,
                    p.photos AS p_photos, COUNT(d.id) AS dup_cnt,
+                   bool_or(COALESCE(d.dup_needs_review, FALSE)) AS needs_review,
                    json_agg(json_build_object(
                        'id', d.id, 'price', d.price, 'is_owner', d.is_owner,
                        'url', d.url, 'match', COALESCE(d.dup_match, '?'),
                        'seller_name', d.seller_name, 'floor', d.floor,
                        'floors_total', d.floors_total, 'photos', d.photos,
-                       'rooms', d.rooms, 'area', d.area
+                       'rooms', d.rooms, 'area', d.area, 'needs_review', COALESCE(d.dup_needs_review, FALSE)
                        ) ORDER BY d.is_owner DESC NULLS LAST, d.price ASC) AS dups
             FROM apartment_listings p
             JOIN apartment_listings d ON d.duplicate_of = p.id AND d.is_duplicate = TRUE
             GROUP BY p.id
-            ORDER BY dup_cnt DESC, p.last_seen DESC NULLS LAST
+            ORDER BY needs_review DESC, dup_cnt DESC, p.last_seen DESC NULLS LAST
             LIMIT 300
+        """)
+        dup_timeline = await pg_fetch("""
+            SELECT date_trunc('day', dup_marked_at)::date AS day, COUNT(*) AS n
+            FROM apartment_listings
+            WHERE is_duplicate = TRUE AND dup_marked_at IS NOT NULL
+            GROUP BY 1 ORDER BY 1
+        """)
+        scan_timeline = await pg_fetch("""
+            SELECT scanned_at, listings_scanned, duplicates_found, needs_review_found
+            FROM dedup_scan_log WHERE table_name = 'apartment_listings'
+            ORDER BY scanned_at DESC LIMIT 200
         """)
         similar = []  # блок «Похожие в ЖК» убран со страницы дублей по запросу
         rent_cnt = 0
@@ -824,6 +1041,12 @@ def make_extras_router(templates) -> APIRouter:
             "rows": out_rows,
             "similar": out_sim,
             "rent_cnt": rent_cnt,
+            "dup_timeline": [{"day": r["day"].strftime("%Y-%m-%d"), "n": r["n"]} for r in dup_timeline],
+            "scan_timeline": [{
+                "at": r["scanned_at"].strftime("%Y-%m-%d %H:%M"),
+                "scanned": r["listings_scanned"], "found": r["duplicates_found"],
+                "review": r["needs_review_found"],
+            } for r in reversed(scan_timeline)],
         })
 
     @router.get("/admin/api/duplicates")
@@ -1396,6 +1619,14 @@ def make_extras_router(templates) -> APIRouter:
             return RedirectResponse(url="/admin/login", status_code=302)
         return RedirectResponse(url="/admin/info#score", status_code=301)
 
+    # ── Админ панель: единая точка входа для Настроек/Пользователей/Зон/
+    # Аналитики — вынесено из главного меню в один пункт справа (см. base.html).
+    @router.get("/admin/panel", response_class=HTMLResponse)
+    async def admin_panel_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("admin_panel.html", {"request": request})
+
     # ── Зоны приоритета: карта с рисованием полигонов ────────────────────
 
     @router.get("/admin/zones", response_class=HTMLResponse)
@@ -1674,6 +1905,29 @@ def make_extras_router(templates) -> APIRouter:
             WHERE lower(trim(complex_name)) = lower(trim($1))
         """, cname)
 
+        # Цена по комнатности В ДИНАМИКЕ (для графика на странице ЖК) —
+        # медиана цены объявлений этого ЖК по месяцам first_seen, отдельно
+        # для каждой комнатности. Берём и архивные тоже (is_active любое) —
+        # иначе на графике исчезали бы месяцы, где всё уже распродано.
+        price_trend_rows = await fetch("""
+            SELECT date_trunc('month', first_seen)::date AS month, rooms,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_price,
+                   COUNT(*) AS n
+            FROM apartment_listings
+            WHERE lower(trim(complex_name)) = lower(trim($1))
+              AND rooms IS NOT NULL AND price > 0 AND first_seen IS NOT NULL
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+        """, cname)
+        price_trend_by_rooms: dict[str, list] = {}
+        for r in price_trend_rows:
+            key = str(r["rooms"])
+            price_trend_by_rooms.setdefault(key, []).append({
+                "month": r["month"].strftime("%Y-%m"),
+                "median_price": float(r["median_price"]),
+                "n": r["n"],
+            })
+
         # Данные источников (korter/homsters) для блока информации
         cx_sources = {}
         _si = cx["source_info"]
@@ -1706,6 +1960,7 @@ def make_extras_router(templates) -> APIRouter:
             "hex_cells": hex_cells,
             "hex_cells_sale": hex_cells_sale,
             "hex_cells_rental": hex_cells_rental,
+            "price_trend_by_rooms": price_trend_by_rooms,
         })
 
     @router.post("/admin/complex/{complex_id}/photos")

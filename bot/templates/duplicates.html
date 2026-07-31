@@ -13,6 +13,19 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
+<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px;">
+  <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+    <b style="font-size:14px;">📅 Когда находили дубли</b>
+    <div style="font-size:11.5px;color:#888;margin-bottom:6px;">по дням, dup_marked_at</div>
+    <div id="dup-timeline-chart"></div>
+  </div>
+  <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+    <b style="font-size:14px;">🌙 Прогоны скана дублей</b>
+    <div style="font-size:11.5px;color:#888;margin-bottom:6px;">дедуп гоняется на ВСЕХ необработанных объявлениях каждый цикл парсера (в т.ч. ночью) — не только на новых</div>
+    <div id="scan-timeline-chart"></div>
+  </div>
+</div>
+
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
   <div style="order:1;flex:1 1 380px;min-width:250px;max-width:68%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
     <div id="dup-map" style="height:calc((100vh - 210px) * 0.667);min-height:280px;width:100%;border-radius:8px;"></div>
@@ -22,10 +35,11 @@
     <b style="font-size:14px;">🏆 Топ по числу дублей</b>
     <div style="margin-top:10px;">
       {% for r in rows[:20] %}
-      <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);{% if r.needs_review %}background:#fef2f2;{% endif %}">
         <b style="font-size:16px;min-width:28px;color:{{ '#ef4444' if r.dup_cnt >= 3 else '#f59e0b' }};">×{{ r.dup_cnt }}</b>
         <div style="flex:1;min-width:0;">
           <a href="/admin/analytics/{{ r.id }}" style="font-size:13px;color:#d4af37;font-weight:800;">{{ r.address or r.id }}</a>
+          {% if r.needs_review %}<span title="Цена одного из объявлений группы разошлась с основным больше чем на 1 млн ₸ — возможно, это НЕ дубли, присмотрись внимательнее" style="font-size:10.5px;background:#ef4444;color:#fff;border-radius:6px;padding:1px 6px;margin-left:4px;font-weight:700;">⚠ проверить цену</span>{% endif %}
           <div style="font-size:11.5px;color:#888;">
             {{ r.rooms or '?' }}-комн{% if r.area %}, {{ r.area }} м²{% endif %} ·
             {{ (r.price/1000000)|round(1) if r.price else '—' }} млн ·
@@ -40,6 +54,34 @@
 </div>
 
 <script>
+// Простой бар-чарт без зависимостей — таймлайн находок дублей по дням.
+(function() {
+  const data = {{ dup_timeline | tojson }};
+  const el = document.getElementById('dup-timeline-chart');
+  if (!data.length) { el.innerHTML = '<p style="font-size:12px;color:#888;">Пока нет данных (dup_marked_at пуст).</p>'; return; }
+  const max = Math.max(...data.map(d => d.n));
+  el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:3px;height:140px;">` +
+    data.map(d => `<div title="${d.day}: ${d.n}" style="flex:1;min-width:4px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;">
+      <div style="font-size:10px;color:#888;">${d.n}</div>
+      <div style="width:100%;background:#f59e0b;border-radius:2px 2px 0 0;height:${Math.max(2, Math.round(d.n/max*110))}px;"></div>
+    </div>`).join('') + `</div>` +
+    `<div style="display:flex;gap:3px;margin-top:4px;">` +
+    data.map(d => `<div style="flex:1;min-width:4px;font-size:9px;color:#888;text-align:center;">${d.day.slice(5)}</div>`).join('') + `</div>`;
+})();
+
+// Прогоны скана (dedup_scan_log) — найдено vs требует проверки, по времени.
+(function() {
+  const data = {{ scan_timeline | tojson }};
+  const el = document.getElementById('scan-timeline-chart');
+  if (!data.length) { el.innerHTML = '<p style="font-size:12px;color:#888;">Пока нет прогонов в логе.</p>'; return; }
+  const max = Math.max(1, ...data.map(d => d.found));
+  el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:3px;height:140px;overflow-x:auto;">` +
+    data.map(d => `<div title="${d.at}: просканировано ${d.scanned}, найдено дублей ${d.found}, требует проверки ${d.review}" style="flex:0 0 10px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;">
+      <div style="width:100%;background:${d.review ? '#ef4444' : '#2563eb'};border-radius:2px 2px 0 0;height:${Math.max(2, Math.round(d.found/max*110))}px;"></div>
+    </div>`).join('') + `</div>` +
+    `<div style="font-size:11px;color:#888;margin-top:6px;">последний прогон: ${data[data.length-1].at} · найдено ${data[data.length-1].found} · требует проверки ${data[data.length-1].review}</div>`;
+})();
+
 document.addEventListener('DOMContentLoaded', function() {
   const map = L.map('dup-map').setView([51.128, 71.43], 13);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
@@ -68,10 +110,11 @@ document.addEventListener('DOMContentLoaded', function() {
       ? `<img src="${d.photo}" style="width:85px;height:65px;object-fit:cover;display:block;border-radius:4px;flex-shrink:0;">`
       : `<div style="width:85px;height:65px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:16px;border-radius:4px;flex-shrink:0;">🏠</div>`;
     return `
-<a href="${d.url ? d.url : '/admin/analytics/' + d.id}" target="${d.url ? '_blank' : '_self'}" style="display:flex;gap:8px;align-items:center;text-decoration:none;color:inherit;border:1px solid ${isPrimary ? '#2563eb' : '#eee'};border-radius:6px;overflow:hidden;background:#fff;padding:7px;flex:0 0 180px;width:180px;">
+<a href="${d.url ? d.url : '/admin/analytics/' + d.id}" target="${d.url ? '_blank' : '_self'}" style="display:flex;gap:8px;align-items:center;text-decoration:none;color:inherit;border:1px solid ${d.needs_review ? '#ef4444' : (isPrimary ? '#2563eb' : '#eee')};border-radius:6px;overflow:hidden;background:#fff;padding:7px;flex:0 0 180px;width:180px;">
   ${photoHtml}
   <div style="min-width:0;">
     ${isPrimary ? '<div style="font-size:8.25px;color:#2563eb;font-weight:800;">ОСНОВНАЯ</div>' : ''}
+    ${d.needs_review ? '<div style="font-size:8.25px;color:#ef4444;font-weight:800;">⚠ ПРОВЕРИТЬ ЦЕНУ</div>' : ''}
     <div style="font-weight:800;font-size:14.25px;">${priceTxt}</div>
     <div style="font-size:10.5px;color:#555;">${d.rooms ? d.rooms + '-комн' : ''}</div>
     <div style="font-size:10px;color:#555;">${whoLabel(d)}</div>

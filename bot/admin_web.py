@@ -64,6 +64,10 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         stats = await db.get_dashboard_stats()
         from bot.db import settings as app_settings
         await app_settings.load()
+        # Личный кабинет посетителя (вход через Telegram, см. bot/core/site_auth.py) —
+        # нужен в шапке для кнопки "Войти"/имени пользователя, см. base_public.html.
+        from bot.core.site_auth import get_user_by_session
+        site_user = await get_user_by_session(request.cookies.get("site_session"))
         return templates.TemplateResponse(
             "dashboard.html", {
                 "request": request,
@@ -73,6 +77,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "parse_interval_min": _state.parse_interval_min,
                 "parse_interval_max": _state.parse_interval_max,
                 "popup_width": app_settings.get_int("POPUP_WIDTH_PX", 380),
+                "site_user": site_user,
             }
         )
 
@@ -432,6 +437,35 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "total_active": total_active, "missing_ceiling": missing_ceiling,
         })
 
+    @app.get("/admin/analytics/year", response_class=HTMLResponse)
+    async def year_analytics_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetchval as pg_fv
+        total_active = await pg_fv(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+        # Год берём с объявления, а если пусто — с его ЖК (см. комментарий
+        # в service_apartments.py про снимок year_stats_history).
+        missing_year = await pg_fv("""
+            SELECT COUNT(*) FROM apartment_listings a
+            LEFT JOIN complexes c ON lower(trim(c.name)) = lower(trim(a.complex_name))
+            WHERE a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
+              AND COALESCE(a.year_built, c.year_built) IS NULL
+        """) or 0
+        return templates.TemplateResponse("year_analytics.html", {
+            "request": request, "atab": "year",
+            "total_active": total_active, "missing_year": missing_year,
+        })
+
+    @app.get("/admin/analytics/demand", response_class=HTMLResponse)
+    async def demand_analytics_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("demand_analytics.html", {
+            "request": request, "atab": "demand",
+        })
+
     @app.get("/admin/analytics/floor-performance", response_class=HTMLResponse)
     async def floor_performance_page(request: Request):
         # ВАЖНО: тот же паттерн, что views/floors — этот роут ДОЛЖЕН стоять
@@ -441,6 +475,27 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return RedirectResponse(url="/admin/login", status_code=302)
         return templates.TemplateResponse("floor_performance.html", {
             "request": request, "atab": "floor_performance",
+        })
+
+    @app.get("/admin/analytics/hype", response_class=HTMLResponse)
+    async def hype_analytics_page(request: Request):
+        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id}.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("hype_analytics.html", {
+            "request": request, "atab": "hype",
+        })
+
+    @app.get("/admin/analytics/transport", response_class=HTMLResponse)
+    async def transport_analytics_page(request: Request):
+        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
+        # без этого "transport" матчился туда как несуществующий listing_id
+        # (терялся, т.к. одноимённый роут в terminal_extras.py регистрируется
+        # через include_router ПОСЛЕ этого catch-all).
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("transport_analytics.html", {
+            "request": request, "atab": "transport",
         })
 
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)

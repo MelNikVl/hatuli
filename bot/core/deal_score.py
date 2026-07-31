@@ -1,29 +1,48 @@
 """
-Deal Score v3 — единый многофакторный скоринг привлекательности сделки.
+Deal Score v4 — единый многофакторный скоринг привлекательности сделки.
 
-Синтез подходов (по материалам анализа 4 моделей):
+Это ЕДИНСТВЕННЫЙ источник score_total и его breakdown — старая параллельная
+система (bot/core/apartment_score_v2.py, независимо считавшая score_yield/
+score_price_market/score_location/score_apt_type/score_floor/score_complex/
+score_supply при каждом парсинге) удалена: два независимых скоринга давали
+рассинхрон — score_total уже был v3, а breakdown в попапе/аналитике всё ещё
+показывал старые числа v2. Теперь breakdown-колонки — это ПРОЕКЦИЯ компонентов
+v4 (см. _legacy_breakdown), т.е. всегда согласованы со score_total.
+
+Синтез подходов (по материалам анализа 4 моделей, см. заметку в Notion):
   1. Hedonic-ядро: ожидаемая цена P_expected строится НЕ из ручных весов,
-     а из локальной рыночной медианы (гексагон + кольцо + город, δ-доступность).
+     а из локальной рыночной медианы (гексагон + кольцо + город, δ-доступность),
+     скорректированной на класс ЖК и высоту потолков (см. _class_adj/_ceiling_adj) —
+     это и есть "цена складывается из локации, метража (сегментация по комнатам
+     уже это учитывает), потолков, этажа (см. риск) и класса ЖК".
      Deal Index = P_expected / P_ask — цена участвует только в сравнении
      с ожиданием, а не «весом в скоре».
   2. Субиндексы 0–100 с прозрачными весами (как у ЦИАН/Zillow):
-     Price 40% · Location 20% · Quality 20% · Market 15% · Risk 5%.
-  3. Эмпирическая калибровка: класс жилья, год постройки, рейтинг ЖК
-     (korter/homsters/krisha), yield из реальной аренды.
-  4. Confidence: доля компонентов, посчитанных на реальных данных —
+     Price · Location · Quality · Market · Risk — веса настраиваются в
+     /admin/settings (см. SCORE_W_* в app_settings), а не захардкожены,
+     потому что "правильные" веса зависят от профиля покупателя (семья vs
+     инвестор) — так делают все нормальные платформы.
+  3. Location включает инфраструктурный слой (школы/сады/вузы из city_poi,
+     OSM) — не только уровень цен гексагона, но и реальные удобства района.
+  4. Quality: при отсутствии housing_class (для ~89% ЖК он не известен —
+     Korter/Homster покрывают только часть каталога) используем прокси —
+     перцентиль цены/м² в сегменте — вместо плоского дефолта 50.
+  5. Confidence: доля компонентов, посчитанных на реальных данных —
      низкий confidence = оценке доверяем меньше (показываем в UI).
 
-Эмпирические эффекты исследования НБРК (левый берег +11.3%, монолит +11.8%
-и т.п.) НЕ добавляются вручную: гексагональные медианы уже содержат
-локальные премии/дисконты — ручное добавление дало бы двойной учёт.
+ВАЖНО про эмпирическую калибровку весов (то, о чём пишут все 4 модели):
+она требует данных о РЕАЛЬНЫХ исходах сделок (цена продажи vs цена в
+объявлении) — этого у нас пока нет (Krisha просто убирает проданное
+объявление, конечную цену мы не видим). Без этого регрессия/ML только
+переобучится на самой цене (циркулярно). Экспертные веса-слайдеры — это
+осознанный шаг 1; шаг 2 (калибровка) — когда появится сигнал об исходе
+сделки (см. TODO в apply_deal_scores).
 
-Записывает: score_total (=deal), hex_deal_index, hex_details (json с
-компонентами), deal_confidence, hex_price_adj=0 (старая ±8 поправка
-больше не нужна — цена теперь компонента, а не дельта).
 Первичку (market_type='primary') не трогаем — там своя модель.
 """
 from __future__ import annotations
 
+import bisect
 import json
 import logging
 from statistics import median
@@ -32,17 +51,42 @@ from bot.core.hexgrid import hex_id, neighbors
 
 logger = logging.getLogger(__name__)
 
-# ── Веса компонентов (сумма = 1.0) ────────────────────────────────────────────
-W_PRICE, W_LOC, W_QUALITY, W_MARKET, W_RISK = 0.40, 0.20, 0.20, 0.15, 0.05
+# ── Веса компонентов по умолчанию (сумма = 1.0) — переопределяются через
+# /admin/settings (SCORE_W_PRICE/LOCATION/QUALITY/MARKET/RISK, в процентах) ──
+# Location убран из скоринга по явному запросу (район/локация как отдельный
+# фактор посчитали не имеющим смысла) — вес 0, доли остальных компонентов
+# нормализуются автоматически (см. wsum-деление ниже), т.е. price/quality/
+# market/risk просто пропорционально занимают освободившиеся 20%.
+_DEFAULT_WEIGHTS = {"price": 0.40, "location": 0.0, "quality": 0.20,
+                    "market": 0.15, "risk": 0.05}
 
 # δ-доступность гекс-модели
 W0, W1, W2 = 1.0, 0.7, 0.35
 MIN_HEX, MIN_RING = 3, 5
+# Аналоги внутри ТОГО ЖЕ дома/ЖК — самый точный уровень сравнения (соседние
+# квартиры того же дома почти гарантированно того же класса и локации).
+# Если таких аналогов достаточно — используем ТОЛЬКО их и не спускаемся до
+# гекс/кольцо/город; иначе (мало квартир в базе по этому ЖК) — обычный
+# hedonic-блендинг гекс+кольцо+город, как раньше.
+MIN_BLDG = 2
 
 _CLASS_SCORE = {"элит": 100, "бизнес": 80, "комфорт": 60, "эконом": 35}
-_DISTRICT_FALLBACK = {
-    "есиль": 80, "алматы": 65, "сарыарка": 50, "байконур": 45, "нура": 30,
-}
+# Ценовая надбавка/дисконт класса ЖК к ожидаемой цене — тот же порядок величин,
+# что и субиндекс, но применяется к P_expected (класс — часть цены, а не
+# только описательный атрибут).
+_CLASS_PRICE_ADJ = {"элит": 1.25, "бизнес": 1.12, "комфорт": 1.0, "эконом": 0.85}
+
+# Высота потолков: в Астане заметный ценовой фактор (панель ~2.5-2.7м vs
+# монолит 3м+). База — 2.7м, ±6%/10см, капим ±18%/-12% чтобы не улетать
+# на выбросах разметки.
+_CEILING_BASELINE = 2.7
+_CEILING_PCT_PER_10CM = 0.06
+_CEILING_ADJ_MIN, _CEILING_ADJ_MAX = -0.12, 0.18
+
+# POI (city_poi, OSM): гексагон 500м + кольцо ~ радиус пешей доступности
+POI_EDGE_M = 500.0
+POI_WEIGHTS = {"school": 12, "kindergarten": 8, "university": 15}
+POI_NEUTRAL = 50  # если справочник city_poi пуст — не штрафуем/не бонусим
 
 
 def _rooms_bucket(rooms) -> str:
@@ -71,17 +115,83 @@ def _year_score(y):
     return 20
 
 
+def _class_key(cls: str) -> str | None:
+    return next((k for k in _CLASS_SCORE if k in cls), None)
+
+
+def _ceiling_adj(ceiling_height) -> float:
+    if not ceiling_height:
+        return 1.0
+    pct = (float(ceiling_height) - _CEILING_BASELINE) / 0.10 * _CEILING_PCT_PER_10CM
+    return 1.0 + max(_CEILING_ADJ_MIN, min(_CEILING_ADJ_MAX, pct))
+
+
+def _apt_type_pts(rooms, area) -> int:
+    """Ликвидность по комнатности/площади (0-15) — та же эвристика, что была
+    в apartment_score_v2, но теперь только проекция для legacy-колонки
+    score_apt_type (см. модуль docstring), не отдельный вес в total."""
+    score = 8
+    if rooms == 1:
+        score = 15
+    elif rooms == 2:
+        score = 13
+    elif rooms == 3:
+        score = 8
+    elif rooms and rooms >= 4:
+        score = 4
+    if area:
+        if area > 100:
+            score = max(score - min(6, int((area - 100) / 10)), 1)
+        elif area > 70:
+            score = max(score - 2, 2)
+    return score
+
+
+def _poi_index_from_rows(rows) -> dict[str, list[tuple[str, float, float]]]:
+    idx: dict[str, list[tuple[str, float, float]]] = {}
+    for r in rows:
+        if r["lat"] is None or r["lon"] is None:
+            continue
+        hid = hex_id(float(r["lat"]), float(r["lon"]), POI_EDGE_M)
+        idx.setdefault(hid, []).append((r["kind"], float(r["lat"]), float(r["lon"])))
+    return idx
+
+
+def _poi_score(lat: float, lon: float, poi_idx: dict) -> tuple[int, int]:
+    if not poi_idx:
+        return POI_NEUTRAL, 0
+    hid = hex_id(lat, lon, POI_EDGE_M)
+    cnt, pts = 0, 0.0
+    for cell in [hid] + neighbors(hid):
+        for kind, _plat, _plon in poi_idx.get(cell, []):
+            pts += POI_WEIGHTS.get(kind, 5)
+            cnt += 1
+    return min(100, round(pts)), cnt
+
+
 def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
-                        edge_m: float) -> dict[str, dict]:
+                        edge_m: float, weights: dict | None = None,
+                        poi_idx: dict | None = None) -> dict[str, dict]:
     """
     listings: [{id, lat, lon, price, area, rooms, floor, floors_total,
                 year_built, complex_name, is_owner, first_seen_days, yield_pct,
-                same_complex_cnt, district}]
+                same_complex_cnt, district, ceiling_height}]
     complexes: {lower(trim(name)): {housing_class, year_built, krisha_rating}}
+    weights: {"price","location","quality","market","risk"} — доли, сумма 1.0
+             (если None — дефолт _DEFAULT_WEIGHTS)
+    poi_idx: индекс city_poi по гексагонам (см. _poi_index_from_rows) —
+             если None, локация считается без инфраструктурного слоя.
     Возвращает {id: {deal, confidence, di, expected_m2, components{...}}}
     """
+    w = {**_DEFAULT_WEIGHTS, **(weights or {})}
+    wsum = sum(w.values()) or 1.0
+    w = {k: v / wsum for k, v in w.items()}
+    W_PRICE, W_LOC, W_QUALITY, W_MARKET, W_RISK = (
+        w["price"], w["location"], w["quality"], w["market"], w["risk"])
+
     # ── Гекс-агрегации (hedonic ядро) ────────────────────────────────────────
     seg_hex: dict[tuple[str, str], list[float]] = {}
+    seg_bldg: dict[tuple[str, str], list[float]] = {}
     seg_city: dict[str, list[float]] = {}
     enriched = []
     for l in listings:
@@ -92,13 +202,17 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
             continue
         seg = _rooms_bucket(l.get("rooms"))
         hid = hex_id(float(l["lat"]), float(l["lon"]), edge_m)
+        bkey = (l.get("complex_name") or "").strip().lower() or None
         seg_hex.setdefault((seg, hid), []).append(p_m2)
         seg_city.setdefault(seg, []).append(p_m2)
-        enriched.append((l, seg, hid, p_m2))
+        if bkey:
+            seg_bldg.setdefault((seg, bkey), []).append(p_m2)
+        enriched.append((l, seg, hid, bkey, p_m2))
     city_med = {s: median(v) for s, v in seg_city.items() if v}
+    city_sorted = {s: sorted(v) for s, v in seg_city.items()}
 
     out: dict[str, dict] = {}
-    for l, seg, hid, p_m2 in enriched:
+    for l, seg, hid, bkey, p_m2 in enriched:
         own = list(seg_hex.get((seg, hid), []))
         try:
             own.remove(p_m2)
@@ -112,55 +226,96 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         p_city = city_med.get(seg)
         if not p_city:
             continue
-        num, den = W2 * p_city, W2
-        if d0:
-            num += W0 * median(own)
-            den += W0
-        if d1:
-            num += W1 * median(ring)
-            den += W1
-        expected = num / den
-        di = expected / p_m2
-        sources = ("гекс+кольцо+город" if d0 and d1 else
+        own_bldg = list(seg_bldg.get((seg, bkey), [])) if bkey else []
+        try:
+            own_bldg.remove(p_m2)
+        except ValueError:
+            pass
+        db = len(own_bldg) >= MIN_BLDG
+        if db:
+            # Хватает аналогов в том же доме/ЖК — они точнее любого
+            # геометрического гекса, дальше вниз по цепочке не спускаемся.
+            expected_raw = median(own_bldg)
+            sources_bldg = True
+        else:
+            num, den = W2 * p_city, W2
+            if d0:
+                num += W0 * median(own)
+                den += W0
+            if d1:
+                num += W1 * median(ring)
+                den += W1
+            expected_raw = num / den
+            sources_bldg = False
+        sources = ("тот же дом/ЖК" if sources_bldg else
+                   "гекс+кольцо+город" if d0 and d1 else
                    "кольцо+город" if d1 else "гекс+город" if d0 else "только город")
+
+        # ── Hedonic-корректировка P_expected: класс ЖК + высота потолков ────
+        # (метраж уже учтён через сегментацию по комнатности; этаж — в Risk)
+        cx = complexes.get((l.get("complex_name") or "").strip().lower()) or {}
+        cls = (cx.get("housing_class") or "").lower()
+        cls_key = _class_key(cls)
+        class_adj = _CLASS_PRICE_ADJ.get(cls_key, 1.0)
+        ceiling_adj = _ceiling_adj(l.get("ceiling_height"))
+        expected = expected_raw * class_adj * ceiling_adj
+        di = expected / p_m2
 
         # ── 1. PRICE (40%): DI → 0..100 ─────────────────────────────────────
         price_score = _clamp(round(50 + (di - 1) * 200))
         pct = round((di - 1) * 100)
-        price_txt = (f"на {abs(pct)}% дешевле локального ожидания" if pct > 2 else
+        adj_bits = []
+        if cls_key:
+            adj_bits.append(f"класс «{cls_key}» {'+' if class_adj > 1 else ''}{round((class_adj-1)*100)}%")
+        if l.get("ceiling_height") and abs(ceiling_adj - 1) > 0.005:
+            adj_bits.append(f"потолки {l['ceiling_height']}м {'+' if ceiling_adj > 1 else ''}{round((ceiling_adj-1)*100)}%")
+        adj_txt = f" (с поправкой: {', '.join(adj_bits)})" if adj_bits else ""
+        price_txt = ((f"на {abs(pct)}% дешевле локального ожидания" if pct > 2 else
                      f"на {abs(pct)}% дороже локального ожидания" if pct < -2 else
-                     "цена на уровне локального рынка")
+                     "цена на уровне локального рынка") + adj_txt)
 
-        # ── 2. LOCATION (20%): уровень цен гексагона vs город ───────────────
-        loc_ratio = expected / p_city
-        loc_score = _clamp(round(50 + (loc_ratio - 1) * 100), 5, 100)
+        # ── 2. LOCATION (20%): цена гексагона vs город + инфраструктура ─────
+        loc_ratio = expected_raw / p_city
+        price_loc_score = _clamp(round(50 + (loc_ratio - 1) * 100), 5, 100)
+        poi_sc, poi_cnt = _poi_score(float(l["lat"]), float(l["lon"]), poi_idx or {})
+        loc_score = _clamp(round(price_loc_score * 0.7 + poi_sc * 0.3))
         loc_txt = (f"локация дороже городской медианы на {round((loc_ratio-1)*100)}%"
                    if loc_ratio > 1.02 else
                    f"локация дешевле городской медианы на {round((1-loc_ratio)*100)}%"
                    if loc_ratio < 0.98 else "локация на уровне города")
+        loc_txt += f", рядом {poi_cnt} объектов инфраструктуры (школы/сады/вузы)" if poi_idx else ""
 
         # ── 3. QUALITY (20%): класс ЖК + год + рейтинг Крыши ────────────────
-        cx = complexes.get((l.get("complex_name") or "").strip().lower()) or {}
-        parts, wsum = [], 0.0
-        cls = (cx.get("housing_class") or "").lower()
-        cls_score = next((v for k, v in _CLASS_SCORE.items() if k in cls), None)
+        # (без класса — прокси: перцентиль цены/м² в сегменте, вместо
+        # плоского дефолта 50, см. модуль docstring п.4)
+        parts, wq = [], 0.0
+        cls_score = _CLASS_SCORE.get(cls_key)
         if cls_score is not None:
             parts.append(cls_score * 0.45)
-            wsum += 0.45
+            wq += 0.45
+        else:
+            svals = city_sorted.get(seg)
+            if svals:
+                pr = bisect.bisect_left(svals, p_m2) / len(svals)
+                proxy_score = round(pr * 100)
+                parts.append(proxy_score * 0.30)
+                wq += 0.30
         yr = l.get("year_built") or cx.get("year_built")
         ys = _year_score(yr)
         if ys is not None:
             parts.append(ys * 0.35)
-            wsum += 0.35
+            wq += 0.35
         rating = cx.get("krisha_rating")
         if rating:
             parts.append(rating / 5 * 100 * 0.20)
-            wsum += 0.20
-        if wsum:
-            quality_score = round(sum(parts) / wsum)
+            wq += 0.20
+        if wq:
+            quality_score = round(sum(parts) / wq)
             q_bits = []
             if cls_score is not None:
-                q_bits.append(f"класс «{cls}»")
+                q_bits.append(f"класс «{cls_key}»")
+            elif city_sorted.get(seg):
+                q_bits.append("класс не известен, оценка по цене/м² в сегменте")
             if ys is not None:
                 q_bits.append(f"{yr} г.")
             if rating:
@@ -183,11 +338,14 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         # ── 5. RISK (5%): штрафы ────────────────────────────────────────────
         risk, risk_bits = 100, []
         fl, flt = l.get("floor"), l.get("floors_total")
+        floor_pts = 8  # проекция для legacy score_floor (0-8)
         if fl == 1:
             risk -= 40
+            floor_pts = 0
             risk_bits.append("1й этаж")
         elif fl and flt and fl == flt:
             risk -= 25
+            floor_pts = 2
             risk_bits.append("последний этаж")
         if l.get("is_owner") is False:
             risk -= 30
@@ -203,7 +361,7 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         conf = 0
         conf += 30 if (d0 or d1) else 0           # локальная ценовая модель есть
         conf += 10 if d0 else 0                   # свой гексагон не пуст
-        conf += 20 if cls_score is not None else 0
+        conf += 20 if cls_score is not None else (8 if city_sorted.get(seg) else 0)
         conf += 15 if ys is not None else 0
         conf += 15 if yp else 0
         conf += 10 if rating else 0
@@ -224,28 +382,64 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
                 "market": {"score": market_score, "weight": W_MARKET, "text": market_txt},
                 "risk": {"score": risk_score, "weight": W_RISK, "text": risk_txt},
             },
-            "version": 3,
+            # ── Проекция на legacy-колонки (score_yield и т.п.) — см. docstring.
+            # Единственная цель: старые потребители (Telegram-алерты,
+            # sheets_sync, попап на карте, аналитика) продолжают показывать
+            # breakdown, но теперь СОГЛАСОВАННЫЙ со score_total, а не отдельно
+            # посчитанный.
+            "legacy": {
+                "yield": round(yield_sc / 100 * 20),
+                "price_market": round(price_score / 100 * 15),
+                "location": 0,  # вес обнулён (W_LOC=0) — в total не участвует, не показываем и в breakdown
+                "apt_type": _apt_type_pts(l.get("rooms"), l.get("area")),
+                "floor": floor_pts,
+                "complex": round(quality_score / 100 * 15),
+                "supply": round(supply_sc / 100 * 7),
+            },
+            "version": 4,
         }
     return out
 
 
 async def apply_deal_scores() -> int:
-    """Считает Deal Score v3 для всех активных вторичных объявлений и
-    записывает score_total (=deal), компоненты и confidence."""
+    """Считает Deal Score v4 для всех активных вторичных объявлений и
+    записывает score_total (=deal), компоненты, confidence и legacy-breakdown
+    (score_yield/score_price_market/... — проекция, см. модуль docstring)."""
     from bot.db.pg import fetch, execute
     from bot.db import settings as app_settings
 
     await execute("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS deal_confidence INT")
 
     edge = float(app_settings.get_int("HEX_EDGE_M", 50))
+    weights = {
+        "price": app_settings.get_float("SCORE_W_PRICE", 40),
+        "location": app_settings.get_float("SCORE_W_LOCATION", 0),
+        "quality": app_settings.get_float("SCORE_W_QUALITY", 20),
+        "market": app_settings.get_float("SCORE_W_MARKET", 15),
+        "risk": app_settings.get_float("SCORE_W_RISK", 5),
+    }
+
+    # same_complex_cnt раньше считался коррелированным подзапросом на КАЖДУЮ
+    # строку (O(n²) full-scan) — это и есть причина, по которой apply_deal_scores
+    # тихо падал по 30с command_timeout в ~83% циклов (см. "hex price failed"
+    # в apartments.log без текста ошибки — пустой TimeoutError). Тот же паттерн
+    # уже был исправлен для /admin/api/map-points?type=rental (см. migrations/
+    # 016_apt_complex_name_lower_idx.sql) — здесь применяем то же решение:
+    # один GROUP BY вместо N подзапросов, дальше просто dict-lookup в Python.
+    complex_counts_rows = await fetch("""
+        SELECT lower(trim(complex_name)) AS cx, COUNT(*) AS cnt
+        FROM apartment_listings
+        WHERE is_active IS NOT FALSE AND complex_name IS NOT NULL
+          AND btrim(complex_name) != ''
+        GROUP BY 1
+    """)
+    complex_counts = {r["cx"]: r["cnt"] for r in complex_counts_rows}
+
     rows = await fetch("""
         SELECT id, lat, lon, price, area, rooms, floor, floors_total,
                year_built, complex_name, is_owner, district, yield_pct,
-               EXTRACT(EPOCH FROM (now() - first_seen)) / 86400 AS first_seen_days,
-               (SELECT COUNT(*) FROM apartment_listings s
-                 WHERE lower(trim(s.complex_name)) = lower(trim(a.complex_name))
-                   AND s.is_active IS NOT FALSE AND a.complex_name IS NOT NULL
-                   AND btrim(a.complex_name) != '') AS same_complex_cnt
+               ceiling_height,
+               EXTRACT(EPOCH FROM (now() - first_seen)) / 86400 AS first_seen_days
         FROM apartment_listings a
         WHERE is_active IS NOT FALSE
           AND COALESCE(is_duplicate, FALSE) = FALSE
@@ -255,6 +449,9 @@ async def apply_deal_scores() -> int:
     listings = [dict(r) for r in rows]
     if not listings:
         return 0
+    for l in listings:
+        cx_key = (l.get("complex_name") or "").strip().lower()
+        l["same_complex_cnt"] = complex_counts.get(cx_key, 1)
 
     cx_rows = await fetch(
         "SELECT name, housing_class, year_built, source_info FROM complexes")
@@ -274,17 +471,27 @@ async def apply_deal_scores() -> int:
             "krisha_rating": kr.get("rating"),
         }
 
-    result = compute_deal_scores(listings, complexes, edge)
+    poi_rows = await fetch("SELECT kind, lat, lon FROM city_poi")
+    poi_idx = _poi_index_from_rows(poi_rows)
+
+    result = compute_deal_scores(listings, complexes, edge, weights, poi_idx)
 
     updated = 0
     for lid, r in result.items():
+        lg = r["legacy"]
         await execute("""
             UPDATE apartment_listings
             SET score_total = $2, deal_confidence = $3,
-                hex_deal_index = $4, hex_details = $5::jsonb, hex_price_adj = 0
+                hex_deal_index = $4, hex_details = $5::jsonb, hex_price_adj = 0,
+                score_yield = $6, score_price_market = $7, score_location = $8,
+                score_apt_type = $9, score_floor = $10, score_complex = $11,
+                score_supply = $12
             WHERE id = $1
         """, lid, r["deal"], r["confidence"], r["di"],
-            json.dumps(r, ensure_ascii=False))
+            json.dumps(r, ensure_ascii=False),
+            lg["yield"], lg["price_market"], lg["location"],
+            lg["apt_type"], lg["floor"], lg["complex"], lg["supply"])
         updated += 1
-    logger.info("deal score v3: %d listings (edge=%dм)", updated, int(edge))
+    logger.info("deal score v4: %d listings (edge=%dм, weights=%s)",
+                updated, int(edge), weights)
     return updated
