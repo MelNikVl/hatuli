@@ -52,6 +52,19 @@
   <div id="archived-chart" style="overflow-x:auto;"></div>
 </div>
 
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:0 0 calc(50% - 7px);min-width:320px;max-width:calc(50% - 7px);overflow:hidden;box-sizing:border-box;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+    <b style="font-size:14px;">Медианная цена/м² ушедших в архив, по дням</b>
+    <div style="display:flex;gap:6px;">
+      {% for val, label in [('', 'Все'), ('1', '1к'), ('2', '2к'), ('3', '3к')] %}
+      <button type="button" class="pm2-rooms-btn" data-rooms="{{ val }}" onclick="loadArchivedPriceM2('{{ val }}')"
+              style="padding:5px 12px;border:1px solid var(--border);border-radius:7px;background:{{ 'var(--accent, #5865f2)' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:12px;cursor:pointer;">{{ label }}</button>
+      {% endfor %}
+    </div>
+  </div>
+  <div style="height:420px;position:relative;"><canvas id="archived-pm2-chart"></canvas></div>
+</div>
+
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
@@ -90,7 +103,7 @@
 
 <script>
 // ── Гекс-карта: последняя цена / скорость ухода объявлений в архив ────────
-const archMap = L.map('arch-hex-map').setView([51.128, 71.43], 12);
+const archMap = L.map('arch-hex-map').setView([51.128, 71.43], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(archMap);
 const archHexLayer = L.layerGroup().addTo(archMap);
 const ARCH_HEX_EDGE = 250;
@@ -285,5 +298,52 @@ function loadArchivedChart(days) {
   }).catch(() => {});
 }
 loadArchivedChart(30);
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+let archivedPm2Chart = null, archivedPm2Rooms = '';
+function loadArchivedPriceM2(rooms) {
+  archivedPm2Rooms = rooms;
+  document.querySelectorAll('.pm2-rooms-btn').forEach(b => {
+    const active = b.dataset.rooms === rooms;
+    b.style.background = active ? 'var(--accent, #5865f2)' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  fetch(`/admin/api/archived-price-m2-history?days=30&rooms=${rooms}`).then(r => r.json()).then(d => {
+    const pts = (d.points || []).filter(p => p.median_m2 != null);
+    const canvas = document.getElementById('archived-pm2-chart');
+    if (archivedPm2Chart) { archivedPm2Chart.destroy(); archivedPm2Chart = null; }
+    if (pts.length < 2) {
+      canvas.parentElement.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;">пока накопилось меньше 2 точек</div>';
+      return;
+    }
+    archivedPm2Chart = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: pts.map(p => p.d),
+        datasets: [{
+          label: 'медиана ₸/м²', data: pts.map(p => p.median_m2),
+          borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.12)', fill: true, tension: 0.25, pointRadius: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => {
+            const p = pts[ctx.dataIndex];
+            return Math.round(p.median_m2).toLocaleString('ru') + ' ₸/м² (' + p.cnt + ' объявл.)';
+          } } },
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 12, font: { size: 12 } }, grid: { display: false } },
+          y: { ticks: { callback: (v) => Math.round(v/1000) + 'к', font: { size: 12 } } },
+        },
+      },
+    });
+  }).catch(() => {});
+}
+loadArchivedPriceM2('');
 </script>
 {% endblock %}

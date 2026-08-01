@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🚌 Транспортная доступность (гексы 100 м)</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+  <div style="display:flex;gap:6px;">
+    <button type="button" class="tr-min-btn" data-min="0" onclick="setTrMin(0)"
+            style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">Все</button>
+    <button type="button" class="tr-min-btn" data-min="0.4" onclick="setTrMin(0.4)"
+            style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">Доступно ≥ 0.4</button>
+    <button type="button" class="tr-min-btn" data-min="0.7" onclick="setTrMin(0.7)"
+            style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">Доступно ≥ 0.7</button>
+    <button type="button" id="tr-landmark-btn" onclick="toggleTrLandmarks()"
+            style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">📍 Точки притяжения</button>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#888;">
+    <span>далеко</span>
+    <span style="width:140px;height:12px;border-radius:6px;background:linear-gradient(90deg,#bfdbfe,#60a5fa,#2563eb,#1e3a8a);display:inline-block;"></span>
+    <span>рядом</span>
+  </div>
+  <span id="tr-result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
+</div>
+
+<div style="font-size:13px;color:#888;max-width:1100px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  <b style="color:var(--text);">Как считается:</b> доступность каждого гекса (ребро 100 м) —
+  <b>ЛРТ-станции в радиусе 1 км (вес 0.75)</b> + <b>автобусные остановки в радиусе 500 м (вес 0.4)</b> +
+  <b>крупные дороги в радиусе 600 м (вес 0.3, доступность на машине)</b> + <b>развязки в радиусе 800 м (вес 0.2)</b>.
+  Итог: <code>доступность = 0.75×(1−dist_ЛРТ/1000) + 0.4×(1−dist_автобус/500) + 0.3×(1−dist_дорога/600) + 0.2×(1−dist_развязка/800)</code>, обрезается в 0..1.
+  Данные: 17 станций ЛРТ (линия 1, открыта 16.05.2026), 838 остановок общественного транспорта, 8627 точек крупных дорог (motorway/trunk/primary/secondary) и развязки — всё из OpenStreetMap (Overpass).
+  Планируемые линии (Косшы, правый берег) пока не учитываются.
+</div>
+
+<div style="border-radius:12px;border:1px solid var(--border);overflow:hidden;">
+  <div id="tr-map" style="height:640px;"></div>
+</div>
+
+<script>
+const trMap = L.map('tr-map').setView([51.128, 71.430], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(trMap);
+const trHexLayer = L.layerGroup().addTo(trMap);
+const trLmLayer = L.layerGroup().addTo(trMap);
+let trHexes = [], trMin = 0, trLmOn = false, trLandmarks = [];
+const TR_EDGE = 100, TR_LAT0 = 51.128, TR_LON0 = 71.430,
+      TR_MLAT = 110574.0, TR_MLON = 111320.0 * Math.cos(TR_LAT0 * Math.PI/180);
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function trColor(t) {
+  const c = [[191,219,254],[96,165,250],[37,99,235],[30,58,138]];
+  const x = Math.max(0, Math.min(1, t));
+  const i = Math.min(3, Math.floor(x * 4));
+  const f = x * 4 - i;
+  const a = c[Math.min(3, i)], b = c[Math.min(3, i + 1)];
+  return `rgb(${Math.round(a[0] + (b[0]-a[0])*f)},${Math.round(a[1] + (b[1]-a[1])*f)},${Math.round(a[2] + (b[2]-a[2])*f)})`;
+}
+function trCorners(lat, lon, edge) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const ang = Math.PI / 180 * (60 * i - 30);
+    pts.push([lat + edge * Math.sin(ang) / TR_MLAT, lon + edge * Math.cos(ang) / TR_MLON]);
+  }
+  return pts;
+}
+function drawTrHexes() {
+  trHexLayer.clearLayers();
+  let shown = 0;
+  trHexes.forEach(h => {
+    if (trMin > 0 && h.score < trMin) return;
+    shown++;
+    L.polygon(trCorners(h.lat, h.lon, TR_EDGE), {
+      color: 'transparent', weight: 0,
+      fillColor: trColor(h.score), fillOpacity: 0.6,
+    }).bindTooltip(`доступность ${h.score.toFixed(2)} · ЛРТ ${Math.round(h.dist_lrt)} м · автобус ${Math.round(h.dist_bus)} м` +
+      (h.dist_road != null ? ` · дорога ${Math.round(h.dist_road)} м` : '') +
+      (h.dist_junction != null ? ` · развязка ${Math.round(h.dist_junction)} м` : ''), {sticky:true})
+      .addTo(trHexLayer);
+  });
+  document.getElementById('tr-result-count').textContent =
+    shown.toLocaleString('ru') + ' гексов из ' + trHexes.length.toLocaleString('ru') + ' с транспортом рядом';
+}
+function setTrMin(v) {
+  trMin = v;
+  document.querySelectorAll('.tr-min-btn').forEach(b => {
+    const active = parseFloat(b.dataset.min) === v;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  drawTrHexes();
+}
+function loadTrLandmarks() {
+  if (trLandmarks.length) return;
+  fetch('/admin/api/city-poi').then(r => r.json()).then(d => {
+    trLandmarks = (d.poi || []).filter(p => p.kind === 'landmark' && p.lat && p.lon);
+    if (trLmOn) drawTrLandmarks();
+  }).catch(() => {});
+}
+function drawTrLandmarks() {
+  trLmLayer.clearLayers();
+  trLandmarks.forEach(p => {
+    const nm = String(p.name);
+    const isLrt = nm.startsWith('ЛРТ');
+    const isPlanned = nm.includes('(план)') || nm.includes('(строится)') || nm.startsWith('ЛРТ-2') || nm.startsWith('ЛРТ-ПБ');
+    let html;
+    if (isLrt) {
+      html = `<div style="width:20px;height:20px;border-radius:50%;background:${isPlanned ? '#f59e0b' : '#e11d48'};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.55);color:#fff;font:700 12px/16px Arial;text-align:center;transform:translate(-50%,-50%);">M</div>`;
+    } else {
+      html = '<div style="font-size:18px;line-height:1;transform:translate(-50%,-100%);text-shadow:0 1px 3px rgba(0,0,0,.6);">📍</div>';
+    }
+    L.marker([p.lat, p.lon], { icon: L.divIcon({ className: '', html, iconSize: [0, 0], iconAnchor: [0, 0] }), zIndexOffset: isLrt ? 600 : 500 })
+      .bindTooltip(escapeHtml(nm + (p.address ? ' — ' + p.address : '')), { sticky: true, direction: 'top', offset: [0, -10] })
+      .addTo(trLmLayer);
+  });
+}
+function toggleTrLandmarks() {
+  trLmOn = !trLmOn;
+  const btn = document.getElementById('tr-landmark-btn');
+  btn.style.background = trLmOn ? '#2563eb' : 'var(--bg)';
+  btn.style.color = trLmOn ? '#fff' : 'var(--text)';
+  if (trLmOn) { loadTrLandmarks(); drawTrLandmarks(); } else { trLmLayer.clearLayers(); }
+}
+fetch('/admin/api/transport-hexes').then(r => r.json()).then(d => {
+  trHexes = d.hexes || [];
+  drawTrHexes();
+}).catch(() => { document.getElementById('tr-result-count').textContent = 'не удалось загрузить'; });
+</script>
+{% endblock %}

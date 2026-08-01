@@ -26,34 +26,21 @@ async function toggleFavComplex() {
   star.style.color = active ? '#ccc' : '#f59e0b';
 }
 </script>
-{% if stats %}
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
-  {% for s in stats %}
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 14px;">
-    <div style="font-size:11px;color:#888;">{{ s.rooms or '?' }}-комн, медиана</div>
-    <div style="font-size:16px;font-weight:800;">{{ '%.1f'|format((s.median_price or 0)/1e6) }} млн ₸</div>
-    {% if s.median_m2 %}<div style="font-size:11px;color:#2563eb;font-weight:600;">{{ (s.median_m2/1000)|round|int }} тыс ₸/м²</div>{% endif %}
-  </div>
-  {% endfor %}
-</div>
-{% endif %}
 {% if cx.is_street %}
 <div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:14px;">
   ⚠️ <b>Это улица, а не ЖК.</b> Аудит определил, что под этим названием Крыша группирует дома по улице. Объявления отвязаны, из карт и подборок запись исключена.
 </div>
 {% endif %}
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13.5px;color:var(--text);">
-  <b>Проверить документы застройщика</b> — Управление архитектуры и градостроительства Астаны: по телефону горячей линии или личному обращению можно уточнить наличие полного пакета документов и иногда получить информацию по проекту (конструктивная схема, этажность, материалы).
-  Контакты: <b>+7 (7172) 55-04-28</b>, <b>+7 (7172) 55-67-03</b>.
-</div>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-<!-- Три колонки: карта · основная информация · объявления в продаже -->
+<!-- Верх страницы: фото слева / описание справа, по 600px — это ВСЁ, что
+     выше сгиба. Карта, объявления, графики и остальное — отдельным блоком ниже. -->
 <style>
+.cx-hero { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; align-items:stretch; }
+.cx-hero .cx-col-card { height:600px; overflow-y:auto; }
+@media (max-width:1150px) { .cx-hero { grid-template-columns:1fr; } .cx-hero .cx-col-card { height:auto; max-height:600px; } }
 .cx-top { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; align-items:start; }
-/* Порядок: фото слева / описание справа — первым рядом; карта + объявления — вторым рядом, ниже */
-#cx-card-photo { order:1; } #cx-card-desc { order:2; } #cx-card-map { order:3; } #cx-card-listings { order:4; }
 @media (max-width:1150px) { .cx-top { grid-template-columns:1fr; } }
 .cx-col-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
 .cx-listing-mini { display:flex; gap:10px; align-items:center; padding:7px 0; border-bottom:1px solid var(--border); text-decoration:none; color:inherit; }
@@ -65,95 +52,7 @@ async function toggleFavComplex() {
 .hex-cell.self { background:#dbeafe; border:2px solid #2563eb; }
 </style>
 
-<div class="cx-top">
-  <div id="cx-card-map" class="cx-col-card">
-    {% if geo %}
-    <div id="cx-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
-    <div style="font-size:11px;color:#888;margin-top:6px;">
-      живых объявлений: <b>{{ live_cnt }}</b> · на карте: <b>{{ map_points | selectattr('lat') | list | length }}</b>
-      {% if live_no_coords %} · <span style="color:#f59e0b;">{{ live_no_coords }} ждут докачки координат</span>{% endif %}
-    </div>
-    <script>
-    // Пины и попап — как на главном дашборде (цена/комнатность на синем
-    // фоне, полное превью по клику), а не голые цветные точки.
-    function cxProxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
-    function cxFmtPriceShort(v) {
-      if (!v) return '—';
-      return v >= 1e6 ? (v/1e6).toFixed(1) + ' М' : (v/1e3).toFixed(1) + 'K';
-    }
-    function cxEscapeHtml(s) {
-      const d = document.createElement('div');
-      d.textContent = s == null ? '' : String(s);
-      return d.innerHTML;
-    }
-    document.addEventListener('DOMContentLoaded', function() {
-      const map = L.map('cx-map').setView([{{ geo.lat }}, {{ geo.lon }}], 15);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
-      const pts = {{ map_points | tojson }};
-      const bounds = [];
-      pts.forEach(p => {
-        if (!p.lat) return;
-        const isArch = p.is_active === false, isDup = !!p.is_dup;
-        const bg = isArch ? '#9ca3af' : (isDup ? '#f59e0b' : '#0077FF');
-        const pinHtml = `
-<div style="transform:translate(-50%,-100%);">
-  <div style="background:${bg};color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:inline-flex;align-items:center;gap:5px;">
-    <span>${p.rooms || '?'}к</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${cxFmtPriceShort(p.price)}</span>
-  </div>
-  <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid ${bg};margin:0 auto;"></div>
-</div>`;
-        const m = L.marker([p.lat, p.lon], {
-          icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
-        }).addTo(map);
-        m.bindPopup(`<div id="cxpop-${p.id}" style="min-width:260px;padding:8px 0 2px;">Загрузка…</div>`, {maxWidth: 380, autoPan: false});
-        m.on('popupopen', () => cxLoadPopup(p.id));
-        bounds.push([p.lat, p.lon]);
-      });
-      if (bounds.length > 1) map.fitBounds(bounds, {padding: [24, 24]});
-      setTimeout(() => map.invalidateSize(), 200);
-    });
-    const cxPopLoaded = {};
-    function cxLoadPopup(id) {
-      if (cxPopLoaded[id]) return;
-      cxPopLoaded[id] = true;
-      fetch('/admin/api/listing/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
-        const el = document.getElementById('cxpop-' + id);
-        if (!el || d.error) return;
-        const priceM = d.price ? (d.price/1e6).toFixed(1) : '—';
-        const priceM2 = (d.price && d.area) ? Math.round(d.price/d.area/1000) + ' тыс ₸/м²' : '';
-        const photo = (d.photos && d.photos[0]) ? `<img src="${cxProxyImg(d.photos[0])}" style="width:100%;height:150px;object-fit:cover;border-radius:8px 8px 0 0;margin:-8px 0 8px;display:block;">` : '';
-        const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
-        const ownerPill = d.is_owner
-          ? `<span style="display:inline-block;background:#dcfce7;color:#166534;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;">👤 собственник</span>`
-          : `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;">🏢 риелтор</span>`;
-        const areaTxt = d.area ? Math.round(d.area) : '?';
-        const floorTxt = d.floor ? `${d.floor}/${d.floors_total || '?'} эт.` : '';
-        const dealScore = (d.deal_score && d.deal_score.deal != null)
-          ? `<div style="font-size:12px;margin-top:4px;">🎯 Deal Score: <b>${d.deal_score.deal}/100</b></div>` : '';
-        el.innerHTML = `
-          ${photo}
-          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-            <div style="font-size:20px;font-weight:800;">${priceM} <span style="font-size:14px;font-weight:700;">млн ₸</span></div>
-            ${priceM2 ? `<span style="${pillStyle}margin:0;">${priceM2}</span>` : ''}
-          </div>
-          <div style="margin-top:6px;">
-            <span style="${pillStyle}">${d.rooms || '?'}-комн</span>${ownerPill}<span style="${pillStyle}">${areaTxt} м²</span>${floorTxt ? `<span style="${pillStyle}">${floorTxt}</span>` : ''}
-          </div>
-          <div style="font-size:12px;color:#555;margin-top:4px;">${cxEscapeHtml(d.address || '')}</div>
-          ${dealScore}
-          <div style="margin-top:8px;padding-top:6px;border-top:1px solid #eee;display:flex;gap:8px;font-size:12.5px;">
-            <a href="/admin/analytics/${id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;border-radius:7px;text-decoration:none;">Аналитика</a>
-            ${d.url ? `<a href="${d.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;border-radius:7px;text-decoration:none;">Крыша</a>` : ''}
-          </div>
-        `;
-      }).catch(() => {});
-    }
-    </script>
-    {% else %}
-    <div style="aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;color:#888;font-size:13px;text-align:center;padding:20px;">🗺 Карта появится после докачки координат объявлений этого ЖК</div>
-    {% endif %}
-  </div>
-
+<div class="cx-hero">
   <div id="cx-card-photo" class="cx-col-card">
     {% set photos = (cx.photos or ([cx.photo_url] if cx.photo_url else [])) %}
     <div id="cx-photos-view">
@@ -271,6 +170,112 @@ async function toggleFavComplex() {
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Цена от (Korter)</td><td><b>{{ '{:,.0f}'.format(cx_sources.korter.price_from).replace(',', ' ') }} ₸</b></td></tr>
       {% endif %}
     </table>
+  </div>
+</div>
+
+{% if stats %}
+<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+  {% for s in stats %}
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 14px;">
+    <div style="font-size:11px;color:#888;">{{ s.rooms or '?' }}-комн, медиана</div>
+    <div style="font-size:16px;font-weight:800;">{{ '%.1f'|format((s.median_price or 0)/1e6) }} млн ₸</div>
+    {% if s.median_m2 %}<div style="font-size:11px;color:#2563eb;font-weight:600;">{{ (s.median_m2/1000)|round|int }} тыс ₸/м²</div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13.5px;color:var(--text);">
+  <b>Проверить документы застройщика</b> — Управление архитектуры и градостроительства Астаны: по телефону горячей линии или личному обращению можно уточнить наличие полного пакета документов и иногда получить информацию по проекту (конструктивная схема, этажность, материалы).
+  Контакты: <b>+7 (7172) 55-04-28</b>, <b>+7 (7172) 55-67-03</b>.
+</div>
+
+<div class="cx-top">
+  <div id="cx-card-map" class="cx-col-card">
+    {% if geo %}
+    <div id="cx-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
+    <div style="font-size:11px;color:#888;margin-top:6px;">
+      живых объявлений: <b>{{ live_cnt }}</b> · на карте: <b>{{ map_points | selectattr('lat') | list | length }}</b>
+      {% if live_no_coords %} · <span style="color:#f59e0b;">{{ live_no_coords }} ждут докачки координат</span>{% endif %}
+    </div>
+    <script>
+    // Пины и попап — как на главном дашборде (цена/комнатность на синем
+    // фоне, полное превью по клику), а не голые цветные точки.
+    function cxProxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
+    function cxFmtPriceShort(v) {
+      if (!v) return '—';
+      return v >= 1e6 ? (v/1e6).toFixed(1) + ' М' : (v/1e3).toFixed(1) + 'K';
+    }
+    function cxEscapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : String(s);
+      return d.innerHTML;
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+      const map = L.map('cx-map').setView([{{ geo.lat }}, {{ geo.lon }}], 15);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+      const pts = {{ map_points | tojson }};
+      const bounds = [];
+      pts.forEach(p => {
+        if (!p.lat) return;
+        const isArch = p.is_active === false, isDup = !!p.is_dup;
+        const bg = isArch ? '#9ca3af' : (isDup ? '#f59e0b' : '#0077FF');
+        const pinHtml = `
+<div style="transform:translate(-50%,-100%);">
+  <div style="background:${bg};color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:inline-flex;align-items:center;gap:5px;">
+    <span>${p.rooms || '?'}к</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${cxFmtPriceShort(p.price)}</span>
+  </div>
+  <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid ${bg};margin:0 auto;"></div>
+</div>`;
+        const m = L.marker([p.lat, p.lon], {
+          icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
+        }).addTo(map);
+        m.bindPopup(`<div id="cxpop-${p.id}" style="min-width:260px;padding:8px 0 2px;">Загрузка…</div>`, {maxWidth: 380, autoPan: false});
+        m.on('popupopen', () => cxLoadPopup(p.id));
+        bounds.push([p.lat, p.lon]);
+      });
+      if (bounds.length > 1) map.fitBounds(bounds, {padding: [24, 24]});
+      setTimeout(() => map.invalidateSize(), 200);
+    });
+    const cxPopLoaded = {};
+    function cxLoadPopup(id) {
+      if (cxPopLoaded[id]) return;
+      cxPopLoaded[id] = true;
+      fetch('/admin/api/listing/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
+        const el = document.getElementById('cxpop-' + id);
+        if (!el || d.error) return;
+        const priceM = d.price ? (d.price/1e6).toFixed(1) : '—';
+        const priceM2 = (d.price && d.area) ? Math.round(d.price/d.area/1000) + ' тыс ₸/м²' : '';
+        const photo = (d.photos && d.photos[0]) ? `<img src="${cxProxyImg(d.photos[0])}" style="width:100%;height:150px;object-fit:cover;border-radius:8px 8px 0 0;margin:-8px 0 8px;display:block;">` : '';
+        const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+        const ownerPill = d.is_owner
+          ? `<span style="display:inline-block;background:#dcfce7;color:#166534;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;">👤 собственник</span>`
+          : `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;">🏢 риелтор</span>`;
+        const areaTxt = d.area ? Math.round(d.area) : '?';
+        const floorTxt = d.floor ? `${d.floor}/${d.floors_total || '?'} эт.` : '';
+        const dealScore = (d.deal_score && d.deal_score.deal != null)
+          ? `<div style="font-size:12px;margin-top:4px;">🎯 Deal Score: <b>${d.deal_score.deal}/100</b></div>` : '';
+        el.innerHTML = `
+          ${photo}
+          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+            <div style="font-size:20px;font-weight:800;">${priceM} <span style="font-size:14px;font-weight:700;">млн ₸</span></div>
+            ${priceM2 ? `<span style="${pillStyle}margin:0;">${priceM2}</span>` : ''}
+          </div>
+          <div style="margin-top:6px;">
+            <span style="${pillStyle}">${d.rooms || '?'}-комн</span>${ownerPill}<span style="${pillStyle}">${areaTxt} м²</span>${floorTxt ? `<span style="${pillStyle}">${floorTxt}</span>` : ''}
+          </div>
+          <div style="font-size:12px;color:#555;margin-top:4px;">${cxEscapeHtml(d.address || '')}</div>
+          ${dealScore}
+          <div style="margin-top:8px;padding-top:6px;border-top:1px solid #eee;display:flex;gap:8px;font-size:12.5px;">
+            <a href="/admin/analytics/${id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;border-radius:7px;text-decoration:none;">Аналитика</a>
+            ${d.url ? `<a href="${d.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;border-radius:7px;text-decoration:none;">Крыша</a>` : ''}
+          </div>
+        `;
+      }).catch(() => {});
+    }
+    </script>
+    {% else %}
+    <div style="aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;color:#888;font-size:13px;text-align:center;padding:20px;">🗺 Карта появится после докачки координат объявлений этого ЖК</div>
+    {% endif %}
   </div>
 
   <div id="cx-card-listings" class="cx-col-card" style="max-height:520px;overflow-y:auto;">
@@ -476,10 +481,87 @@ drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }}, 'avg_price', 
     </div>
   </div>
 
+  <div class="cx-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 style="margin:0;">🏗 Технические характеристики</h3>
+      <button type="button" onclick="toggleTechEdit()" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);cursor:pointer;">✏️ редактировать</button>
+    </div>
+    <p style="font-size:12px;color:#888;margin:6px 0 10px;">Конструктив, инженерия, лицензирование застройщика (elicense.kz по БИН) и документы (ПСД/АПЗ/акт ввода). Пока в основном пусто — источника данных ещё нет, но всё готово для заполнения вручную или скриптом.</p>
+    <table style="font-size:13.5px;border-collapse:collapse;width:100%;">
+      <tr><td style="padding:4px 12px 4px 0;color:#888;width:200px;">Конструктив</td><td>{{ tech_specs.construction_type or '—' }}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">Класс бетона / арматуры</td><td>{{ tech_specs.concrete_class or '—' }}{% if tech_specs.rebar_class %} / {{ tech_specs.rebar_class }}{% endif %}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">Фасад / утепление</td><td>{{ tech_specs.facade_type or '—' }}{% if tech_specs.insulation_material %} · {{ tech_specs.insulation_material }}{% if tech_specs.insulation_thickness_mm %} {{ tech_specs.insulation_thickness_mm }}мм{% endif %}{% endif %}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">Отопление / вентиляция</td><td>{{ tech_specs.heating_type or '—' }}{% if tech_specs.ventilation_type %} · {{ tech_specs.ventilation_type }}{% endif %}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">Лифты</td><td>{% if tech_specs.lifts_brand %}{{ tech_specs.lifts_brand }}{% if tech_specs.lifts_model %} {{ tech_specs.lifts_model }}{% endif %}{% if tech_specs.lifts_count_per_section %} · {{ tech_specs.lifts_count_per_section }} на секцию{% endif %}{% else %}—{% endif %}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">Потолки (мин–макс)</td><td>{% if tech_specs.ceiling_height_min %}{{ tech_specs.ceiling_height_min }}–{{ tech_specs.ceiling_height_max or tech_specs.ceiling_height_min }} м{% else %}—{% endif %}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">БИН застройщика</td><td>{{ tech_specs.developer_bin or '—' }}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">Лицензия (elicense.kz)</td><td>{{ tech_specs.elicense_status or '—' }}{% if tech_specs.developer_bin %} · <a href="https://elicense.kz/ru/search?bin={{ tech_specs.developer_bin }}" target="_blank">проверить ↗</a>{% endif %}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">Экспертиза ПСД</td><td>{% if tech_specs.docs_psd_expertise_number %}№{{ tech_specs.docs_psd_expertise_number }}{% if tech_specs.docs_psd_expertise_date %} от {{ tech_specs.docs_psd_expertise_date }}{% endif %}{% else %}—{% endif %}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">АПЗ</td><td>{% if tech_specs.docs_apz_number %}№{{ tech_specs.docs_apz_number }}{% if tech_specs.docs_apz_date %} от {{ tech_specs.docs_apz_date }}{% endif %}{% else %}—{% endif %}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">Акт ввода в эксплуатацию</td><td>{% if tech_specs.docs_commission_act_number %}№{{ tech_specs.docs_commission_act_number }}{% if tech_specs.docs_commission_act_date %} от {{ tech_specs.docs_commission_act_date }}{% endif %}{% else %}—{% endif %}</td></tr>
+    </table>
+    {% if tech_specs.notes %}<p style="font-size:12.5px;color:var(--text);margin-top:10px;white-space:pre-wrap;">{{ tech_specs.notes }}</p>{% endif %}
+
+    <div id="tech-edit" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <input id="t-construction" placeholder="Конструктив (монолит-каркас/кирпич/газоблок)" value="{{ tech_specs.construction_type or '' }}">
+        <input id="t-concrete" placeholder="Класс бетона" value="{{ tech_specs.concrete_class or '' }}">
+        <input id="t-rebar" placeholder="Класс арматуры" value="{{ tech_specs.rebar_class or '' }}">
+        <input id="t-facade" placeholder="Фасад (керамогранит/штукатурка/вентфасад)" value="{{ tech_specs.facade_type or '' }}">
+        <input id="t-insulation" placeholder="Утеплитель" value="{{ tech_specs.insulation_material or '' }}">
+        <input id="t-insulation-mm" type="number" placeholder="Толщина утеплителя, мм" value="{{ tech_specs.insulation_thickness_mm or '' }}">
+        <input id="t-heating" placeholder="Отопление (центральное/автономное)" value="{{ tech_specs.heating_type or '' }}">
+        <input id="t-ventilation" placeholder="Вентиляция" value="{{ tech_specs.ventilation_type or '' }}">
+        <input id="t-lifts-brand" placeholder="Лифты — бренд (OTIS/KONE...)" value="{{ tech_specs.lifts_brand or '' }}">
+        <input id="t-lifts-model" placeholder="Лифты — модель" value="{{ tech_specs.lifts_model or '' }}">
+        <input id="t-lifts-count" type="number" placeholder="Лифтов на секцию" value="{{ tech_specs.lifts_count_per_section or '' }}">
+        <input id="t-ceiling-min" placeholder="Потолки мин, м" value="{{ tech_specs.ceiling_height_min or '' }}">
+        <input id="t-ceiling-max" placeholder="Потолки макс, м" value="{{ tech_specs.ceiling_height_max or '' }}">
+        <input id="t-bin" placeholder="БИН застройщика" value="{{ tech_specs.developer_bin or '' }}">
+        <input id="t-elicense" placeholder="Статус лицензии elicense.kz" value="{{ tech_specs.elicense_status or '' }}">
+        <input id="t-psd-num" placeholder="№ заключения экспертизы ПСД" value="{{ tech_specs.docs_psd_expertise_number or '' }}">
+        <input id="t-psd-date" type="date" value="{{ tech_specs.docs_psd_expertise_date or '' }}">
+        <input id="t-apz-num" placeholder="№ АПЗ" value="{{ tech_specs.docs_apz_number or '' }}">
+        <input id="t-apz-date" type="date" value="{{ tech_specs.docs_apz_date or '' }}">
+        <input id="t-act-num" placeholder="№ акта ввода в эксплуатацию" value="{{ tech_specs.docs_commission_act_number or '' }}">
+        <input id="t-act-date" type="date" value="{{ tech_specs.docs_commission_act_date or '' }}">
+      </div>
+      <textarea id="t-notes" placeholder="Свободные заметки / источник данных" style="width:100%;margin-top:8px;min-height:60px;">{{ tech_specs.notes or '' }}</textarea>
+      <button class="btn-save-c" style="margin-top:8px;" onclick="saveTechSpecs()">💾 Сохранить</button>
+      <span id="t-status" style="font-size:12px;color:#22c55e;margin-left:8px;"></span>
+    </div>
+  </div>
+
 </div>
 </div>
 
 <script>
+async function toggleTechEdit() {
+  const el = document.getElementById('tech-edit');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+async function saveTechSpecs() {
+  const val = id => document.getElementById(id).value;
+  const r = await fetch('/admin/complex/{{ cx.id }}/tech-specs', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      construction_type: val('t-construction'), concrete_class: val('t-concrete'),
+      rebar_class: val('t-rebar'), facade_type: val('t-facade'),
+      insulation_material: val('t-insulation'), insulation_thickness_mm: val('t-insulation-mm'),
+      heating_type: val('t-heating'), ventilation_type: val('t-ventilation'),
+      lifts_brand: val('t-lifts-brand'), lifts_model: val('t-lifts-model'),
+      lifts_count_per_section: val('t-lifts-count'),
+      ceiling_height_min: val('t-ceiling-min'), ceiling_height_max: val('t-ceiling-max'),
+      developer_bin: val('t-bin'), elicense_status: val('t-elicense'),
+      docs_psd_expertise_number: val('t-psd-num'), docs_psd_expertise_date: val('t-psd-date'),
+      docs_apz_number: val('t-apz-num'), docs_apz_date: val('t-apz-date'),
+      docs_commission_act_number: val('t-act-num'), docs_commission_act_date: val('t-act-date'),
+      notes: val('t-notes'),
+    }),
+  });
+  document.getElementById('t-status').textContent = r.ok ? 'Сохранено ✓ (обновится после перезагрузки)' : 'Ошибка!';
+  if (r.ok) setTimeout(() => location.reload(), 900);
+}
 async function saveContacts() {
   const r = await fetch('/admin/complex/{{ cx.id }}/contacts', {
     method: 'POST', headers: {'Content-Type': 'application/json'},

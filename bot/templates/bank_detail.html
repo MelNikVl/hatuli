@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<a href="/admin/banks" style="font-size:13px;color:#2563eb;text-decoration:none;">← Все банки</a>
+<div class="page-title">🏦 {{ bank.name }}</div>
+
+<div style="font-size:13px;max-width:1100px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;color:#aaa;">
+  {{ bank.description or '' }}
+  {% if bank.notes %}<div style="margin-top:6px;color:#f59e0b;">💡 {{ bank.notes }}</div>{% endif %}
+  <div style="margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;">
+    {% if bank.website %}<span>🌐 <a href="{{ bank.website }}" target="_blank" style="color:#2563eb;">{{ bank.website }}</a></span>{% endif %}
+    {% if bank.phone %}<span>📞 {{ bank.phone }}</span>{% endif %}
+    {% if bank.program_type == 'operator' %}<span>🇰🇿 Оператор госпрограмм</span>{% else %}<span>🏛 Коммерческий банк</span>{% endif %}
+  </div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;max-width:1100px;">
+  <div style="font-weight:700;margin-bottom:10px;">📋 Ипотечные программы ({{ programs|length }})</div>
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+    <tr style="color:#888;text-align:left;">
+      <th style="padding:6px;border-bottom:1px solid var(--border);">Программа</th>
+      <th style="padding:6px;border-bottom:1px solid var(--border);">Жильё</th>
+      <th style="padding:6px;border-bottom:1px solid var(--border);">Ставка</th>
+      <th style="padding:6px;border-bottom:1px solid var(--border);">Взнос</th>
+      <th style="padding:6px;border-bottom:1px solid var(--border);">Сумма</th>
+      <th style="padding:6px;border-bottom:1px solid var(--border);">Срок</th>
+    </tr>
+    {% for p in programs %}
+    <tr>
+      <td style="padding:6px;border-bottom:1px solid var(--border);font-weight:600;">{{ p.name }}</td>
+      <td style="padding:6px;border-bottom:1px solid var(--border);">
+        {% if p.housing_type == 'new' %}🏗 Первичка
+        {% elif p.housing_type == 'secondary' %}🏠 Вторичка
+        {% else %}Оба рынка{% endif %}
+      </td>
+      <td style="padding:6px;border-bottom:1px solid var(--border);">
+        {% if p.rate_min is not none %}<b>от {{ '%.1f'|format(p.rate_min) }}%</b>{% if p.rate_max and p.rate_max != p.rate_min %} до {{ '%.1f'|format(p.rate_max) }}%{% endif %}{% else %}—{% endif %}
+        {% if p.rate_note %}<div style="color:#888;font-size:11px;">{{ p.rate_note }}</div>{% endif %}
+      </td>
+      <td style="padding:6px;border-bottom:1px solid var(--border);">{% if p.down_payment_min_pct is not none %}от {{ p.down_payment_min_pct }}%{% else %}—{% endif %}</td>
+      <td style="padding:6px;border-bottom:1px solid var(--border);">
+        {% if p.max_amount_tg %}{{ (p.max_amount_tg / 1e6)|round|int }} млн ₸
+        {% else %}индивид.{% endif %}
+      </td>
+      <td style="padding:6px;border-bottom:1px solid var(--border);">{% if p.max_term_years %}до {{ p.max_term_years }} лет{% else %}—{% endif %}</td>
+    </tr>
+    {% if p.conditions %}
+    <tr>
+      <td colspan="6" style="padding:2px 6px 8px;color:#888;font-size:11.5px;">📌 {{ p.conditions }}
+        {% if p.source_url %}<a href="{{ p.source_url }}" target="_blank" style="color:#2563eb;"> · источник</a>{% endif %}
+      </td>
+    </tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+  <div style="margin-top:10px;font-size:11.5px;color:#666;">
+    Данные на 31.07.2026 из открытых источников. Ставки меняются — перед подачей заявки проверяйте сайт банка.
+  </div>
+</div>
+{% endblock %}

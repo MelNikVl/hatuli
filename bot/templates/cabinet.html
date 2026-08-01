@@ -45,11 +45,27 @@ document.getElementById('login-btn').onclick = async function() {
       <option value="weekly" {{ 'selected' if user.notify_frequency == 'weekly' }}>Раз в неделю</option>
       <option value="off" {{ 'selected' if user.notify_frequency == 'off' }}>Не присылать</option>
     </select>
+    <div style="font-size:11.5px;color:#888;margin-top:5px;">Шлём в Telegram, если у избранной квартиры или у любой квартиры в избранном ЖК изменилась цена, описание или объявление ушло в архив.</div>
   </div>
   <button onclick="saveProfile()" style="border:none;border-radius:10px;padding:12px 22px;font-size:14px;font-weight:700;cursor:pointer;background:#2563eb;color:#fff;">Сохранить</button>
   <span id="cab-saved" style="margin-left:10px;color:#16a34a;font-size:13px;display:none;">Сохранено ✓</span>
   <div style="margin-top:16px;"><a href="javascript:void(0)" onclick="logout()" style="color:#ef4444;font-size:13px;">Выйти</a></div>
 </div>
+
+{% if favorite_complexes %}
+<div class="cab-card">
+  <h3 style="margin-bottom:14px;">🏢 Избранные ЖК ({{ favorite_complexes|length }})</h3>
+  {% for c in favorite_complexes %}
+  <div class="fav-item">
+    <div style="flex:1;">
+      <a href="/admin/complex/{{ c.complex_id }}" style="color:inherit;text-decoration:none;font-weight:700;">{{ c.name or ('ЖК #' + c.complex_id|string) }}</a>
+      <div style="font-size:11.5px;color:#888;">{{ c.district or '' }}{% if c.year_built %} · {{ c.year_built }} г.{% endif %}</div>
+    </div>
+    <button onclick="removeFavComplex('{{ c.complex_id }}', this)" style="border:none;background:none;color:#ef4444;cursor:pointer;font-size:18px;">✕</button>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 
 <div class="cab-card">
   <h3 style="margin-bottom:14px;">⭐ Избранное ({{ favorites|length }})</h3>
@@ -85,6 +101,10 @@ async function saveProfile() {
 async function logout() { await fetch('/api/auth/logout', {method: 'POST'}); location.reload(); }
 async function removeFav(id, btn) {
   await fetch('/api/favorites/' + encodeURIComponent(id), {method: 'DELETE'});
+  btn.closest('.fav-item').remove();
+}
+async function removeFavComplex(id, btn) {
+  await fetch('/api/favorite-complexes/' + encodeURIComponent(id), {method: 'DELETE'});
   btn.closest('.fav-item').remove();
 }
 </script>

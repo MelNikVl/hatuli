@@ -331,10 +331,12 @@ async function loadZones() {
        <input id="zn-${z.id}" value="${z.name}" style="flex:1;min-width:100px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12px;">
        <input id="zb-${z.id}" type="number" value="${z.bonus}" min="-50" max="50" style="width:60px;padding:4px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:${neg ? '#ef4444' : '#16a34a'};font-weight:700;font-size:12px;">
        <span style="font-size:10px;color:#aaa;width:100%;">${hexInfo}</span>
+       <span id="zf-${z.id}" onclick="toggleFavZone(${z.id}, event)" title="В избранное — уведомления в Telegram об изменении цен в зоне" style="cursor:pointer;font-size:16px;color:#ccc;user-select:none;">☆</span>
        <button class="del" style="background:#2563eb;" title="Сохранить имя/баллы" onclick="updateZoneMeta(${z.id})">💾</button>
        <button class="del" onclick="deleteZone(${z.id})">✕</button>
      </div>`;
   }).join('');
+  refreshFavZoneStars(d.zones.map(z => z.id));
   d.zones.forEach(z => {
     const neg = z.bonus < 0;
     const col = neg ? '#ef4444' : (z.color || '#2563eb');
@@ -348,6 +350,29 @@ async function loadZones() {
         .addTo(zonesLayer);
     });
   });
+}
+
+async function refreshFavZoneStars(ids) {
+  if (!ids.length) return;
+  try {
+    const r = await fetch('/api/favorite-zones/ids?ids=' + ids.join(','));
+    const d = await r.json();
+    (d.ids || []).forEach(id => {
+      const star = document.getElementById('zf-' + id);
+      if (star) { star.textContent = '★'; star.style.color = '#f59e0b'; }
+    });
+  } catch (e) {}
+}
+async function toggleFavZone(id, ev) {
+  if (ev) ev.stopPropagation();
+  const star = document.getElementById('zf-' + id);
+  const active = star.textContent === '★';
+  const method = active ? 'DELETE' : 'POST';
+  const r = await fetch('/api/favorite-zones/' + id, {method});
+  if (r.status === 401) { alert('Войди через Telegram (Личный кабинет), чтобы добавлять зоны в избранное.'); return; }
+  if (!r.ok) return;
+  star.textContent = active ? '☆' : '★';
+  star.style.color = active ? '#ccc' : '#f59e0b';
 }
 
 map.on('moveend zoomend', drawGrid);

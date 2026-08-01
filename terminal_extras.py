@@ -412,6 +412,16 @@ def make_extras_router(templates) -> APIRouter:
             "SELECT id, ts, title, source, url, image_url FROM news ORDER BY ts DESC LIMIT 30")]
         return templates.TemplateResponse("news.html", {"request": request, "news": news})
 
+    @router.get("/admin/news/{nid}", response_class=HTMLResponse)
+    async def news_detail(request: Request, nid: int):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetchrow
+        n = await fetchrow("SELECT * FROM news WHERE id = $1", nid)
+        if not n:
+            return HTMLResponse("Новость не найдена", status_code=404)
+        return templates.TemplateResponse("news_detail.html", {"request": request, "n": dict(n)})
+
     @router.get("/admin/analytics/transport", response_class=HTMLResponse)
     async def transport_page(request: Request):
         if not is_authed(request):
@@ -423,7 +433,7 @@ def make_extras_router(templates) -> APIRouter:
         import psycopg2
         db = psycopg2.connect(_load_db_url("krisha_bot"))
         cur = db.cursor()
-        cur.execute("SELECT lat, lon, score, dist_lrt, dist_bus FROM transport_hexes ORDER BY score DESC")
+        cur.execute("SELECT lat, lon, score, dist_lrt, dist_bus, dist_road, dist_junction FROM transport_hexes ORDER BY score DESC")
         cols = [d[0] for d in cur.description]
         hexes = [dict(zip(cols, row)) for row in cur.fetchall()]
         cur.close(); db.close()
@@ -550,6 +560,35 @@ def make_extras_router(templates) -> APIRouter:
         if not user:
             return JSONResponse({"error": "auth"}, status_code=401)
         await remove_favorite_complex(user["user_id"], complex_id)
+        return JSONResponse({"ok": True})
+
+    # ── Избранные зоны — уведомления по изменению цен внутри зоны ──────────
+    @router.get("/api/favorite-zones/ids")
+    async def api_favorite_zone_ids(request: Request, ids: str = ""):
+        from bot.core.site_auth import get_user_by_session, is_favorite_zone_ids
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"ids": []})
+        zone_ids = [int(i) for i in ids.split(",") if i.strip().isdigit()]
+        found = await is_favorite_zone_ids(user["user_id"], zone_ids)
+        return JSONResponse({"ids": list(found)})
+
+    @router.post("/api/favorite-zones/{zone_id}")
+    async def api_add_favorite_zone(request: Request, zone_id: int):
+        from bot.core.site_auth import get_user_by_session, add_favorite_zone
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await add_favorite_zone(user["user_id"], zone_id)
+        return JSONResponse({"ok": True})
+
+    @router.delete("/api/favorite-zones/{zone_id}")
+    async def api_remove_favorite_zone(request: Request, zone_id: int):
+        from bot.core.site_auth import get_user_by_session, remove_favorite_zone
+        user = await get_user_by_session(_site_session_cookie(request))
+        if not user:
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await remove_favorite_zone(user["user_id"], zone_id)
         return JSONResponse({"ok": True})
 
     @router.post("/api/auth/start")
@@ -1928,6 +1967,29 @@ def make_extras_router(templates) -> APIRouter:
                 "n": r["n"],
             })
 
+        # Технические характеристики (конструктив/окна/двери/лифты/документы) —
+        # почти всегда пусто пока (источника данных ещё нет), но карточка и
+        # форма редактирования уже готовы принимать данные, когда появятся.
+        from bot.db.pg import execute as _tech_execute
+        await _tech_execute("""
+            CREATE TABLE IF NOT EXISTS complex_tech_specs (
+                complex_id INT PRIMARY KEY REFERENCES complexes(id) ON DELETE CASCADE,
+                construction_type TEXT, concrete_class TEXT, rebar_class TEXT,
+                facade_type TEXT, insulation_material TEXT, insulation_thickness_mm INT,
+                heating_type TEXT, heating_details TEXT, ventilation_type TEXT,
+                lifts_brand TEXT, lifts_model TEXT, lifts_count_per_section INT,
+                ceiling_height_min NUMERIC, ceiling_height_max NUMERIC,
+                developer_bin TEXT, elicense_status TEXT, elicense_checked_at TIMESTAMPTZ,
+                docs_psd_expertise_number TEXT, docs_psd_expertise_date DATE,
+                docs_apz_number TEXT, docs_apz_date DATE,
+                docs_commission_act_number TEXT, docs_commission_act_date DATE,
+                notes TEXT, updated_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+        tech_row = await fetchrow(
+            "SELECT * FROM complex_tech_specs WHERE complex_id = $1", complex_id)
+        tech_specs = dict(tech_row) if tech_row else {}
+
         # Данные источников (korter/homsters) для блока информации
         cx_sources = {}
         _si = cx["source_info"]
@@ -1961,6 +2023,7 @@ def make_extras_router(templates) -> APIRouter:
             "hex_cells_sale": hex_cells_sale,
             "hex_cells_rental": hex_cells_rental,
             "price_trend_by_rooms": price_trend_by_rooms,
+            "tech_specs": tech_specs,
         })
 
     @router.post("/admin/complex/{complex_id}/photos")
@@ -2017,6 +2080,78 @@ def make_extras_router(templates) -> APIRouter:
             (data.get("uk_contacts") or "").strip() or None,
             (data.get("chat_links") or "").strip() or None,
             (data.get("residents_notes") or "").strip() or None,
+        )
+        return JSONResponse({"ok": True})
+
+    # ── Технические характеристики ЖК (конструктив/инженерия/документы) —
+    # см. chek-лист застройщика: table complex_tech_specs (1:1 с complexes),
+    # плюс детальные complex_walls/windows/doors/concrete_rebar (пока без
+    # формы — заполняются вручную/скриптом, когда появится источник данных).
+    @router.post("/admin/complex/{complex_id}/tech-specs")
+    async def complex_tech_specs_save(request: Request, complex_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        data = await request.json()
+        from bot.db.pg import execute
+
+        def _s(key):
+            v = (data.get(key) or "").strip()
+            return v or None
+
+        def _d(key):
+            v = _s(key)
+            if not v:
+                return None
+            try:
+                from datetime import date as _date
+                return _date.fromisoformat(v)
+            except ValueError:
+                return None
+
+        def _i(key):
+            v = _s(key)
+            try:
+                return int(v) if v else None
+            except ValueError:
+                return None
+
+        def _f(key):
+            v = _s(key)
+            try:
+                return float(v) if v else None
+            except ValueError:
+                return None
+
+        await execute("""
+            INSERT INTO complex_tech_specs (
+                complex_id, construction_type, concrete_class, rebar_class,
+                facade_type, insulation_material, insulation_thickness_mm,
+                heating_type, heating_details, ventilation_type,
+                lifts_brand, lifts_model, lifts_count_per_section,
+                ceiling_height_min, ceiling_height_max,
+                developer_bin, elicense_status, docs_psd_expertise_number,
+                docs_psd_expertise_date, docs_apz_number, docs_apz_date,
+                docs_commission_act_number, docs_commission_act_date, notes,
+                updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())
+            ON CONFLICT (complex_id) DO UPDATE SET
+                construction_type=$2, concrete_class=$3, rebar_class=$4,
+                facade_type=$5, insulation_material=$6, insulation_thickness_mm=$7,
+                heating_type=$8, heating_details=$9, ventilation_type=$10,
+                lifts_brand=$11, lifts_model=$12, lifts_count_per_section=$13,
+                ceiling_height_min=$14, ceiling_height_max=$15,
+                developer_bin=$16, elicense_status=$17, docs_psd_expertise_number=$18,
+                docs_psd_expertise_date=$19, docs_apz_number=$20, docs_apz_date=$21,
+                docs_commission_act_number=$22, docs_commission_act_date=$23, notes=$24,
+                updated_at=now()
+        """, complex_id, _s("construction_type"), _s("concrete_class"), _s("rebar_class"),
+            _s("facade_type"), _s("insulation_material"), _i("insulation_thickness_mm"),
+            _s("heating_type"), _s("heating_details"), _s("ventilation_type"),
+            _s("lifts_brand"), _s("lifts_model"), _i("lifts_count_per_section"),
+            _f("ceiling_height_min"), _f("ceiling_height_max"),
+            _s("developer_bin"), _s("elicense_status"), _s("docs_psd_expertise_number"),
+            _d("docs_psd_expertise_date"), _s("docs_apz_number"), _d("docs_apz_date"),
+            _s("docs_commission_act_number"), _d("docs_commission_act_date"), _s("notes"),
         )
         return JSONResponse({"ok": True})
 
@@ -2415,6 +2550,41 @@ def make_extras_router(templates) -> APIRouter:
             "avg_up": [int(r["avg_up"] or 0) for r in rows],
             "avg_down": [int(r["avg_down"] or 0) for r in rows],
         })
+
+    @router.get("/admin/api/price-trend-listings")
+    async def price_trend_listings(request: Request, days: int = 30, rooms: str = ""):
+        """Конкретные объявления, из которых сложился график на
+        /admin/analytics/prices — для правой колонки (список объектов,
+        от самых больших изменений цены к самым маленьким)."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        room_cond = ""
+        params: list = [str(days)]
+        if rooms == "4":
+            room_cond = "AND a.rooms >= 4"
+        elif rooms in ("1", "2", "3"):
+            room_cond = "AND a.rooms = $2"
+            params.append(int(rooms))
+        rows = await pg_fetch(f"""
+            SELECT ph.listing_id, ph.old_price, ph.new_price, ph.changed_at,
+                   a.rooms, a.area, a.url, a.complex_name, a.address
+            FROM price_history ph
+            JOIN apartment_listings a ON a.id = ph.listing_id
+            WHERE ph.changed_at > now() - ($1 || ' days')::interval
+              AND ph.old_price IS NOT NULL AND ph.new_price IS NOT NULL
+              AND ph.old_price != ph.new_price
+              {room_cond}
+            ORDER BY abs(ph.new_price - ph.old_price) DESC
+            LIMIT 300
+        """, *params)
+        return JSONResponse({"listings": [{
+            "id": r["listing_id"], "rooms": r["rooms"], "area": r["area"],
+            "old_price": r["old_price"], "new_price": r["new_price"],
+            "delta": r["new_price"] - r["old_price"],
+            "changed_at": r["changed_at"].strftime("%d.%m.%Y"),
+            "url": r["url"], "complex_name": r["complex_name"], "address": r["address"],
+        } for r in rows]})
 
     # ── Ушедшие в архив: динамика по дням, по комнатности ──────────────────
 

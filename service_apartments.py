@@ -672,6 +672,26 @@ async def run_cycle():
     except Exception as e:
         log.warning("ceiling snapshot failed: %s", e)
 
+    # Снимок для графика "покрытие данными о годе постройки во времени"
+    # (/admin/analytics/year) — год берём с самого объявления, а если там
+    # пусто — с его ЖК (a.year_built чаще пусто, чем у самого ЖК, который
+    # заполняется вручную/через Korter/Homsters).
+    try:
+        from bot.db.pg import execute as _pg_exec_year, fetchval as _pg_fv_year
+        _total_active_y = await _pg_fv_year(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE") or 0
+        _with_year = await _pg_fv_year("""
+            SELECT COUNT(*) FROM apartment_listings a
+            LEFT JOIN complexes c ON lower(trim(c.name)) = lower(trim(a.complex_name))
+            WHERE a.is_active IS NOT FALSE
+              AND COALESCE(a.year_built, c.year_built) IS NOT NULL
+        """) or 0
+        await _pg_exec_year(
+            "INSERT INTO year_stats_history (total_active, with_year) VALUES ($1, $2)",
+            _total_active_y, _with_year)
+    except Exception as e:
+        log.warning("year snapshot failed: %s", e)
+
     # Снимок просмотров по комнатности во времени (/admin/analytics/views) —
     # views_count накопительный с даты публикации, поэтому график по факту
     # показывает суммарный накопленный интерес по типам квартир на срезах
@@ -695,6 +715,23 @@ async def run_cycle():
             _v1, _v2, _v3, _v4p)
     except Exception as e:
         log.warning("views snapshot failed: %s", e)
+
+    # Снимок покрытия данными о просмотрах во времени (/admin/analytics/views)
+    # — сколько активных объявлений вообще имеют известный views_count,
+    # тот же принцип, что и ceiling_stats_history выше. views_count качает
+    # отдельный медленный микросервис krisha-viewcount (Playwright).
+    try:
+        from bot.db.pg import execute as _pg_exec_vc, fetchval as _pg_fv_vc
+        _total_active_vc = await _pg_fv_vc(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE") or 0
+        _with_views = await _pg_fv_vc(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND views_count IS NOT NULL") or 0
+        await _pg_exec_vc(
+            "INSERT INTO views_coverage_history (total_active, with_views) VALUES ($1, $2)",
+            _total_active_vc, _with_views)
+    except Exception as e:
+        log.warning("views coverage snapshot failed: %s", e)
 
     # === Мониторинг сервера/проекта (CPU/память/диск/размер) — снимок раз
     # в цикл, см. /admin/settings ===

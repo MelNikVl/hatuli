@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🏦 Банки · Ипотека на жильё</div>
+<div style="font-size:13px;color:#888;max-width:1100px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  Ипотечные программы <b>{{ banks|length }} банков</b> на первичное и вторичное жильё.
+  Данные на <b>31.07.2026</b> из открытых источников (сайты банков, vbr.kz, kn.kz) — ставки и условия
+  уточняйте в банках. Госпрограммы: <b>7-20-25</b> (от 7%), <b>Наурыз</b> (7–9%), <b>Отау</b> (9%).
+  С 1 июля 2026 предельная ставка по рыночной ипотеке снижена с 25% до 20%.
+</div>
+
+<div style="display:flex;gap:6px;margin-bottom:14px;">
+  <button type="button" class="bnk-filter" data-t="all" onclick="bnkFilter('all')"
+          style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">Все ({{ banks|length }})</button>
+  <button type="button" class="bnk-filter" data-t="new" onclick="bnkFilter('new')"
+          style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">🏗 Первичка</button>
+  <button type="button" class="bnk-filter" data-t="secondary" onclick="bnkFilter('secondary')"
+          style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">🏠 Вторичка</button>
+</div>
+
+<div id="bnk-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px;">
+{% for b in banks %}
+  {% set has_new = b.programs|selectattr('housing_type','in',['new','both'])|list %}
+  {% set has_sec = b.programs|selectattr('housing_type','in',['secondary','both'])|list %}
+  {% set mins = b.programs|map(attribute='rate_min')|select('!=', None)|list %}
+  <div class="bnk-card" data-has-new="{{ '1' if has_new else '0' }}" data-has-secondary="{{ '1' if has_sec else '0' }}"
+       style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;">
+    <a href="/admin/banks/{{ b.slug }}" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;flex:1;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div style="font-weight:700;font-size:15px;">{{ b.name }}</div>
+        {% if mins %}
+        <div style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:8px;padding:3px 8px;font-size:13px;font-weight:700;white-space:nowrap;">от {{ '%.1f'|format(mins|min) }}%</div>
+        {% endif %}
+      </div>
+      <div style="font-size:12.5px;color:#888;margin-top:6px;flex:1;">{{ b.description or '' }}</div>
+      <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">
+        {% if has_new %}<span style="font-size:11.5px;padding:2px 8px;border-radius:6px;background:rgba(37,99,235,.12);color:#60a5fa;">🏗 Первичка</span>{% endif %}
+        {% if has_sec %}<span style="font-size:11.5px;padding:2px 8px;border-radius:6px;background:rgba(16,185,129,.12);color:#34d399;">🏠 Вторичка</span>{% endif %}
+        {% if b.program_type == 'operator' %}<span style="font-size:11.5px;padding:2px 8px;border-radius:6px;background:rgba(250,204,21,.12);color:#facc15;">🇰🇿 Госоператор</span>{% endif %}
+        <span style="font-size:11.5px;padding:2px 8px;border-radius:6px;background:var(--bg);color:#888;">{{ b.programs|length }} прогр.</span>
+      </div>
+    </a>
+  </div>
+{% endfor %}
+</div>
+
+<script>
+function bnkFilter(t) {
+  document.querySelectorAll('.bnk-filter').forEach(b => {
+    const active = b.dataset.t === t;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  document.querySelectorAll('.bnk-card').forEach(c => {
+    const ok = t === 'all' || (t === 'new' ? c.dataset.hasNew === '1' : c.dataset.hasSecondary === '1');
+    c.style.display = ok ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

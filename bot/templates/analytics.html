@@ -63,25 +63,27 @@ tr:last-child td { border-bottom: none; }
 <div class="page-title">📊 Аналитика квартир</div>
 <div class="container">
 
-<div class="chart-box-1200" style="height:auto;">
-  <b style="font-size:1em;">🎯 Уверенность Смарт рейтинга по гексам</b>
-  <span style="font-size:0.85em;color:#888;margin-left:6px;">% факторов, посчитанных на реальных данных (не риск сделки) — см. подсказку "?" у скора в превью</span>
-  <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;">
-    {% for val, label in [('', 'Все'), ('1', '1-комн'), ('2', '2-комн'), ('3', '3-комн'), ('4', '4+-комн')] %}
-    <button type="button" class="conf-rooms-btn" data-rooms="{{ val }}" onclick="loadConfidenceHex('{{ val }}')"
-            style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:13px;cursor:pointer;">{{ label }}</button>
-    {% endfor %}
-    <span id="conf-hex-count" style="font-size:12px;color:#888;margin-left:auto;align-self:center;"></span>
+<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;">
+  <div class="chart-box-1200" style="flex:1 1 0;min-width:340px;width:auto;height:auto;">
+    <b style="font-size:1em;">🎯 Уверенность Смарт рейтинга по гексам</b>
+    <span style="font-size:0.85em;color:#888;margin-left:6px;">% факторов, посчитанных на реальных данных (не риск сделки) — см. подсказку "?" у скора в превью</span>
+    <div id="conf-summary-stats" class="stats-bar" style="margin-top:10px;"></div>
+    <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;">
+      {% for val, label in [('', 'Все'), ('1', '1-комн'), ('2', '2-комн'), ('3', '3-комн'), ('4', '4+-комн')] %}
+      <button type="button" class="conf-rooms-btn" data-rooms="{{ val }}" onclick="loadConfidenceHex('{{ val }}')"
+              style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:13px;cursor:pointer;">{{ label }}</button>
+      {% endfor %}
+      <span id="conf-hex-count" style="font-size:12px;color:#888;margin-left:auto;align-self:center;"></span>
+    </div>
+    <div id="conf-hex-map" style="height:25vh;min-height:220px;border-radius:8px;"></div>
   </div>
-  <div id="conf-hex-map" style="height:25vh;min-height:220px;border-radius:8px;"></div>
-</div>
-<div>
-  <div class="chart-box-1200">
+  <div class="chart-box-1200" style="flex:1 1 0;min-width:340px;width:auto;height:auto;">
     <b style="font-size:1em;">📉 Объявления без фото во времени</b>
     <span style="font-size:0.85em;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж</span>
     <div id="no-photo-chart" class="chart-box-1200-inner"></div>
   </div>
-
+</div>
+<div>
   <div class="chart-box-1200">
     <b style="font-size:1em;">💸 Снижения цены по дням, по комнатности</b>
     <div style="display:flex;gap:14px;font-size:11px;color:#888;margin:6px 0;">
@@ -175,6 +177,20 @@ tr:last-child td { border-bottom: none; }
       confHexLayer.clearLayers();
       const pts = d.points || [];
       document.getElementById('conf-hex-count').textContent = pts.length.toLocaleString('ru') + ' объявлений';
+      // Средняя уверенность — общая по Астане и по 1/2/3-комн — считаем из
+      // того же ответа, что и гексы, без отдельного запроса (rooms=='' даёт
+      // полный набор точек со своим полем rooms на каждой).
+      if (!rooms) {
+        const avg = arr => arr.length ? Math.round(arr.reduce((s,v)=>s+v,0)/arr.length) : null;
+        const overall = avg(pts.map(p => p.confidence));
+        const byRoom = [1,2,3].map(rc => avg(pts.filter(p => p.rooms === rc).map(p => p.confidence)));
+        const statsEl = document.getElementById('conf-summary-stats');
+        if (statsEl) {
+          const mk = (val, lbl) => `<div class="stat-card"><div class="val">${val == null ? '—' : val + '%'}</div><div class="lbl">${lbl}</div></div>`;
+          statsEl.innerHTML = mk(overall, 'В среднем по Астане')
+            + byRoom.map((v,i) => mk(v, (i+1) + '-комн')).join('');
+        }
+      }
       const buckets = new Map();
       pts.forEach(p => {
         const [q, r] = confHexAxial(p.lat, p.lon);

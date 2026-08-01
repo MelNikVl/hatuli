@@ -101,13 +101,13 @@ async def upsert(r: dict) -> str:
                 r["id"], exists["price"], r["price"])
         except Exception:
             pass
+    # score_total не трогаем — считается отдельно в deal_score.apply_deal_scores()
     await pg_exec("""
         UPDATE apartment_listings SET
-            price=$2, est_rent=$3, yield_pct=$4,
-            score_total=$5, last_seen=NOW()
+            price=$2, est_rent=$3, yield_pct=$4, last_seen=NOW()
         WHERE id=$1
     """, r["id"], r.get("price"), r.get("est_rent", 0),
-         r.get("yield_pct", 0), sd.get("total_score", 0))
+         r.get("yield_pct", 0))
     return "upd"
 
 

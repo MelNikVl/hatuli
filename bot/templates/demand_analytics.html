@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🔥 Спрос</div>
+<div style="font-size:13px;color:#888;max-width:900px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  <b>Как считается:</b> два сигнала на гексагон — медиана просмотров (<code>views_count</code>) среди
+  объявлений с известным счётчиком в этом гексе, и медиана скорости ухода в архив (дни от появления
+  до архива) среди ушедших там за выбранный период. Считаем их <b>независимо</b> — просмотры отслеживает
+  отдельный медленный сервис, который следит в основном за активными объявлениями, а у ушедших в архив
+  почти никогда не бывает известного счётчика одновременно, так что требовать оба поля у ОДНОЙ записи
+  оставило бы карту почти пустой. Оба сигнала нормируем в 0..1 по перцентилям (10-й/90-й) и усредняем:
+  <code>спрос = (норм.просмотры + норм.скорость_ухода) / 2</code>, где скорость ухода — ИНВЕРСИЯ дней в
+  архиве (меньше дней = выше очки); если в гексе есть только один из двух сигналов — используем его один.
+  Серый гексагон — низкий спрос, яркий оранжевый — высокий. «Ушло» — прокси через <code>archived_at</code>,
+  не гарантированный факт продажи.
+</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+  <div style="display:flex;gap:6px;">
+    {% for val, label in [('', 'Все'), ('1', '1к'), ('2', '2к'), ('3', '3к'), ('4', '4+к')] %}
+    <button type="button" class="dm-rooms-btn" data-rooms="{{ val }}" onclick="setDemandRooms('{{ val }}')"
+            style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:13px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+  </div>
+  <div style="display:flex;gap:6px;">
+    {% for val, label in [(7, '7 дней'), (30, '30 дней'), (90, '90 дней'), (180, '180 дней')] %}
+    <button type="button" class="dm-days-btn" data-days="{{ val }}" onclick="setDemandDays({{ val }})"
+            style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:{{ '#2563eb' if val == 90 else 'var(--bg)' }};color:{{ '#fff' if val == 90 else 'var(--text)' }};font-size:13px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+  </div>
+  <span id="dm-result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
+</div>
+
+<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
+  <div style="flex:1 1 0;min-width:320px;">
+    <div id="demand-map" style="height:640px;border-radius:12px;border:1px solid var(--border);"></div>
+    <div id="dm-hex-detail" style="display:none;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;max-height:260px;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<script>
+const dmMap = L.map('demand-map').setView([51.128, 71.430], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(dmMap);
+const dmHexLayer = L.layerGroup().addTo(dmMap);
+let dmRooms = '', dmDays = 90, dmViewsPoints = [], dmSpeedPoints = [];
+const DM_EDGE = 200;
+const DM_LAT0 = 51.128, DM_LON0 = 71.430,
+      DM_MLAT = 110574.0, DM_MLON = 111320.0 * Math.cos(DM_LAT0 * Math.PI/180);
+function dmAxial(lat, lon, edge) {
+  const x = (lon - DM_LON0) * DM_MLON, y = (lat - DM_LAT0) * DM_MLAT;
+  let q = (Math.sqrt(3)/3 * x - y/3) / edge, r = (2/3 * y) / edge;
+  const s = -q - r;
+  let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+  const dq = Math.abs(rq-q), dr = Math.abs(rr-r), ds = Math.abs(rs-s);
+  if (dq > dr && dq > ds) rq = -rr - rs; else if (dr > ds) rr = -rq - rs;
+  return [rq, rr];
+}
+function dmCorners(q, r, edge) {
+  const cx = edge * Math.sqrt(3) * (q + r/2), cy = edge * 1.5 * r;
+  const clat = DM_LAT0 + cy/DM_MLAT, clon = DM_LON0 + cx/DM_MLON;
+  const out = [];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI/180 * (60*i - 30);
+    out.push([clat + (edge*Math.sin(a))/DM_MLAT, clon + (edge*Math.cos(a))/DM_MLON]);
+  }
+  return out;
+}
+function dmMedian(arr) {
+  const s = [...arr].sort((a,b) => a-b);
+  const mid = Math.floor(s.length/2);
+  return s.length % 2 ? s[mid] : (s[mid-1]+s[mid])/2;
+}
+function dmPercentile(arr, p) {
+  const s = [...arr].sort((a,b) => a-b);
+  return s[Math.min(Math.floor(s.length * p), s.length - 1)];
+}
+function dmColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const from = [156,163,175], to = [234,88,12];  // серый -> яркий оранжевый
+  const c = from.map((f,i) => Math.round(f + (to[i]-f)*t));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+function bucketByHex(points, edge) {
+  const buckets = new Map();
+  points.forEach(p => {
+    const [q, r] = dmAxial(p.lat, p.lon, edge);
+    const key = q + ':' + r;
+    if (!buckets.has(key)) buckets.set(key, {q, r, items: []});
+    buckets.get(key).items.push(p);
+  });
+  return buckets;
+}
+function drawDemandHex() {
+  dmHexLayer.clearLayers();
+  if (!dmViewsPoints.length && !dmSpeedPoints.length) return;
+  // Нормировка обоих сигналов по перцентилям 10/90 текущей выборки —
+  // устойчивее к выбросам, чем raw min/max (см. тот же приём на /admin/analytics/views).
+  const vLo = dmPercentile(dmViewsPoints.map(p => p.views), 0.10);
+  const vHi = dmPercentile(dmViewsPoints.map(p => p.views), 0.90) || 1;
+  const dLo = dmPercentile(dmSpeedPoints.map(p => p.days), 0.10);
+  const dHi = dmPercentile(dmSpeedPoints.map(p => p.days), 0.90) || 1;
+  const norm = (v, lo, hi) => hi > lo ? Math.max(0, Math.min(1, (v - lo) / (hi - lo))) : 0.5;
+
+  const viewBuckets = bucketByHex(dmViewsPoints, DM_EDGE);
+  const speedBuckets = bucketByHex(dmSpeedPoints, DM_EDGE);
+  const allKeys = new Set([...viewBuckets.keys(), ...speedBuckets.keys()]);
+  allKeys.forEach(key => {
+    const vb = viewBuckets.get(key), sb = speedBuckets.get(key);
+    const vMedian = vb ? dmMedian(vb.items.map(i => i.views)) : null;
+    const dMedianVal = sb ? dmMedian(sb.items.map(i => i.days)) : null;
+    const vNorm = vMedian != null ? norm(vMedian, vLo, vHi) : null;
+    const speedNorm = dMedianVal != null ? 1 - norm(dMedianVal, dLo, dHi) : null;
+    const parts = [vNorm, speedNorm].filter(x => x != null);
+    const demand = parts.length ? parts.reduce((s,x) => s+x, 0) / parts.length : 0;
+    const q = (vb || sb).q, r = (vb || sb).r;
+    const n = (vb ? vb.items.length : 0) + (sb ? sb.items.length : 0);
+    L.polygon(dmCorners(q, r, DM_EDGE), {
+      color: '#fff', weight: 0.5, fillColor: dmColor(demand), fillOpacity: 0.65,
+    }).bindTooltip(`спрос: ${Math.round(demand*100)}/100` +
+      (vMedian != null ? ` · медиана 👁 ${Math.round(vMedian)}` : ' · нет данных по просмотрам') +
+      (dMedianVal != null ? ` · ${Math.round(dMedianVal)} дн. в архиве` : ' · нет данных по скорости ухода') +
+      ` · ${n} объявл.`, {sticky:true})
+      .on('click', () => showDemandHexDetail(vb, sb, demand))
+      .addTo(dmHexLayer);
+  });
+}
+
+function showDemandHexDetail(vb, sb, demand) {
+  const el = document.getElementById('dm-hex-detail');
+  el.style.display = 'block';
+  const viewsHtml = vb ? [...vb.items].sort((a,c) => (c.views||0)-(a.views||0)).map(p => `<div style="font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--border);">
+      👁 ${(p.views||0).toLocaleString('ru')} — <a href="/admin/analytics/${p.id}">${p.rooms || '?'}-комн${p.price ? ', ' + (p.price/1e6).toFixed(1) + ' млн ₸' : ''}</a>
+    </div>`).join('') : '<div style="color:#888;font-size:12.5px;">нет данных по просмотрам в этом гексе</div>';
+  const speedHtml = sb ? [...sb.items].sort((a,c) => a.days-c.days).map(p => `<div style="font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--border);">
+      ⏱ ${p.days} дн. в архиве — <a href="/admin/analytics/${p.id}">${p.rooms || '?'}-комн${p.price ? ', ' + (p.price/1e6).toFixed(1) + ' млн ₸' : ''}</a>
+    </div>`).join('') : '<div style="color:#888;font-size:12.5px;">нет данных по скорости ухода в этом гексе</div>';
+  el.innerHTML = `<div style="font-weight:700;margin-bottom:8px;">Гексагон: спрос ${Math.round(demand*100)}/100</div>
+    <div style="font-weight:600;font-size:13px;margin-top:6px;">👁 Просмотры</div>${viewsHtml}
+    <div style="font-weight:600;font-size:13px;margin-top:10px;">⏱ Скорость ухода</div>${speedHtml}`;
+}
+
+function loadDemand() {
+  document.getElementById('dm-result-count').textContent = 'загрузка…';
+  fetch(`/admin/api/demand-points?rooms=${dmRooms}&days=${dmDays}`).then(r => r.json()).then(d => {
+    dmViewsPoints = d.views_points || [];
+    dmSpeedPoints = d.speed_points || [];
+    document.getElementById('dm-result-count').textContent =
+      dmViewsPoints.length.toLocaleString('ru') + ' с известными просмотрами · ' +
+      dmSpeedPoints.length.toLocaleString('ru') + ' ушедших в архив за период';
+    drawDemandHex();
+    document.getElementById('dm-hex-detail').style.display = 'none';
+  }).catch(() => { document.getElementById('dm-result-count').textContent = 'не удалось загрузить'; });
+}
+function setDemandRooms(r) {
+  dmRooms = r;
+  document.querySelectorAll('.dm-rooms-btn').forEach(b => {
+    const active = b.dataset.rooms === r;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  loadDemand();
+}
+function setDemandDays(d) {
+  dmDays = d;
+  document.querySelectorAll('.dm-days-btn').forEach(b => {
+    const active = parseInt(b.dataset.days) === d;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  loadDemand();
+}
+loadDemand();
+</script>
+{% endblock %}

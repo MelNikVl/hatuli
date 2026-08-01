@@ -141,8 +141,11 @@ async def _send_digest_cycle(bot: Bot) -> None:
     from bot.db.pg import fetch, execute
 
     await _ensure_watch_state_table()
-    from bot.core.site_auth import _ensure_complex_favorites_table
+    from bot.core.site_auth import _ensure_complex_favorites_table, _ensure_zone_favorites_table
+    from bot.core.zones import _point_in_ring
+    import json as _json_zones
     await _ensure_complex_favorites_table()
+    await _ensure_zone_favorites_table()
 
     rows = await fetch("""
         SELECT user_id, notify_frequency, last_notified_at
@@ -150,7 +153,8 @@ async def _send_digest_cycle(bot: Bot) -> None:
         WHERE COALESCE(is_blocked, 0) = 0
           AND COALESCE(notify_frequency, 'daily') != 'off'
           AND (EXISTS (SELECT 1 FROM favorites f WHERE f.user_id = users.user_id)
-               OR EXISTS (SELECT 1 FROM complex_favorites cf WHERE cf.user_id = users.user_id))
+               OR EXISTS (SELECT 1 FROM complex_favorites cf WHERE cf.user_id = users.user_id)
+               OR EXISTS (SELECT 1 FROM zone_favorites zf WHERE zf.user_id = users.user_id))
     """)
     for r in rows:
         freq = r["notify_frequency"] or "daily"
@@ -181,16 +185,67 @@ async def _send_digest_cycle(bot: Bot) -> None:
                )
         """, r["user_id"])
 
-        if not watched:
-            await execute("UPDATE users SET last_notified_at = now() WHERE user_id = $1", r["user_id"])
-            continue
-
         state_rows = await fetch(
             "SELECT listing_id, last_description, last_is_active FROM favorite_watch_state WHERE user_id = $1",
             r["user_id"])
         state = {s["listing_id"]: s for s in state_rows}
 
         lines = []
+
+        # Избранные зоны: только цена (не описание/архив — зона может
+        # содержать тысячи квартир, персональный watch-state на каждую был
+        # бы слишком тяжёлым). Изменение считаем "новым", если оно случилось
+        # после прошлого уведомления этому пользователю (или за 30 дней,
+        # если уведомлений ещё не было).
+        zone_rows = await fetch(
+            "SELECT zf.zone_id, z.name, z.polygon FROM zone_favorites zf "
+            "JOIN priority_zones z ON z.id = zf.zone_id WHERE zf.user_id = $1",
+            r["user_id"])
+        if zone_rows:
+            since = last if last is not None else None
+            candidates = await fetch("""
+                SELECT a.id, a.lat, a.lon, a.price, a.url, a.rooms, a.area, ph.old_price
+                FROM apartment_listings a
+                JOIN LATERAL (
+                    SELECT old_price, changed_at FROM price_history h
+                    WHERE h.listing_id = a.id ORDER BY changed_at DESC LIMIT 1
+                ) ph ON TRUE
+                WHERE a.lat IS NOT NULL AND a.lon IS NOT NULL
+                  AND a.is_active IS NOT FALSE
+                  AND ph.changed_at > COALESCE($1::timestamptz, now() - interval '30 days')
+            """, since)
+            zones_rings = []
+            for zr in zone_rows:
+                poly = zr["polygon"]
+                if isinstance(poly, str):
+                    poly = _json_zones.loads(poly)
+                if not poly:
+                    continue
+                if isinstance(poly[0][0], (int, float)):
+                    rings = [poly]
+                elif isinstance(poly[0][0][0], (int, float)):
+                    rings = poly
+                else:
+                    rings = poly[0] if poly and poly[0] else []
+                zones_rings.append((zr["name"], rings))
+            for c in candidates:
+                if not c["old_price"] or c["old_price"] == c["price"]:
+                    continue
+                lat, lon = float(c["lat"]), float(c["lon"])
+                for zname, rings in zones_rings:
+                    if any(_point_in_ring(lat, lon, ring) for ring in rings):
+                        direction = "снизилась" if c["price"] < c["old_price"] else "выросла"
+                        lines.append(
+                            f"📍 зона «{zname}»: {'▼' if direction == 'снизилась' else '▲'} "
+                            f"{c['rooms'] or '?'}-комн, {c['area'] or '?'} м² — цена {direction}: "
+                            f"{c['old_price']/1e6:.1f} → {c['price']/1e6:.1f} млн ₸\n{c['url']}"
+                        )
+                        break
+
+        if not watched and not lines:
+            await execute("UPDATE users SET last_notified_at = now() WHERE user_id = $1", r["user_id"])
+            continue
+
         for f in watched:
             lid = f["listing_id"]
             prev = state.get(lid)

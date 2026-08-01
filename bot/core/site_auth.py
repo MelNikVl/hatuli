@@ -186,6 +186,62 @@ async def is_favorite_complex_ids(user_id: int, complex_ids: list[int]) -> set[i
     return {r["complex_id"] for r in rows}
 
 
+# ── Избранные зоны — уведомления по изменению цен на объекты внутри зоны ───
+
+async def _ensure_zone_favorites_table() -> None:
+    await execute("""
+        CREATE TABLE IF NOT EXISTS zone_favorites (
+            user_id BIGINT NOT NULL,
+            zone_id INT NOT NULL REFERENCES priority_zones(id) ON DELETE CASCADE,
+            saved_at TIMESTAMPTZ DEFAULT now(),
+            PRIMARY KEY (user_id, zone_id)
+        )
+    """)
+
+
+async def list_favorite_zones(user_id: int) -> list[dict]:
+    await _ensure_zone_favorites_table()
+    rows = await fetch("""
+        SELECT zf.zone_id, zf.saved_at, z.name, z.color
+        FROM zone_favorites zf
+        LEFT JOIN priority_zones z ON z.id = zf.zone_id
+        WHERE zf.user_id = $1
+        ORDER BY zf.saved_at DESC
+    """, user_id)
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d.get("saved_at") is not None:
+            d["saved_at"] = d["saved_at"].isoformat()
+        out.append(d)
+    return out
+
+
+async def add_favorite_zone(user_id: int, zone_id: int) -> None:
+    await _ensure_zone_favorites_table()
+    await execute("""
+        INSERT INTO zone_favorites (user_id, zone_id, saved_at) VALUES ($1, $2, now())
+        ON CONFLICT (user_id, zone_id) DO NOTHING
+    """, user_id, zone_id)
+
+
+async def remove_favorite_zone(user_id: int, zone_id: int) -> None:
+    await _ensure_zone_favorites_table()
+    await execute(
+        "DELETE FROM zone_favorites WHERE user_id = $1 AND zone_id = $2",
+        user_id, zone_id)
+
+
+async def is_favorite_zone_ids(user_id: int, zone_ids: list[int]) -> set[int]:
+    if not zone_ids:
+        return set()
+    await _ensure_zone_favorites_table()
+    rows = await fetch(
+        "SELECT zone_id FROM zone_favorites WHERE user_id = $1 AND zone_id = ANY($2::int[])",
+        user_id, zone_ids)
+    return {r["zone_id"] for r in rows}
+
+
 # ── Админ: управление пользователями сайта (отдельно от admin_users) ───────
 
 async def list_site_users() -> list[dict]:
@@ -206,5 +262,6 @@ async def set_user_blocked(user_id: int, blocked: bool) -> None:
 async def delete_site_user(user_id: int) -> None:
     await execute("DELETE FROM favorites WHERE user_id = $1", user_id)
     await execute("DELETE FROM complex_favorites WHERE user_id = $1", user_id)
+    await execute("DELETE FROM zone_favorites WHERE user_id = $1", user_id)
     await execute("DELETE FROM site_sessions WHERE user_id = $1", user_id)
     await execute("DELETE FROM users WHERE user_id = $1", user_id)

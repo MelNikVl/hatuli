@@ -23,22 +23,74 @@
     <button type="button" class="vdays-btn active" data-days="7" onclick="setDays(7)" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">за 7 дней</button>
     <button type="button" class="vdays-btn" data-days="14" onclick="setDays(14)" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">за 2 недели</button>
   </div>
-  <label style="font-size:12.5px;color:#888;margin-left:16px;">Сторона гексагона (м):
-    <input id="v-hex-edge" type="number" min="30" max="1000" step="10" value="200" style="width:70px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);margin-left:4px;">
+  <label style="font-size:12.5px;color:#888;margin-left:16px;display:flex;align-items:center;gap:6px;">Сторона гексагона (м): <span id="v-hex-edge-val">100</span>
+    <input id="v-hex-edge" type="range" min="40" max="150" step="10" value="100" style="width:140px;">
   </label>
   <span id="v-result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
 </div>
 
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
-  <div style="flex:1 1 0;min-width:320px;">
+  <div style="flex:3 1 0;min-width:320px;">
     <div id="views-map" style="height:640px;border-radius:12px;border:1px solid var(--border);"></div>
     <div id="v-hex-detail" style="display:none;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;max-height:260px;overflow-y:auto;"></div>
   </div>
-  <div style="flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+  <div style="flex:1 1 0;min-width:240px;max-width:25%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
     <div style="font-weight:700;font-size:14px;margin-bottom:8px;">🏆 Топ-50 по просмотрам</div>
     <div id="v-top50" style="max-height:640px;overflow-y:auto;"></div>
   </div>
 </div>
+
+<style>
+.chart-box-1200-inner { position:relative; height:520px; }
+</style>
+<div class="chart-box-1200" style="height:auto;">
+  <b style="font-size:1em;">📈 Покрытие данными о просмотрах во времени</b>
+  <span style="font-size:0.85em;color:#888;margin-left:6px;">сколько активных объявлений вообще имеют известный views_count — снимок раз в цикл парсера продаж</span>
+  <div style="display:inline-flex;gap:6px;margin-left:12px;">
+    {% for d in [7, 30, 90] %}
+    <a href="?cov_days={{ d }}" class="views-cov-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
+    {% endfor %}
+  </div>
+  <div class="chart-box-1200-inner"><canvas id="views-coverage-chart"></canvas></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+(function() {
+  let covDays = new URLSearchParams(location.search).get('cov_days') || 30;
+  document.querySelectorAll('.views-cov-days-link').forEach(a => {
+    if (a.dataset.days === String(covDays)) { a.style.background = '#2563eb'; a.style.color = '#fff'; }
+  });
+  fetch('/admin/api/views-coverage-history?days=' + covDays).then(r => r.json()).then(d => {
+    const pts = d.points || [];
+    if (pts.length < 2) {
+      document.getElementById('views-coverage-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек снимков</div>';
+      return;
+    }
+    new Chart(document.getElementById('views-coverage-chart'), {
+      type: 'line',
+      data: {
+        labels: pts.map(p => p.at),
+        datasets: [{
+          label: 'с известными просмотрами, шт.', data: pts.map(p => p.with_views),
+          borderColor: '#ea580c', backgroundColor: 'rgba(234,88,12,.12)', fill: true, tension: 0.25, pointRadius: 2,
+        }, {
+          label: 'всего активных, шт.', data: pts.map(p => p.total_active),
+          borderColor: '#8892b0', borderDash: [5, 4], fill: false, tension: 0.25, pointRadius: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: true, labels: { boxWidth: 10, font: { size: 12 } } } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+          y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
+        },
+      },
+    });
+  }).catch(() => {});
+})();
+</script>
 
 <style>
 .chart-box-1200 { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-top:14px; width:1200px; max-width:100%; height:600px; overflow-y:auto; box-sizing:border-box; font-size:1em; }
@@ -46,6 +98,12 @@
 <div class="chart-box-1200">
   <b style="font-size:1em;">👁 Просмотры по комнатности во времени</b>
   <span style="font-size:0.85em;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж; накопительный счётчик, не прирост за день</span>
+  <div style="display:inline-flex;gap:6px;margin-left:12px;">
+    {% for d, label in [(1, '1 день'), (3, '3 дня'), (7, '7 дней'), (30, 'месяц')] %}
+    <button type="button" class="vrooms-days-btn" data-days="{{ d }}" onclick="loadRoomsHistory({{ d }})"
+            style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:{{ '#2563eb' if d == 1 else 'var(--bg)' }};color:{{ '#fff' if d == 1 else 'var(--text)' }};border:1px solid var(--border);cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+  </div>
   <div style="display:flex;gap:14px;font-size:0.85em;color:#888;margin:6px 0;">
     <span><span style="display:inline-block;width:9px;height:9px;background:#3b82f6;border-radius:2px;"></span> 1-комн</span>
     <span><span style="display:inline-block;width:9px;height:9px;background:#22c55e;border-radius:2px;"></span> 2-комн</span>
@@ -118,10 +176,21 @@ function renderTop50(points) {
     </div>`).join('') || '<div style="color:#888;font-size:13px;">нет данных за этот период</div>';
 }
 
+function percentile(arr, p) {
+  const s = [...arr].sort((a,b) => a-b);
+  return s[Math.min(Math.floor(s.length * p), s.length - 1)];
+}
 function renderHexes(points, edge) {
   hexLayer.clearLayers();
+  // Раньше нормировали цвет на RAW максимум медиан по гексам — если где-то
+  // одно объявление-выброс (напр. 27000 просмотров) сидело в своём гексе
+  // одно, ЕГО медиана и становилась "максимумом", и все остальные гексы
+  // красились почти серым (t = их_медиана / 27000 ≈ 0). Берём перцентиль
+  // 90 как верхнюю границу шкалы — тот же приём, что и на тепловых картах
+  // цены на главной карте (см. dashboard.html scoreColor/heatColor).
+  const validPoints = points.filter(p => p.lat != null && p.lon != null);
   const buckets = new Map();
-  points.forEach(p => {
+  validPoints.forEach(p => {
     const [q, r] = hexAxial(p.lat, p.lon, edge);
     const key = q + ':' + r;
     if (!buckets.has(key)) buckets.set(key, {q, r, items: []});
@@ -130,9 +199,9 @@ function renderHexes(points, edge) {
   const medians = [];
   buckets.forEach(b => { b.value = median(b.items.map(i => i.views || 0)); medians.push(b.value); });
   if (!medians.length) return;
-  const hi = Math.max(...medians) || 1;
+  const hi = percentile(medians, 0.90) || Math.max(...medians) || 1;
   buckets.forEach(b => {
-    const t = b.value / hi;
+    const t = Math.min(1, b.value / hi);
     L.polygon(hexCorners(b.q, b.r, edge), {
       color: '#fff', weight: 0.5, fillColor: viewsColor(t), fillOpacity: 0.6,
     }).bindTooltip(`медиана: 👁 ${Math.round(b.value)} · ${b.items.length} объявл.`, {sticky:true})
@@ -166,13 +235,20 @@ function setDays(d) {
 function load() {
   fetch('/admin/api/views-points?days=' + currentDays).then(r => r.json()).then(d => {
     currentPoints = d.points || [];
-    document.getElementById('v-result-count').textContent = currentPoints.length + ' объявлений с известными просмотрами';
-    renderHexes(currentPoints, parseFloat(document.getElementById('v-hex-edge').value) || 200);
+    // Счётчик просмотров качает отдельный медленный Playwright-микросервис
+    // (krisha-viewcount, см. подсказку сверху) — реально идёт по несколько
+    // объявлений в минуту, поэтому покрытие всегда маленький процент от
+    // всех активных, это не баг страницы.
+    document.getElementById('v-result-count').textContent = currentPoints.length + ' объявлений с известными просмотрами (счётчик медленный — см. пояснение выше)';
+    renderHexes(currentPoints, parseFloat(document.getElementById('v-hex-edge').value) || 100);
     renderTop50(currentPoints);
     document.getElementById('v-hex-detail').style.display = 'none';
   });
 }
-document.getElementById('v-hex-edge').addEventListener('change', () => renderHexes(currentPoints, parseFloat(document.getElementById('v-hex-edge').value) || 200));
+document.getElementById('v-hex-edge').addEventListener('input', () => {
+  document.getElementById('v-hex-edge-val').textContent = document.getElementById('v-hex-edge').value;
+  renderHexes(currentPoints, parseFloat(document.getElementById('v-hex-edge').value) || 100);
+});
 load();
 
 function roomsHistoryChart(divId, points, w, h) {
@@ -205,10 +281,18 @@ function roomsHistoryChart(divId, points, w, h) {
   el.innerHTML = `<svg width="${w}" height="${h}" style="display:block;overflow:visible;max-width:100%;">${linesHtml}${xLabels}</svg>`;
 }
 
-fetch('/admin/api/views-history?days=1').then(r => r.json()).then(d => {
-  const blockEl = document.getElementById('views-rooms-chart');
-  const blockW = Math.max(320, blockEl.parentElement.clientWidth - 4);
-  roomsHistoryChart('views-rooms-chart', d.points || [], blockW, 480);
-}).catch(() => {});
+function loadRoomsHistory(days) {
+  document.querySelectorAll('.vrooms-days-btn').forEach(b => {
+    const active = parseInt(b.dataset.days) === days;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  fetch('/admin/api/views-history?days=' + days).then(r => r.json()).then(d => {
+    const blockEl = document.getElementById('views-rooms-chart');
+    const blockW = Math.max(320, blockEl.parentElement.clientWidth - 4);
+    roomsHistoryChart('views-rooms-chart', d.points || [], blockW, 480);
+  }).catch(() => {});
+}
+loadRoomsHistory(1);
 </script>
 {% endblock %}

@@ -487,6 +487,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         })
 
     @app.get("/admin/analytics/transport", response_class=HTMLResponse)
+    async def transport_page(request: Request):
+        # ВАЖНО: выше catch-all /admin/analytics/{listing_id} ниже.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("transport_analytics.html", {
+            "request": request, "atab": "transport",
+        })
+
+    @app.get("/admin/analytics/transport", response_class=HTMLResponse)
     async def transport_analytics_page(request: Request):
         # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
         # без этого "transport" матчился туда как несуществующий listing_id

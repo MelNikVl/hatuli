@@ -149,6 +149,22 @@ html, body { overflow: hidden !important; }
     <option value="">Продавец: все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
   </select></div>
 
+  <div id="f-heat-wrap" class="rooms-dd">
+    <button type="button" class="rooms-dd-btn" id="heat-dd-btn" onclick="toggleFbarDropdown(event,'heat-dd-btn')">🌡 Тепловые карты</button>
+    <div class="rooms-dd-panel" id="heat-dd-panel">
+      <span class="fb-group-label" style="font-size:10px;color:#888;display:block;margin-bottom:4px;">Тепловые карты</span>
+      <div style="display:flex;flex-wrap:nowrap;gap:6px;">
+        <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены продажи</button>
+        <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены аренды</button>
+        <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
+      </div>
+      <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
+        <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
+      </div>
+      <div style="font-size:11px;color:#888;margin-top:8px;">Настройки размера гекса и прозрачности — на карте, под кнопками +/−, пока включена тепловая карта.</div>
+    </div>
+  </div>
+
   <button type="button" class="more-filters-btn" onclick="openMoreFilters()">Ещё фильтры ▾</button>
 
   <span id="result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
@@ -185,17 +201,6 @@ html, body { overflow: hidden !important; }
         <option value="">любая</option><option value="черновая">бетон (черновая)</option><option value="с отделкой">с отделкой</option><option value="с мебелью">с мебелью</option>
       </select>
       <span style="font-size:10.5px;color:#aaa;display:block;margin-top:4px;">по тексту объявления — не у всех определена</span></div>
-    <div><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;margin-bottom:6px;">Тепловые карты</label>
-      <div style="display:flex;flex-wrap:nowrap;gap:6px;">
-        <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены продажи</button>
-        <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены аренды</button>
-        <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
-      </div>
-      <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
-        <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
-      </div>
-      <div style="font-size:11px;color:#888;margin-top:8px;">Настройки размера гекса и прозрачности — на карте, под кнопками +/−, пока включена тепловая карта.</div>
-    </div>
     <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;margin-bottom:6px;">Минимальный смарт рейтинг</label>
       <input id="f-score" type="number" min="0" max="100" step="5" onchange="applyFilters()" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
 

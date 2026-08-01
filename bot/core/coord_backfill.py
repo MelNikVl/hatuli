@@ -52,7 +52,7 @@ async def backfill_coords_and_complex(limit: int, min_age_days: float = 3.0) -> 
                OR (COALESCE(is_owner, FALSE) = FALSE AND (seller_name IS NULL OR btrim(seller_name) = ''))
                OR photos IS NULL OR photos::text IN ('[]', 'null')
                OR description IS NULL OR btrim(description) = ''
-               OR floor IS NULL)
+               OR floor IS NULL OR ceiling_height IS NULL)
           AND is_active IS NOT FALSE AND url IS NOT NULL
           AND (coord_fetch_attempted_at IS NULL
                OR coord_fetch_attempted_at < now() - ($2 || ' days')::interval)
