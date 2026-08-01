@@ -405,6 +405,11 @@
   </details>
   {% endif %}
 
+  <details class="tile" open>
+    <summary>🏦 В каких банках можно взять ипотеку</summary>
+    <div id="mortgage-tile-body" style="font-size:13.5px;color:#888;">загрузка…</div>
+  </details>
+
   {% if listing.description %}
   <details class="tile full-width">
     <summary>📝 Описание объявления</summary>
@@ -495,4 +500,42 @@ document.addEventListener('keydown', (e) => {
 }, true);
 </script>
 {% endif %}
+
+<script>
+// В каких банках можно взять ипотеку под это объявление — та же логика
+// подбора, что и в попапе на дашборде (см. matchMortgageBanks в dashboard.html),
+// продублирована здесь: страница объявления отдельный шаблон без общего JS.
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+fetch('/admin/api/mortgage-banks').then(r => r.json()).then(d => {
+  const programs = d.programs || [];
+  const price = {{ (listing.price or 0) | tojson }};
+  const market = {{ (listing.market_type or 'secondary') | tojson }};
+  const byBank = new Map();
+  programs.forEach(p => {
+    if (p.housing_type === 'new' && market !== 'primary') return;
+    if (p.housing_type === 'secondary' && market === 'primary') return;
+    const down = p.down_payment_min_pct || 0;
+    const needed = price * (1 - down / 100);
+    if (p.max_amount_tg && needed > p.max_amount_tg) return;
+    const cur = byBank.get(p.short_name);
+    if (cur === undefined || (p.rate_min != null && (cur == null || p.rate_min < cur))) {
+      byBank.set(p.short_name, p.rate_min);
+    }
+  });
+  const banks = [...byBank.entries()]
+    .sort((a, b) => (a[1] ?? 999) - (b[1] ?? 999))
+    .map(([name, rate]) => ({name, rate: rate != null ? Math.round(rate * 10) / 10 : null}));
+  const body = document.getElementById('mortgage-tile-body');
+  if (!body) return;
+  body.style.color = 'var(--text)';
+  if (!banks.length) { body.textContent = 'Подходящих программ не нашлось.'; return; }
+  body.innerHTML = '<ul style="padding-left:18px;margin:0;line-height:1.8;">' +
+    banks.map(b => `<li>${escapeHtml(b.name)}${b.rate != null ? ' — от ' + b.rate + '%' : ''}</li>`).join('') + '</ul>';
+}).catch(() => {
+  const body = document.getElementById('mortgage-tile-body');
+  if (body) body.textContent = 'Не удалось загрузить.';
+});
+</script>
 {% endblock %}

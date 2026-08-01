@@ -53,15 +53,15 @@ async function toggleFavComplex() {
 </style>
 
 <div class="cx-hero">
-  <div id="cx-card-photo" class="cx-col-card">
+  <div id="cx-card-photo" class="cx-col-card" style="display:flex;flex-direction:column;">
     {% set photos = (cx.photos or ([cx.photo_url] if cx.photo_url else [])) %}
-    <div id="cx-photos-view">
+    <div id="cx-photos-view" style="{{ 'flex:1;min-height:0;display:flex;flex-direction:column;' if photos else '' }}">
       {% if photos %}
-      <div style="display:flex;gap:6px;margin-bottom:10px;">
+      <div style="display:flex;gap:6px;margin-bottom:10px;flex:1;min-height:0;">
         <img id="cx-main-photo" src="{{ photos[0] }}" loading="lazy" onclick="cxOpenLightbox(0)"
-             style="flex:1;min-width:0;height:150px;object-fit:cover;border-radius:8px;cursor:zoom-in;">
+             style="flex:1;min-width:0;height:100%;object-fit:cover;border-radius:8px;cursor:zoom-in;">
         {% if photos|length > 1 %}
-        <div style="display:flex;flex-direction:column;gap:6px;width:56px;flex-shrink:0;overflow-y:auto;max-height:150px;">
+        <div style="display:flex;flex-direction:column;gap:6px;width:56px;flex-shrink:0;overflow-y:auto;height:100%;">
           {% for ph in photos[1:6] %}
           <img src="{{ ph }}" loading="lazy" onclick="cxSetMain({{ loop.index }})"
                style="width:56px;height:42px;object-fit:cover;border-radius:6px;cursor:pointer;flex-shrink:0;">

@@ -377,6 +377,24 @@ def make_extras_router(templates) -> APIRouter:
         cur.close(); db.close()
         return JSONResponse({"resources": resources, "snapshots": snapshots, "media_runs": media_runs})
 
+    @router.get("/admin/api/mortgage-banks")
+    async def mortgage_banks_api(request: Request):
+        """Публичный (карта на главной без логина) список банков/ипотечных
+        программ — для подсказки 'в каких банках можно взять ипотеку' в
+        превью объявления, большом попапе и на странице объявления
+        (analytics_detail.html). Маленькая таблица (десятки строк) — отдаём
+        целиком, подбор подходящих банков под конкретную цену/тип жилья
+        считается на клиенте (см. matchMortgageBanks в dashboard.html)."""
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT b.slug, b.short_name, b.name, b.website, p.housing_type, p.rate_min, p.rate_max,
+                   p.down_payment_min_pct, p.max_amount_tg
+            FROM mortgage_programs p JOIN banks b ON b.id = p.bank_id
+            WHERE p.rate_min IS NOT NULL
+            ORDER BY b.sort_order, p.rate_min
+        """)
+        return JSONResponse({"programs": [dict(r) for r in rows]})
+
     @router.get("/admin/banks", response_class=HTMLResponse)
     async def banks_page(request: Request):
         if not is_authed(request):
@@ -1316,7 +1334,14 @@ def make_extras_router(templates) -> APIRouter:
 
         conds, params, i = [], [], 1
         if rooms:
-            conds.append(f"AND rooms = ${i}"); params.append(int(rooms)); i += 1
+            # UI отдаёт список через запятую при выборе нескольких чекбоксов
+            # комнатности ("1,2") — int(rooms) на такой строке падал с
+            # ValueError, и весь запрос (а с ним и вся карта на этом зуме) молча
+            # переставал отвечать. rooms = ANY(...) работает и для одного, и для
+            # нескольких значений.
+            room_list = [int(x) for x in rooms.split(',') if x.strip().isdigit()]
+            if room_list:
+                conds.append(f"AND rooms = ANY(${i})"); params.append(room_list); i += 1
         if price_min > 0:
             conds.append(f"AND price >= ${i}"); params.append(int(price_min)); i += 1
         if price_max > 0:
@@ -1362,7 +1387,9 @@ def make_extras_router(templates) -> APIRouter:
             # (по объявлениям продажи того же ЖК). Позиция приблизительная.
             conds, params, i = ["1=1"], [], 1
             if rooms:
-                conds.append(f"r.rooms = ${i}"); params.append(int(rooms)); i += 1
+                room_list = [int(x) for x in rooms.split(',') if x.strip().isdigit()]
+                if room_list:
+                    conds.append(f"r.rooms = ANY(${i})"); params.append(room_list); i += 1
             if price_min > 0:
                 conds.append(f"r.price >= ${i}"); params.append(int(price_min)); i += 1
             if area_min > 0:
@@ -1447,7 +1474,9 @@ def make_extras_router(templates) -> APIRouter:
                 "AND COALESCE(is_duplicate, FALSE) = FALSE AND lat IS NOT NULL") or 0
         conds, params, i = [], [], 1
         if rooms:
-            conds.append(f"AND rooms = ${i}"); params.append(int(rooms)); i += 1
+            room_list = [int(x) for x in rooms.split(',') if x.strip().isdigit()]
+            if room_list:
+                conds.append(f"AND rooms = ANY(${i})"); params.append(room_list); i += 1
         if price_min > 0:
             conds.append(f"AND price >= ${i}"); params.append(int(price_min)); i += 1
         if price_max > 0:
@@ -1628,6 +1657,27 @@ def make_extras_router(templates) -> APIRouter:
             }
         return JSONResponse(resp)
 
+    @router.get("/admin/api/heat-points")
+    async def heat_points_api(request: Request):
+        """Компактные точки (lat/lon/price/rooms) ВСЕХ активных объявлений
+        продажи — для тепловой карты цен на дашборде (drawPriceHeat в
+        dashboard.html). Раньше этого эндпоинта не существовало вовсе (фронт
+        ссылался на него, получал 404 → heatCache.sale оставался пустым
+        массивом), из-за чего гексы тепловой карты продажи не рисовались
+        нигде на карте, хотя сами объявления/ЖК были видны."""
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT lat, lon, price, rooms
+            FROM apartment_listings
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+              AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND price > 500000
+        """)
+        return JSONResponse({"points": [{
+            "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "price": r["price"], "rooms": r["rooms"],
+        } for r in rows]})
+
     @router.get("/admin/api/archived-sale-points")
     async def archived_sale_points(request: Request):
         """Последняя цена перед уходом в архив (за последние 180 дней) — для
@@ -1764,14 +1814,21 @@ def make_extras_router(templates) -> APIRouter:
         rows = await fetch("""
             SELECT c.id, c.name, c.developer_id, d.name AS developer_name,
                    c.residents_notes, c.photo_url, c.photos, c.avg_price_m2,
-                   c.housing_class, c.year_built, c.korter_url,
+                   c.housing_class, c.year_built, c.korter_url, c.source_info,
+                   c.has_parking, c.has_closed_territory, c.has_security,
+                   ts.construction_type, ts.facade_type, ts.lifts_brand,
+                   ts.ceiling_height_min,
                    COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE
-                       AND COALESCE(a.is_duplicate, FALSE) = FALSE) AS active_cnt
+                       AND COALESCE(a.is_duplicate, FALSE) = FALSE) AS active_cnt,
+                   COUNT(a2.id) AS ever_cnt
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
+            LEFT JOIN complex_tech_specs ts ON ts.complex_id = c.id
             LEFT JOIN apartment_listings a ON lower(trim(a.complex_name)) = lower(trim(c.name))
+                AND a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
+            LEFT JOIN apartment_listings a2 ON lower(trim(a2.complex_name)) = lower(trim(c.name))
             WHERE COALESCE(c.is_street, FALSE) = FALSE
-            GROUP BY c.id, d.name
+            GROUP BY c.id, d.name, ts.construction_type, ts.facade_type, ts.lifts_brand, ts.ceiling_height_min
             ORDER BY active_cnt DESC
             LIMIT $1
         """, limit)
@@ -1788,11 +1845,38 @@ def make_extras_router(templates) -> APIRouter:
                 "has_class": bool(d["housing_class"]),
                 "has_year": bool(d["year_built"]),
                 "has_korter": bool(d["korter_url"]),
+                # Признаки для скоринга класса ЖК (см. Notion "Класс жилья") —
+                # конструктив/фасад/лифты/потолки живут в complex_tech_specs
+                # (сейчас почти всегда пусто — таблица создана заранее, но
+                # источника заполнения ещё нет), закрытость/охрана/паркинг —
+                # булевы поля прямо в complexes.
+                "has_construction": bool(d["construction_type"]),
+                "has_facade": bool(d["facade_type"]),
+                "has_lifts": bool(d["lifts_brand"]),
+                "has_ceiling": bool(d["ceiling_height_min"]),
+                "has_security_data": d["has_parking"] is not None or d["has_closed_territory"] is not None or d["has_security"] is not None,
+                # Никогда не привязано ни одного объявления (ни активного, ни
+                # архивного) — кандидат на чистку/дубликат/мусорную запись.
+                "orphan": d["ever_cnt"] == 0,
+                "has_origin": bool(d["korter_url"] or d["source_info"]),
             })
         total_cx = await fetch("SELECT COUNT(*) AS n FROM complexes WHERE COALESCE(is_street, FALSE) = FALSE")
+        orphan_cx = await fetch("""
+            SELECT COUNT(*) AS n FROM complexes c
+            WHERE COALESCE(c.is_street, FALSE) = FALSE
+              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE lower(trim(a.complex_name)) = lower(trim(c.name)))
+        """)
+        orphan_no_origin = await fetch("""
+            SELECT COUNT(*) AS n FROM complexes c
+            WHERE COALESCE(c.is_street, FALSE) = FALSE
+              AND c.korter_url IS NULL AND c.source_info IS NULL
+              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE lower(trim(a.complex_name)) = lower(trim(c.name)))
+        """)
         return templates.TemplateResponse("complexes_audit.html", {
             "request": request, "rows": out, "limit": limit,
             "total_cx": total_cx[0]["n"] if total_cx else 0,
+            "orphan_cx": orphan_cx[0]["n"] if orphan_cx else 0,
+            "orphan_no_origin": orphan_no_origin[0]["n"] if orphan_no_origin else 0,
         })
 
     @router.get("/admin/complex/{complex_id}", response_class=HTMLResponse)
@@ -2332,6 +2416,7 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({
             "id": l["id"], "url": l.get("url") or "",
             "price": l.get("price"), "rooms": l.get("rooms"),
+            "market": l.get("market_type") or "secondary",
             "area": float(l["area"]) if l.get("area") else None,
             "floor": l.get("floor"), "floors_total": l.get("floors_total"),
             "address": l.get("address") or "", "district": l.get("district") or "",

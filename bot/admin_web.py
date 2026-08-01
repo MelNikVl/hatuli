@@ -34,6 +34,85 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     def is_authed(request: Request) -> bool:
         return request.cookies.get("admin_auth") == "1"
 
+    # ── SEO/AI-краулеры: robots.txt/sitemap.xml/llms.txt на самом ────────────
+    # приложении. Cloudflare перед ним отдаёт свой собственный managed
+    # robots.txt (Content-Signal блок), который блокирует GPTBot/ClaudeBot/
+    # Google-Extended/CCBot и др. по умолчанию — эти файлы на origin ничего
+    # не решают, пока в Cloudflare (Security → Bots → AI Bots / Content
+    # Signals) не разрешат нужных ботов вручную. См. заметку в чате.
+    from fastapi.responses import PlainTextResponse, Response as _Response
+
+    @app.get("/robots.txt", response_class=PlainTextResponse)
+    async def robots_txt():
+        return PlainTextResponse(
+            "User-agent: *\n"
+            "Allow: /\n\n"
+            "User-agent: GPTBot\nAllow: /\n\n"
+            "User-agent: OAI-SearchBot\nAllow: /\n\n"
+            "User-agent: ChatGPT-User\nAllow: /\n\n"
+            "User-agent: ClaudeBot\nAllow: /\n\n"
+            "User-agent: Claude-SearchBot\nAllow: /\n\n"
+            "User-agent: Claude-User\nAllow: /\n\n"
+            "User-agent: PerplexityBot\nAllow: /\n\n"
+            "User-agent: Google-Extended\nAllow: /\n\n"
+            "User-agent: Applebot-Extended\nAllow: /\n\n"
+            "User-agent: Yandex\nAllow: /\n\n"
+            "Disallow: /admin/login\n"
+            "Disallow: /admin/api/\n"
+            "Disallow: /cabinet\n\n"
+            "Sitemap: https://hatuli.ai-groundtruth.com/sitemap.xml\n"
+        )
+
+    @app.get("/llms.txt", response_class=PlainTextResponse)
+    async def llms_txt():
+        return PlainTextResponse(
+            "# Hatuli\n\n"
+            "> Карта квартир Астаны: продажа и аренда, тепловые карты цен/шума/"
+            "транспортной доступности, рейтинг жилых комплексов, оценка справедливой "
+            "цены и торга по объявлению.\n\n"
+            "## Ключевые страницы\n"
+            "- [Карта квартир](https://hatuli.ai-groundtruth.com/admin): все активные объявления продажи и аренды в Астане с фильтрами и тепловыми картами\n"
+            "- [Жилые комплексы](https://hatuli.ai-groundtruth.com/admin/complexes): рейтинг ЖК Астаны по цене, застройщику, инфраструктуре\n"
+            "- [Застройщики](https://hatuli.ai-groundtruth.com/admin/developers): список застройщиков и их проектов\n"
+            "- [Инфо](https://hatuli.ai-groundtruth.com/admin/info): методология скоринга и расчётов\n"
+        )
+
+    @app.get("/sitemap.xml")
+    async def sitemap_xml():
+        from bot.db.pg import fetch as pg_fetch
+        urls = [
+            ("https://hatuli.ai-groundtruth.com/admin", "hourly", "1.0"),
+            ("https://hatuli.ai-groundtruth.com/admin/complexes", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/admin/developers", "weekly", "0.6"),
+            ("https://hatuli.ai-groundtruth.com/admin/info", "monthly", "0.4"),
+        ]
+        # Топ-2000 ЖК по активным объявлениям — полный список (2500+) в один
+        # sitemap не кладём (мягкий лимит поисковиков — 50k URL, но страницы
+        # без единого объявления малоценны для индексации).
+        rows = await pg_fetch("""
+            SELECT c.id, c.updated_at,
+                   COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE) AS active_cnt
+            FROM complexes c
+            LEFT JOIN apartment_listings a ON lower(trim(a.complex_name)) = lower(trim(c.name))
+            WHERE COALESCE(c.is_street, FALSE) = FALSE
+            GROUP BY c.id
+            HAVING COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE) > 0
+            ORDER BY active_cnt DESC
+            LIMIT 2000
+        """)
+        body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+        for loc, freq, prio in urls:
+            body.append(f"<url><loc>{loc}</loc><changefreq>{freq}</changefreq><priority>{prio}</priority></url>")
+        for r in rows:
+            lastmod = r["updated_at"].strftime("%Y-%m-%d") if r["updated_at"] else ""
+            body.append(
+                f"<url><loc>https://hatuli.ai-groundtruth.com/admin/complex/{r['id']}</loc>"
+                f"{'<lastmod>' + lastmod + '</lastmod>' if lastmod else ''}"
+                f"<changefreq>weekly</changefreq><priority>0.7</priority></url>"
+            )
+        body.append("</urlset>")
+        return _Response("\n".join(body), media_type="application/xml")
+
     @app.get("/admin/login", response_class=HTMLResponse)
     async def admin_login_page(request: Request):
         return templates.TemplateResponse("login.html", {"request": request, "error": None})

@@ -19,7 +19,7 @@
   </div>
   <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#888;">
     <span>далеко</span>
-    <span style="width:140px;height:12px;border-radius:6px;background:linear-gradient(90deg,#bfdbfe,#60a5fa,#2563eb,#1e3a8a);display:inline-block;"></span>
+    <span style="width:140px;height:12px;border-radius:6px;background:linear-gradient(90deg,#d1d5db,#93c5fd,#3b82f6,#1e3a8a);display:inline-block;"></span>
     <span>рядом</span>
   </div>
   <span id="tr-result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
@@ -50,8 +50,12 @@ const TR_EDGE = 100, TR_LAT0 = 51.128, TR_LON0 = 71.430,
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+// Плохая доступность (t~0) — серый (нейтрально плохо, не "тревожный" цвет),
+// хорошая (t~1) — насыщенный синий. Раньше вся шкала была в синих тонах
+// (от бледно-голубого до тёмно-синего) — плохие места было не отличить от
+// просто "не самых лучших" с первого взгляда.
 function trColor(t) {
-  const c = [[191,219,254],[96,165,250],[37,99,235],[30,58,138]];
+  const c = [[209,213,219],[147,197,253],[59,130,246],[30,58,138]];
   const x = Math.max(0, Math.min(1, t));
   const i = Math.min(3, Math.floor(x * 4));
   const f = x * 4 - i;

@@ -6,9 +6,18 @@
   <small style="font-size:13px;color:#888;font-weight:400;">показано {{ rows|length }} из {{ total_cx }} ЖК, по числу активных объявлений</small>
 </div>
 <p style="font-size:13px;color:#888;max-width:900px;margin-bottom:14px;">
-  Где что удалось вытащить (застройщик, описание, фото, цена/м², класс, год постройки) — чтобы разбираться точечно,
+  Где что удалось вытащить (застройщик, описание, фото, цена/м², класс, год постройки, признаки для определения класса жилья) — чтобы разбираться точечно,
   а не искать пробелы вручную по каждому ЖК. ✅ — данные есть, ✕ — нет.
 </p>
+<div style="font-size:13px;max-width:900px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  <b style="color:var(--text);">⚠️ {{ orphan_cx }} из {{ total_cx }} ЖК ни разу не привязано ни к одному объявлению</b> (ни активному, ни архивному) —
+  это и есть основная причина, почему в базе ~{{ total_cx }} ЖК. Из них у <b>{{ orphan_no_origin }}</b> нет ни korter_url, ни source_info,
+  т.е. непонятно, откуда они вообще взялись. На выборке имена таких записей — обрубленные фрагменты описаний объявлений
+  (например «Next One Год Постройки 2027 Пл», «Alem Sana Год Постройки 2026 П») — похоже на баг в старой логике
+  автоматического извлечения названия ЖК из текста объявления, обрезанной на ~30 символах. Настоящих совпадений с
+  актуальными объявлениями у них нет и никогда не было — кандидаты на удаление, но перед массовой чисткой стоит
+  подтвердить у пользователя, т.к. это необратимо.
+</div>
 <style>
 .aud-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .aud-table th { text-align: left; color: #888; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 11.5px; text-transform: uppercase; position: sticky; top: 0; background: var(--surface); }
@@ -23,9 +32,11 @@
   <tr>
     <th>ЖК</th><th>Активных объявл.</th><th>Застройщик</th><th>Описание</th>
     <th>Фото</th><th>Цена/м²</th><th>Класс жилья</th><th>Год постройки</th><th>Korter</th>
+    <th>Конструктив</th><th>Фасад</th><th>Лифты</th><th>Потолки</th><th>Охрана/паркинг</th>
+    <th>Ни разу не привязан</th>
   </tr>
   {% for r in rows %}
-  <tr>
+  <tr{{ ' style="background:#fef2f2;"' | safe if r.orphan and not r.has_origin }}>
     <td><a href="/admin/complex/{{ r.id }}" style="color:inherit;font-weight:600;">{{ r.name }}</a></td>
     <td>{{ r.active_cnt }}</td>
     <td class="{{ 'aud-ok' if r.has_developer else 'aud-no' }}">{{ '✅ ' + r.developer_name if r.has_developer else '✕' }}</td>
@@ -35,6 +46,12 @@
     <td class="{{ 'aud-ok' if r.has_class else 'aud-no' }}">{{ '✅' if r.has_class else '✕' }}</td>
     <td class="{{ 'aud-ok' if r.has_year else 'aud-no' }}">{{ '✅' if r.has_year else '✕' }}</td>
     <td class="{{ 'aud-ok' if r.has_korter else 'aud-no' }}">{{ '✅' if r.has_korter else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_construction else 'aud-no' }}">{{ '✅' if r.has_construction else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_facade else 'aud-no' }}">{{ '✅' if r.has_facade else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_lifts else 'aud-no' }}">{{ '✅' if r.has_lifts else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_ceiling else 'aud-no' }}">{{ '✅' if r.has_ceiling else '✕' }}</td>
+    <td class="{{ 'aud-ok' if r.has_security_data else 'aud-no' }}">{{ '✅' if r.has_security_data else '✕' }}</td>
+    <td class="{{ 'aud-no' if r.orphan else 'aud-ok' }}">{{ '⚠️ да' if r.orphan else '' }}</td>
   </tr>
   {% endfor %}
 </table>

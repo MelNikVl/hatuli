@@ -157,6 +157,7 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены продажи</button>
         <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены аренды</button>
         <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
+        <button type="button" class="heat-btn" data-mode="transport" onclick="toggleHeat('transport')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Транспортная доступность</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
         <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
@@ -280,6 +281,94 @@ function closeMoreFilters() { document.getElementById('more-filters-overlay').st
 <script>
 const IS_ADMIN = {{ 'true' if admin else 'false' }};
 const POPUP_WIDTH = {{ popup_width | default(380) }};
+
+// ── Ипотека: какие банки подходят под конкретное объявление ───────────────
+// Список программ маленький (десятки строк) — грузим один раз на всю
+// сессию и подбираем подходящие банки на клиенте под цену/тип жилья
+// конкретного объявления, вместо отдельного запроса на объявление.
+let MORTGAGE_PROGRAMS = null;
+let mortgagePromise = null;
+function loadMortgagePrograms() {
+  if (mortgagePromise) return mortgagePromise;
+  mortgagePromise = fetch('/admin/api/mortgage-banks').then(r => r.json()).then(d => {
+    MORTGAGE_PROGRAMS = d.programs || [];
+    return MORTGAGE_PROGRAMS;
+  }).catch(() => { MORTGAGE_PROGRAMS = []; return MORTGAGE_PROGRAMS; });
+  return mortgagePromise;
+}
+// Возвращает подходящие банки (лучшая ставка на банк), отсортированные по
+// ставке — housing_type программы: 'new' (первичка), 'secondary' (вторичка),
+// 'both' (любое). Предодобрение не проверяем — только тип жилья и потолок
+// суммы кредита (с учётом минимального ПВ программы).
+function bankHostname(website) {
+  try { return new URL(website).hostname; } catch (e) { return null; }
+}
+// Иконка банка — фавикон с офиц. сайта (через сервис Google, без хранения
+// логотипов у себя); домен уже есть в banks.website.
+function bankIconHtml(website, size) {
+  const host = bankHostname(website);
+  if (!host) return '';
+  size = size || 18;
+  return `<img src="https://www.google.com/s2/favicons?domain=${host}&sz=${size * 2}" width="${size}" height="${size}" style="border-radius:4px;vertical-align:-3px;margin-right:4px;flex-shrink:0;" onerror="this.style.display='none'">`;
+}
+function matchMortgageBanks(price, market) {
+  if (!MORTGAGE_PROGRAMS || !price) return [];
+  const byBank = new Map();
+  MORTGAGE_PROGRAMS.forEach(p => {
+    if (p.housing_type === 'new' && market !== 'primary') return;
+    if (p.housing_type === 'secondary' && market === 'primary') return;
+    const down = p.down_payment_min_pct || 0;
+    const needed = price * (1 - down / 100);
+    if (p.max_amount_tg && needed > p.max_amount_tg) return;
+    const cur = byBank.get(p.short_name);
+    if (cur === undefined || (p.rate_min != null && (cur.rate == null || p.rate_min < cur.rate))) {
+      byBank.set(p.short_name, {rate: p.rate_min, website: p.website});
+    }
+  });
+  return [...byBank.entries()]
+    .sort((a, b) => (a[1].rate ?? 999) - (b[1].rate ?? 999))
+    // rate_min — real4 в БД, у части значений (напр. 21.7) бинарное
+    // округление даёт "21.700000762939453" при выводе — округляем до 1 знака.
+    .map(([name, v]) => ({name, website: v.website, rate: v.rate != null ? Math.round(v.rate * 10) / 10 : null}));
+}
+function mortgageLineHtml(price, market, id, max) {
+  const banks = matchMortgageBanks(price, market);
+  if (!banks.length) return '';
+  max = max || 2;
+  const shown = banks.slice(0, max)
+    .map(b => `${bankIconHtml(b.website, 15)}${escapeHtml(b.name)}${b.rate != null ? ' от ' + b.rate + '%' : ''}`).join(' &nbsp;·&nbsp; ');
+  const restN = banks.length - max;
+  const more = restN > 0
+    ? ` &nbsp;<a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;text-decoration:none;">посмотреть ещё ${restN} вариант${restN === 1 ? '' : (restN < 5 ? 'а' : 'ов')}</a>`
+    : '';
+  return `<div style="font-size:12.5px;margin-top:6px;font-weight:700;">Ипотека: ${shown}${more}</div>`;
+}
+// Большой попап: 2 лучших банка крупно + компактный список ещё нескольких
+// рядом (см. хэнд-драйв мокап пользователя — 2 больших блока + колонка 3-7).
+function mortgageModalBlockHtml(price, market, id) {
+  const banks = matchMortgageBanks(price, market);
+  if (!banks.length) return '';
+  const top2 = banks.slice(0, 2);
+  const rest = banks.slice(2, 7);
+  const top2Html = top2.map(b => `
+    <div style="flex:1;min-width:140px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;">
+      <div style="display:flex;align-items:center;gap:6px;font-weight:800;font-size:14.5px;">${bankIconHtml(b.website, 22)}${escapeHtml(b.name)}</div>
+      <div style="font-size:13px;color:#16a34a;font-weight:700;margin-top:4px;">${b.rate != null ? 'от ' + b.rate + '%' : 'ставка по запросу'}</div>
+    </div>`).join('');
+  const restHtml = rest.length ? `
+    <div style="flex:1;min-width:160px;display:flex;flex-direction:column;gap:6px;">
+      ${rest.map(b => `<div style="display:flex;align-items:center;gap:6px;font-size:13px;padding:5px 8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;">${bankIconHtml(b.website, 16)}<span style="flex:1;">${escapeHtml(b.name)}</span>${b.rate != null ? `<b style="color:#16a34a;">от ${b.rate}%</b>` : ''}</div>`).join('')}
+    </div>` : '';
+  const restN = banks.length - top2.length - rest.length;
+  const moreLink = restN > 0 ? `<div style="margin-top:8px;"><a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;font-size:13px;text-decoration:none;">посмотреть ещё ${restN} вариант${restN === 1 ? '' : (restN < 5 ? 'а' : 'ов')} →</a></div>` : '';
+  return `
+<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
+  <div style="font-size:14px;font-weight:800;margin-bottom:10px;">Ипотека: в каких банках можно взять</div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">${top2Html}${restHtml}</div>
+  ${moreLink}
+</div>`;
+}
+loadMortgagePrograms();
 // Реестр маркеров по id объявления — для дедупликации при инкрементальной
 // подгрузке (см. renderSaleBatch) и для сборки списка id внутри кластера.
 // Кэш ответов /admin/api/map-points* по точной строке запроса — если
@@ -524,10 +613,13 @@ const MapButtons = L.Control.extend({
       <div style="display:flex;gap:8px;white-space:nowrap;">
         <button id="btn-schools" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;display:inline-flex;align-items:center;padding:0 11px;border:1.5px solid #2563eb;border-radius:13px;background:#fff;color:#2563eb;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">Школы и садики</button>
         <button id="btn-draw" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;display:inline-flex;align-items:center;padding:0 11px;border:1.5px solid #2563eb;border-radius:13px;background:#fff;color:#2563eb;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">Нарисовать область</button>
-        <button id="btn-draw-clear" type="button" style="display:none;flex-shrink:0;white-space:nowrap;height:26px;align-items:center;padding:0 11px;border:none;border-radius:13px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕ Убрать все области</button>
+        <button id="btn-draw-clear" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;align-items:center;padding:0 11px;border:none;border-radius:13px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕ Убрать все области</button>
         <button id="btn-ruler" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;display:inline-flex;align-items:center;padding:0 11px;border:1.5px solid #2563eb;border-radius:13px;background:#fff;color:#2563eb;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">Линейка</button>
-        <button id="btn-ruler-clear" type="button" style="display:none;flex-shrink:0;white-space:nowrap;height:26px;align-items:center;padding:0 11px;border:none;border-radius:13px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕ Убрать линейку</button>
-        <style>#btn-draw-clear, #btn-ruler-clear { display: none; } #btn-draw-clear.shown, #btn-ruler-clear.shown { display: inline-flex; }</style>
+        <button id="btn-ruler-clear" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;align-items:center;padding:0 11px;border:none;border-radius:13px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕ Убрать линейку</button>
+        <!-- display управляется ТОЛЬКО классом .shown (не инлайн-style — тот
+             перебивает CSS-класс независимо от специфичности, кнопка держалась
+             невидимой даже когда classList.toggle('shown', true) срабатывал). -->
+        <style>#btn-draw-clear, #btn-ruler-clear { display: none !important; } #btn-draw-clear.shown, #btn-ruler-clear.shown { display: inline-flex !important; }</style>
       </div>
       <div id="map-load-bar-wrap" style="display:none;align-items:center;gap:6px;">
         <div style="flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.6);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.25);"><div id="map-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div></div>
@@ -721,11 +813,17 @@ function loadLiteCluster(paramsObj) {
   liteCluster.clearLayers();
   const lp = new URLSearchParams(paramsObj);
   return cachedFetchJson('/admin/api/map-points-lite?' + lp.toString()).then(d => {
-    (d.points || []).forEach(([lat, lon]) => {
+    // На отдалённом виде (zoom < ZOOM_GATE) это единственный слой, который
+    // реально рисуется — если не отфильтровать здесь по нарисованной области
+    // (как это уже делают renderSaleBatch/drawComplexLayer), нарисованная
+    // область молча игнорируется и карта показывает весь город.
+    let pts = d.points || [];
+    if (drawnPolygons.length) pts = pts.filter(([lat, lon]) => pointInAnyDrawnPolygon(lat, lon));
+    pts.forEach(([lat, lon]) => {
       L.marker([lat, lon], {icon: L.divIcon({className:'', iconSize:[1,1]})}).addTo(liteCluster);
     });
     if (!map.hasLayer(liteCluster)) liteCluster.addTo(map);
-    return (d.points || []).length;
+    return pts.length;
   }).catch(() => 0);
 }
 const SMALL_CLUSTER_MAX = 5;  // кластеры до 5 меток — кружок с числом, клик открывает все сразу в панели справа (см. #26)
@@ -1360,6 +1458,9 @@ function renderSaleBatch(d) {
       const cxLine = pt.complex
         ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
         : (devTxt ? `<div style="font-size:13px;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : '');
+      // Банки, где можно взять ипотеку под это объявление — над строкой ЖК,
+      // топ-2 по ставке (полный список — на странице объявления/Аналитика).
+      const bankLine = mortgageLineHtml(pt.price, pt.market, pt.id, 2);
       const descId = 'desc-' + pt.id;
       const descHtml = pt.description ? `
 <div style="font-size:12.5px;color:#555;margin-top:6px;">
@@ -1403,18 +1504,15 @@ function renderSaleBatch(d) {
   </div>
   <div id="info-${pt.id}" style="font-size:12.5px;color:#555;margin-top:4px;"></div>
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
-  <div style="font-size:12.5px;margin-top:3px;">Смарт рейтинг: <a href="/admin/analytics/${pt.id}" onclick="event.stopPropagation()" title="${scoreExplainText(pt.score_bd)}" style="color:${sc};font-weight:800;text-decoration:none;border-bottom:1px dashed ${sc};">${pt.score}</a> ${scoreInfoIcon('smart-' + pt.id)}<span id="dealscore-${pt.id}"></span>
-    <div id="scx-smart-${pt.id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:12.5px;line-height:1.4;color:#444;">Смарт рейтинг = Deal Score (см. ниже) + бонусы: зона приоритета, доп. слои данных, недавнее снижение цены. Полная раскладка — по клику на число или на вкладке ❤️ Скор в Инфо.</div>
-  </div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
   ${(priceTrend || pt.views) ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend ? priceTrend.replace(/^ · /, '') : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>` : ''}
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
+  ${bankLine}
   ${cxLine}
   ${descHtml}
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
     ${!(pt.photos && pt.photos.length) ? `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" style="flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:34px;background:#f3f4f6;color:#ccc;font-size:18px;line-height:1;border-radius:7px;cursor:pointer;">☆</span>` : ''}
     <a href="javascript:void(0)" onclick="openDetailModal('${pt.id}', event)" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Подробнее</a>
-    <a href="/admin/analytics/${pt.id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Аналитика</a>
     <a href="${pt.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;line-height:1;border-radius:7px;text-decoration:none;white-space:nowrap;">Крыша</a>
   </div>
   </div>
@@ -1561,26 +1659,15 @@ function loadListingExtras(id) {
       const targetM = (b.target_price/1e6).toFixed(1);
       const methodTxt = {'hex+ring+class': 'гексагон+соседние, тот же класс ЖК', 'hex+ring': 'гексагон+соседние',
         'city_segment': 'по городу (мало аналогов рядом)', 'district_fallback': 'по району (нет координат)'}[b.method] || 'аналоги рядом';
-      const explain = `Медиана по ${b.comparables_cnt} похожим объявлениям (${methodTxt}, комнаты/площадь ±15%): ${medianM} млн ₸, ваша цена: ${priceM} млн ₸. ${b.recommendation || ''}`;
-      // клик, а не наведение — надёжно работает и на тач-экранах
+      // Раньше был раскрывающийся "?" с объяснением прямо в карточке —
+      // вместе с ним убрали Смарт рейтинг/Deal Score из превью (просили
+      // короче), поэтому объяснение теперь только на странице объявления.
       el.innerHTML = `<div>
         <span style="color:#16a34a;font-weight:800;white-space:nowrap;">реальная цена ${targetM} млн ₸</span>
-        <span onclick="toggleBargainExplain('${id}', event)" style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:#e5e7eb;color:#555;font-size:12px;font-weight:800;cursor:pointer;">?</span>
-        <div id="bgx-${id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:13.5px;line-height:1.4;color:#444;">${escapeHtml(explain)}</div>
+        <a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#555;font-size:11.5px;font-weight:700;text-decoration:none;">почему?</a>
       </div>`;
     } else {
       el.innerHTML = '';
-    }
-
-    // Deal Score: гексагональный индекс микрорынка (см. вкладку Скор в Инфо)
-    const dsEl = document.getElementById('dealscore-' + id);
-    if (dsEl && d.deal_score && d.deal_score.deal != null) {
-      const dsExplain = 'Deal Score 0-100 = взвешенная сумма 5 факторов: Цена vs локальный рынок (40%), '
-        + 'Локация+инфраструктура (20%), Качество ЖК: класс/год/рейтинг (20%), '
-        + 'Доходность+ликвидность (15%), Риск: этаж/риелтор (5%). '
-        + 'Уверенность — какая доля факторов посчитана на реальных данных (а не на дефолте), а не риск сделки.';
-      dsEl.innerHTML = ` · Deal Score <b>${d.deal_score.deal}/100</b> <span style="color:#888;">· уверенность ${d.deal_score.confidence}%</span> ${scoreInfoIcon('deal-' + id)}
-        <div id="scx-deal-${id}" style="display:none;margin-top:4px;padding:6px 8px;background:#f3f4f6;border-radius:6px;font-size:12.5px;line-height:1.4;color:#444;">${escapeHtml(dsExplain)}</div>`;
     }
 
   }).catch(() => { el.innerHTML = ''; });
@@ -1619,8 +1706,13 @@ function drawHexPriceMini(divId, cells, valueField, fmt) {
     poly.addTo(hmap);
     c.corners.forEach(p => bounds.push(p));
   });
-  hmap.fitBounds(bounds, {padding:[2,2]});
-  setTimeout(() => hmap.invalidateSize(), 50);
+  // invalidateSize() ДО fitBounds() — контейнер может ещё не иметь реального
+  // размера в момент L.map() (например второй из двух соседних flex-блоков
+  // "продажа рядом"/"аренда рядом" в попапе объявления, который получает
+  // расчётную ширину на кадр позже первого); fitBounds на нулевом контейнере
+  // считает границы неверно и гексы уезжают за пределы видимой области —
+  // выглядит как "не работает", хотя данные загрузились.
+  setTimeout(() => { hmap.invalidateSize(); hmap.fitBounds(bounds, {padding:[2,2]}); }, 50);
 }
 function loadHexPriceMini(id, lat, lon, rooms) {
   const wrap = document.getElementById('hexwrap-' + id);
@@ -1687,7 +1779,8 @@ let HEAT_EDGE_M = 60;  // синхронизирован с дефолтом п�
 let NOISE_EDGE_M = 60;  // раньше был фиксирован отдельно (30м) — теперь все гексы тепловых карт (цены/аренда/шум, фон и детальный слой) одного размера, из общего ползунка "сторона гекса"
 const heatLayer = L.layerGroup();
 let heatMode = null;
-let heatCache = {sale: null, rental: null, noise: null};
+let heatCache = {sale: null, rental: null, noise: null, transport: null};
+let noiseDefaultsApplied = false;  // гекс 40м / прозрачность 50% при первом включении шума за сессию
 // Детальный слой шума (30м, по фактическим точкам дорог) при ~39к точек по
 // городу даёт под 100к+ отдельных гексов, если рисовать их все разом — это
 // и было главной причиной "тормозит при включении шума". Показываем его
@@ -1727,6 +1820,37 @@ function heatColor(t) {
   const from = HEAT_STOPS[i], to = HEAT_STOPS[i + 1];
   const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+// Транспортная доступность — отдельная шкала от цены/шума: плохо (t~0) —
+// нейтральный серый, хорошо (t~1) — синий (см. /admin/analytics/transport,
+// та же палитра). Гексы приходят уже готовые с сервера (100м, transport_hexes),
+// без пересчёта через hexBucket — рисуем сеткой lat/lon-центр + свои углы.
+const TRANSPORT_STOPS = [[209,213,219],[147,197,253],[59,130,246],[30,58,138]];
+function transportColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = TRANSPORT_STOPS.length - 1;
+  const pos = t * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const frac = pos - i;
+  const from = TRANSPORT_STOPS[i], to = TRANSPORT_STOPS[i + 1];
+  const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function transportHexCorners(lat, lon, edge) {
+  const pts = [];
+  for (let i = 0; i < 6; i++) {
+    const ang = Math.PI / 180 * (60 * i - 30);
+    pts.push([lat + edge * Math.sin(ang) / MLAT, lon + edge * Math.cos(ang) / MLON]);
+  }
+  return pts;
+}
+function drawTransportHeat(hexes) {
+  (hexes || []).forEach(h => {
+    L.polygon(transportHexCorners(h.lat, h.lon, 100), {
+      color: 'transparent', weight: 0, fillColor: transportColor(h.score), fillOpacity: 0.4,
+    }).bindTooltip(`доступность ${h.score.toFixed(2)} · ЛРТ ${Math.round(h.dist_lrt)} м · автобус ${Math.round(h.dist_bus)} м`, {sticky:true}).addTo(heatLayer);
+  });
 }
 
 function hexBucket(items, latLonFn, edge) {
@@ -2050,6 +2174,9 @@ async function loadHeatData(mode) {
     // (~39к точек — именованные ключи в каждой раздували ответ вдвое), разворачиваем
     // обратно в объекты один раз здесь, а не переписываем все функции ниже под индексы.
     heatCache.noise = (d.roads || []).map(r => ({lat: r[0], lon: r[1], lanes: r[2], highway: r[3]}));
+  } else if (mode === 'transport') {
+    const d = await fetch('/admin/api/transport-hexes').then(r => r.json());
+    heatCache.transport = d.hexes || [];
   }
   return heatCache[mode];
 }
@@ -2077,6 +2204,20 @@ async function toggleHeat(mode) {
   map.removeLayer(fineNoiseLayer);
   fineNoiseLayer.clearLayers();
   heatMode = mode;
+  // Внешний шум по умолчанию — гекс 40м и максимальная прозрачность (50%,
+  // потолок ползунка), в отличие от цен/аренды (60м/40%) — мелкий шум
+  // сильнее размазывается по соседним домам, крупный гекс его прячет.
+  // Применяем один раз при первом включении шума за сессию, не трогаем
+  // ползунки повторно, если пользователь уже сам их подвинул.
+  const applyingNoiseDefaults = mode === 'noise' && !noiseDefaultsApplied;
+  if (applyingNoiseDefaults) {
+    noiseDefaultsApplied = true;
+    const edgeInput = document.getElementById('f-heat-edge'), edgeVal = document.getElementById('f-heat-edge-val');
+    const opInput = document.getElementById('f-heat-opacity'), opVal = document.getElementById('f-heat-opacity-val');
+    if (edgeInput) { edgeInput.value = 40; if (edgeVal) edgeVal.textContent = '40'; }
+    if (opInput) { opInput.value = 50; if (opVal) opVal.textContent = '50'; }
+    HEAT_EDGE_M = 40; NOISE_BG_EDGE_M = 40; NOISE_EDGE_M = 40;
+  }
   heatLayer.clearLayers();
   if (!map.hasLayer(heatLayer)) heatLayer.addTo(map);
   const barWrap = document.getElementById('heat-load-bar-wrap');
@@ -2100,6 +2241,7 @@ async function toggleHeat(mode) {
     drawRoadHeatBackground(data);
     if (!map.hasLayer(fineNoiseLayer)) fineNoiseLayer.addTo(map);
     drawRoadHeat(data);
+    if (applyingNoiseDefaults) setHeatOpacity(50);
     // Догружаем/чистим детальный слой при панорамировании/зуме, пока режим
     // шума активен — debounce, чтобы не пересчитывать на каждый пиксель драга.
     let t;
@@ -2109,6 +2251,8 @@ async function toggleHeat(mode) {
       drawRoadHeat(heatCache.noise);
     }, 200); };
     map.on('moveend zoomend', noiseViewHandler);
+  } else if (mode === 'transport') {
+    drawTransportHeat(data);
   }
 }
 
@@ -2311,6 +2455,7 @@ ${(d.seller_questions && d.seller_questions.length) ? `
   <ul style="font-size:13.5px;line-height:1.7;padding-left:18px;margin:0;">${d.seller_questions.map(q => `<li>${escapeHtml(q)}</li>`).join('')}</ul>
 </div>` : ''}
 ${nearbyHtml}
+${mortgageModalBlockHtml(d.price, d.market, id)}
 <div id="hexwrap-modal" style="padding:18px 22px 0;"></div>
 <div style="margin:18px 22px 0;">
   <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">Карта района</div>
