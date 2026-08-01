@@ -3,7 +3,7 @@
 <div class="page-title">🏢 Жилой Комплекс {{ cx.name }}
   <span id="cx-fav-star" onclick="toggleFavComplex()" title="В избранное — уведомления в Telegram об изменениях в ЖК" style="cursor:pointer;font-size:22px;vertical-align:middle;color:#ccc;user-select:none;">☆</span>
   {% if developer %}<small style="font-size:14px;font-weight:800;">· 🏗 Застройщик {% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer }}</span>{% endif %}</small>{% endif %}
-  <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% endif %}</small></div>
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% elif cx.housing_class_estimate %} · {{ cx.housing_class_estimate }}{% endif %}</small></div>
 <script>
 (async function() {
   const star = document.getElementById('cx-fav-star');
@@ -140,7 +140,7 @@ async function toggleFavComplex() {
     <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">
       <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx.address or cx_address or 'не определён' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer or '—' }}</span>{% endif %}</b></td></tr>
-      <tr><td style="padding:5px 14px 5px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b>{% if not cx.housing_class and cx.housing_class_estimate %} <span style="color:#888;font-weight:400;font-size:12.5px;" title="Автоматическая оценка по медианной высоте потолков и цене/м² объявлений в ЖК относительно города — не официальная классификация, см. критерии в Инфо">{{ cx.housing_class_estimate }} ⓘ</span>{% endif %}</td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Год постройки/сдачи</td><td><b>{{ cx.year_built or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Район</td><td><b>{{ cx.district or '—' }}</b></td></tr>
       {% if cx_sources.krisha %}

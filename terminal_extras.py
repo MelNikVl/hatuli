@@ -2851,6 +2851,30 @@ def make_extras_router(templates) -> APIRouter:
         } for r in rows]
         return JSONResponse({"points": pts, "days": days})
 
+    @router.get("/admin/api/views-coverage-history")
+    async def views_coverage_history(request: Request):
+        """Сколько объявлений (по дате публикации, first_seen) и какой
+        комнатности имеют накопленный счётчик просмотров (views_count IS NOT
+        NULL, см. krisha-viewcount.service) — для графика покрытия данных по
+        просмотрам вверху /admin/analytics/views."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT first_seen::date AS d,
+                   CASE WHEN rooms >= 4 THEN 4 ELSE rooms END AS rooms_bucket,
+                   COUNT(*) AS cnt
+            FROM apartment_listings
+            WHERE views_count IS NOT NULL AND first_seen IS NOT NULL
+            GROUP BY 1, 2
+            ORDER BY 1
+        """)
+        return JSONResponse({"points": [{
+            "date": r["d"].strftime("%Y-%m-%d"),
+            "rooms": r["rooms_bucket"],
+            "count": r["cnt"],
+        } for r in rows]})
+
     # ── Объявления без привязки к ЖК ──────────────────────────────────────
 
     # ── Аналитика: этаж vs скорость ухода в архив / просмотры ──────────────

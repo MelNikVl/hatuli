@@ -13,6 +13,33 @@
   так что сравнение между объявлениями честное (иначе объявление, висящее месяц, всегда обгоняло бы вчерашнее).
 </p>
 
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+  <div style="font-weight:700;font-size:14px;margin-bottom:2px;">Покрытие данными о просмотрах во времени</div>
+  <div style="font-size:12px;color:#888;margin-bottom:10px;">Сколько объявлений (по дате публикации) и какой комнатности имеют накопленный счётчик просмотров — растёт по мере работы krisha-viewcount, а не за счёт новых просмотров.</div>
+  <canvas id="views-coverage-chart" height="80"></canvas>
+</div>
+<script>
+fetch('/admin/api/views-coverage-history').then(r => r.json()).then(d => {
+  const pts = d.points || [];
+  const dates = [...new Set(pts.map(p => p.date))].sort();
+  const roomLabels = {1: '1-комн', 2: '2-комн', 3: '3-комн', 4: '4+ комн'};
+  const colors = {1: '#2563eb', 2: '#16a34a', 3: '#f59e0b', 4: '#ef4444'};
+  const byRoom = {1: {}, 2: {}, 3: {}, 4: {}};
+  pts.forEach(p => { if (byRoom[p.rooms]) byRoom[p.rooms][p.date] = p.count; });
+  const datasets = [1, 2, 3, 4].map(r => ({
+    label: roomLabels[r],
+    data: dates.map(d2 => byRoom[r][d2] || 0),
+    borderColor: colors[r], backgroundColor: colors[r], tension: 0.15,
+  }));
+  new Chart(document.getElementById('views-coverage-chart'), {
+    type: 'line',
+    data: {labels: dates, datasets},
+    options: {responsive: true, plugins: {legend: {position: 'bottom'}}, scales: {y: {beginAtZero: true}}},
+  });
+}).catch(() => {});
+</script>
+
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
