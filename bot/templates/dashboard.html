@@ -339,9 +339,9 @@ function mortgageLineHtml(price, market, id, max) {
     .map(b => `${bankIconHtml(b.website, 15)}${escapeHtml(b.name)}${b.rate != null ? ' от ' + b.rate + '%' : ''}`).join(' &nbsp;·&nbsp; ');
   const restN = banks.length - max;
   const more = restN > 0
-    ? ` &nbsp;<a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;text-decoration:none;">посмотреть ещё ${restN} вариант${restN === 1 ? '' : (restN < 5 ? 'а' : 'ов')}</a>`
+    ? ` &nbsp;<a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;text-decoration:none;">ещё ${restN} вариант${restN === 1 ? '' : (restN < 5 ? 'а' : 'ов')}</a>`
     : '';
-  return `<div style="font-size:12.5px;margin-top:6px;font-weight:700;">Ипотека: ${shown}${more}</div>`;
+  return `<div style="font-size:12.5px;font-weight:700;margin:8px 0;padding:7px 10px;background:#eff6ff;border-radius:8px;">Ипотека: ${shown}${more}</div>`;
 }
 // Большой попап: 2 лучших банка крупно + компактный список ещё нескольких
 // рядом (см. хэнд-драйв мокап пользователя — 2 больших блока + колонка 3-7).
@@ -360,7 +360,7 @@ function mortgageModalBlockHtml(price, market, id) {
       ${rest.map(b => `<div style="display:flex;align-items:center;gap:6px;font-size:13px;padding:5px 8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;">${bankIconHtml(b.website, 16)}<span style="flex:1;">${escapeHtml(b.name)}</span>${b.rate != null ? `<b style="color:#16a34a;">от ${b.rate}%</b>` : ''}</div>`).join('')}
     </div>` : '';
   const restN = banks.length - top2.length - rest.length;
-  const moreLink = restN > 0 ? `<div style="margin-top:8px;"><a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;font-size:13px;text-decoration:none;">посмотреть ещё ${restN} вариант${restN === 1 ? '' : (restN < 5 ? 'а' : 'ов')} →</a></div>` : '';
+  const moreLink = restN > 0 ? `<div style="margin-top:8px;"><a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;font-size:13px;text-decoration:none;">ещё ${restN} вариант${restN === 1 ? '' : (restN < 5 ? 'а' : 'ов')} →</a></div>` : '';
   return `
 <div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:14px;font-weight:800;margin-bottom:10px;">Ипотека: в каких банках можно взять</div>
@@ -1479,7 +1479,9 @@ function renderSaleBatch(d) {
       const floorPillHtml = pt.floor ? `<span style="${pillStyle}">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : '';
       const ownerPillHtml = `<span style="${ownerPillStyle}">${isOwner ? 'собственник' : 'риелтор'}</span>`;
       if (pt.ceiling_height) pillList.push(`Потолок ${pt.ceiling_height} м`);
-      if (pt.finish_type) pillList.push(`${pt.finish_type === 'черновая' ? '🧱' : pt.finish_type === 'с мебелью' ? '🛋' : '🎨'} ${pt.finish_type}`);
+      // "с отделкой"/"с мебелью" овалы убрали (просили) — черновая осталась,
+      // так как это единственное реально полезное предупреждение из трёх.
+      if (pt.finish_type === 'черновая') pillList.push(`🧱 ${pt.finish_type}`);
       // Этаж рядом с собственником/риелтора, потолок/отделка. Застройщик
       // переехал в строку с ЖК, комнатность/метраж/срок на рынке — в строку с ценой.
       const extraPillsHtml = pillList.map(t => `<span style="${pillStyle}">${t}</span>`).join('');
@@ -1849,7 +1851,7 @@ function drawTransportHeat(hexes) {
   (hexes || []).forEach(h => {
     L.polygon(transportHexCorners(h.lat, h.lon, 100), {
       color: 'transparent', weight: 0, fillColor: transportColor(h.score), fillOpacity: 0.4,
-    }).bindTooltip(`доступность ${h.score.toFixed(2)} · ЛРТ ${Math.round(h.dist_lrt)} м · автобус ${Math.round(h.dist_bus)} м`, {sticky:true}).addTo(heatLayer);
+    }).addTo(heatLayer);
   });
 }
 

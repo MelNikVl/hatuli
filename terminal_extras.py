@@ -446,6 +446,23 @@ def make_extras_router(templates) -> APIRouter:
             return RedirectResponse(url="/admin/login", status_code=302)
         return templates.TemplateResponse("transport_analytics.html", {"request": request})
 
+    @router.get("/admin/api/hype-locations")
+    async def hype_locations_api(request: Request):
+        db = _hype_db_conn()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT name, district, lat, lon, rating, reason, last_seen
+            FROM hype_locations
+            WHERE lat IS NOT NULL AND lon IS NOT NULL AND rating > 0
+            ORDER BY rating DESC LIMIT 80""")
+        cols = [d[0] for d in cur.description]
+        locs = [dict(zip(cols, row)) for row in cur.fetchall()]
+        for l in locs:
+            if l.get("last_seen") is not None:
+                l["last_seen"] = str(l["last_seen"])
+        cur.close(); db.close()
+        return JSONResponse({"locations": locs})
+
     @router.get("/admin/api/transport-hexes")
     async def transport_hexes_api(request: Request):
         import psycopg2
@@ -1414,9 +1431,12 @@ def make_extras_router(templates) -> APIRouter:
                        ph.old_price AS prev_price, ph.changed_at AS price_changed_at
                 FROM rental_listings r
                 LEFT JOIN LATERAL (
-                    SELECT old_price, changed_at FROM rental_price_history h
+                    -- Исторический максимум (не последнее изменение) — просили
+                    -- показывать "цена упала с максимума до текущей", а не
+                    -- только последний шаг изменения.
+                    SELECT GREATEST(MAX(old_price), MAX(new_price)) AS old_price, MIN(changed_at) AS changed_at
+                    FROM rental_price_history h
                     WHERE h.listing_id = r.id
-                    ORDER BY changed_at DESC LIMIT 1
                 ) ph ON TRUE
                 WHERE {' AND '.join(conds)}
                   AND r.last_seen > now() - interval '14 days'
@@ -1549,9 +1569,11 @@ def make_extras_router(templates) -> APIRouter:
                    dv.id AS developer_id, dv.name AS developer_name
             FROM apartment_listings a
             LEFT JOIN LATERAL (
-                SELECT old_price, changed_at FROM price_history h
+                -- Исторический максимум, а не последнее изменение — просили
+                -- показывать "цена упала с максимума до текущей".
+                SELECT GREATEST(MAX(old_price), MAX(new_price)) AS old_price, MIN(changed_at) AS changed_at
+                FROM price_history h
                 WHERE h.listing_id = a.id
-                ORDER BY changed_at DESC LIMIT 1
             ) ph ON TRUE
             LEFT JOIN complexes cx ON lower(trim(cx.name)) = lower(trim(a.complex_name))
             LEFT JOIN developers dv ON dv.id = cx.developer_id
@@ -2708,6 +2730,37 @@ def make_extras_router(templates) -> APIRouter:
             "request": request, "atab": "archived", "stats": stats,
         })
 
+    @router.get("/admin/api/archived-price-m2-history")
+    async def archived_price_m2_history(request: Request, days: int = 30, rooms: str = ""):
+        """Медиана цены/м² среди объявлений, ушедших в архив, по дням —
+        для графика на /admin/archived. Раньше фронтенд ссылался на этот
+        путь, а обработчика не существовало вовсе (см. тот же класс бага,
+        что и с /admin/api/heat-points) — график был всегда пуст."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        room_cond = ""
+        params: list = [str(days)]
+        if rooms:
+            room_cond = "AND rooms = $2"
+            params.append(int(rooms))
+        rows = await pg_fetch(f"""
+            SELECT archived_at::date AS d,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY price / NULLIF(area, 0)) AS median_m2,
+                   COUNT(*) AS cnt
+            FROM apartment_listings
+            WHERE archived_at > now() - ($1 || ' days')::interval
+              AND price > 0 AND area > 0
+              {room_cond}
+            GROUP BY 1
+            ORDER BY 1
+        """, *params)
+        return JSONResponse({"points": [{
+            "d": r["d"].strftime("%d.%m"),
+            "median_m2": round(r["median_m2"]) if r["median_m2"] is not None else None,
+            "cnt": r["cnt"],
+        } for r in rows]})
+
     @router.get("/admin/api/archived-history")
     async def archived_history(request: Request, days: int = 30):
         """Сколько объявлений ушло в архив по дням, отдельно по комнатности
@@ -2852,27 +2905,27 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({"points": pts, "days": days})
 
     @router.get("/admin/api/views-coverage-history")
-    async def views_coverage_history(request: Request):
-        """Сколько объявлений (по дате публикации, first_seen) и какой
-        комнатности имеют накопленный счётчик просмотров (views_count IS NOT
-        NULL, см. krisha-viewcount.service) — для графика покрытия данных по
-        просмотрам вверху /admin/analytics/views."""
+    async def views_coverage_history(request: Request, days: int = 30):
+        """Снимки views_coverage_history (пишутся раз в цикл парсера продаж,
+        см. service_apartments.py) — сколько активных объявлений всего и
+        сколько из них имеют известный views_count, во времени. Раньше этот
+        путь по ошибке был занят другим (несовместимым по форме ответа)
+        обработчиком, из-за чего уже существующий фронтенд-блок ниже на
+        странице получал не те поля и не рисовался."""
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
+        days = max(1, min(days, 365))
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
-            SELECT first_seen::date AS d,
-                   CASE WHEN rooms >= 4 THEN 4 ELSE rooms END AS rooms_bucket,
-                   COUNT(*) AS cnt
-            FROM apartment_listings
-            WHERE views_count IS NOT NULL AND first_seen IS NOT NULL
-            GROUP BY 1, 2
-            ORDER BY 1
-        """)
+            SELECT at, total_active, with_views
+            FROM views_coverage_history
+            WHERE at > now() - ($1 || ' days')::interval
+            ORDER BY at ASC
+        """, str(days))
         return JSONResponse({"points": [{
-            "date": r["d"].strftime("%Y-%m-%d"),
-            "rooms": r["rooms_bucket"],
-            "count": r["cnt"],
+            "at": r["at"].strftime("%d.%m %H:%M"),
+            "total_active": r["total_active"],
+            "with_views": r["with_views"],
         } for r in rows]})
 
     # ── Объявления без привязки к ЖК ──────────────────────────────────────
