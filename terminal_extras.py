@@ -387,8 +387,9 @@ def make_extras_router(templates) -> APIRouter:
         считается на клиенте (см. matchMortgageBanks в dashboard.html)."""
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
-            SELECT b.slug, b.short_name, b.name, b.website, p.housing_type, p.rate_min, p.rate_max,
-                   p.down_payment_min_pct, p.max_amount_tg
+            SELECT b.slug, b.short_name, b.name, b.website, p.name AS program_name,
+                   p.housing_type, p.rate_min, p.rate_max, p.down_payment_min_pct,
+                   p.max_amount_tg, p.conditions
             FROM mortgage_programs p JOIN banks b ON b.id = p.bank_id
             WHERE p.rate_min IS NOT NULL
             ORDER BY b.sort_order, p.rate_min
@@ -397,8 +398,8 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/banks", response_class=HTMLResponse)
     async def banks_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
+        # Публичная страница (см. паттерн ЖК/застройщиков) — банки/ставки
+        # полезны любому посетителю карты, не только админу.
         from bot.db.pg import fetch as pg_fetch
         banks = [dict(r) for r in await pg_fetch(
             "SELECT id, slug, name, short_name, description, website, phone, program_type, notes, sort_order FROM banks ORDER BY sort_order, name")]
@@ -412,8 +413,6 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/banks/{slug}", response_class=HTMLResponse)
     async def bank_detail(request: Request, slug: str):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import fetch, fetchrow
         bank = await fetchrow("SELECT * FROM banks WHERE slug = $1", slug)
         if not bank:
@@ -423,8 +422,6 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/news", response_class=HTMLResponse)
     async def news_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import fetch as pg_fetch
         news = [dict(r) for r in await pg_fetch(
             "SELECT id, ts, title, source, url, image_url FROM news ORDER BY ts DESC LIMIT 30")]
@@ -432,8 +429,6 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/news/{nid}", response_class=HTMLResponse)
     async def news_detail(request: Request, nid: int):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import fetchrow
         n = await fetchrow("SELECT * FROM news WHERE id = $1", nid)
         if not n:
@@ -2367,6 +2362,7 @@ def make_extras_router(templates) -> APIRouter:
         Публичный (как и сама карта) — ничего чувствительного тут нет."""
         from bot.db.pg import fetchrow as pg_fetchrow, fetch as pg_fetch
         from bot.core.bargain import get_comparables, analyze_bargain
+        from datetime import datetime as _dt, timezone as _tz
         import json as _json_ld
 
         row = await pg_fetchrow("SELECT * FROM apartment_listings WHERE id = $1", listing_id)
@@ -2454,6 +2450,7 @@ def make_extras_router(templates) -> APIRouter:
             "views_count": l.get("views_count"),
             "description": l.get("description") or "",
             "first_seen": l["first_seen"].strftime("%d.%m.%Y") if l.get("first_seen") else None,
+            "age": int((_dt.now(_tz.utc) - l["first_seen"]).days) if l.get("first_seen") else None,
             "bargain": {
                 "discount_pct": bargain.get("discount_pct") or 0,
                 "target_price": bargain.get("target_price"),

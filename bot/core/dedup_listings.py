@@ -160,9 +160,19 @@ def find_duplicates(listings: list[dict],
         if (matched_primary is None and addr and price > 0 and floor is not None
                 and rooms is not None):
             key2 = (addr, round(price / 100_000) * 100_000, floor, rooms)
-            if key2 in price_addr_idx and price_addr_idx[key2] != lid:
-                matched_primary = price_addr_idx[key2]
-                matched_rule = "addr_price"
+            cand2 = price_addr_idx.get(key2)
+            if cand2 and cand2 != lid:
+                # Раньше это правило не проверяло площадь вообще — две РАЗНЫЕ
+                # квартиры на одном этаже с одинаковой (округлённой до 100к)
+                # ценой и комнатностью, но разной площадью, склеивались в
+                # дубль. area > 0 у обеих — единственный случай, когда стоит
+                # это правило применять (без площади у одной из сторон
+                # оставляем как запасной вариант без проверки, как раньше).
+                ex2 = by_id.get(cand2)
+                ex2_area = float(ex2.get("area") or 0) if ex2 else 0
+                if not ex2 or area <= 0 or ex2_area <= 0 or abs(ex2_area - area) <= 3:
+                    matched_primary = cand2
+                    matched_rule = "addr_price"
 
         # 4. координаты + комнаты + этаж + площадь + цена (см. docstring —
         # ловит те же дубли, что и правила 2/3, но независимо от текста

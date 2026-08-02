@@ -331,6 +331,31 @@ function matchMortgageBanks(price, market) {
     // округление даёт "21.700000762939453" при выводе — округляем до 1 знака.
     .map(([name, v]) => ({name, website: v.website, rate: v.rate != null ? Math.round(v.rate * 10) / 10 : null}));
 }
+// Полная информация по каждой ПОДХОДЯЩЕЙ программе (не по банку) — какая
+// именно программа и почему она проходит по этому объявлению (тип жилья,
+// первоначальный взнос, потолок суммы кредита).
+function matchMortgagePrograms(price, market) {
+  if (!MORTGAGE_PROGRAMS || !price) return [];
+  const out = [];
+  MORTGAGE_PROGRAMS.forEach(p => {
+    if (p.housing_type === 'new' && market !== 'primary') return;
+    if (p.housing_type === 'secondary' && market === 'primary') return;
+    const down = p.down_payment_min_pct || 0;
+    const needed = price * (1 - down / 100);
+    if (p.max_amount_tg && needed > p.max_amount_tg) return;
+    const housingTxt = p.housing_type === 'new' ? 'новостройка' : p.housing_type === 'secondary' ? 'вторичное жильё' : 'первичка и вторичка';
+    const downTxt = down > 0 ? `ПВ от ${down}%` : 'без ПВ';
+    const capTxt = p.max_amount_tg ? `кредит до ${Math.round(p.max_amount_tg / 1e6)} млн ₸` : 'без потолка суммы';
+    out.push({
+      bank: p.short_name, website: p.website, program: p.program_name,
+      rate: p.rate_min != null ? Math.round(p.rate_min * 10) / 10 : null,
+      rateMax: p.rate_max != null ? Math.round(p.rate_max * 10) / 10 : null,
+      reason: `${housingTxt} · ${downTxt} · ${capTxt}`,
+      conditions: p.conditions || '',
+    });
+  });
+  return out.sort((a, b) => (a.rate ?? 999) - (b.rate ?? 999));
+}
 function mortgageLineHtml(price, market, id, max) {
   const banks = matchMortgageBanks(price, market);
   if (!banks.length) return '';
@@ -345,25 +370,47 @@ function mortgageLineHtml(price, market, id, max) {
 }
 // Большой попап: 2 лучших банка крупно + компактный список ещё нескольких
 // рядом (см. хэнд-драйв мокап пользователя — 2 больших блока + колонка 3-7).
+// Группируем программы по банку (лучшая ставка = представитель банка для
+// сортировки/топ-2), но внутри карточки банка перечисляем ВСЕ его подходящие
+// программы с названием и причиной подбора — не просто "банк + ставка".
+function groupProgramsByBank(programs) {
+  const byBank = new Map();
+  programs.forEach(p => {
+    if (!byBank.has(p.bank)) byBank.set(p.bank, {bank: p.bank, website: p.website, programs: []});
+    byBank.get(p.bank).programs.push(p);
+  });
+  return [...byBank.values()].sort((a, b) => (a.programs[0].rate ?? 999) - (b.programs[0].rate ?? 999));
+}
+function bankProgramsListHtml(programs) {
+  return programs.map(p => `
+    <div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);">
+      <div style="font-size:12.5px;font-weight:700;">${escapeHtml(p.program)}${p.rate != null ? ` — от ${p.rate}%` : ''}</div>
+      <div style="font-size:11.5px;color:#888;margin-top:2px;">${escapeHtml(p.reason)}</div>
+    </div>`).join('');
+}
 function mortgageModalBlockHtml(price, market, id) {
-  const banks = matchMortgageBanks(price, market);
-  if (!banks.length) return '';
+  const programs = matchMortgagePrograms(price, market);
+  if (!programs.length) return '';
+  const banks = groupProgramsByBank(programs);
   const top2 = banks.slice(0, 2);
   const rest = banks.slice(2, 7);
   const top2Html = top2.map(b => `
-    <div style="flex:1;min-width:140px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;">
-      <div style="display:flex;align-items:center;gap:6px;font-weight:800;font-size:14.5px;">${bankIconHtml(b.website, 22)}${escapeHtml(b.name)}</div>
-      <div style="font-size:13px;color:#16a34a;font-weight:700;margin-top:4px;">${b.rate != null ? 'от ' + b.rate + '%' : 'ставка по запросу'}</div>
+    <div style="flex:1;min-width:200px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;">
+      <div style="display:flex;align-items:center;gap:6px;font-weight:800;font-size:14.5px;">${bankIconHtml(b.website, 22)}${escapeHtml(b.bank)}</div>
+      ${bankProgramsListHtml(b.programs)}
     </div>`).join('');
   const restHtml = rest.length ? `
-    <div style="flex:1;min-width:160px;display:flex;flex-direction:column;gap:6px;">
-      ${rest.map(b => `<div style="display:flex;align-items:center;gap:6px;font-size:13px;padding:5px 8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;">${bankIconHtml(b.website, 16)}<span style="flex:1;">${escapeHtml(b.name)}</span>${b.rate != null ? `<b style="color:#16a34a;">от ${b.rate}%</b>` : ''}</div>`).join('')}
+    <div style="flex:1;min-width:200px;display:flex;flex-direction:column;gap:8px;">
+      ${rest.map(b => `<div style="padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;">
+        <div style="display:flex;align-items:center;gap:6px;font-weight:700;font-size:13px;">${bankIconHtml(b.website, 16)}${escapeHtml(b.bank)}</div>
+        ${bankProgramsListHtml(b.programs.slice(0, 1))}
+      </div>`).join('')}
     </div>` : '';
   const restN = banks.length - top2.length - rest.length;
   const moreLink = restN > 0 ? `<div style="margin-top:8px;"><a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;font-size:13px;text-decoration:none;">ещё ${restN} вариант${restN === 1 ? '' : (restN < 5 ? 'а' : 'ов')} →</a></div>` : '';
   return `
 <div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
-  <div style="font-size:14px;font-weight:800;margin-bottom:10px;">Ипотека: в каких банках можно взять</div>
+  <div style="font-size:14px;font-weight:800;margin-bottom:10px;">Ипотека: какие программы подходят под это объявление</div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">${top2Html}${restHtml}</div>
   ${moreLink}
 </div>`;
@@ -2420,28 +2467,48 @@ function openDetailModal(id, ev) {
   </div>
 </div>` : '';
 
+    // Те же плашки, что в превью на карте (см. CARD_HTML) — комнатность,
+    // цена/м², площадь, срок на рынке, этаж, продавец — просили продублировать
+    // в большом попапе, а не только показывать текстом.
+    const modalPillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+    const modalPriceM2Txt = (d.price && d.area) ? Math.round(d.price / d.area / 1000) + ' тыс ₸/м²' : '';
+    const modalAgeTxt = d.age != null ? (d.age === 0 ? 'сегодня' : d.age + ' дн.') : null;
+    const modalPillsHtml = `
+    <span style="${modalPillStyle}">${d.rooms || '?'}-комн</span>
+    ${modalPriceM2Txt ? `<span style="${modalPillStyle}">${modalPriceM2Txt}</span>` : ''}
+    ${d.area ? `<span style="${modalPillStyle}">${Math.round(d.area)} м²</span>` : ''}
+    ${modalAgeTxt ? `<span style="${modalPillStyle}">на рынке: ${modalAgeTxt}</span>` : ''}
+    ${d.floor ? `<span style="${modalPillStyle}">${d.floor}/${d.floors_total || '?'} эт.</span>` : ''}
+    <span style="${modalPillStyle}">${d.is_owner ? 'собственник' : 'риелтор'}</span>
+    ${d.ceiling_height ? `<span style="${modalPillStyle}">потолок ${d.ceiling_height} м</span>` : ''}
+    ${d.finish_type ? `<span style="${modalPillStyle}">${escapeHtml(d.finish_type)}</span>` : ''}`;
+
+    const priceHistoryHtml = `
+<div id="modal-price-history-wrap" style="padding:18px 22px 0;display:none;">
+  <div style="font-size:14px;color:var(--text);margin-bottom:6px;">История цены</div>
+  <div id="modal-price-history"></div>
+</div>`;
+
     content.innerHTML = `
 ${photoHtml}
 <div style="padding:20px 22px 0;">
   <div style="font-size:34px;font-weight:800;">${priceM} <span style="font-size:21px;">млн ₸</span></div>
-  <div style="font-size:19px;color:var(--text);margin-top:4px;">${d.rooms || '?'}-комн · ${d.area ? Math.round(d.area) : '?'} м²${d.floor ? ' · ' + d.floor + '/' + (d.floors_total || '?') + ' эт.' : ''}${d.ceiling_height ? ' · потолок ' + d.ceiling_height + ' м' : ''}</div>
-  <div style="font-size:14px;color:var(--text);margin-top:6px;">${d.is_owner ? 'собственник' : (d.seller_name ? 'риелтор' : '—')}${d.seller_name ? ' · ' + escapeHtml(d.seller_name) : ''}${d.finish_type ? ' · отделка: ' + escapeHtml(d.finish_type) : ''}</div>
+  <div style="margin-top:8px;">${modalPillsHtml}</div>
+  ${d.seller_name ? `<div style="font-size:13px;color:var(--text);margin-top:4px;">${escapeHtml(d.seller_name)}</div>` : ''}
   <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
   ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
   ${d.views_count ? `<div style="font-size:13px;color:var(--text);margin-top:6px;">👁 просмотрели ${d.views_count.toLocaleString('ru')} раз${d.first_seen ? ' с ' + d.first_seen : ''}</div>` : ''}
 </div>
 ${bargainHtml}
-${yieldHtml}
-${scoreSectionHtml}
-${complexPhotosHtml}
+${priceHistoryHtml}
 ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:13px;color:var(--text);font-weight:700;margin-bottom:6px;">📝 Описание</div>
   <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(d.description).slice(0, 600)}${d.description.length > 600 ? '…' : ''}</div>
 </div>` : ''}
-<div id="modal-price-history-wrap" style="padding:18px 22px 0;display:none;">
-  <div style="font-size:14px;color:var(--text);margin-bottom:6px;">История цены</div>
-  <div id="modal-price-history"></div>
-</div>
+${mortgageModalBlockHtml(d.price, d.market, id)}
+${scoreSectionHtml}
+${yieldHtml}
+${complexPhotosHtml}
 <div style="margin:20px 22px 0;padding:14px 16px;border:1px dashed var(--border);border-radius:10px;">
   <div style="font-size:15px;color:var(--text);font-weight:700;margin-bottom:5px;">🏗 Инфраструктура</div>
   <div style="font-size:14.5px;color:var(--text);">Чат дома, застройщик, этажность ЖК — появится по мере накопления данных.</div>
@@ -2457,7 +2524,6 @@ ${(d.seller_questions && d.seller_questions.length) ? `
   <ul style="font-size:13.5px;line-height:1.7;padding-left:18px;margin:0;">${d.seller_questions.map(q => `<li>${escapeHtml(q)}</li>`).join('')}</ul>
 </div>` : ''}
 ${nearbyHtml}
-${mortgageModalBlockHtml(d.price, d.market, id)}
 <div id="hexwrap-modal" style="padding:18px 22px 0;"></div>
 <div style="margin:18px 22px 0;">
   <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">Карта района</div>
