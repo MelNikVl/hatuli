@@ -52,6 +52,14 @@ SOURCE_BLOCK = {
 # явные маркеры объявлений в заголовке
 AD_TITLE = re.compile(r"без комиссии|горячая цена|срочно продам|срочно сдам|продам квартиру|сдам квартиру|торг уместен", re.I)
 
+# только новости, относящиеся к Астане (страна/другие города — мимо)
+ASTANA_MARKERS = ("астан", "столиц", "нур-султан", "лрт", "талдыколь")
+
+
+def is_astana_relevant(title: str) -> bool:
+    t = (title or "").lower()
+    return any(m in t for m in ASTANA_MARKERS)
+
 
 def parse_rss(xml: str) -> list[dict]:
     out = []
@@ -68,6 +76,9 @@ def parse_rss(xml: str) -> list[dict]:
         if sm and (sm.group(1) or "").strip().lower() in SOURCE_BLOCK:
             continue
         if AD_TITLE.search(title):
+            continue
+        # только Астана: страна/другие города не берём
+        if not is_astana_relevant(title):
             continue
         # картинка из RSS (media:content / enclosure)
         img = None
