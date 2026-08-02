@@ -606,9 +606,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
         rows = await pg_fetch("""
             SELECT c.id, c.name, c.district, c.avg_price_m2::float AS price_per_m2,
-                   agg.floors_total,
+                   COALESCE(cts.floors_total, agg.floors_total) AS floors_total,
                    COALESCE(cts.ceiling_height_max, agg.ceiling_height)::float AS ceiling_height,
-                   hct.elevator_count, hct.apartment_count
+                   hct.elevator_count, hct.apartment_count, cts.lifts_type
             FROM complexes c
             LEFT JOIN complex_tech_specs cts ON cts.complex_id = c.id
             LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
