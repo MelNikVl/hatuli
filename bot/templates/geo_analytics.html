@@ -11,10 +11,15 @@
 <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
   <button id="geo-mode-count" onclick="geoSetMode('count')" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">🔢 Количество</button>
   <button id="geo-mode-price" onclick="geoSetMode('price')" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">💰 Цена/м²</button>
+  <span style="flex:1;"></span>
+  <button id="geo-sandbox-btn" onclick="geoToggleSandbox()" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">🧪 Kepler.gl (песочница)</button>
   <span id="geo-count" style="font-size:12.5px;color:#888;">загрузка…</span>
 </div>
 
 <div id="geo-map" style="width:100%;height:78vh;border-radius:12px;overflow:hidden;border:1px solid var(--border);"></div>
+<div id="geo-sandbox" style="display:none;width:100%;height:78vh;border-radius:12px;overflow:hidden;border:1px solid var(--border);">
+  <iframe id="geo-sandbox-frame" src="" style="width:100%;height:100%;border:none;" allowfullscreen></iframe>
+</div>
 
 <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
@@ -62,6 +67,25 @@ function geoRender() {
     GEO_MAP.addControl(geoOverlay);
   } else {
     geoOverlay.setProps({ layers: [geoMakeLayer()] });
+  }
+}
+
+const GEO_KEpler_URL = 'https://kepler.gl/demo/map?mapUrl=' + encodeURIComponent('https://hatuli.ai-groundtruth.com/admin/api/geo-sales.geojson');
+function geoToggleSandbox() {
+  const sb = document.getElementById('geo-sandbox');
+  const gm = document.getElementById('geo-map');
+  const btn = document.getElementById('geo-sandbox-btn');
+  const on = sb.style.display !== 'none';
+  if (!on) {
+    document.getElementById('geo-sandbox-frame').src = GEO_KEpler_URL;
+    sb.style.display = 'block';
+    gm.style.display = 'none';
+    btn.style.background = '#2563eb'; btn.style.color = '#fff';
+  } else {
+    sb.style.display = 'none';
+    gm.style.display = 'block';
+    document.getElementById('geo-sandbox-frame').src = '';
+    btn.style.background = 'var(--bg)'; btn.style.color = 'var(--text)';
   }
 }
 

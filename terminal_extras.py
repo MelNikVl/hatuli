@@ -485,6 +485,30 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({"locations": locs})
 
 
+    @router.get("/admin/api/geo-sales.geojson")
+    async def geo_sales_geojson(request: Request):
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT id, lat, lon, price, area, rooms, district, complex_name
+            FROM apartment_listings
+            WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND lat IS NOT NULL AND lon IS NOT NULL AND price IS NOT NULL
+            ORDER BY id""")
+        feats = []
+        for r in rows:
+            props = {
+                "id": str(r["id"]), "price": r["price"], "rooms": r.get("rooms"),
+                "district": r.get("district"), "complex": r.get("complex_name"),
+            }
+            if r.get("area"):
+                props["price_m2"] = round(r["price"] / r["area"], 0)
+            feats.append({"type": "Feature",
+                          "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]},
+                          "properties": props})
+        return JSONResponse(
+            content={"type": "FeatureCollection", "features": feats},
+            headers={"Access-Control-Allow-Origin": "*"})
+
     @router.get("/admin/api/geo-sales")
     async def geo_sales_api(request: Request):
         from bot.db.pg import fetch as pg_fetch
