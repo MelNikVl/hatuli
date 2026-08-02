@@ -420,6 +420,13 @@ def make_extras_router(templates) -> APIRouter:
         programs = await fetch("SELECT * FROM mortgage_programs WHERE bank_id = $1 ORDER BY id", bank["id"])
         return templates.TemplateResponse("bank_detail.html", {"request": request, "bank": bank, "programs": programs})
 
+    @router.get("/admin/mortgage-calculator", response_class=HTMLResponse)
+    async def mortgage_calculator_page(request: Request):
+        # Публичная страница (тот же паттерн, что /admin/banks) — расчёт
+        # ежемесячного платежа по программам из /admin/api/mortgage-banks,
+        # считается на клиенте (та же JSON-ручка, что и попап на карте).
+        return templates.TemplateResponse("mortgage_calculator.html", {"request": request})
+
     @router.get("/admin/news", response_class=HTMLResponse)
     async def news_page(request: Request):
         from bot.db.pg import fetch as pg_fetch

@@ -157,7 +157,7 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены продажи</button>
         <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены аренды</button>
         <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
-        <button type="button" class="heat-btn" data-mode="transport" onclick="toggleHeat('transport')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Транспортная доступность</button>
+        <button type="button" class="heat-btn" data-mode="transport" onclick="toggleHeat('transport')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Транспортная доступность</button>
         <button type="button" class="heat-btn" data-mode="hype" onclick="toggleHeat('hype')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">🔥 Хайп (новости)</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
@@ -389,9 +389,13 @@ function bankProgramsListHtml(programs) {
       <div style="font-size:11.5px;color:#888;margin-top:2px;">${escapeHtml(p.reason)}</div>
     </div>`).join('');
 }
-function mortgageModalBlockHtml(price, market, id) {
+function mortgageModalBlockHtml(price, market, id, bankEstimate) {
   const programs = matchMortgagePrograms(price, market);
   if (!programs.length) return '';
+  const bankEstimateHtml = bankEstimate ? `
+  <div style="font-size:13px;margin-bottom:10px;">🏦 Оценка банка: <b>${(bankEstimate/1e6).toFixed(1)} млн ₸</b>
+    <a href="/admin/info#bank-estimate" target="_blank" title="Что такое оценка банка — открыть объяснение" style="display:inline-block;width:14px;height:14px;line-height:14px;border-radius:50%;background:var(--border);color:var(--text);font-size:10px;text-align:center;text-decoration:none;font-weight:700;vertical-align:2px;">?</a>
+  </div>` : '';
   const banks = groupProgramsByBank(programs);
   const top2 = banks.slice(0, 2);
   const rest = banks.slice(2, 7);
@@ -412,6 +416,7 @@ function mortgageModalBlockHtml(price, market, id) {
   return `
 <div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:14px;font-weight:800;margin-bottom:10px;">Ипотека: какие программы подходят под это объявление</div>
+  ${bankEstimateHtml}
   <div style="display:flex;gap:10px;flex-wrap:wrap;">${top2Html}${restHtml}</div>
   ${moreLink}
 </div>`;
@@ -1533,7 +1538,6 @@ function renderSaleBatch(d) {
       // Этаж рядом с собственником/риелтора, потолок/отделка. Застройщик
       // переехал в строку с ЖК, комнатность/метраж/срок на рынке — в строку с ценой.
       const extraPillsHtml = pillList.map(t => `<span style="${pillStyle}">${t}</span>`).join('');
-      const priceM2Txt = (pt.price && pt.area) ? Math.round(pt.price/pt.area/1000) + ' тыс ₸/м²' : '';
       const areaPillHtml = `<span style="${pillStyle}margin:0;">${areaTxt} м²</span>`;
       const agePillHtml = `<span style="${pillStyle}margin:0;">на рынке: ${ageText}</span>`;
       CARD_HTML[pt.id] = (`
@@ -1544,7 +1548,6 @@ function renderSaleBatch(d) {
       <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
         <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
         ${roomsPillHtml}
-        ${priceM2Txt ? `<span style="${pillStyle}margin:0;">${priceM2Txt}</span>` : ''}
         ${areaPillHtml}
         ${agePillHtml}
         ${floorPillHtml}
@@ -1555,7 +1558,7 @@ function renderSaleBatch(d) {
   <div id="info-${pt.id}" style="font-size:12.5px;color:#555;margin-top:4px;"></div>
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
-  ${(priceTrend || pt.views) ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend ? priceTrend.replace(/^ · /, '') : ''}${pt.views ? ' · 👁 ' + pt.views.toLocaleString('ru') + ' просмотр.' : ''}</div>` : ''}
+  ${priceTrend ? `<div style="font-size:12px;color:#888;margin-top:5px;">${priceTrend.replace(/^ · /, '')}</div>` : ''}
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${bankLine}
   ${cxLine}
@@ -2528,7 +2531,7 @@ ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:v
   <div style="font-size:13px;color:var(--text);font-weight:700;margin-bottom:6px;">📝 Описание</div>
   <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(d.description).slice(0, 600)}${d.description.length > 600 ? '…' : ''}</div>
 </div>` : ''}
-${mortgageModalBlockHtml(d.price, d.market, id)}
+${mortgageModalBlockHtml(d.price, d.market, id, d.bargain ? d.bargain.target_price : null)}
 ${scoreSectionHtml}
 ${yieldHtml}
 ${complexPhotosHtml}

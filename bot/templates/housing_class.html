@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🏗 Класс жилья по ЖК <small>тестовый скор, только для админа</small></div>
+{% include "_analytics_tabs.html" %}
+
+<div style="font-size:13px;color:#888;max-width:1100px;margin:14px 0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  Экспериментальный числовой скор (0–100), не связан с колонкой «Класс жилья» (эконом/комфорт/бизнес/премиум) на странице ЖК.
+  Веса: <b>цена/м²</b> — наибольший, <b>потолки</b> и <b>кол-во квартир</b> — средние, <b>этажность</b> (чем выше, тем ниже класс) и <b>лифты</b> — небольшие.
+  Лифты и кол-во квартир в базе нигде не хранятся — вбей вручную в соответствующих ячейках, они сохранятся и войдут в расчёт.
+</div>
+
+<div style="overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+  <thead>
+    <tr style="border-bottom:2px solid var(--border);text-align:left;">
+      <th style="padding:8px;">ЖК</th>
+      <th style="padding:8px;">Район</th>
+      <th style="padding:8px;text-align:right;">Цена/м² (40%)</th>
+      <th style="padding:8px;text-align:right;">Этажность (10%, ↓)</th>
+      <th style="padding:8px;text-align:right;">Потолок, м (20%)</th>
+      <th style="padding:8px;text-align:right;">Лифты (10%)</th>
+      <th style="padding:8px;text-align:right;">Квартир (20%)</th>
+      <th style="padding:8px;text-align:right;">Скор</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in complexes %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px;font-weight:700;"><a href="/admin/complex/find?name={{ c.name|urlencode }}" style="color:var(--text);text-decoration:none;">{{ c.name }}</a></td>
+      <td style="padding:8px;color:#888;">{{ c.district or '—' }}</td>
+      <td style="padding:8px;text-align:right;">{{ '%d'|format(c.price_per_m2) ~ ' ₸' if c.price_per_m2 else '—' }}</td>
+      <td style="padding:8px;text-align:right;">{{ c.floors_total or '—' }}</td>
+      <td style="padding:8px;text-align:right;">{{ '%.1f'|format(c.ceiling_height) if c.ceiling_height else '—' }}</td>
+      <td style="padding:8px;text-align:right;">
+        <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/update" style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end;">
+          <input type="hidden" name="apartment_count" value="{{ c.apartment_count or '' }}">
+          <input type="number" name="elevator_count" value="{{ c.elevator_count or '' }}" min="0" placeholder="—"
+                 style="width:56px;padding:3px 5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12.5px;">
+          <button type="submit" style="border:none;background:none;color:#2563eb;cursor:pointer;font-size:12px;">✓</button>
+        </form>
+      </td>
+      <td style="padding:8px;text-align:right;">
+        <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/update" style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end;">
+          <input type="hidden" name="elevator_count" value="{{ c.elevator_count or '' }}">
+          <input type="number" name="apartment_count" value="{{ c.apartment_count or '' }}" min="0" placeholder="—"
+                 style="width:64px;padding:3px 5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12.5px;">
+          <button type="submit" style="border:none;background:none;color:#2563eb;cursor:pointer;font-size:12px;">✓</button>
+        </form>
+      </td>
+      <td style="padding:8px;text-align:right;">
+        {% if c.score is not none %}
+        <span style="font-weight:800;font-size:14.5px;padding:3px 10px;border-radius:8px;background:{{ 'rgba(16,185,129,.15);color:#34d399' if c.score >= 66 else ('rgba(245,158,11,.15);color:#f59e0b' if c.score >= 33 else 'rgba(239,68,68,.15);color:#ef4444') }};">{{ c.score }}</span>
+        {% else %}
+        <span style="color:#888;">нет данных</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if not complexes %}
+<div style="padding:30px;text-align:center;color:#888;">Нет ЖК с достаточными данными.</div>
+{% endif %}
+{% endblock %}

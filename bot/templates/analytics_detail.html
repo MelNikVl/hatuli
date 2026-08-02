@@ -407,6 +407,11 @@
 
   <details class="tile" open>
     <summary>🏦 В каких банках можно взять ипотеку</summary>
+    {% if bargain and bargain.target_price %}
+    <div style="font-size:13px;margin-bottom:10px;">Оценка банка: <b>{{ "{:,.1f}".format(bargain.target_price / 1e6) }} млн ₸</b>
+      <a href="/admin/info#bank-estimate" target="_blank" title="Что такое оценка банка — открыть объяснение" style="display:inline-block;width:14px;height:14px;line-height:14px;border-radius:50%;background:var(--border);color:var(--text);font-size:10px;text-align:center;text-decoration:none;font-weight:700;vertical-align:2px;">?</a>
+    </div>
+    {% endif %}
     <div id="mortgage-tile-body" style="font-size:13.5px;color:#888;">загрузка…</div>
   </details>
 

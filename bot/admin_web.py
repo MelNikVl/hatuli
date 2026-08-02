@@ -595,6 +595,61 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "request": request, "atab": "transport",
         })
 
+    @app.get("/admin/analytics/housing-class", response_class=HTMLResponse)
+    async def housing_class_page(request: Request):
+        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
+        # см. комментарий у transport_analytics_page выше.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+        from bot.core.housing_class_score import compute_housing_class_scores
+
+        rows = await pg_fetch("""
+            SELECT c.id, c.name, c.district, c.avg_price_m2::float AS price_per_m2,
+                   agg.floors_total,
+                   COALESCE(cts.ceiling_height_max, agg.ceiling_height)::float AS ceiling_height,
+                   hct.elevator_count, hct.apartment_count
+            FROM complexes c
+            LEFT JOIN complex_tech_specs cts ON cts.complex_id = c.id
+            LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
+            LEFT JOIN (
+                SELECT lower(trim(complex_name)) AS key,
+                       MAX(floors_total) AS floors_total,
+                       AVG(ceiling_height) AS ceiling_height
+                FROM apartment_listings
+                WHERE complex_name IS NOT NULL
+                GROUP BY lower(trim(complex_name))
+            ) agg ON agg.key = lower(trim(c.name))
+            WHERE c.avg_price_m2 IS NOT NULL OR agg.floors_total IS NOT NULL
+            ORDER BY c.name
+        """)
+        complexes = compute_housing_class_scores([dict(r) for r in rows])
+        complexes.sort(key=lambda r: (r["score"] is None, -(r["score"] or 0)))
+        return templates.TemplateResponse("housing_class.html", {
+            "request": request, "atab": "housing_class", "complexes": complexes,
+        })
+
+    @app.post("/admin/analytics/housing-class/{complex_id}/update")
+    async def housing_class_update(request: Request, complex_id: int,
+                                    elevator_count: str = Form(""), apartment_count: str = Form("")):
+        # Тестовые поля, которых нет больше нигде в БД (лифты/кол-во квартир) —
+        # вводятся вручную здесь же на странице, см. миграцию housing_class_test.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import execute as pg_execute
+
+        def _to_int(s: str):
+            s = (s or "").strip()
+            return int(s) if s.isdigit() else None
+
+        await pg_execute("""
+            INSERT INTO housing_class_test (complex_id, elevator_count, apartment_count, updated_at)
+            VALUES ($1, $2, $3, now())
+            ON CONFLICT (complex_id) DO UPDATE
+            SET elevator_count = $2, apartment_count = $3, updated_at = now()
+        """, complex_id, _to_int(elevator_count), _to_int(apartment_count))
+        return RedirectResponse(url="/admin/analytics/housing-class", status_code=303)
+
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
     async def analytics_detail(request: Request, listing_id: str):
         if not is_authed(request):
