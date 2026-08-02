@@ -484,6 +484,26 @@ def make_extras_router(templates) -> APIRouter:
         cur.close(); db.close()
         return JSONResponse({"locations": locs})
 
+
+    @router.get("/admin/api/photo-analysis")
+    async def photo_analysis_api(request: Request):
+        from bot.db.pg import fetch as pg_fetch, fetchval as pg_fv
+        processed = await pg_fv("SELECT count(*) FROM apartment_listings WHERE floorplan_checked_at IS NOT NULL") or 0
+        photos = await pg_fv("SELECT count(*) FROM listing_floorplans") or 0
+        floorplans = await pg_fv("SELECT count(*) FROM listing_floorplans WHERE is_floorplan") or 0
+        queue = await pg_fv("SELECT count(*) FROM apartment_listings WHERE floorplan_checked_at IS NULL AND photos IS NOT NULL AND photos::text != '[]' AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+        hourly = await pg_fetch("SELECT date_trunc('hour', checked_at) AS ts, count(*) AS photos, count(*) FILTER (WHERE is_floorplan) AS fps FROM listing_floorplans GROUP BY 1 ORDER BY 1")
+        hourly = [dict(r) for r in hourly]
+        for h in hourly:
+            if h.get("ts") is not None:
+                h["ts"] = str(h["ts"])
+        daily = await pg_fetch("SELECT floorplan_checked_at::date AS d, count(*) AS listings FROM apartment_listings WHERE floorplan_checked_at IS NOT NULL GROUP BY 1 ORDER BY 1")
+        daily = [dict(r) for r in daily]
+        for d in daily:
+            if d.get("d") is not None:
+                d["d"] = str(d["d"])
+        return JSONResponse({"stats": {"processed": processed, "photos": photos, "floorplans": floorplans, "queue": queue}, "hourly": hourly, "daily": daily})
+
     @router.get("/admin/api/transport-hexes")
     async def transport_hexes_api(request: Request):
         import psycopg2

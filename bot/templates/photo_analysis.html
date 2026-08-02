@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">📷 Анализ фото (планировки SigLIP)</div>
+
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+  <div style="flex:1 1 0;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+    <div style="font-size:11.5px;color:#888;">Обработано объявлений</div>
+    <div id="pa-processed" style="font-size:22px;font-weight:700;">—</div>
+  </div>
+  <div style="flex:1 1 0;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+    <div style="font-size:11.5px;color:#888;">Фото проанализировано</div>
+    <div id="pa-photos" style="font-size:22px;font-weight:700;">—</div>
+  </div>
+  <div style="flex:1 1 0;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+    <div style="font-size:11.5px;color:#888;">📐 Планов найдено</div>
+    <div id="pa-floorplans" style="font-size:22px;font-weight:700;color:#f59e0b;">—</div>
+  </div>
+  <div style="flex:1 1 0;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+    <div style="font-size:11.5px;color:#888;">В очереди</div>
+    <div id="pa-queue" style="font-size:22px;font-weight:700;">—</div>
+  </div>
+</div>
+
+<div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;">
+  <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+    <div style="font-weight:700;margin-bottom:4px;">🖼 Фото классифицировано</div>
+    <div style="font-size:12.5px;color:#888;margin-bottom:10px;">По часам (SigLIP, CPU, ~1 фото/сек).</div>
+    <div style="position:relative;height:240px;"><canvas id="pa-photos-chart"></canvas></div>
+  </div>
+  <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+    <div style="font-weight:700;margin-bottom:4px;">📐 Планов найдено</div>
+    <div style="font-size:12.5px;color:#888;margin-bottom:10px;">Накопленным итогом.</div>
+    <div style="position:relative;height:240px;"><canvas id="pa-fp-chart"></canvas></div>
+  </div>
+</div>
+
+<div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:1100px;">
+  <div style="font-weight:700;margin-bottom:8px;">🤖 Какая модель работает и как</div>
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+    <tr><td style="padding:5px 8px;color:#888;width:210px;border-bottom:1px solid var(--border);">Модель</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);"><b>SigLIP ViT-B-16</b> (open_clip, веса webli) — мультимодальная модель OpenAI-CLIP-архитектуры: картинка и текст попадают в одно эмбеддинг-пространство, близость = семантическое сходство</td></tr>
+    <tr><td style="padding:5px 8px;color:#888;border-bottom:1px solid var(--border);">Где работает</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);">Локально на сервере (CPU, ~/floorplan-clip/venv), <b>без API и без оплаты за каждый вызов</b> — модель скачана один раз (~450 МБ)</td></tr>
+    <tr><td style="padding:5px 8px;color:#888;border-bottom:1px solid var(--border);">Как определяет план</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);">Для каждого фото считается сходство с 8 текстовыми описаниями: 4 «плана» (floor plan, architectural drawing, blueprint, top-down layout) и 4 «интерьера» (living room, kitchen, bedroom, interior photo). Через softmax получаются вероятности; фото = план, если макс. вероятность «плана» выше макс. вероятности «интерьера» и выше порога 0.22</td></tr>
+    <tr><td style="padding:5px 8px;color:#888;border-bottom:1px solid var(--border);">Процесс</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);">Скрипт floorplan_scan.py: берёт активные объявления с фото → качает фото с CDN Крыши (пауза 1 сек между загрузками, кэш по хешу URL) → классифицирует → пишет в listing_floorplans (скоры) + floorplan_url в объявление. Возобновляется с места остановки</td></tr>
+    <tr><td style="padding:5px 8px;color:#888;border-bottom:1px solid var(--border);">Где результат</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);">В карточке объявления — блок «📐 План квартиры» с изображением плана</td></tr>
+  </table>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+let paCharts = {};
+function paLoad() {
+  fetch('/admin/api/photo-analysis').then(r => r.json()).then(d => {
+    document.getElementById('pa-processed').textContent = d.stats.processed.toLocaleString('ru-RU');
+    document.getElementById('pa-photos').textContent = d.stats.photos.toLocaleString('ru-RU');
+    document.getElementById('pa-floorplans').textContent = d.stats.floorplans.toLocaleString('ru-RU');
+    document.getElementById('pa-queue').textContent = d.stats.queue.toLocaleString('ru-RU');
+
+    const hourly = d.hourly || [];
+    const labels = hourly.map(h => String(h.ts).slice(5, 16).replace('T', ' '));
+    const photos = hourly.map(h => h.photos);
+    const fps = hourly.map(h => h.fps);
+
+    if (paCharts.photos) paCharts.photos.destroy();
+    paCharts.photos = new Chart(document.getElementById('pa-photos-chart'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'Фото', data: photos, backgroundColor: 'rgba(37,99,235,.7)', borderRadius: 4 }] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { ticks: { color: '#888', font: { size: 9 }, maxRotation: 45 } }, y: { beginAtZero: true, ticks: { color: '#888', precision: 0 } } } }
+    });
+
+    if (paCharts.fp) paCharts.fp.destroy();
+    paCharts.fp = new Chart(document.getElementById('pa-fp-chart'), {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'Планов (итог)', data: (() => { let s = 0; return fps.map(v => s += v); })(), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.15)', fill: true, tension: .3 }] },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { ticks: { color: '#888', font: { size: 9 }, maxRotation: 45 } }, y: { beginAtZero: true, ticks: { color: '#f59e0b', precision: 0 } } } }
+    });
+  }).catch(() => {});
+}
+paLoad();
+setInterval(paLoad, 60000);  // автообновление раз в минуту
+</script>
+{% endblock %}

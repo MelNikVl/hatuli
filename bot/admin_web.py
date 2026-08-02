@@ -565,6 +565,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "request": request, "atab": "hype",
         })
 
+    @app.get("/admin/analytics/photo-analysis", response_class=HTMLResponse)
+    async def photo_analysis_page(request: Request):
+        # ВАЖНО: выше catch-all /admin/analytics/{listing_id} ниже.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("photo_analysis.html", {
+            "request": request, "atab": "photo_analysis",
+        })
+
     @app.get("/admin/analytics/news-analysis", response_class=HTMLResponse)
     async def news_analysis_page(request: Request):
         # ВАЖНО: выше catch-all /admin/analytics/{listing_id} ниже.
