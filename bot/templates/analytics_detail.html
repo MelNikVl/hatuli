@@ -136,6 +136,7 @@
       <span class="pill"><span class="pk">Район</span><span class="pv">{{ listing.district or '—' }}</span></span>
       <span class="pill"><span class="pk">Год</span><span class="pv">{{ listing.year_built or '—' }}</span></span>
       <span class="pill"><span class="pk">Новостройка</span><span class="pv">{{ 'да' if listing.is_new_build else 'нет' }}</span></span>
+      {% if listing.floorplan_url %}<a class="pill" href="{{ listing.floorplan_url }}" target="_blank" style="text-decoration:none;color:inherit;" title="Открыть план квартиры"><span class="pk">📐</span><span class="pv">План</span></a>{% endif %}
       {% if listing.views_count %}<span class="pill"><span class="pk">👁</span><span class="pv">{{ '{:,}'.format(listing.views_count).replace(',', ' ') }}</span></span>{% endif %}
       <span class="pill"><span class="pk">📍</span><span class="pv">{{ listing.address or '—' }}</span></span>
     </div>
