@@ -44,6 +44,15 @@ def strip_tags(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", s)).strip()
 
 
+# классифайды/доски объявлений — НЕ СМИ, в новости не включаем
+SOURCE_BLOCK = {
+    "krisha.kz", "korter.kz", "homsters.kz", "noz.kz", "etagi.com",
+    "olx.kz", "slando.kz", "market.kz", "satu.kz", "avito.kz", "2gis.kz",
+}
+# явные маркеры объявлений в заголовке
+AD_TITLE = re.compile(r"без комиссии|горячая цена|срочно продам|срочно сдам|продам квартиру|сдам квартиру|торг уместен", re.I)
+
+
 def parse_rss(xml: str) -> list[dict]:
     out = []
     for it in re.findall(r"<item>(.*?)</item>", xml, re.S):
@@ -54,6 +63,11 @@ def parse_rss(xml: str) -> list[dict]:
             continue
         title = strip_tags(tm.group(1))
         if not title or len(title) < 20:
+            continue
+        # отсечь классифайды и объявления
+        if sm and (sm.group(1) or "").strip().lower() in SOURCE_BLOCK:
+            continue
+        if AD_TITLE.search(title):
             continue
         # картинка из RSS (media:content / enclosure)
         img = None

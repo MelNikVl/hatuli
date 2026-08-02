@@ -157,7 +157,8 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены продажи</button>
         <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены аренды</button>
         <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
-        <button type="button" class="heat-btn" data-mode="transport" onclick="toggleHeat('transport')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Транспортная доступность</button>
+        <button type="button" class="heat-btn" data-mode="transport" onclick="toggleHeat('transport')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Транспортная доступность</button>
+        <button type="button" class="heat-btn" data-mode="hype" onclick="toggleHeat('hype')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">🔥 Хайп (новости)</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
         <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
@@ -1828,7 +1829,7 @@ let HEAT_EDGE_M = 60;  // синхронизирован с дефолтом п�
 let NOISE_EDGE_M = 60;  // раньше был фиксирован отдельно (30м) — теперь все гексы тепловых карт (цены/аренда/шум, фон и детальный слой) одного размера, из общего ползунка "сторона гекса"
 const heatLayer = L.layerGroup();
 let heatMode = null;
-let heatCache = {sale: null, rental: null, noise: null, transport: null};
+let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null};
 let noiseDefaultsApplied = false;  // гекс 40м / прозрачность 50% при первом включении шума за сессию
 // Детальный слой шума (30м, по фактическим точкам дорог) при ~39к точек по
 // городу даёт под 100к+ отдельных гексов, если рисовать их все разом — это
@@ -1922,6 +1923,23 @@ function median(arr) {
   return s.length % 2 ? s[mid] : (s[mid-1]+s[mid])/2;
 }
 
+function hypeNewsColor(t) {
+  const c = [[254,240,138],[250,204,21],[245,158,11],[180,83,9]];
+  const x = Math.max(0, Math.min(1, t));
+  const i = Math.min(3, Math.floor(x * 4));
+  const f = x * 4 - i;
+  const a = c[Math.min(3, i)], b = c[Math.min(3, i + 1)];
+  return `rgb(${Math.round(a[0] + (b[0]-a[0])*f)},${Math.round(a[1] + (b[1]-a[1])*f)},${Math.round(a[2] + (b[2]-a[2])*f)})`;
+}
+function drawHypeNewsHeat(hexes) {
+  (hexes || []).forEach(h => {
+    const s = Math.max(0.05, Math.min(1, (h.value || 0) / 100));
+    L.polygon(transportHexCorners(h.lat, h.lon, 100), {
+      color: 'transparent', weight: 0, fillColor: hypeNewsColor(s), fillOpacity: 0.5,
+    }).bindTooltip(`${h.name || ''} · хайп ${Math.round(h.value || 0)}`, {sticky:true})
+      .addTo(heatLayer);
+  });
+}
 function drawPriceHeat(points, archivedPoints) {
   const buckets = hexBucket(points.filter(p => p.price > 0), p => [p.lat, p.lon]);
   // Гексагоны без активных объявлений — подстрахуем последними ценами
@@ -2226,6 +2244,9 @@ async function loadHeatData(mode) {
   } else if (mode === 'transport') {
     const d = await fetch('/admin/api/transport-hexes').then(r => r.json());
     heatCache.transport = d.hexes || [];
+  } else if (mode === 'hype') {
+    const d = await fetch('/admin/api/hype-locations').then(r => r.json());
+    heatCache.hype = (d.locations || []).map(l => ({lat: l.lat, lon: l.lon, value: l.rating || 0, name: l.name, reason: l.reason}));
   }
   return heatCache[mode];
 }
@@ -2302,6 +2323,8 @@ async function toggleHeat(mode) {
     map.on('moveend zoomend', noiseViewHandler);
   } else if (mode === 'transport') {
     drawTransportHeat(data);
+  } else if (mode === 'hype') {
+    drawHypeNewsHeat(data);
   }
 }
 

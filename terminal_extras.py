@@ -435,6 +435,25 @@ def make_extras_router(templates) -> APIRouter:
             return HTMLResponse("Новость не найдена", status_code=404)
         return templates.TemplateResponse("news_detail.html", {"request": request, "n": dict(n)})
 
+    @router.get("/admin/analytics/news-analysis", response_class=HTMLResponse)
+    async def news_analysis_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("news_analysis.html", {"request": request})
+
+    @router.get("/admin/api/news-analysis")
+    async def news_analysis_api(request: Request):
+        db = _hype_db_conn()
+        cur = db.cursor()
+        cur.execute("SELECT run_date, news_count, sources_count, threads_count, tokens_spent FROM news_analysis_runs ORDER BY run_date DESC LIMIT 90")
+        cols = [d[0] for d in cur.description]
+        runs = [dict(zip(cols, row)) for row in cur.fetchall()]
+        for r in runs:
+            if r.get("run_date") is not None:
+                r["run_date"] = str(r["run_date"])
+        cur.close(); db.close()
+        return JSONResponse({"runs": runs})
+
     @router.get("/admin/analytics/transport", response_class=HTMLResponse)
     async def transport_page(request: Request):
         if not is_authed(request):
