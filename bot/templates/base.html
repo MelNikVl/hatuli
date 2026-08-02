@@ -165,7 +165,7 @@
     <a href="/admin" class="pub-logo"><img src="/static/branding/logo-icon.png" alt=""> Hatuli</a>
     <div class="pub-row1-right">
       <button class="pub-theme-btn" id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button">🌓 <span id="sidebar-theme-label">тёмная</span></button>
-      <a href="/favorites" class="pub-fav-icon" title="Избранное" style="font-size:19px;text-decoration:none;color:var(--text);">♡</a>
+      <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;text-decoration:none;color:var(--text);background:rgba(37,99,235,.1);border-radius:8px;padding:4px 10px;"><span style="font-size:16px;line-height:1;">♡</span>Избранное</a>
       {% if admin %}<a href="/admin/logout" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Выйти</a>
       {% else %}<a href="/cabinet" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Войти</a>{% endif %}
     </div>

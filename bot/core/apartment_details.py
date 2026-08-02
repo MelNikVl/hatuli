@@ -220,6 +220,14 @@ async def fetch_apartment_details(url: str) -> dict:
         desc_text = desc_el.get_text("\n", strip=True)
         desc_text = re.sub(r"[ \t]+", " ", desc_text)
         desc_text = re.sub(r"\n{3,}", "\n\n", desc_text)
+        # Krisha встраивает виджет Google Translate прямо внутрь блока
+        # описания — его текст ("Перевести"/"Перевод может быть неточным"/
+        # "Показать оригинал") попадает в get_text() вперемешку с реальным
+        # текстом. Вырезаем известные артефакты, откуда бы они ни попали.
+        desc_text = re.sub(r"\s*Перевести\s+Перевод\s+может\s+быть\s+неточным\s+Показать\s+оригинал\s*",
+                            "\n", desc_text)
+        desc_text = re.sub(r"(^|\n)[ \t]*Перевести[ \t]*(?=\n|$)", r"\1", desc_text)
+        desc_text = re.sub(r"\n{3,}", "\n\n", desc_text).strip()
     else:
         desc_text = ""
     result["description"] = desc_text[:2000]

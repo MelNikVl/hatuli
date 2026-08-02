@@ -106,7 +106,7 @@
     <a href="/admin" class="pub-logo"><img src="/static/branding/logo-icon.png" alt=""> Hatuli</a>
     <div class="pub-row1-right">
       <button class="pub-theme-btn" id="pub-theme-toggle" onclick="togglePubTheme()" type="button">🌓 <span id="pub-theme-label">тёмная</span></button>
-      <a href="/favorites" class="pub-fav-icon" title="Избранное">♡</a>
+      <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;background:rgba(37,99,235,.1);border-radius:8px;padding:4px 10px;"><span style="font-size:16px;line-height:1;">♡</span>Избранное</a>
       {% if site_user %}
       <a href="/cabinet" class="pub-user-chip">{{ site_user.full_name or ('@' + (site_user.username or site_user.user_id|string)) }}</a>
       {% if admin %}<a href="/admin/logout" class="pub-fav-icon" title="Выйти" style="font-size:13px;font-weight:600;">Выйти</a>{% endif %}

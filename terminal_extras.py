@@ -1088,19 +1088,11 @@ def make_extras_router(templates) -> APIRouter:
         """Страница дублей: кто чей дубль, со ссылками."""
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
-        from bot.db.pg import fetch as pg_fetch, execute as pg_exec2
-        # колонка появляется после первого прогона дедупа — создаём сами,
-        # чтобы страница не падала на свежей базе
-        await pg_exec2("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS dup_match TEXT")
-        await pg_exec2("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS dup_needs_review BOOLEAN DEFAULT FALSE")
-        await pg_exec2("""
-            CREATE TABLE IF NOT EXISTS dedup_scan_log (
-                id SERIAL PRIMARY KEY, table_name TEXT NOT NULL,
-                scanned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                listings_scanned INT NOT NULL, duplicates_found INT NOT NULL,
-                needs_review_found INT NOT NULL DEFAULT 0
-            )
-        """)
+        from bot.db.pg import fetch as pg_fetch
+        # dup_match/dup_needs_review/dedup_scan_log — см. migrations/028_dup_columns.sql
+        # (раньше эти ALTER TABLE гонялись тут на каждый заход на страницу —
+        # колонки давно существуют, а лишний ALTER TABLE на живой активно
+        # пишущейся таблице иногда не мог получить лок и падал по таймауту).
         rows = await pg_fetch("""
             SELECT p.id, p.address, p.price, p.rooms, p.area, p.is_owner,
                    p.seller_name, p.lat, p.lon, p.complex_name, p.floor, p.floors_total,

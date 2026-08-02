@@ -14,6 +14,7 @@
 <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
   <thead>
     <tr style="border-bottom:2px solid var(--border);text-align:left;">
+      <th style="padding:8px;width:1%;"></th>
       <th style="padding:8px;">ЖК</th>
       <th style="padding:8px;">Район</th>
       <th style="padding:8px;">Стены</th>
@@ -28,12 +29,16 @@
       <th style="padding:8px;text-align:right;">3к</th>
       <th style="padding:8px;text-align:right;">4к</th>
       <th style="padding:8px;text-align:right;">Скор</th>
-      <th style="padding:8px;"></th>
     </tr>
   </thead>
   <tbody>
     {% for c in complexes %}
     <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px;text-align:center;">
+        <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/delete" onsubmit="return confirm('Удалить ЖК «{{ c.name }}» из базы? Объявления не удаляются, только карточка ЖК.');">
+          <button type="submit" title="Удалить ЖК (не существует в реальности)" style="border:none;background:none;color:#ef4444;cursor:pointer;font-size:16px;font-weight:700;line-height:1;padding:2px 6px;">✕</button>
+        </form>
+      </td>
       <td style="padding:8px;font-weight:700;"><a href="/admin/complex/find?name={{ c.name|urlencode }}" style="color:var(--text);text-decoration:none;">{{ c.name }}</a></td>
       <td style="padding:8px;color:#888;">{{ c.district or '—' }}</td>
       <td style="padding:8px;color:#888;">{{ c.construction_type or '—' }}</td>
@@ -85,11 +90,6 @@
         {% else %}
         <span style="color:#888;">нет данных</span>
         {% endif %}
-      </td>
-      <td style="padding:8px;text-align:center;">
-        <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/delete" onsubmit="return confirm('Удалить ЖК «{{ c.name }}» из базы? Объявления не удаляются, только карточка ЖК.');">
-          <button type="submit" title="Удалить ЖК (не существует в реальности)" style="border:none;background:none;color:#ef4444;cursor:pointer;font-size:16px;font-weight:700;line-height:1;padding:2px 6px;">✕</button>
-        </form>
       </td>
     </tr>
     {% endfor %}

@@ -365,7 +365,7 @@ function mortgageLineHtml(price, market, id, max) {
     .map(b => `${bankIconHtml(b.website, 15)}${escapeHtml(b.name)}${b.rate != null ? ' от ' + b.rate + '%' : ''}`).join(' &nbsp;·&nbsp; ');
   const restN = banks.length - max;
   const more = restN > 0
-    ? ` &nbsp;<a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;text-decoration:none;">ещё ${restN} вариант${restN === 1 ? '' : (restN < 5 ? 'а' : 'ов')}</a>`
+    ? ` &nbsp;<a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;text-decoration:none;">ещё ${restN}</a>`
     : '';
   return `<div style="font-size:12.5px;font-weight:700;margin:8px 0;padding:7px 10px;background:#eff6ff;border-radius:8px;">Ипотека: ${shown}${more}</div>`;
 }
@@ -1491,7 +1491,7 @@ function renderSaleBatch(d) {
       }
       const sc = scoreColor(pt.score, p10, p90);
       if (pt.photos && pt.photos.length) { ptPhotos[pt.id] = pt.photos; carIdx[pt.id] = 0; }
-      const favStarHtml = `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" data-active="0" style="position:absolute;top:8px;left:8px;font-size:24px;line-height:1;cursor:pointer;color:#7dd3fc;text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 3px rgba(0,0,0,.6);z-index:2;">☆</span>`;
+      const favStarHtml = `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" data-active="0" style="position:absolute;top:8px;left:8px;font-size:28px;line-height:1;cursor:pointer;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 3px rgba(0,0,0,.6);z-index:2;">♡</span>`;
       const carHtml = pt.photos && pt.photos.length ? `
 <div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;cursor:pointer;" onclick="openLightbox('${pt.id}', event)">
   <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;display:block;border:none;" onerror="this.parentNode.style.display='none'">
@@ -1678,8 +1678,9 @@ async function checkFavoriteState(id) {
   } catch (e) {}
 }
 function setFavStar(el, active) {
-  el.textContent = active ? '★' : '☆';
-  el.style.color = active ? '#f59e0b' : (el.style.position === 'absolute' ? '#7dd3fc' : '#ccc');
+  const isPhotoCorner = el.style.position === 'absolute';
+  el.textContent = active ? '♥' : '♡';
+  el.style.color = active ? (isPhotoCorner ? '#fff' : '#f59e0b') : (isPhotoCorner ? 'rgba(255,255,255,.85)' : '#ccc');
   el.dataset.active = active ? '1' : '0';
 }
 async function toggleFavorite(id, ev) {
