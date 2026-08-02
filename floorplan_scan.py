@@ -20,10 +20,15 @@ BASE = Path("/home/nik/krisha_bot")
 PHOTO_CACHE = BASE / "static" / "cache" / "photos"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
 
-# пороги эвристики (настраиваются под выборку)
-H_SAT_MAX = 35.0      # средняя насыщенность (план — почти ч/б)
-H_WHITE_MIN = 0.18    # доля почти белых пикселей
+# пороги эвристики (подобраны по 8 реальным планам: sat 1-33, white 0.19-0.95, gray 0.51-0.99, ink 0-0.21)
+H_SAT_MAX = 30.0      # средняя насыщенность (план — почти ч/б; интерьеры ~42+)
+H_WHITE_MIN = 0.18    # доля почти белых пикселей (у фото ~0.05)
 H_GRAY_MIN = 0.50     # доля «серых» пикселей (max-min < 15)
+H_INK_MIN = 0.002     # доля тёмных пикселей (должны быть линии чертежа)
+H_INK_MAX = 0.50
+# SigLIP: строже
+FP_MARGIN = 0.05      # план должен быть заметно выше интерьера
+FP_MIN = 0.25
 
 
 def load_database_url() -> str:
@@ -68,7 +73,7 @@ def download(url: str, delay: float = 1.0) -> Path:
 
 # --- Эвристика OpenCV ---
 def heuristic_features(path: Path):
-    """(sat_mean, white_ratio, gray_ratio) или None."""
+    """(sat_mean, white_ratio, gray_ratio, ink_ratio) или None."""
     import cv2
     import numpy as np
     img = cv2.imread(str(path))
@@ -77,16 +82,18 @@ def heuristic_features(path: Path):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     sat = float(hsv[:, :, 1].mean())
     white = float(((hsv[:, :, 1] < 20) & (hsv[:, :, 2] > 200)).mean())
+    ink = float((hsv[:, :, 2] < 80).mean())
     b, g, r = img[:, :, 0].astype(int), img[:, :, 1].astype(int), img[:, :, 2].astype(int)
     gray = float((np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b) < 15).mean())
-    return sat, white, gray
+    return sat, white, gray, ink
 
 
 def is_candidate(f):
     if f is None:
         return False
-    sat, white, gray = f
-    return sat < H_SAT_MAX and white > H_WHITE_MIN and gray > H_GRAY_MIN
+    sat, white, gray, ink = f
+    return (sat < H_SAT_MAX and white > H_WHITE_MIN and gray > H_GRAY_MIN
+            and H_INK_MIN < ink < H_INK_MAX)
 
 
 # --- SigLIP (только для кандидатов) ---
@@ -95,14 +102,10 @@ _preprocess = None
 _text_features = None
 _device = "cpu"
 _TEXTS = [
-    "a floor plan of an apartment",
-    "architectural floor plan drawing",
-    "blueprint of a flat",
-    "top-down floor plan layout",
-    "photo of a living room",
-    "interior photo of a kitchen",
-    "photo of a bedroom",
-    "real photo of an apartment interior",
+    "apartment floor plan diagram",
+    "architectural floor plan blueprint",
+    "photograph of apartment interior",
+    "photograph of furniture and rooms",
 ]
 
 
@@ -126,6 +129,7 @@ def load_model():
 
 
 def siglip_probs(path: Path):
+    """(floorplan_prob, interior_prob) — softmax по 2+2 промптам."""
     import torch
     from PIL import Image
     load_model()
@@ -135,7 +139,7 @@ def siglip_probs(path: Path):
         im = im / im.norm(dim=-1, keepdim=True)
         sim = (100.0 * im @ _text_features.T).softmax(dim=-1)
         p = sim[0].cpu().numpy()
-    return float(max(p[0], p[1], p[2], p[3])), float(max(p[4], p[5], p[6], p[7]))
+    return float(p[0] + p[1]), float(p[2] + p[3])
 
 
 def main() -> None:
@@ -181,17 +185,17 @@ def main() -> None:
                 h_pass = is_candidate(f)
                 if not h_pass:
                     cur.execute(
-                        "INSERT INTO listing_floorplans (listing_id, photo_url, floorplan_score, other_score, is_floorplan, h_sat, h_white, h_gray) "
-                        "VALUES (%s, %s, 0, 0, FALSE, %s, %s, %s)",
-                        (lid, url, *(f or (0, 0, 0))))
+                        "INSERT INTO listing_floorplans (listing_id, photo_url, floorplan_score, other_score, is_floorplan, h_sat, h_white, h_gray, h_ortho, h_ink) "
+                        "VALUES (%s, %s, 0, 0, FALSE, %s, %s, %s, NULL, %s)",
+                        (lid, url, *(f or (0, 0, 0, 0))))
                     continue
                 candidates += 1
                 fp_s, ot_s = siglip_probs(p)
-                is_fp = fp_s > ot_s and fp_s > a.min_score
+                is_fp = (fp_s - ot_s) > FP_MARGIN and fp_s > FP_MIN
                 cur.execute(
-                    "INSERT INTO listing_floorplans (listing_id, photo_url, floorplan_score, other_score, is_floorplan, h_sat, h_white, h_gray) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                    (lid, url, fp_s, ot_s, bool(is_fp), *(f or (0, 0, 0))))
+                    "INSERT INTO listing_floorplans (listing_id, photo_url, floorplan_score, other_score, is_floorplan, h_sat, h_white, h_gray, h_ortho, h_ink) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, %s)",
+                    (lid, url, fp_s, ot_s, bool(is_fp), *(f or (0, 0, 0, 0))))
                 if is_fp and floorplan_url is None:
                     floorplan_url = url
             except Exception as e:
