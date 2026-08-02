@@ -485,6 +485,25 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({"locations": locs})
 
 
+    @router.get("/admin/api/geo-sales")
+    async def geo_sales_api(request: Request):
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT id, lat, lon, price, area, rooms, district, complex_name
+            FROM apartment_listings
+            WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND lat IS NOT NULL AND lon IS NOT NULL AND price IS NOT NULL
+            ORDER BY id""")
+        points = []
+        for r in rows:
+            price_m2 = round(r["price"] / r["area"], 0) if r.get("area") else None
+            points.append({
+                "id": r["id"], "lat": r["lat"], "lon": r["lon"],
+                "price": r["price"], "price_m2": price_m2, "rooms": r.get("rooms"),
+                "district": r.get("district"), "complex": r.get("complex_name"),
+            })
+        return JSONResponse({"points": points, "count": len(points)})
+
     @router.get("/admin/api/photo-analysis")
     async def photo_analysis_api(request: Request):
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fv

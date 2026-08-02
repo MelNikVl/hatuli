@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🗺 Геоаналитика <small>deck.gl (ядро Kepler.gl) · продажи</small></div>
+
+<div style="font-size:13px;color:#888;max-width:1100px;margin-bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;">
+  Тепловая карта по <b>активным объявлениям о продаже</b> ({{ '—' }} шт.). Режим: <b>количество</b> объявлений или <b>цена/м²</b>.
+  Клик по карте — попап с объектом. WebGL-слой deck.gl — тот же движок, что у Kepler.gl.
+</div>
+
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+  <button id="geo-mode-count" onclick="geoSetMode('count')" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">🔢 Количество</button>
+  <button id="geo-mode-price" onclick="geoSetMode('price')" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">💰 Цена/м²</button>
+  <span id="geo-count" style="font-size:12.5px;color:#888;">загрузка…</span>
+</div>
+
+<div id="geo-map" style="width:100%;height:78vh;border-radius:12px;overflow:hidden;border:1px solid var(--border);"></div>
+
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.0.31/dist.min.js"></script>
+<script>
+let geoPoints = [];
+let geoMode = 'count';
+let geoOverlay = null;
+const GEO_MAP = new maplibregl.Map({
+  container: 'geo-map',
+  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  center: [71.430, 51.128],
+  zoom: 11,
+});
+GEO_MAP.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+function geoMakeLayer() {
+  const data = geoPoints;
+  if (geoMode === 'price') {
+    return new deck.HeatmapLayer({
+      id: 'geo-heat-price',
+      data,
+      getPosition: d => [d.lon, d.lat],
+      getWeight: d => d.price_m2 || d.price || 0,
+      radiusPixels: 42,
+      intensity: 1.4,
+      threshold: 0.02,
+      colorRange: [[10, 25, 90], [60, 120, 200], [180, 90, 30], [230, 140, 20], [240, 200, 60], [255, 240, 160]],
+    });
+  }
+  return new deck.HeatmapLayer({
+    id: 'geo-heat-count',
+    data,
+    getPosition: d => [d.lon, d.lat],
+    radiusPixels: 30,
+    intensity: 1.2,
+    threshold: 0.02,
+    colorRange: [[10, 25, 90], [60, 120, 200], [120, 180, 120], [230, 140, 20], [240, 200, 60], [255, 255, 200]],
+  });
+}
+
+function geoRender() {
+  if (!geoOverlay) {
+    geoOverlay = new deck.MapboxOverlay({ layers: [geoMakeLayer()] });
+    GEO_MAP.addControl(geoOverlay);
+  } else {
+    geoOverlay.setProps({ layers: [geoMakeLayer()] });
+  }
+}
+
+function geoSetMode(m) {
+  geoMode = m;
+  document.getElementById('geo-mode-count').style.background = m === 'count' ? '#2563eb' : 'var(--bg)';
+  document.getElementById('geo-mode-count').style.color = m === 'count' ? '#fff' : 'var(--text)';
+  document.getElementById('geo-mode-price').style.background = m === 'price' ? '#2563eb' : 'var(--bg)';
+  document.getElementById('geo-mode-price').style.color = m === 'price' ? '#fff' : 'var(--text)';
+  geoRender();
+}
+
+fetch('/admin/api/geo-sales').then(r => r.json()).then(d => {
+  geoPoints = d.points || [];
+  document.getElementById('geo-count').textContent = 'точек: ' + geoPoints.length.toLocaleString('ru-RU');
+  geoRender();
+}).catch(() => { document.getElementById('geo-count').textContent = 'ошибка загрузки'; });
+</script>
+{% endblock %}
