@@ -618,6 +618,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                    COALESCE(cts.floors_total, agg.floors_total) AS floors_total,
                    COALESCE(cts.ceiling_height_max, agg.ceiling_height)::float AS ceiling_height,
                    hct.elevator_count, hct.elevator_capacity_kg, hct.apartment_count,
+                   hct.rooms_1, hct.rooms_2, hct.rooms_3, hct.rooms_4,
                    cts.lifts_type, cts.construction_type
             FROM complexes c
             LEFT JOIN complex_tech_specs cts ON cts.complex_id = c.id
@@ -642,7 +643,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     @app.post("/admin/analytics/housing-class/{complex_id}/update")
     async def housing_class_update(request: Request, complex_id: int,
                                     elevator_count: str = Form(""), elevator_capacity_kg: str = Form(""),
-                                    apartment_count: str = Form("")):
+                                    apartment_count: str = Form(""),
+                                    rooms_1: str = Form(""), rooms_2: str = Form(""),
+                                    rooms_3: str = Form(""), rooms_4: str = Form("")):
         # Тестовые поля, которых нет больше нигде в БД (лифты/их грузоподъёмность/
         # кол-во квартир) — вводятся вручную здесь же на странице, см. миграции
         # housing_class_test / 026_elevator_capacity.
@@ -655,11 +658,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return int(s) if s.isdigit() else None
 
         await pg_execute("""
-            INSERT INTO housing_class_test (complex_id, elevator_count, elevator_capacity_kg, apartment_count, updated_at)
-            VALUES ($1, $2, $3, $4, now())
+            INSERT INTO housing_class_test (complex_id, elevator_count, elevator_capacity_kg, apartment_count, rooms_1, rooms_2, rooms_3, rooms_4, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
             ON CONFLICT (complex_id) DO UPDATE
-            SET elevator_count = $2, elevator_capacity_kg = $3, apartment_count = $4, updated_at = now()
-        """, complex_id, _to_int(elevator_count), _to_int(elevator_capacity_kg), _to_int(apartment_count))
+            SET elevator_count = $2, elevator_capacity_kg = $3, apartment_count = $4,
+                rooms_1 = $5, rooms_2 = $6, rooms_3 = $7, rooms_4 = $8, updated_at = now()
+        """, complex_id, _to_int(elevator_count), _to_int(elevator_capacity_kg), _to_int(apartment_count),
+            _to_int(rooms_1), _to_int(rooms_2), _to_int(rooms_3), _to_int(rooms_4))
         return RedirectResponse(url="/admin/analytics/housing-class", status_code=303)
 
     @app.post("/admin/analytics/housing-class/{complex_id}/delete")
