@@ -617,7 +617,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             SELECT c.id, c.name, c.district, c.avg_price_m2::float AS price_per_m2,
                    COALESCE(cts.floors_total, agg.floors_total) AS floors_total,
                    COALESCE(cts.ceiling_height_max, agg.ceiling_height)::float AS ceiling_height,
-                   hct.elevator_count, hct.apartment_count, cts.lifts_type
+                   hct.elevator_count, hct.elevator_capacity_kg, hct.apartment_count,
+                   cts.lifts_type, cts.construction_type
             FROM complexes c
             LEFT JOIN complex_tech_specs cts ON cts.complex_id = c.id
             LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
@@ -640,9 +641,11 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.post("/admin/analytics/housing-class/{complex_id}/update")
     async def housing_class_update(request: Request, complex_id: int,
-                                    elevator_count: str = Form(""), apartment_count: str = Form("")):
-        # Тестовые поля, которых нет больше нигде в БД (лифты/кол-во квартир) —
-        # вводятся вручную здесь же на странице, см. миграцию housing_class_test.
+                                    elevator_count: str = Form(""), elevator_capacity_kg: str = Form(""),
+                                    apartment_count: str = Form("")):
+        # Тестовые поля, которых нет больше нигде в БД (лифты/их грузоподъёмность/
+        # кол-во квартир) — вводятся вручную здесь же на странице, см. миграции
+        # housing_class_test / 026_elevator_capacity.
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import execute as pg_execute
@@ -652,11 +655,22 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return int(s) if s.isdigit() else None
 
         await pg_execute("""
-            INSERT INTO housing_class_test (complex_id, elevator_count, apartment_count, updated_at)
-            VALUES ($1, $2, $3, now())
+            INSERT INTO housing_class_test (complex_id, elevator_count, elevator_capacity_kg, apartment_count, updated_at)
+            VALUES ($1, $2, $3, $4, now())
             ON CONFLICT (complex_id) DO UPDATE
-            SET elevator_count = $2, apartment_count = $3, updated_at = now()
-        """, complex_id, _to_int(elevator_count), _to_int(apartment_count))
+            SET elevator_count = $2, elevator_capacity_kg = $3, apartment_count = $4, updated_at = now()
+        """, complex_id, _to_int(elevator_count), _to_int(elevator_capacity_kg), _to_int(apartment_count))
+        return RedirectResponse(url="/admin/analytics/housing-class", status_code=303)
+
+    @app.post("/admin/analytics/housing-class/{complex_id}/delete")
+    async def housing_class_delete(request: Request, complex_id: int):
+        # Удаление явно несуществующих/мусорных ЖК из базы — только карточка
+        # ЖК (housing_class_test/complex_tech_specs каскадно), сами объявления
+        # НЕ трогаем: complex_name у apartment_listings — свободный текст, не FK.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import execute as pg_execute
+        await pg_execute("DELETE FROM complexes WHERE id = $1", complex_id)
         return RedirectResponse(url="/admin/analytics/housing-class", status_code=303)
 
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
