@@ -502,7 +502,18 @@ def make_extras_router(templates) -> APIRouter:
         for d in daily:
             if d.get("d") is not None:
                 d["d"] = str(d["d"])
-        return JSONResponse({"stats": {"processed": processed, "photos": photos, "floorplans": floorplans, "queue": queue}, "hourly": hourly, "daily": daily})
+        recent = await pg_fetch("""
+            SELECT l.id, fp.photo_url, fp.floorplan_score::float AS score,
+                   l.title, l.address, fp.checked_at
+            FROM listing_floorplans fp
+            JOIN apartment_listings l ON l.id = fp.listing_id
+            WHERE fp.is_floorplan
+            ORDER BY fp.checked_at DESC, fp.id DESC LIMIT 10""")
+        recent = [dict(r) for r in recent]
+        for r in recent:
+            if r.get("checked_at") is not None:
+                r["checked_at"] = str(r["checked_at"])
+        return JSONResponse({"stats": {"processed": processed, "photos": photos, "floorplans": floorplans, "queue": queue}, "hourly": hourly, "daily": daily, "recent": recent})
 
     @router.get("/admin/api/transport-hexes")
     async def transport_hexes_api(request: Request):
