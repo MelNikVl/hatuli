@@ -503,12 +503,12 @@ def make_extras_router(templates) -> APIRouter:
             if d.get("d") is not None:
                 d["d"] = str(d["d"])
         recent = await pg_fetch("""
-            SELECT l.id, fp.photo_url, fp.floorplan_score::float AS score,
+            SELECT DISTINCT ON (l.id) l.id, fp.photo_url, fp.floorplan_score::float AS score,
                    l.title, l.address, fp.checked_at
             FROM listing_floorplans fp
             JOIN apartment_listings l ON l.id = fp.listing_id
             WHERE fp.is_floorplan
-            ORDER BY fp.checked_at DESC, fp.id DESC LIMIT 10""")
+            ORDER BY l.id, fp.floorplan_score DESC, fp.id DESC LIMIT 10""")
         recent = [dict(r) for r in recent]
         for r in recent:
             if r.get("checked_at") is not None:
