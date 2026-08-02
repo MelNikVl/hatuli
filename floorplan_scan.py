@@ -17,6 +17,7 @@ import os
 import re
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -42,8 +43,22 @@ def cache_path(url: str) -> Path:
     return PHOTO_CACHE / (hashlib.sha256(url.encode()).hexdigest() + ".jpg")
 
 
-def download(url: str) -> Path:
-    """Качает фото в кэш (thread-safe), возвращает путь."""
+# глобальный троттлинг: не более 1 загрузки за delay сек (все воркеры вместе)
+_rate_lock = threading.Lock()
+_last_dl = [0.0]
+
+
+def _throttle(delay: float) -> None:
+    with _rate_lock:
+        elapsed = time.time() - _last_dl[0]
+        if elapsed < delay:
+            time.sleep(delay - elapsed)
+        _last_dl[0] = time.time()
+
+
+def download(url: str, delay: float = 0.3) -> Path:
+    """Качает фото в кэш (thread-safe, с троттлингом), возвращает путь."""
+    _throttle(delay)
     p = cache_path(url)
     if p.exists() and p.stat().st_size > 0:
         return p
@@ -115,6 +130,8 @@ def main() -> None:
     ap.add_argument("--max-photos", type=int, default=12)
     ap.add_argument("--min-score", type=float, default=0.22)
     ap.add_argument("--batch", type=int, default=100)
+    ap.add_argument("--delay", type=float, default=0.3, help="сек между загрузками фото (троттлинг CDN)")
+    ap.add_argument("--workers", type=int, default=3)
     a = ap.parse_args()
 
     PHOTO_CACHE.mkdir(parents=True, exist_ok=True)
@@ -122,13 +139,15 @@ def main() -> None:
     cur = conn.cursor()
 
     # пул загрузок
-    dl = ThreadPoolExecutor(max_workers=6)
+    dl = ThreadPoolExecutor(max_workers=a.workers)
     dl_lock = threading.Lock()
     dl_count = 0
 
     cur.execute("""
         SELECT id, photos::text FROM apartment_listings
-        WHERE floorplan_checked_at IS NULL AND photos IS NOT NULL AND photos::text != '[]'
+        WHERE floorplan_checked_at IS NULL
+          AND photos IS NOT NULL AND photos::text != '[]'
+          AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
         ORDER BY id LIMIT %s""", (a.limit,))
     rows = cur.fetchall()
     print(f"Объявлений к обработке: {len(rows)}", flush=True)
@@ -145,7 +164,7 @@ def main() -> None:
 
         for url in urls:
             try:
-                p = dl.submit(download, url).result(timeout=60)
+                p = dl.submit(download, url, a.delay).result(timeout=60)
                 with dl_lock:
                     dl_count += 1
                 is_fp, fp_s, ot_s = classify(p, a.min_score)
