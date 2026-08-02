@@ -55,8 +55,8 @@ function twoLineChart(divId, days, seriesUp, seriesDown, w, h, fmtVal) {
     el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек</div>';
     return;
   }
-  const LABEL_H = 22, TOP_PAD = 26, LEFT_PAD = 46;
-  const plotW = w - LEFT_PAD;
+  const LABEL_H = 22, TOP_PAD = 26, LEFT_PAD = 46, RIGHT_PAD = 34;
+  const plotW = w - LEFT_PAD - RIGHT_PAD;
   const chartH = h - LABEL_H - TOP_PAD;
   const allVals = seriesUp.concat(seriesDown);
   const mx = Math.max(1, ...allVals);
@@ -92,7 +92,7 @@ function twoLineChart(divId, days, seriesUp, seriesDown, w, h, fmtVal) {
   const arrowAt = (coords, color, glyph) => {
     if (coords.length < 2) return '';
     const last = coords[coords.length - 1];
-    const ax = Math.min(last[0] + 22, w - 6), ay = last[1];
+    const ax = Math.min(last[0] + 22, w - 8), ay = last[1];
     return `<text x="${ax}" y="${ay + 4}" font-size="15" text-anchor="middle" style="filter:drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 1.5px #fff);">${glyph}</text>`;
   };
   el.innerHTML = `<svg width="${w}" height="${h}" style="display:block;overflow:visible;max-width:100%;">` +

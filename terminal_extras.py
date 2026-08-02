@@ -3078,7 +3078,7 @@ def make_extras_router(templates) -> APIRouter:
         """, *params)
         return JSONResponse({"points": [{
             "lat": float(r["lat"]), "lon": float(r["lon"]),
-            "confidence": r["deal_confidence"], "score": r["score_total"],
+            "confidence": r["deal_confidence"], "score": r["score_total"], "rooms": r["rooms"],
         } for r in rows]})
 
     @router.get("/admin/api/ceiling-history")
