@@ -32,6 +32,7 @@
   <a href="#general" data-tab="general" class="active">📖 Общая информация</a>
   <a href="#score" data-tab="score">❤️ Скор</a>
   <a href="#noise" data-tab="noise">Внешний шум</a>
+  <a href="#hype" data-tab="hype">🔥 Хайп</a>
 </div>
 
 <div id="tab-general">
@@ -266,6 +267,43 @@
 </div>
 </div><!-- /tab-noise -->
 
+<div id="tab-hype" style="display:none;">
+<h3>🔥 Как замеряется хайп локаций</h3>
+<p><b>Главный принцип:</b> хайп строится <b>только из новостей</b> — анализируются упоминания локаций в СМИ и Threads. Рыночные данные проекта (цены/объёмы) в скоринге не участвуют.</p>
+
+<h4>📅 Цикл замеров</h4>
+<table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+  <tr style="color:#888;text-align:left;">
+    <th style="padding:6px;border-bottom:1px solid var(--border);">Что</th>
+    <th style="padding:6px;border-bottom:1px solid var(--border);">Как часто</th>
+    <th style="padding:6px;border-bottom:1px solid var(--border);">Как</th>
+  </tr>
+  <tr><td style="padding:6px;border-bottom:1px solid var(--border);">📰 Сбор новостей</td><td style="padding:6px;border-bottom:1px solid var(--border);">1 раз/день (08:30)</td><td style="padding:6px;border-bottom:1px solid var(--border);">Google News RSS по запросам «Астана недвижимость/новостройки/ипотека»; Playwright достаёт фото и текст статей; классифайды (krisha.kz и др.) отсекаются фильтром</td></tr>
+  <tr><td style="padding:6px;border-bottom:1px solid var(--border);">📱 Threads</td><td style="padding:6px;border-bottom:1px solid var(--border);">каждый час</td><td style="padding:6px;border-bottom:1px solid var(--border);">поиск site:threads.net по недвижимости Астаны, счёт постов, прогоны в hype_tracker</td></tr>
+  <tr><td style="padding:6px;border-bottom:1px solid var(--border);">🗞 Медиа-скан</td><td style="padding:6px;border-bottom:1px solid var(--border);">5 раз/день (8,11,14,17,20)</td><td style="padding:6px;border-bottom:1px solid var(--border);">Google News RSS, счёт материалов по СМИ (Zakon.kz, Kazinform, Liter.kz, inastana.kz, Azattyq Ruhy…)</td></tr>
+  <tr><td style="padding:6px;border-bottom:1px solid var(--border);">🧠 LLM-анализ</td><td style="padding:6px;border-bottom:1px solid var(--border);">1 раз/день (21:00)</td><td style="padding:6px;border-bottom:1px solid var(--border);">LLM читает <b>полные тексты</b> всех новостей за сутки, извлекает упоминания локаций, считает рейтинги</td></tr>
+  <tr><td style="padding:6px;border-bottom:1px solid var(--border);">💾 Снимки hype_tracker</td><td style="padding:6px;border-bottom:1px solid var(--border);">2 раза/день (8:00, 20:00)</td><td style="padding:6px;border-bottom:1px solid var(--border);">сбор noz.kz/krisha.kz/внутренних метрик + ресурсы в hype_tracker</td></tr>
+</table>
+
+<h4>🧮 Как считается рейтинг локации (0–100)</h4>
+<p>1. LLM читает полные тексты новостей за сутки + темы из Threads.<br>
+2. Извлекаются упоминания локаций: районы (Есиль, Нура, Алматы, Сарыарка, Байконур), ЖК, ориентиры (ЛРТ, вокзалы, парки, ТРЦ).<br>
+3. Считается частота упоминаний каждой локации.<br>
+4. <b>Рейтинг = упоминания локации / максимум упоминаний × 100</b> (лидер получает 100, минимум для упомянутых — 5).<br>
+5. Районам присваиваются фиксированные координаты, ЖК — по известным координатам.</p>
+
+<h4>🗺 Как это видно на карте</h4>
+<p>Страница <b>«🔥 Хайп»</b> (Аналитика): основной слой «Хайп по новостям» — гексы 100 м вокруг локаций, цвет по рейтингу (бледно-жёлтый → золото). Слой «Рынок (проект)» — справочно, выключен по умолчанию. Кнопка «📍 Точки притяжения» — достопримечательности и станции ЛРТ. На главной (дашборд) — кнопка «🔥 Хайп (новости)» в разделе «Тепловые карты».</p>
+
+<h4>📊 Где смотреть статистику</h4>
+<p>— «📰 Обход СМИ» на странице хайпа: новости по часам.<br>
+— «📈 Ресурсы во времени»: ресурсы/объекты по снимкам.<br>
+— <b>«📰 Анализ новостей»</b> (Аналитика): сколько новостей проанализировано по дням и сколько токенов потрачено на LLM-анализ.<br>
+— История рейтингов локаций хранится в hype_tracker.hype_location_history.</p>
+
+<p style="color:#888;font-size:12px;">⚠️ Рейтинг отражает <b>медиа-внимание</b> к локации (упоминаемость в новостях), а не финансовую аналитику или прогноз доходности.</p>
+</div>
+
 <script>
 (function() {
   const tabs = document.querySelectorAll('#info-tabs a');
@@ -274,6 +312,7 @@
     document.getElementById('tab-general').style.display = name === 'general' ? '' : 'none';
     document.getElementById('tab-score').style.display = name === 'score' ? '' : 'none';
     document.getElementById('tab-noise').style.display = name === 'noise' ? '' : 'none';
+    document.getElementById('tab-hype').style.display = name === 'hype' ? '' : 'none';
   }
   tabs.forEach(t => t.addEventListener('click', (e) => {
     e.preventDefault();
@@ -281,7 +320,7 @@
     activate(t.dataset.tab);
   }));
   const initial = (location.hash || '').replace('#', '');
-  activate(['score', 'noise'].includes(initial) ? initial : 'general');
+  activate(['score', 'noise', 'hype'].includes(initial) ? initial : 'general');
 })();
 </script>
 
