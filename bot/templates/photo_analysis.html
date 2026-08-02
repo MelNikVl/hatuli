@@ -39,6 +39,7 @@
 
 <div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:1100px;">
   <div style="font-weight:700;margin-bottom:8px;">🤖 Какая модель работает и как</div>
+  <div style="font-size:12.5px;color:#f59e0b;margin-bottom:8px;">Гибрид: эвристика OpenCV (фильтр) → SigLIP (подтверждение). Эвристика отсекает ~90% фото (цветные интерьеры, фасады), SigLIP запускается только на ч/б-кандидатах.</div>
   <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
     <tr><td style="padding:5px 8px;color:#888;width:210px;border-bottom:1px solid var(--border);">Модель</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);"><b>SigLIP ViT-B-16</b> (open_clip, веса webli) — мультимодальная модель OpenAI-CLIP-архитектуры: картинка и текст попадают в одно эмбеддинг-пространство, близость = семантическое сходство</td></tr>
     <tr><td style="padding:5px 8px;color:#888;border-bottom:1px solid var(--border);">Где работает</td><td style="padding:5px 8px;border-bottom:1px solid var(--border);">Локально на сервере (CPU, ~/floorplan-clip/venv), <b>без API и без оплаты за каждый вызов</b> — модель скачана один раз (~450 МБ)</td></tr>

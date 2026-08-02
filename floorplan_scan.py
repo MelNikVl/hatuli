@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Детекция планировок на фото объявлений (SigLIP, локально, без API).
-Запуск (из ~/floorplan-clip/venv — там torch):
-  /home/nik/floorplan-clip/venv/bin/python /home/nik/krisha_bot/floorplan_scan.py [--limit N] [--max-photos M] [--min-score 0.22]
+"""Детекция планировок: гибрид — эвристика OpenCV (быстрый фильтр) + SigLIP на кандидатах.
+Запуск (из ~/floorplan-clip/venv — там torch, opencv):
+  /home/nik/floorplan-clip/venv/bin/python /home/nik/krisha_bot/floorplan_scan.py [--limit N] [--delay 1.0]
 
-Что делает:
-  1. Берёт объявления с фото, у которых floorplan_checked_at IS NULL (пачками по 100).
-  2. Качает фото с CDN (кэш в static/cache/photos/<sha256(url)>.jpg).
-  3. Классифицирует каждое фото SigLIP (floorplan vs интерьер).
-  4. Пишет: listing_floorplans (пофото), listings.floorplan_url (первое фото-план).
+Решение «план» = эвристика прошла И SigLIP согласен (fp > other, fp > порог).
 """
 import argparse
 import hashlib
 import json
-import os
-import re
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.request import Request, urlopen
 
 BASE = Path("/home/nik/krisha_bot")
 PHOTO_CACHE = BASE / "static" / "cache" / "photos"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
+
+# пороги эвристики (настраиваются под выборку)
+H_SAT_MAX = 35.0      # средняя насыщенность (план — почти ч/б)
+H_WHITE_MIN = 0.18    # доля почти белых пикселей
+H_GRAY_MIN = 0.50     # доля «серых» пикселей (max-min < 15)
 
 
 def load_database_url() -> str:
@@ -43,7 +42,6 @@ def cache_path(url: str) -> Path:
     return PHOTO_CACHE / (hashlib.sha256(url.encode()).hexdigest() + ".jpg")
 
 
-# глобальный троттлинг: не более 1 загрузки за delay сек (все воркеры вместе)
 _rate_lock = threading.Lock()
 _last_dl = [0.0]
 
@@ -56,23 +54,43 @@ def _throttle(delay: float) -> None:
         _last_dl[0] = time.time()
 
 
-def download(url: str, delay: float = 0.3) -> Path:
-    """Качает фото в кэш (thread-safe, с троттлингом), возвращает путь."""
+def download(url: str, delay: float = 1.0) -> Path:
     _throttle(delay)
     p = cache_path(url)
     if p.exists() and p.stat().st_size > 0:
         return p
-    req = Request(url, headers={"User-Agent": UA})
-    data = urlopen(req, timeout=20).read()
+    data = urlopen(Request(url, headers={"User-Agent": UA}), timeout=20).read()
     if not data:
         raise ValueError("empty")
     p.write_bytes(data)
     return p
 
 
-# --- Модель SigLIP (один раз на процесс) ---
+# --- Эвристика OpenCV ---
+def heuristic_features(path: Path):
+    """(sat_mean, white_ratio, gray_ratio) или None."""
+    import cv2
+    import numpy as np
+    img = cv2.imread(str(path))
+    if img is None:
+        return None
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    sat = float(hsv[:, :, 1].mean())
+    white = float(((hsv[:, :, 1] < 20) & (hsv[:, :, 2] > 200)).mean())
+    b, g, r = img[:, :, 0].astype(int), img[:, :, 1].astype(int), img[:, :, 2].astype(int)
+    gray = float((np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b) < 15).mean())
+    return sat, white, gray
+
+
+def is_candidate(f):
+    if f is None:
+        return False
+    sat, white, gray = f
+    return sat < H_SAT_MAX and white > H_WHITE_MIN and gray > H_GRAY_MIN
+
+
+# --- SigLIP (только для кандидатов) ---
 _model = None
-_tokenizer = None
 _preprocess = None
 _text_features = None
 _device = "cpu"
@@ -89,56 +107,49 @@ _TEXTS = [
 
 
 def load_model():
-    global _model, _tokenizer, _preprocess, _text_features, _device
+    global _model, _preprocess, _text_features, _device
     if _model is not None:
         return
     import torch
     import open_clip
-    print("Загружаю модель SigLIP ViT-B-16 (webli)...", flush=True)
-    _model, _, _preprocess = open_clip.create_model_and_transforms(
-        "ViT-B-16-SigLIP", pretrained="webli")
-    _tokenizer = open_clip.get_tokenizer("ViT-B-16-SigLIP")
+    print("Загружаю SigLIP...", flush=True)
+    _model, _, _preprocess = open_clip.create_model_and_transforms("ViT-B-16-SigLIP", pretrained="webli")
+    tokenizer = open_clip.get_tokenizer("ViT-B-16-SigLIP")
     _device = "cuda" if torch.cuda.is_available() else "cpu"
     _model = _model.to(_device)
     _model.eval()
     with torch.no_grad():
-        text_tokens = _tokenizer(_TEXTS).to(_device)
-        text_features = _model.encode_text(text_tokens)
-        _text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-    print(f"Модель на: {_device}", flush=True)
+        tt = tokenizer(_TEXTS).to(_device)
+        tf = _model.encode_text(tt)
+        _text_features = tf / tf.norm(dim=-1, keepdim=True)
+    print(f"SigLIP на: {_device}", flush=True)
 
 
-def classify(path: Path, min_score: float):
-    """Возвращает (is_floorplan, floorplan_score, other_score)."""
+def siglip_probs(path: Path):
     import torch
     from PIL import Image
     load_model()
     image = _preprocess(Image.open(path).convert("RGB")).unsqueeze(0).to(_device)
     with torch.no_grad():
-        image_features = _model.encode_image(image)
-        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        sim = (100.0 * image_features @ _text_features.T).softmax(dim=-1)
-        probs = sim[0].cpu().numpy()
-    fp = max(probs[0], probs[1], probs[2], probs[3])
-    other = max(probs[4], probs[5], probs[6], probs[7])
-    return (fp > other and fp > min_score, float(fp), float(other))
+        im = _model.encode_image(image)
+        im = im / im.norm(dim=-1, keepdim=True)
+        sim = (100.0 * im @ _text_features.T).softmax(dim=-1)
+        p = sim[0].cpu().numpy()
+    return float(max(p[0], p[1], p[2], p[3])), float(max(p[4], p[5], p[6], p[7]))
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=200, help="сколько объявлений за прогон")
+    ap.add_argument("--limit", type=int, default=30)
     ap.add_argument("--max-photos", type=int, default=12)
     ap.add_argument("--min-score", type=float, default=0.22)
-    ap.add_argument("--batch", type=int, default=100)
-    ap.add_argument("--delay", type=float, default=0.3, help="сек между загрузками фото (троттлинг CDN)")
+    ap.add_argument("--delay", type=float, default=1.0)
     ap.add_argument("--workers", type=int, default=3)
     a = ap.parse_args()
 
     PHOTO_CACHE.mkdir(parents=True, exist_ok=True)
     conn = db()
     cur = conn.cursor()
-
-    # пул загрузок
     dl = ThreadPoolExecutor(max_workers=a.workers)
     dl_lock = threading.Lock()
     dl_count = 0
@@ -152,8 +163,7 @@ def main() -> None:
     rows = cur.fetchall()
     print(f"Объявлений к обработке: {len(rows)}", flush=True)
 
-    done = 0
-    found = 0
+    done = found = candidates = 0
     for lid, photos_json in rows:
         try:
             urls = [u for u in json.loads(photos_json) if isinstance(u, str) and u.startswith("http")]
@@ -167,15 +177,25 @@ def main() -> None:
                 p = dl.submit(download, url, a.delay).result(timeout=60)
                 with dl_lock:
                     dl_count += 1
-                is_fp, fp_s, ot_s = classify(p, a.min_score)
+                f = heuristic_features(p)
+                h_pass = is_candidate(f)
+                if not h_pass:
+                    cur.execute(
+                        "INSERT INTO listing_floorplans (listing_id, photo_url, floorplan_score, other_score, is_floorplan, h_sat, h_white, h_gray) "
+                        "VALUES (%s, %s, 0, 0, FALSE, %s, %s, %s)",
+                        (lid, url, *(f or (0, 0, 0))))
+                    continue
+                candidates += 1
+                fp_s, ot_s = siglip_probs(p)
+                is_fp = fp_s > ot_s and fp_s > a.min_score
                 cur.execute(
-                    "INSERT INTO listing_floorplans (listing_id, photo_url, floorplan_score, other_score, is_floorplan) "
-                    "VALUES (%s, %s, %s, %s, %s)",
-                    (lid, url, float(fp_s), float(ot_s), bool(is_fp)))
+                    "INSERT INTO listing_floorplans (listing_id, photo_url, floorplan_score, other_score, is_floorplan, h_sat, h_white, h_gray) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (lid, url, fp_s, ot_s, bool(is_fp), *(f or (0, 0, 0))))
                 if is_fp and floorplan_url is None:
                     floorplan_url = url
             except Exception as e:
-                print(f"    [ERR] listing {lid}: {type(e).__name__}: {e}", flush=True)
+                print(f"    [ERR] {lid}: {type(e).__name__}: {e}", flush=True)
                 continue
 
         cur.execute(
@@ -184,14 +204,13 @@ def main() -> None:
         done += 1
         if floorplan_url:
             found += 1
-
-        if done % 25 == 0:
+        if done % 10 == 0:
             conn.commit()
-            print(f"  {done}/{len(rows)} · планов найдено: {found} · скачано фото: {dl_count}", flush=True)
+            print(f"  {done}/{len(rows)} · планов: {found} · кандидатов SigLIP: {candidates} · фото: {dl_count}", flush=True)
 
     conn.commit()
     conn.close()
-    print(f"Готово: обработано {done}, планов найдено: {found}", flush=True)
+    print(f"Готово: {done} объявлений, планов {found}, кандидатов на SigLIP {candidates}", flush=True)
 
 
 if __name__ == "__main__":
