@@ -565,6 +565,47 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "request": request, "atab": "hype",
         })
 
+    @app.get("/admin/analytics/parse-monitor", response_class=HTMLResponse)
+    async def parse_monitor_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+
+        def one(rows):
+            return rows[0] if rows else {}
+
+        stats = {
+            "total": one(await pg_fetch("SELECT count(*)::int AS n FROM complexes WHERE krisha_url IS NOT NULL")).get("n", 0),
+            "filled": one(await pg_fetch("""SELECT count(*)::int AS n FROM housing_class_test hct
+                             JOIN complexes c ON c.id = hct.complex_id
+                             WHERE c.krisha_url IS NOT NULL AND hct.apartment_count_source = 'krisha'""")).get("n", 0),
+            "pending": one(await pg_fetch("""SELECT count(*)::int AS n FROM complexes c
+                              LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
+                              WHERE c.krisha_url IS NOT NULL
+                                AND (hct.apartment_count_source IS DISTINCT FROM 'krisha')""")).get("n", 0),
+            "errors": one(await pg_fetch("""SELECT count(*)::int AS n FROM krisha_parse_log
+                             WHERE status = 'error' AND ts > now() - interval '24 hours'""")).get("n", 0),
+        }
+        set_rows = await pg_fetch("SELECT key, value FROM parse_settings")
+        settings = {"delay": "120", "batch": "10", "enabled": "1"}
+        for r in set_rows:
+            settings[r["key"].replace("krisha_", "")] = r["value"]
+        log = await pg_fetch("""SELECT l.ts::timestamp(0) AS ts, c.name, l.apartment_count, l.status, l.detail
+                                      FROM krisha_parse_log l LEFT JOIN complexes c ON c.id = l.complex_id
+                                      ORDER BY l.id DESC LIMIT 20""")
+        hours = await pg_fetch("""SELECT to_char(date_trunc('hour', ts), 'DD HH24:00') AS h,
+                                        count(*) FILTER (WHERE status='ok')::int AS ok,
+                                        count(*) FILTER (WHERE status='error')::int AS err
+                                        FROM krisha_parse_log WHERE ts > now() - interval '24 hours'
+                                        GROUP BY 1 ORDER BY 1""")
+        return templates.TemplateResponse("parse_monitor.html", {
+            "request": request, "atab": "parse",
+            "stats": stats, "settings": settings, "log": log,
+            "chart": {"hours": [h["h"] for h in hours],
+                      "ok": [h["ok"] for h in hours],
+                      "err": [h["err"] for h in hours]},
+        })
+
     @app.get("/admin/analytics/geo", response_class=HTMLResponse)
     async def geo_analytics_page(request: Request):
         # ВАЖНО: выше catch-all /admin/analytics/{listing_id}.

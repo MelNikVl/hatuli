@@ -509,6 +509,19 @@ def make_extras_router(templates) -> APIRouter:
             content={"type": "FeatureCollection", "features": feats},
             headers={"Access-Control-Allow-Origin": "*"})
 
+    @router.post("/admin/api/parse-settings")
+    async def parse_settings_api(request: Request):
+        from bot.db.pg import fetch as pg_fetch
+        body = await request.json()
+        for key, val in (("delay", body.get("delay")), ("batch", body.get("batch")),
+                         ("enabled", body.get("enabled"))):
+            if val is not None:
+                await pg_fetch("""INSERT INTO parse_settings (key, value, updated_at)
+                                  VALUES ('krisha_' || $1, $2, now())
+                                  ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()""",
+                               key, str(val))
+        return JSONResponse({"ok": True})
+
     @router.get("/admin/api/geo-sales")
     async def geo_sales_api(request: Request):
         from bot.db.pg import fetch as pg_fetch
