@@ -848,6 +848,15 @@ def make_extras_router(templates) -> APIRouter:
         await delete_site_user(user_id)
         return JSONResponse({"ok": True})
 
+    @router.get("/admin/monitoring", response_class=HTMLResponse)
+    async def monitoring_page(request: Request):
+        # Раньше блок "Сервер и проект" жил прямо на /admin/settings —
+        # вынесен на отдельную страницу, чтобы не грузить настройки лишним
+        # живым polling'ом на 4 метрики каждые 5с.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("monitoring.html", {"request": request})
+
     @router.get("/admin/settings", response_class=HTMLResponse)
     async def settings_page(request: Request):
         if not is_authed(request):
