@@ -13,6 +13,21 @@
   так что сравнение между объявлениями честное (иначе объявление, висящее месяц, всегда обгоняло бы вчерашнее).
 </p>
 
+<style>
+.chart-box-1200-inner { position:relative; height:520px; }
+</style>
+<div class="chart-box-1200" style="height:auto;">
+  <b style="font-size:1em;">📈 Покрытие данными о просмотрах во времени</b>
+  <span style="font-size:0.85em;color:#888;margin-left:6px;">сколько активных объявлений вообще имеют известный views_count — снимок раз в цикл парсера продаж</span>
+  <div style="display:inline-flex;gap:6px;margin-left:12px;">
+    {% for d in [7, 30, 90] %}
+    <a href="?cov_days={{ d }}" class="views-cov-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
+    {% endfor %}
+  </div>
+  <div id="v-coverage-stat" style="display:flex;gap:14px;margin:10px 0;"></div>
+  <div class="chart-box-1200-inner"><canvas id="views-coverage-chart"></canvas></div>
+</div>
+
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
@@ -40,20 +55,6 @@
   </div>
 </div>
 
-<style>
-.chart-box-1200-inner { position:relative; height:520px; }
-</style>
-<div class="chart-box-1200" style="height:auto;">
-  <b style="font-size:1em;">📈 Покрытие данными о просмотрах во времени</b>
-  <span style="font-size:0.85em;color:#888;margin-left:6px;">сколько активных объявлений вообще имеют известный views_count — снимок раз в цикл парсера продаж</span>
-  <div style="display:inline-flex;gap:6px;margin-left:12px;">
-    {% for d in [7, 30, 90] %}
-    <a href="?cov_days={{ d }}" class="views-cov-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
-    {% endfor %}
-  </div>
-  <div class="chart-box-1200-inner"><canvas id="views-coverage-chart"></canvas></div>
-</div>
-
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
 (function() {
@@ -63,6 +64,12 @@
   });
   fetch('/admin/api/views-coverage-history?days=' + covDays).then(r => r.json()).then(d => {
     const pts = d.points || [];
+    if (pts.length) {
+      const last = pts[pts.length - 1];
+      const mk = (v, lbl) => `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 16px;text-align:center;"><div style="font-size:18px;font-weight:800;">${(v ?? 0).toLocaleString('ru')}</div><div style="font-size:11px;color:#888;">${lbl}</div></div>`;
+      document.getElementById('v-coverage-stat').innerHTML =
+        mk(last.total_active, 'всего активных объявлений') + mk(last.with_views, 'с данными по просмотрам');
+    }
     if (pts.length < 2) {
       document.getElementById('views-coverage-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек снимков</div>';
       return;

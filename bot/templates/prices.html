@@ -121,7 +121,7 @@ function loadPrices(rooms, days) {
   });
   fetch('/admin/api/price-trend-history?days=' + currentDays + '&rooms=' + encodeURIComponent(rooms)).then(r => r.json()).then(d => {
     const blockW = document.getElementById('price-trend-chart').parentElement.clientWidth - 4;
-    const w = Math.max(320, blockW);
+    const w = Math.max(320, Math.round(blockW * 1.2));
     twoLineChart('price-trend-chart', d.days || [], d.cnt_up || [], d.cnt_down || [], w, 480,
       v => v + ' объявл.');
     twoLineChart('price-amount-chart', d.days || [], (d.avg_up || []).map(v => v / 1e6),
