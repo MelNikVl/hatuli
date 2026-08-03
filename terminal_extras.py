@@ -3196,29 +3196,10 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/unbound", response_class=HTMLResponse)
     async def unbound_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        from bot.db.pg import fetchval as pg_fv
-        stats = {
-            "total_active": await pg_fv(
-                "SELECT COUNT(*) FROM apartment_listings "
-                "WHERE is_active IS NOT FALSE "
-                "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0,
-            "unbound": await pg_fv(
-                "SELECT COUNT(*) FROM apartment_listings "
-                "WHERE is_active IS NOT FALSE "
-                "AND COALESCE(is_duplicate, FALSE) = FALSE "
-                "AND (complex_name IS NULL OR btrim(complex_name) = '')") or 0,
-            "unbound_coords": await pg_fv(
-                "SELECT COUNT(*) FROM apartment_listings "
-                "WHERE is_active IS NOT FALSE "
-                "AND COALESCE(is_duplicate, FALSE) = FALSE "
-                "AND (complex_name IS NULL OR btrim(complex_name) = '') "
-                "AND lat IS NOT NULL") or 0,
-        }
-        return templates.TemplateResponse("unbound.html", {
-            "request": request, "atab": "unbound", "stats": stats,
-        })
+        # Слито в /admin/analytics/floors (этажи+потолок+этаж-vs-продажи+
+        # координаты одной страницей) — API-ручки unbound-* ниже остались,
+        # их использует JS на объединённой странице.
+        return RedirectResponse(url="/admin/analytics/floors", status_code=301)
 
     @router.get("/admin/api/unbound-points")
     async def unbound_points(request: Request):

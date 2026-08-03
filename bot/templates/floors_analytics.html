@@ -1,46 +1,147 @@
 {% extends "base.html" %}
 {% block content %}
 {% include "_analytics_tabs.html" with context %}
-<div class="page-title">🧱 Покрытие данными по этажам</div>
-<p style="font-size:13px;color:#888;max-width:900px;">
-  Этаж (как и координаты, фото, отделка) приходит только с детальной страницы объявления на Крыше —
-  та же докачка, что упирается в лимит запросов (см. вкладку <a href="/admin/parser">Парсеры</a>).
-  График ниже — снимки <code>floor_stats_history</code>, которые пишутся раз в цикл парсера продаж.
+<div class="page-title">🧱 Покрытие данными: этажи, потолки, координаты</div>
+<p style="font-size:13px;color:#888;max-width:1100px;">
+  Этаж, высота потолка и координаты (как и фото, отделка) приходят только с детальной страницы объявления
+  на Крыше — та же докачка, что упирается в лимит запросов (см. вкладку <a href="/admin/parser">Парсеры</a>).
+  Графики ниже — снимки <code>floor_stats_history</code>/<code>ceiling_stats_history</code>, которые пишутся
+  раз в цикл парсера продаж.
 </p>
 
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px;">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
-    <div style="font-size:24px;font-weight:800;">{{ "{:,}".format(total_active).replace(",", " ") }}</div>
-    <div style="font-size:12px;color:#888;">активных объявлений</div>
+<style>
+.dc-box { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; box-sizing:border-box; font-size:1em; flex:1 1 0; min-width:340px; }
+.dc-box-inner { position:relative; height:340px; }
+</style>
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-top:14px;">
+  <div class="dc-box">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;">
+      <div style="background:var(--bg);border-radius:10px;padding:10px 14px;">
+        <div style="font-size:20px;font-weight:800;">{{ "{:,}".format(total_active).replace(",", " ") }}</div>
+        <div style="font-size:11px;color:#888;">активных объявлений</div>
+      </div>
+      <div style="background:var(--bg);border-radius:10px;padding:10px 14px;">
+        <div style="font-size:20px;font-weight:800;color:#ef4444;">{{ "{:,}".format(missing_floor).replace(",", " ") }}</div>
+        <div style="font-size:11px;color:#888;">сейчас без этажа{% if total_active %} ({{ (missing_floor / total_active * 100) | round(1) }}%){% endif %}</div>
+      </div>
+    </div>
+    <b style="font-size:0.95em;">Без этажа — во времени</b>
+    <div style="display:inline-flex;gap:6px;margin-left:12px;">
+      {% for d in [7, 30, 90] %}
+      <a href="?floor_days={{ d }}" class="floors-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
+      {% endfor %}
+    </div>
+    <div class="dc-box-inner"><canvas id="floor-missing-chart"></canvas></div>
   </div>
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
-    <div style="font-size:24px;font-weight:800;color:#ef4444;">{{ "{:,}".format(missing_floor).replace(",", " ") }}</div>
-    <div style="font-size:12px;color:#888;">сейчас без этажа{% if total_active %} ({{ (missing_floor / total_active * 100) | round(1) }}%){% endif %}</div>
+
+  <div class="dc-box">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;">
+      <div style="background:var(--bg);border-radius:10px;padding:10px 14px;">
+        <div style="font-size:20px;font-weight:800;">{{ "{:,}".format(total_active).replace(",", " ") }}</div>
+        <div style="font-size:11px;color:#888;">активных объявлений</div>
+      </div>
+      <div style="background:var(--bg);border-radius:10px;padding:10px 14px;">
+        <div style="font-size:20px;font-weight:800;color:#ef4444;">{{ "{:,}".format(missing_ceiling).replace(",", " ") }}</div>
+        <div style="font-size:11px;color:#888;">сейчас без высоты потолка{% if total_active %} ({{ (missing_ceiling / total_active * 100) | round(1) }}%){% endif %}</div>
+      </div>
+    </div>
+    <b style="font-size:0.95em;">Без высоты потолка — во времени</b>
+    <div style="display:inline-flex;gap:6px;margin-left:12px;">
+      {% for d in [7, 30, 90] %}
+      <a href="?ceiling_days={{ d }}" class="ceiling-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
+      {% endfor %}
+    </div>
+    <div class="dc-box-inner"><canvas id="ceiling-missing-chart"></canvas></div>
   </div>
 </div>
 
-<style>
-.chart-box-1200 { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; width:1200px; max-width:100%; height:600px; box-sizing:border-box; font-size:1em; }
-.chart-box-1200-inner { position:relative; height:520px; }
-</style>
-<div class="chart-box-1200">
-  <b style="font-size:1em;">Сколько активных объявлений БЕЗ этажа — во времени</b>
-  <div style="display:inline-flex;gap:6px;margin-left:12px;">
-    {% for d in [7, 30, 90] %}
-    <a href="?days={{ d }}" class="floors-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
-    {% endfor %}
+<p style="font-size:13px;color:#888;max-width:1100px;margin-top:18px;">
+  «Скорость продажи» ниже — прокси, не факт продажи: считаем дни от появления объявления до ухода в архив
+  (архив = мы перестали видеть объявление активным, не обязательно именно продажа — см. вкладку
+  <a href="/admin/archived">Ушедшие в архив</a>). Оба графика — только по объявлениям, где известен этаж.
+</p>
+<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
+  <div class="dc-box">
+    <b style="font-size:0.95em;">По конкретному этажу дома</b>
+    <div class="dc-box-inner"><canvas id="chart-floor"></canvas></div>
   </div>
-  <div class="chart-box-1200-inner"><canvas id="floor-missing-chart"></canvas></div>
+  <div class="dc-box">
+    <b style="font-size:0.95em;">Этаж vs количество проданных квартир</b>
+    <span style="font-size:0.8em;color:#888;margin-left:6px;">"продано" — прокси через уход в архив</span>
+    <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;">
+      {% for val, label in [('today', 'Сегодня'), ('3d', '3 дня'), ('7d', '7 дней'), ('month', 'Месяц'), ('3m', '3 месяца'), ('6m', 'Пол года')] %}
+      <button type="button" class="fs-period-btn" data-period="{{ val }}" onclick="loadFloorSold('{{ val }}')"
+              style="padding:5px 11px;border:1px solid var(--border);border-radius:8px;background:{{ '#2563eb' if val == 'month' else 'var(--bg)' }};color:{{ '#fff' if val == 'month' else 'var(--text)' }};font-size:12px;cursor:pointer;">{{ label }}</button>
+      {% endfor %}
+    </div>
+    <div class="dc-box-inner"><canvas id="chart-floor-sold"></canvas></div>
+  </div>
+</div>
+
+<div class="page-title" style="margin-top:22px;">🧩 Квартиры без координат
+  <small style="font-size:13px;color:#888;font-weight:400;">
+    {{ stats.unbound }} без ЖК всего · {{ stats.unbound - stats.unbound_coords }} из них ещё и без точных координат
+    {% if stats.total_active %}({{ ((stats.unbound - stats.unbound_coords) / stats.total_active * 100) | round(1) }}% от активных){% endif %}
+  </small>
+</div>
+<p style="font-size:13px;color:#888;max-width:1100px;">
+  Список и карта ниже показывают только объявления БЕЗ точных координат (детальная страница Крыши ещё не докачана) —
+  {{ stats.unbound_coords }} объявлений хоть и без ЖК, зато с точными координатами уже полностью видны на главной карте,
+  дублировать их тут смысла нет. Синие точки — привязка по центру района (точных координат пока нет).
+  Кнопка «Привязать к ЖК» прогоняет две стадии: склейка по ссылке на карточку ЖК и поиск названия ЖК в заголовке.
+</p>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+  <button onclick="rebind()" id="rebind-btn" style="padding:10px 20px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14px;cursor:pointer;">🔗 Привязать к ЖК</button>
+  <span style="font-size:12px;color:#888;">2 стадии: по ссылке на карточку ЖК · по названию из текста</span>
+  <span id="rebind-status" style="font-size:13px;color:#16a34a;"></span>
+  <span id="map-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
+</div>
+
+<div id="unbound-statbar" style="display:flex;gap:0;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 24px;margin-bottom:12px;">
+  <div style="text-align:center;">
+    <div style="font-size:34px;font-weight:800;color:#3b82f6;" id="stat-on-map">…</div>
+    <div style="font-size:12px;color:#888;">на карте (точно + по району)</div>
+  </div>
+  <div style="font-size:34px;color:#444;padding:0 22px;">/</div>
+  <div style="text-align:center;">
+    <div style="font-size:34px;font-weight:800;color:#ef4444;" id="stat-no-geo">…</div>
+    <div style="font-size:12px;color:#888;">совсем без координат</div>
+  </div>
+</div>
+
+<div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;">
+  <div style="flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+    <b style="font-size:14px;">📉 Непривязанные объявления во времени</b>
+    <div style="font-size:11.5px;color:#888;margin-top:2px;">точка = снимок после каждого прогона привязки (быстрая — каждые ~20 мин, полная — раз в ~6ч)</div>
+    <div id="unbound-chart" style="margin-top:10px;"></div>
+  </div>
+
+  <div style="flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+    <div id="unbound-map" style="aspect-ratio:1/1;width:100%;min-height:280px;border-radius:8px;"></div>
+  </div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-top:14px;">
+  <b style="font-size:14px;">📋 Объявления совсем без координат</b>
+  <span style="font-size:12px;color:#888;margin-left:6px;">чтобы проставить локацию вручную — открыть на Крыше, найти адрес/карту, вбить координаты</span>
+  <div id="no-coords-list" style="margin-top:10px;max-height:520px;overflow-y:auto;display:flex;flex-direction:column;gap:1px;">
+    <div style="color:#888;font-size:12px;padding:10px;">загрузка…</div>
+  </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
-let daysParam = new URLSearchParams(location.search).get('days') || 30;
+// ── Этажи ──────────────────────────────────────────────────────────────
+let floorDaysParam = new URLSearchParams(location.search).get('floor_days') || 30;
 document.querySelectorAll('.floors-days-link').forEach(a => {
-  if (a.dataset.days === String(daysParam)) { a.style.background = '#2563eb'; a.style.color = '#fff'; }
+  if (a.dataset.days === String(floorDaysParam)) { a.style.background = '#2563eb'; a.style.color = '#fff'; }
 });
-let chartInst = null;
-fetch('/admin/api/floor-history?days=' + daysParam).then(r => r.json()).then(d => {
+fetch('/admin/api/floor-history?days=' + floorDaysParam).then(r => r.json()).then(d => {
   const pts = d.points || [];
   if (pts.length < 2) {
     document.getElementById('floor-missing-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек снимков</div>';
@@ -48,22 +149,209 @@ fetch('/admin/api/floor-history?days=' + daysParam).then(r => r.json()).then(d =
   }
   new Chart(document.getElementById('floor-missing-chart'), {
     type: 'line',
-    data: {
-      labels: pts.map(p => p.at),
-      datasets: [{
-        label: 'без этажа, шт.', data: pts.map(p => p.total_active - p.with_floor),
-        borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,.12)', fill: true, tension: 0.25, pointRadius: 2,
-      }],
-    },
-    options: {
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
-        y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
-      },
-    },
+    data: { labels: pts.map(p => p.at), datasets: [{
+      label: 'без этажа, шт.', data: pts.map(p => p.total_active - p.with_floor),
+      borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,.12)', fill: true, tension: 0.25, pointRadius: 2,
+    }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { x: { ticks: { maxTicksLimit: 10, font: { size: 12 } }, grid: { display: false } },
+                y: { beginAtZero: true, ticks: { precision: 0, font: { size: 12 } } } } },
   });
 }).catch(() => {});
+
+// ── Потолок ────────────────────────────────────────────────────────────
+let ceilingDaysParam = new URLSearchParams(location.search).get('ceiling_days') || 30;
+document.querySelectorAll('.ceiling-days-link').forEach(a => {
+  if (a.dataset.days === String(ceilingDaysParam)) { a.style.background = '#2563eb'; a.style.color = '#fff'; }
+});
+fetch('/admin/api/ceiling-history?days=' + ceilingDaysParam).then(r => r.json()).then(d => {
+  const pts = d.points || [];
+  if (pts.length < 2) {
+    document.getElementById('ceiling-missing-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек снимков</div>';
+    return;
+  }
+  new Chart(document.getElementById('ceiling-missing-chart'), {
+    type: 'line',
+    data: { labels: pts.map(p => p.at), datasets: [{
+      label: 'без потолка, шт.', data: pts.map(p => p.total_active - p.with_ceiling),
+      borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,.12)', fill: true, tension: 0.25, pointRadius: 2,
+    }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false } },
+      scales: { x: { ticks: { maxTicksLimit: 10, font: { size: 12 } }, grid: { display: false } },
+                y: { beginAtZero: true, ticks: { precision: 0, font: { size: 12 } } } } },
+  });
+}).catch(() => {});
+
+// ── Этаж vs продажи/просмотры ─────────────────────────────────────────
+fetch('/admin/api/floor-performance-data').then(r => r.json()).then(d => {
+  const byFloor = (d.by_floor || []).filter(f => f.floor_bucket !== '0');
+  if (byFloor.length) {
+    new Chart(document.getElementById('chart-floor'), {
+      type: 'line',
+      data: { labels: byFloor.map(f => f.floor_bucket), datasets: [
+        { label: 'Дней до архива', data: byFloor.map(f => f.avg_days_to_archive), borderColor: '#2563eb', backgroundColor: 'transparent', yAxisID: 'y', tension: 0.25 },
+        { label: 'Просмотров', data: byFloor.map(f => f.avg_views), borderColor: '#f59e0b', backgroundColor: 'transparent', yAxisID: 'y1', tension: 0.25 },
+      ] },
+      options: { maintainAspectRatio: false, scales: {
+        x: { title: { display: true, text: 'этаж (20+ — всё выше 20-го)' } },
+        y: { position: 'left', title: { display: true, text: 'дней' } },
+        y1: { position: 'right', title: { display: true, text: 'просмотров' }, grid: { drawOnChartArea: false } },
+      } },
+    });
+  } else {
+    document.getElementById('chart-floor').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока недостаточно данных по этажу</div>';
+  }
+}).catch(() => {});
+
+let floorSoldChart = null;
+function loadFloorSold(period) {
+  document.querySelectorAll('.fs-period-btn').forEach(b => {
+    const active = b.dataset.period === period;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  fetch('/admin/api/floor-sold-counts?period=' + period).then(r => r.json()).then(d => {
+    const pts = d.points || [];
+    if (floorSoldChart) { floorSoldChart.destroy(); floorSoldChart = null; }
+    if (!pts.length) {
+      document.getElementById('chart-floor-sold').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">нет данных за этот период</div>';
+      return;
+    }
+    floorSoldChart = new Chart(document.getElementById('chart-floor-sold'), {
+      type: 'bar',
+      data: { labels: pts.map(p => p.floor), datasets: [{ label: 'Продано квартир', data: pts.map(p => p.sold_cnt), backgroundColor: '#16a34a', borderRadius: 3 }] },
+      options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: {
+        x: { title: { display: true, text: 'этаж (20+ — всё выше 20-го)' }, ticks: { font: { size: 11 } } },
+        y: { beginAtZero: true, ticks: { precision: 0, font: { size: 11 } } },
+      } },
+    });
+  }).catch(() => {});
+}
+loadFloorSold('month');
+</script>
+
+<script>
+// ── Квартиры без координат ────────────────────────────────────────────
+function loadNoCoordsList() {
+  fetch('/admin/api/unbound-no-coords').then(r => r.json()).then(d => {
+    const el = document.getElementById('no-coords-list');
+    if (!d.points || !d.points.length) { el.innerHTML = '<div style="color:#888;font-size:12px;padding:10px;">пусто</div>'; return; }
+    el.innerHTML = d.points.map(p => `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--border);">
+        <div style="min-width:0;">
+          <div style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.title || (p.rooms + '-комн, ' + (p.address || p.district || 'адрес неизвестен'))}</div>
+          <div style="font-size:11px;color:#888;">${p.price ? (p.price/1e6).toFixed(1) + ' млн ₸' : '—'} · ${p.rooms || '?'}-комн${p.area ? ', ' + p.area + ' м²' : ''} · в базе с ${p.found}</div>
+        </div>
+        ${p.url ? `<a href="${p.url}" target="_blank" style="flex-shrink:0;color:#d4af37;font-weight:800;font-size:12.5px;text-decoration:none;white-space:nowrap;">Крыша ↗</a>` : ''}
+      </div>`).join('');
+  }).catch(() => {});
+}
+loadNoCoordsList();
+</script>
+
+<script>
+function unboundChartSVG(points, w, h) {
+  if (points.length < 2) return '<div style="font-size:12px;color:#888;padding:10px;">пока накопилась только 1 точка — график появится после следующего прогона привязки</div>';
+  const LABEL_H = 26;
+  const chartH = h - LABEL_H;
+  const vals = points.map(p => p.unbound);
+  const mn = Math.min(...vals), mx = Math.max(...vals);
+  const span = (mx - mn) || 1;
+  const stepX = w / (points.length - 1);
+  const coords = points.map((p, i) => [i * stepX, LABEL_H + chartH - ((p.unbound - mn) / span) * (chartH - 10) - 5]);
+  const path = coords.map((c, i) => (i ? 'L' : 'M') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
+  const areaPath = path + ` L${coords[coords.length-1][0].toFixed(1)},${h} L0,${h} Z`;
+  const gid = 'ug' + Math.random().toString(36).slice(2, 9);
+  const labelEvery = Math.max(1, Math.ceil(points.length / Math.floor(w / 60)));
+  const labels = coords.map((c, i) => {
+    if (i !== 0 && i !== points.length - 1 && i % labelEvery !== 0) return '';
+    const x = Math.min(Math.max(c[0], 20), w - 20);
+    const y = i % 2 === 1 ? LABEL_H - 15 : LABEL_H - 4;
+    return `<text x="${x.toFixed(1)}" y="${y}" text-anchor="middle" font-size="10" font-weight="700" fill="#2563eb">${points[i].unbound}</text>`;
+  }).join('');
+  const dots = coords.map((c, i) => `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="8" fill="transparent"><title>${points[i].at}: ${points[i].unbound} непривязано из ${points[i].total_active}</title></circle>` +
+    `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="3.5" fill="#2563eb" stroke="#fff" stroke-width="1.3" style="pointer-events:none;"/>`).join('');
+  const firstAt = points[0].at, lastAt = points[points.length - 1].at;
+  return `<svg width="${w}" height="${h}" style="display:block;overflow:visible;max-width:100%;">` +
+    `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">` +
+    `<stop offset="0%" stop-color="#2563eb" stop-opacity="0.35"/>` +
+    `<stop offset="100%" stop-color="#2563eb" stop-opacity="0.02"/></linearGradient></defs>` +
+    `<path d="${areaPath}" fill="url(#${gid})" stroke="none"/>` +
+    `<path d="${path}" fill="none" stroke="#2563eb" stroke-width="2"/>${dots}${labels}</svg>` +
+    `<div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:2px;"><span>${firstAt}</span><span>${lastAt}</span></div>`;
+}
+function loadUnboundChart() {
+  fetch('/admin/api/unbound-history').then(r => r.json()).then(d => {
+    const el = document.getElementById('unbound-chart');
+    const box = el.parentElement;
+    el.innerHTML = unboundChartSVG(d.points || [], Math.max(300, box.clientWidth - 32), 160);
+  }).catch(() => {});
+}
+loadUnboundChart();
+</script>
+
+<script>
+const map = L.map('unbound-map').setView([51.128, 71.43], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+const layer = L.layerGroup().addTo(map);
+
+function loadPoints() {
+  fetch('/admin/api/unbound-points').then(r => r.json()).then(d => {
+    layer.clearLayers();
+    d.points.forEach(pt => {
+      const exact = pt.binding === 'точно';
+      const m = L.circleMarker([pt.lat, pt.lon], {
+        radius: 6, fillColor: exact ? '#f59e0b' : '#3b82f6',
+        color: '#fff', weight: 1, fillOpacity: .85}).addTo(layer);
+      m.bindPopup(
+        `<b>${pt.title || (pt.rooms + '-комн')}</b><br>` +
+        `${pt.price ? (pt.price/1e6).toFixed(1) + ' млн ₸' : '—'} · ${pt.rooms || '?'}-комн${pt.area ? ', ' + pt.area + ' м²' : ''}<br>` +
+        `${pt.address ? '📍 ' + pt.address + '<br>' : ''}` +
+        `<span style="color:#888;">координаты: ${exact ? 'точные' : 'по району (приблизительно)'} · в базе с ${pt.found}</span><br>` +
+        `<a href="/admin/analytics/${pt.id}">Карточка</a>${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}`);
+    });
+    document.getElementById('map-count').textContent =
+      d.count + ' на карте' + (d.no_geo ? ` (ещё ${d.no_geo} совсем без координат)` : '');
+    document.getElementById('stat-on-map').textContent = d.count.toLocaleString('ru');
+    document.getElementById('stat-no-geo').textContent = (d.no_geo || 0).toLocaleString('ru');
+  });
+}
+
+async function rebind() {
+  const btn = document.getElementById('rebind-btn');
+  const st = document.getElementById('rebind-status');
+  btn.disabled = true;
+  st.textContent = 'запускаю…';
+  try {
+    await fetch('/admin/rebind', {method: 'POST'});
+    const timer = setInterval(async () => {
+      const d = await (await fetch('/admin/rebind/status')).json();
+      if (d.running) { st.textContent = '⏳ ' + d.stage; return; }
+      clearInterval(timer);
+      btn.disabled = false;
+      if (d.result) {
+        const r = d.result;
+        st.textContent = `✅ привязано ${r.bound} (по ссылке: ${r.by_url}, по тексту: ${r.by_text}, по гео: ${r.by_geo}) · адресов из заголовков: ${r.addr_filled} · осталось: ${r.left}`;
+        loadPoints();
+        loadUnboundChart();
+      } else {
+        st.textContent = d.stage || 'готово';
+      }
+      setTimeout(() => { if (!btn.disabled) st.textContent = ''; }, 15000);
+    }, 2500);
+  } catch (e) { st.textContent = 'ошибка'; btn.disabled = false; }
+}
+
+(async () => {
+  try {
+    const d = await (await fetch('/admin/rebind/status')).json();
+    if (d.running) {
+      document.getElementById('rebind-btn').disabled = true;
+      document.getElementById('rebind-status').textContent = '⏳ ' + d.stage;
+    }
+  } catch (e) {}
+})();
+
+loadPoints();
 </script>
 {% endblock %}

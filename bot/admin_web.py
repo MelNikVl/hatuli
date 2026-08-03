@@ -486,6 +486,10 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin/analytics/floors", response_class=HTMLResponse)
     async def floors_analytics_page(request: Request):
+        # Объединённая страница: этажи + потолок + этаж-vs-продажи +
+        # координаты (раньше 4 отдельные вкладки — /admin/analytics/ceiling,
+        # /admin/analytics/floor-performance и /admin/unbound теперь просто
+        # редиректят сюда, см. ниже).
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import fetchval as pg_fv
@@ -495,26 +499,36 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         missing_floor = await pg_fv(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
             "AND COALESCE(is_duplicate, FALSE) = FALSE AND floor IS NULL") or 0
-        return templates.TemplateResponse("floors_analytics.html", {
-            "request": request, "atab": "floors",
-            "total_active": total_active, "missing_floor": missing_floor,
-        })
-
-    @app.get("/admin/analytics/ceiling", response_class=HTMLResponse)
-    async def ceiling_analytics_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        from bot.db.pg import fetchval as pg_fv
-        total_active = await pg_fv(
-            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
-            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
         missing_ceiling = await pg_fv(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
             "AND COALESCE(is_duplicate, FALSE) = FALSE AND ceiling_height IS NULL") or 0
-        return templates.TemplateResponse("ceiling_analytics.html", {
-            "request": request, "atab": "ceiling",
-            "total_active": total_active, "missing_ceiling": missing_ceiling,
+        unbound_stats = {
+            "total_active": total_active,
+            "unbound": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings "
+                "WHERE is_active IS NOT FALSE "
+                "AND COALESCE(is_duplicate, FALSE) = FALSE "
+                "AND (complex_name IS NULL OR btrim(complex_name) = '')") or 0,
+            "unbound_coords": await pg_fv(
+                "SELECT COUNT(*) FROM apartment_listings "
+                "WHERE is_active IS NOT FALSE "
+                "AND COALESCE(is_duplicate, FALSE) = FALSE "
+                "AND (complex_name IS NULL OR btrim(complex_name) = '') "
+                "AND lat IS NOT NULL") or 0,
+        }
+        return templates.TemplateResponse("floors_analytics.html", {
+            "request": request, "atab": "floors",
+            "total_active": total_active, "missing_floor": missing_floor,
+            "missing_ceiling": missing_ceiling, "stats": unbound_stats,
         })
+
+    @app.get("/admin/analytics/ceiling", response_class=HTMLResponse)
+    async def ceiling_analytics_page_redirect(request: Request):
+        return RedirectResponse(url="/admin/analytics/floors", status_code=301)
+
+    @app.get("/admin/analytics/floor-performance", response_class=HTMLResponse)
+    async def floor_performance_page_redirect(request: Request):
+        return RedirectResponse(url="/admin/analytics/floors", status_code=301)
 
     @app.get("/admin/analytics/year", response_class=HTMLResponse)
     async def year_analytics_page(request: Request):
@@ -545,16 +559,6 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "request": request, "atab": "demand",
         })
 
-    @app.get("/admin/analytics/floor-performance", response_class=HTMLResponse)
-    async def floor_performance_page(request: Request):
-        # ВАЖНО: тот же паттерн, что views/floors — этот роут ДОЛЖЕН стоять
-        # выше catch-all /admin/analytics/{listing_id} ниже, иначе "floor-
-        # performance" матчится туда как несуществующий listing_id ("Not found").
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("floor_performance.html", {
-            "request": request, "atab": "floor_performance",
-        })
 
     @app.get("/admin/analytics/hype", response_class=HTMLResponse)
     async def hype_analytics_page(request: Request):
