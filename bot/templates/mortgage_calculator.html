@@ -194,6 +194,11 @@ function mcCalc() {
   printBtn.disabled = false; printBtn.style.opacity = '1';
 }
 
+// Предзаполнение цены из ?price=30.5 (открытие из карточки объявления —
+// см. openMortgageCalcPopup в dashboard.html) — до этого всегда была 30.
+const _mcPriceParam = parseFloat(new URLSearchParams(location.search).get('price'));
+if (_mcPriceParam > 0) document.getElementById('mc-price').value = _mcPriceParam;
+
 fetch('/admin/api/mortgage-banks').then(r => r.json()).then(d => {
   MC_PROGRAMS = d.programs || [];
   mcRebuildBankOptions();

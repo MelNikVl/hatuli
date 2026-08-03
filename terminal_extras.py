@@ -1679,6 +1679,7 @@ def make_extras_router(templates) -> APIRouter:
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
                    a.is_owner, a.seller_name, a.year_built, a.views_count,
                    a.description, a.ceiling_height, a.finish_type, a.floor, a.floors_total,
+                   a.floorplan_url,
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
@@ -1690,7 +1691,8 @@ def make_extras_router(templates) -> APIRouter:
                     + COALESCE(a.price_drop_bonus,0)) AS eff_score,
                    ph.old_price AS prev_price,
                    ph.changed_at AS price_changed_at,
-                   dv.id AS developer_id, dv.name AS developer_name
+                   dv.id AS developer_id, dv.name AS developer_name,
+                   cx.photos AS complex_photos
             FROM apartment_listings a
             LEFT JOIN LATERAL (
                 -- Исторический максимум, а не последнее изменение — просили
@@ -1740,6 +1742,15 @@ def make_extras_router(templates) -> APIRouter:
                     ph = []
             return (ph or [])[:5]
 
+        def _complex_photos_of(r):
+            ph = r["complex_photos"]
+            if isinstance(ph, str):
+                try:
+                    ph = _json_ph.loads(ph)
+                except ValueError:
+                    ph = []
+            return (ph or [])[:3]
+
         pts = [{
             "id": r["id"],
             "lat": float(r["lat"]),
@@ -1754,6 +1765,8 @@ def make_extras_router(templates) -> APIRouter:
             "year_built": r["year_built"],
             "description": r["description"] or "",
             "ceiling_height": float(r["ceiling_height"]) if r["ceiling_height"] is not None else None,
+            "floorplan_url": r["floorplan_url"] or "",
+            "complex_photos": _complex_photos_of(r),
             "url": r["url"] or "",
             "market": r["market_type"] or "",
             "geo": r["geo_source"] or "",
