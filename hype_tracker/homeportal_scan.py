@@ -52,7 +52,7 @@ def norm_name(n: str) -> str:
 def main() -> int:
     # индексы complexes для маппинга (загружаем один раз)
     global COMPLEX_INDEX, NORM_INDEX
-    cx_rows = [r.split("|", 1) for r in psql("SELECT id, name FROM complexes").splitlines() if r]
+    cx_rows = [r.split("|", 1) for r in psql("SELECT id, name FROM complexes WHERE is_garbage IS NOT TRUE").splitlines() if r]
     COMPLEX_INDEX = {name.strip().lower(): int(cid) for cid, name in cx_rows}
     NORM_INDEX = {}
     for cid, name in cx_rows:
