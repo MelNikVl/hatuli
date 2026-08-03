@@ -2553,6 +2553,7 @@ def make_extras_router(templates) -> APIRouter:
             "is_owner": l.get("is_owner") is True,
             "year_built": l.get("year_built"),
             "views_count": l.get("views_count"),
+            "floorplan_url": l.get("floorplan_url") or "",
             "description": l.get("description") or "",
             "first_seen": l["first_seen"].strftime("%d.%m.%Y") if l.get("first_seen") else None,
             "age": int((_dt.now(_tz.utc) - l["first_seen"]).days) if l.get("first_seen") else None,

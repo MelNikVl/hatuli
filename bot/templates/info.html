@@ -33,6 +33,7 @@
   <a href="#score" data-tab="score">❤️ Скор</a>
   <a href="#noise" data-tab="noise">Внешний шум</a>
   <a href="#hype" data-tab="hype">🔥 Хайп</a>
+  <a href="#transport" data-tab="transport">🚌 Транспорт</a>
 </div>
 
 <div id="tab-general">
@@ -310,6 +311,21 @@
 <p style="color:#888;font-size:12px;">⚠️ Рейтинг отражает <b>медиа-внимание</b> к локации (упоминаемость в новостях), а не финансовую аналитику или прогноз доходности.</p>
 </div>
 
+<div id="tab-transport" style="display:none;">
+<h3>🚌 Транспортная доступность (тепловая карта)</h3>
+<p>Гексы 100 м. Как и шум — это <b>оценочная модель по близости</b>, не реальное расписание/маршрутизация: у Астаны нет публичного GTFS-фида с расписанием. Скрипт <code>hype_tracker/transport_hexes.py</code>, данные — OSM (остановки/ЛРТ/дороги через Overpass, тот же принцип зеркал-фолбэков, что и у слоя шума).</p>
+<table class="sc-table">
+  <tr><th>Фактор</th><th>Радиус</th><th>Вес</th><th>Логика</th></tr>
+  <tr><td>🚆 ЛРТ-станции</td><td>1000 м</td><td>0.75</td><td>Самый весомый — станция рядом сильнее всего повышает доступность.</td></tr>
+  <tr><td>🚌 Маршрутная связность</td><td>500 м</td><td>0.5</td><td>Сколько РАЗНЫХ линий (автобус/троллейбус/трамвай) имеют свою остановку рядом — не просто «остановка есть», а «сколько маршрутов реально доступно» (см. ниже про пустые данные).</td></tr>
+  <tr><td>🚏 Автобусные остановки</td><td>500 м</td><td>0.4</td><td>Есть ли вообще остановка рядом, независимо от числа маршрутов.</td></tr>
+  <tr><td>🛣 Крупные дороги</td><td>600 м</td><td>0.3</td><td>Доступность на машине — тут ближе значит лучше (не путать со слоем шума, где логика обратная).</td></tr>
+  <tr><td>🔀 Развязки/перекрёстки</td><td>800 м</td><td>0.2</td><td>Узел транспортной сети — легче выехать в любом направлении.</td></tr>
+</table>
+<p>Каждый фактор нормализуется в 0–1 (линейно от 0 на границе радиуса до 1 в упор), итог — взвешенная сумма, обрезанная в 0–1.</p>
+<p style="background:rgba(245,158,11,.12);border-radius:8px;padding:10px 14px;">⚠️ <b>Маршрутная связность сейчас всегда даёт 0.</b> Проверено напрямую через Overpass: в OpenStreetMap для Астаны <b>вообще нет route-relations</b> (объектов «маршрут автобуса №N со списком остановок») — размечены только сами точки остановок, без привязки к линиям. Код полностью готов и включится сам, как только эти данные появятся в OSM (силами сообщества картографов) или найдётся альтернативный источник (официальная карта маршрутов акимата/перевозчика) — пока это честный ноль, а не баг.</p>
+</div>
+
 <script>
 (function() {
   const tabs = document.querySelectorAll('#info-tabs a');
@@ -319,6 +335,7 @@
     document.getElementById('tab-score').style.display = name === 'score' ? '' : 'none';
     document.getElementById('tab-noise').style.display = name === 'noise' ? '' : 'none';
     document.getElementById('tab-hype').style.display = name === 'hype' ? '' : 'none';
+    document.getElementById('tab-transport').style.display = name === 'transport' ? '' : 'none';
   }
   tabs.forEach(t => t.addEventListener('click', (e) => {
     e.preventDefault();
@@ -326,7 +343,7 @@
     activate(t.dataset.tab);
   }));
   const initial = (location.hash || '').replace('#', '');
-  activate(['score', 'noise', 'hype'].includes(initial) ? initial : 'general');
+  activate(['score', 'noise', 'hype', 'transport'].includes(initial) ? initial : 'general');
 })();
 </script>
 

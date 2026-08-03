@@ -2537,7 +2537,8 @@ function openDetailModal(id, ev) {
     ${d.floor ? `<span style="${modalPillStyle}">${d.floor}/${d.floors_total || '?'} эт.</span>` : ''}
     <span style="${modalPillStyle}">${d.is_owner ? 'собственник' : 'риелтор'}</span>
     ${d.ceiling_height ? `<span style="${modalPillStyle}">потолок ${d.ceiling_height} м</span>` : ''}
-    ${d.finish_type ? `<span style="${modalPillStyle}">${escapeHtml(d.finish_type)}</span>` : ''}`;
+    ${d.finish_type ? `<span style="${modalPillStyle}">${escapeHtml(d.finish_type)}</span>` : ''}
+    ${d.floorplan_url ? `<a href="${d.floorplan_url}" target="_blank" onclick="event.stopPropagation()" style="${modalPillStyle}text-decoration:none;">📐 План</a>` : ''}`;
 
     const priceHistoryHtml = `
 <div id="modal-price-history-wrap" style="padding:18px 22px 0;display:none;">
