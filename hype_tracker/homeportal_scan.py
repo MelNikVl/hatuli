@@ -34,7 +34,33 @@ def req(url: str, post=None) -> dict:
 ESC = lambda s: str(s).replace(chr(39), chr(39) * 2) if s is not None else ""
 
 
+def norm_name(n: str) -> str:
+    """Нормализация названия ЖК для маппинга: нижний регистр, убираем мусор маркетплейсов."""
+    if not n:
+        return ""
+    n = n.lower()
+    n = re.sub(r"жк[\s\-]*", "", n)          # «жк »
+    n = re.sub(r"\([^)]*\)", " ", n)          # «(Комфорт+ Класс)»
+    n = re.sub(r"—.*$", "", n)                # « — Формат...»
+    n = re.sub(r"\|.*$", "", n)               # « | Комфорт+»
+    n = re.sub(r"год постройки.*$", "", n)
+    n = re.sub(r"[^a-zа-яё0-9 ]", " ", n)
+    n = re.sub(r"\s+", " ", n).strip()
+    return n
+
+
 def main() -> int:
+    # индексы complexes для маппинга (загружаем один раз)
+    global COMPLEX_INDEX, NORM_INDEX
+    cx_rows = [r.split("|", 1) for r in psql("SELECT id, name FROM complexes").splitlines() if r]
+    COMPLEX_INDEX = {name.strip().lower(): int(cid) for cid, name in cx_rows}
+    NORM_INDEX = {}
+    for cid, name in cx_rows:
+        nm = norm_name(name)
+        if nm and nm not in NORM_INDEX:
+            NORM_INDEX[nm] = int(cid)
+    print(f"complexes проиндексировано: {len(COMPLEX_INDEX)}")
+
     # 1) список всех объектов
     d = req(f"{API}/getobjects", {})
     rows = d["data"]["objects"]["data"]
@@ -112,12 +138,18 @@ def main() -> int:
                 rooms_1 = EXCLUDED.rooms_1, rooms_2 = EXCLUDED.rooms_2, rooms_3 = EXCLUDED.rooms_3,
                 rooms_4 = EXCLUDED.rooms_4, apartment_data = EXCLUDED.apartment_data,
                 images = EXCLUDED.images, fetched_at = now()""")
-            # маппинг на complexes: заполняем только пустые поля
-            m = psql(f"SELECT id FROM complexes WHERE lower(trim(name)) = lower(trim('{ESC(o.get('name'))}')) LIMIT 1")
-            if not m:
-                m = psql(f"""SELECT c.id FROM complexes c WHERE lower(c.name) LIKE '%' || lower(trim('{ESC(o.get('name'))}')) || '%' ORDER BY length(c.name) LIMIT 1""")
-            if m:
-                cid = m.strip()
+            # маппинг на complexes: точное → нормализованное → LIKE; помечаем matched
+            obj_name = o.get("name") or ""
+            cid = COMPLEX_INDEX.get(obj_name.strip().lower())
+            if not cid:
+                nm = norm_name(obj_name)
+                cid = NORM_INDEX.get(nm)
+            if not cid and nm:
+                parts = nm.split()
+                if len(parts) >= 2:
+                    cid = NORM_INDEX.get(parts[0])
+            if cid:
+                psql(f"UPDATE homeportal_objects SET matched_complex_id = {cid}, matched_at = now() WHERE object_id = {oid}")
                 psql(f"""INSERT INTO housing_class_test (complex_id, apartment_count, rooms_1, rooms_2, rooms_3, rooms_4, elevator_count, apartment_count_source, updated_at)
                          VALUES ({cid}, {apt_total}, {r1}, {r2}, {r3}, {r4},
                          {(objd.get('freight_elevators_at_the_entrance') or 0) + (objd.get('passenger_elevators_in_the_entrance') or 0)}, 'homeportal', now())
@@ -141,6 +173,8 @@ def main() -> int:
             done += 1
         except Exception as e:
             errors += 1
+            psql(f"INSERT INTO homeportal_parse_log (object_id, name, status, detail) "
+                 f"VALUES ({oid}, '{ESC(o.get('name'))}', 'error', '{ESC(str(e)[:150])}')")
             print(f"❌ {oid}: {e}")
         time.sleep(DELAY)
 
