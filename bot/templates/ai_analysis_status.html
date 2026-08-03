@@ -1,5 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+.kw-chip { display:inline-flex; align-items:center; gap:5px; background:var(--bg); border:1px solid var(--border); border-radius:16px; padding:4px 6px 4px 12px; font-size:12.5px; margin:3px 4px 3px 0; }
+.kw-chip .cnt { color:#888; }
+.kw-chip button { border:none; background:none; color:#888; cursor:pointer; font-size:14px; line-height:1; padding:2px 6px; border-radius:50%; }
+.kw-chip button:hover { color:#ef4444; background:var(--surface); }
+.kw-add { display:flex; gap:6px; margin-top:10px; }
+.kw-add input[type=text] { flex:1; min-width:0; padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:12.5px; }
+.kw-add button { padding:6px 14px; border:none; border-radius:8px; background:#2563eb; color:#fff; font-size:12.5px; font-weight:700; cursor:pointer; }
+.kw-add button:hover { opacity:.85; }
+.col-flex { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+.col-flex > .col { flex:1 1 0; min-width:340px; display:flex; flex-direction:column; gap:14px; }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; }
+</style>
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">🤖 AI-анализ описаний <small style="font-size:13px;color:#888;font-weight:400;">DeepSeek, bot/core/ai_text_analysis.py</small></div>
 <p style="font-size:13px;color:#888;max-width:1100px;">
@@ -10,6 +23,7 @@
   звоночки — как и раньше, плюс перепланировка (и её узаконенность), свободная планировка, кондиционер, и факты про
   сам ЖК (не квартиру), если текст их упоминает. Распашонка/свободная планировка дают небольшой плюс к скору
   (см. <a href="/admin/info#score">Инфо → Скор</a>, раздел «4. Слои»). Новые факты о ЖК шлют уведомление в Telegram.
+  Управление включением/выключением слоёв — на странице <a href="/admin/analytics/ai-status">AI-анализ: статус</a>.
 </p>
 
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:16px 0;">
@@ -31,77 +45,148 @@
   </div>
 </div>
 
-<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-bottom:14px;">
-  <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
-    <b style="font-size:14px;">Разбор описаний по дням</b>
-    <span style="font-size:12px;color:#888;margin-left:6px;">последние 30 дней, по ai_analyzed_at</span>
-    {% if daily_ai %}
-    {% set max_cnt = daily_ai | map(attribute='cnt') | max %}
-    <div style="display:flex;align-items:flex-end;gap:3px;height:160px;margin-top:12px;overflow-x:auto;">
-      {% for d in daily_ai %}
-      <div style="flex:1;min-width:10px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;" title="{{ d.day }}: {{ d.cnt }}">
-        <div style="font-size:10px;color:#666;text-align:center;">{{ d.cnt }}</div>
-        <div style="height:{{ (d.cnt / max_cnt * 125) | round(0, 'floor') | int }}px;background:#2563eb;border-radius:2px 2px 0 0;"></div>
-        <div style="font-size:9px;color:#888;text-align:center;writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;margin-top:2px;">{{ d.day }}</div>
-      </div>
-      {% endfor %}
+<div class="card" style="margin-bottom:14px;">
+  <b style="font-size:14px;">Разбор описаний по дням</b>
+  <span style="font-size:12px;color:#888;margin-left:6px;">последние 30 дней, по ai_analyzed_at</span>
+  {% if daily_ai %}
+  {% set max_cnt = daily_ai | map(attribute='cnt') | max %}
+  <div style="display:flex;align-items:flex-end;gap:3px;height:160px;margin-top:12px;overflow-x:auto;">
+    {% for d in daily_ai %}
+    <div style="flex:1;min-width:10px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;" title="{{ d.day }}: {{ d.cnt }}">
+      <div style="font-size:10px;color:#666;text-align:center;">{{ d.cnt }}</div>
+      <div style="height:{{ (d.cnt / max_cnt * 125) | round(0, 'floor') | int }}px;background:#2563eb;border-radius:2px 2px 0 0;"></div>
+      <div style="font-size:9px;color:#888;text-align:center;writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;margin-top:2px;">{{ d.day }}</div>
     </div>
-    {% else %}
-    <div style="padding:20px 0;color:#888;font-size:13px;">пока нет обработанных описаний за последние 30 дней</div>
-    {% endif %}
+    {% endfor %}
   </div>
-  <div style="flex:1 1 0;min-width:300px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
-    <b style="font-size:14px;">Квартира: что нашлось</b>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
-      <tr><td style="padding:5px 0;color:#888;">🔀 Распашонка</td><td style="text-align:right;font-weight:700;">{{ counts.cross_layout_cnt or 0 }}</td></tr>
-      <tr><td style="padding:5px 0;color:#888;">🆓 Свободная планировка</td><td style="text-align:right;font-weight:700;">{{ counts.free_layout_cnt or 0 }}</td></tr>
-      <tr><td style="padding:5px 0;color:#888;">🔨 Была перепланировка</td><td style="text-align:right;font-weight:700;">{{ counts.relayout_cnt or 0 }}</td></tr>
-      <tr><td style="padding:5px 0;color:#888;">✅ Узаконена</td><td style="text-align:right;font-weight:700;">{{ counts.relayout_legal_cnt or 0 }}</td></tr>
-      <tr><td style="padding:5px 0;color:#888;">❄️ Кондиционер</td><td style="text-align:right;font-weight:700;">{{ counts.ac_cnt or 0 }}</td></tr>
-    </table>
-  </div>
-  <div style="flex:1 1 0;min-width:300px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
-    <b style="font-size:14px;">Отделка (из текста)</b>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
-      {% for r in finish_rows %}
-      <tr><td style="padding:5px 0;color:#888;">{{ r.v }}</td><td style="text-align:right;font-weight:700;">{{ r.cnt }}</td></tr>
-      {% else %}
-      <tr><td style="padding:5px 0;color:#888;">пока нет данных</td></tr>
-      {% endfor %}
-    </table>
-  </div>
-  <div style="flex:1 1 0;min-width:300px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
-    <b style="font-size:14px;">Срочность продажи</b>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
-      {% for r in urgency_rows %}
-      <tr><td style="padding:5px 0;color:#888;">{{ r.v }}</td><td style="text-align:right;font-weight:700;">{{ r.cnt }}</td></tr>
-      {% else %}
-      <tr><td style="padding:5px 0;color:#888;">пока нет данных</td></tr>
-      {% endfor %}
-    </table>
-  </div>
+  {% else %}
+  <div style="padding:20px 0;color:#888;font-size:13px;">пока нет обработанных описаний за последние 30 дней</div>
+  {% endif %}
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-top:14px;">
-  <b style="font-size:14px;">🏢 Последние дополненные факты о ЖК</b>
-  <span style="font-size:12px;color:#888;margin-left:6px;">откуда AI это взял — ссылка на объявление-источник</span>
-  <div style="margin-top:10px;max-height:420px;overflow-y:auto;">
-    <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
-      <tr style="border-bottom:2px solid var(--border);text-align:left;">
-        <th style="padding:6px 8px;">ЖК</th><th style="padding:6px 8px;">Поле</th>
-        <th style="padding:6px 8px;">Значение</th><th style="padding:6px 8px;">Источник</th>
-      </tr>
-      {% for f in recent_facts %}
-      <tr style="border-bottom:1px solid var(--border);">
-        <td style="padding:6px 8px;font-weight:700;">{{ f.complex_name }}</td>
-        <td style="padding:6px 8px;color:#888;">{{ field_labels.get(f.field, f.field) }}</td>
-        <td style="padding:6px 8px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ f.value }}</td>
-        <td style="padding:6px 8px;">{% if f.source_url %}<a href="{{ f.source_url }}" target="_blank" style="color:#d4af37;font-weight:700;text-decoration:none;">Крыша ↗</a>{% endif %}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4" style="padding:14px;color:#888;text-align:center;">Пока ничего не найдено.</td></tr>
-      {% endfor %}
-    </table>
+<!-- Левая колонка = квартирный уровень, правая = уровень ЖК -->
+<div class="col-flex">
+  <div class="col">
+    <div class="card">
+      <b style="font-size:14px;">Квартира: что нашлось</b>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
+        <tr><td style="padding:5px 0;color:#888;">🔀 Распашонка</td><td style="text-align:right;font-weight:700;">{{ counts.cross_layout_cnt or 0 }}</td></tr>
+        <tr><td style="padding:5px 0;color:#888;">🆓 Свободная планировка</td><td style="text-align:right;font-weight:700;">{{ counts.free_layout_cnt or 0 }}</td></tr>
+        <tr><td style="padding:5px 0;color:#888;">🔨 Была перепланировка</td><td style="text-align:right;font-weight:700;">{{ counts.relayout_cnt or 0 }}</td></tr>
+        <tr><td style="padding:5px 0;color:#888;">✅ Узаконена</td><td style="text-align:right;font-weight:700;">{{ counts.relayout_legal_cnt or 0 }}</td></tr>
+        <tr><td style="padding:5px 0;color:#888;">❄️ Кондиционер</td><td style="text-align:right;font-weight:700;">{{ counts.ac_cnt or 0 }}</td></tr>
+      </table>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+        <span style="font-size:12px;color:#888;">Свои слова — живой счётчик упоминаний в активных объявлениях (title/описание):</span>
+        <div style="margin-top:8px;">
+          {% for w in apartment_feature_words %}
+          <span class="kw-chip">{{ w.word }} <span class="cnt">({{ w.count }})</span>
+            <form method="post" action="/admin/analytics/ai-analysis/keywords/delete" style="display:inline;">
+              <input type="hidden" name="category" value="apartment_feature"><input type="hidden" name="word" value="{{ w.word }}">
+              <button type="submit" title="удалить">×</button>
+            </form>
+          </span>
+          {% else %}
+          <span style="font-size:12px;color:#888;">пока нет своих слов</span>
+          {% endfor %}
+        </div>
+        <form method="post" action="/admin/analytics/ai-analysis/keywords/add" class="kw-add">
+          <input type="hidden" name="category" value="apartment_feature">
+          <input type="text" name="word" placeholder="например: балкон" required>
+          <button type="submit">Добавить</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <b style="font-size:14px;">Отделка (из текста)</b>
+      <span style="font-size:11.5px;color:#888;margin-left:4px;">это значение <code>ai_analysis-&gt;&gt;'finish'</code> от DeepSeek — не путать с regex-полем <code>finish_type</code> (bot/core/finish_classify.py), см. AI-анализ: статус</span>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
+        {% for r in finish_rows %}
+        <tr><td style="padding:5px 0;color:#888;">{{ r.v }}</td><td style="text-align:right;font-weight:700;">{{ r.cnt }}</td></tr>
+        {% else %}
+        <tr><td style="padding:5px 0;color:#888;">пока нет данных</td></tr>
+        {% endfor %}
+      </table>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+        <span style="font-size:12px;color:#888;">Свои слова для regex-эвристики (bot/core/finish_classify.py) — попадание считается доп. сигналом "с отделкой":</span>
+        <div style="margin-top:8px;">
+          {% for w in finish_words %}
+          <span class="kw-chip">{{ w.word }} <span class="cnt">({{ w.count }})</span>
+            <form method="post" action="/admin/analytics/ai-analysis/keywords/delete" style="display:inline;">
+              <input type="hidden" name="category" value="finish"><input type="hidden" name="word" value="{{ w.word }}">
+              <button type="submit" title="удалить">×</button>
+            </form>
+          </span>
+          {% else %}
+          <span style="font-size:12px;color:#888;">пока нет своих слов</span>
+          {% endfor %}
+        </div>
+        <form method="post" action="/admin/analytics/ai-analysis/keywords/add" class="kw-add">
+          <input type="hidden" name="category" value="finish">
+          <input type="text" name="word" placeholder="например: свежий ремонт" required>
+          <button type="submit">Добавить</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <b style="font-size:14px;">Срочность продажи</b>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
+        {% for r in urgency_rows %}
+        <tr><td style="padding:5px 0;color:#888;">{{ r.v }}</td><td style="text-align:right;font-weight:700;">{{ r.cnt }}</td></tr>
+        {% else %}
+        <tr><td style="padding:5px 0;color:#888;">пока нет данных</td></tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card">
+      <b style="font-size:14px;">🏢 ЖК: ключевые слова</b>
+      <span style="font-size:12px;color:#888;margin-left:6px;">живой счётчик — по активным объявлениям с заполненным ЖК (complex_name), тот же текст, из которого берутся ЖК-факты</span>
+      <div style="margin-top:8px;">
+        {% for w in complex_feature_words %}
+        <span class="kw-chip">{{ w.word }} <span class="cnt">({{ w.count }})</span>
+          <form method="post" action="/admin/analytics/ai-analysis/keywords/delete" style="display:inline;">
+            <input type="hidden" name="category" value="complex_feature"><input type="hidden" name="word" value="{{ w.word }}">
+            <button type="submit" title="удалить">×</button>
+          </form>
+        </span>
+        {% else %}
+        <span style="font-size:12px;color:#888;">пока нет своих слов</span>
+        {% endfor %}
+      </div>
+      <form method="post" action="/admin/analytics/ai-analysis/keywords/add" class="kw-add">
+        <input type="hidden" name="category" value="complex_feature">
+        <input type="text" name="word" placeholder="например: консьерж" required>
+        <button type="submit">Добавить</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <b style="font-size:14px;">🏢 Последние дополненные факты о ЖК</b>
+      <span style="font-size:12px;color:#888;margin-left:6px;">откуда AI это взял — ссылка на объявление-источник</span>
+      <div style="margin-top:10px;max-height:420px;overflow-y:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+          <tr style="border-bottom:2px solid var(--border);text-align:left;">
+            <th style="padding:6px 8px;">ЖК</th><th style="padding:6px 8px;">Поле</th>
+            <th style="padding:6px 8px;">Значение</th><th style="padding:6px 8px;">Источник</th>
+          </tr>
+          {% for f in recent_facts %}
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:6px 8px;font-weight:700;">{{ f.complex_name }}</td>
+            <td style="padding:6px 8px;color:#888;">{{ field_labels.get(f.field, f.field) }}</td>
+            <td style="padding:6px 8px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ f.value }}</td>
+            <td style="padding:6px 8px;">{% if f.source_url %}<a href="{{ f.source_url }}" target="_blank" style="color:#d4af37;font-weight:700;text-decoration:none;">Крыша ↗</a>{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" style="padding:14px;color:#888;text-align:center;">Пока ничего не найдено.</td></tr>
+          {% endfor %}
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

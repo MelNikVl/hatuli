@@ -760,11 +760,12 @@ async def run_cycle():
 
         # === Отделка (черновая/с отделкой/с мебелью) — бесплатная эвристика
         # по тексту, см. bot/core/finish_classify.py ===
-        try:
-            from bot.core.finish_classify import apply_finish_classification
-            await apply_finish_classification()
-        except Exception as e:
-            log.warning("finish classification failed: %s", e)
+        if app_settings.get_bool("AI_FINISH_CLASSIFY", True):
+            try:
+                from bot.core.finish_classify import apply_finish_classification
+                await apply_finish_classification()
+            except Exception as e:
+                log.warning("finish classification failed: %s", e)
 
         # === Дедупликация (приоритет объявлений от хозяина) ===
         try:

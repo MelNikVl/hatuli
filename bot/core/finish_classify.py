@@ -43,12 +43,18 @@ _FURNISHED_RE = re.compile("|".join(_FURNISHED_PATTERNS), re.IGNORECASE)
 _FINISHED_RE = re.compile("|".join(_FINISHED_PATTERNS), re.IGNORECASE)
 
 
-def classify_finish(title: str | None, description: str | None) -> str | None:
+def classify_finish(title: str | None, description: str | None,
+                     custom_finished_re: "re.Pattern | None" = None) -> str | None:
     """Вернуть 'черновая' | 'с отделкой' | 'с мебелью' | None (нет сигнала).
     Порядок проверки важен: явный "без отделки" перекрывает случайное
     совпадение слова "мебель" где-то в другом месте текста того же объявления
     (например "продаю без мебели, отделка чистовая" — тогда сначала мебель
-    исключаем явным сигналом, а не наоборот)."""
+    исключаем явным сигналом, а не наоборот).
+
+    custom_finished_re — опциональный доп. регекс, собранный из слов, которые
+    админ добавил через /admin/analytics/ai-analysis (категория 'finish',
+    таблица ai_keywords) — работает ТОЛЬКО как дополнительный сигнал для
+    бакета "с отделкой", не заменяя статические паттерны выше."""
     text = f"{title or ''} {description or ''}".strip()
     if not text:
         return None
@@ -58,7 +64,25 @@ def classify_finish(title: str | None, description: str | None) -> str | None:
         return "с мебелью"
     if _FINISHED_RE.search(text):
         return "с отделкой"
+    if custom_finished_re is not None and custom_finished_re.search(text):
+        return "с отделкой"
     return None
+
+
+async def _load_custom_finished_re() -> "re.Pattern | None":
+    """Слова категории 'finish' из ai_keywords (см. /admin/analytics/ai-analysis)
+    — админ может дополнить словарь без деплоя. Загружается один раз за вызов
+    apply_finish_classification(), не на каждую строку."""
+    from bot.db.pg import fetch
+
+    try:
+        rows = await fetch("SELECT word FROM ai_keywords WHERE category = 'finish'")
+    except Exception:
+        return None
+    words = [r["word"] for r in rows if r["word"]]
+    if not words:
+        return None
+    return re.compile("|".join(re.escape(w) for w in words), re.IGNORECASE)
 
 
 async def apply_finish_classification(batch: int = 500) -> int:
@@ -67,6 +91,7 @@ async def apply_finish_classification(batch: int = 500) -> int:
     from bot.db.pg import fetch, execute
 
     await execute("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS finish_type TEXT")
+    custom_re = await _load_custom_finished_re()
     rows = await fetch("""
         SELECT id, title, description FROM apartment_listings
         WHERE is_active IS NOT FALSE
@@ -77,7 +102,7 @@ async def apply_finish_classification(batch: int = 500) -> int:
 
     updated = 0
     for r in rows:
-        finish = classify_finish(r["title"], r["description"])
+        finish = classify_finish(r["title"], r["description"], custom_re)
         if finish is None:
             continue
         await execute(

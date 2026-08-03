@@ -55,7 +55,7 @@ function twoLineChart(divId, days, seriesUp, seriesDown, w, h, fmtVal) {
     el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек</div>';
     return;
   }
-  const LABEL_H = 22, TOP_PAD = 26, LEFT_PAD = 46, RIGHT_PAD = 34;
+  const LABEL_H = 22, TOP_PAD = 26, LEFT_PAD = 46, RIGHT_PAD = 58;
   const plotW = w - LEFT_PAD - RIGHT_PAD;
   const chartH = h - LABEL_H - TOP_PAD;
   const allVals = seriesUp.concat(seriesDown);
@@ -92,10 +92,18 @@ function twoLineChart(divId, days, seriesUp, seriesDown, w, h, fmtVal) {
   const arrowAt = (coords, color, glyph) => {
     if (coords.length < 2) return '';
     const last = coords[coords.length - 1];
-    const ax = Math.min(last[0] + 22, w - 8), ay = last[1];
+    const ax = Math.min(last[0] + 22, w - 14), ay = last[1];
     return `<text x="${ax}" y="${ay + 4}" font-size="15" text-anchor="middle" style="filter:drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 1.5px #fff);">${glyph}</text>`;
   };
-  el.innerHTML = `<svg width="${w}" height="${h}" style="display:block;overflow:visible;max-width:100%;">` +
+  // ВАЖНО: без max-width:100% — у SVG нет viewBox, поэтому max-width сжимал
+  // ЛЕЙАУТ-бокс до ширины контейнера, а координаты точек внутри оставались
+  // не пересчитанными под эту ширину (раз w шире контейнера) — самые свежие
+  // (правые) точки/подписи рисовались ЗА пределами сжатого бокса и просто
+  // обрезались/перекрывались соседним блоком, а не становились доступны через
+  // scroll (overflow:visible красит мимо бокса, а не расширяет scrollWidth).
+  // Без max-width SVG получает свою реальную ширину w, и overflow-x:auto
+  // контейнера + автопрокрутка вправо (см. ниже) показывают их как есть.
+  el.innerHTML = `<svg width="${w}" height="${h}" style="display:block;overflow:visible;">` +
     yAxisHtml +
     `<path d="${pathOf(cUp)}" fill="none" stroke="#ef4444" stroke-width="2"/>` +
     `<path d="${pathOf(cDown)}" fill="none" stroke="#16a34a" stroke-width="2"/>` +
@@ -103,6 +111,11 @@ function twoLineChart(divId, days, seriesUp, seriesDown, w, h, fmtVal) {
     valueLabelsOf(cUp, seriesUp, '#ef4444', true) + valueLabelsOf(cDown, seriesDown, '#16a34a', false) +
     arrowAt(cUp, '#ef4444', '🔺') + arrowAt(cDown, '#16a34a', '🔻') +
     xLabels + `</svg>`;
+  // График шире контейнера (см. w = blockW * 1.2 ниже) специально, чтобы
+  // хватало места под подписи/стрелку у последней точки — но из-за этого
+  // самые свежие (правые) значения по умолчанию оказывались за пределами
+  // видимой области, требуя ручной прокрутки вправо. Прокручиваем автоматически.
+  el.scrollLeft = el.scrollWidth;
 }
 
 let currentRooms = '', currentDays = 30;

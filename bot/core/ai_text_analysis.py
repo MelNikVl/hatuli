@@ -47,6 +47,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from bot.db import settings as app_settings
 from bot.db.pg import execute, fetch, fetchrow
 
 logger = logging.getLogger(__name__)
@@ -242,10 +243,11 @@ async def analyze_top_listings(limit: int = 10) -> int:
             await apply_layout_bonus(r["id"], result)
         except Exception as exc:
             logger.warning("layout bonus failed %s: %s", r["id"], exc)
-        try:
-            await apply_complex_facts(r["id"], r["complex_name"], r["url"], result.get("complex_facts") or {})
-        except Exception as exc:
-            logger.warning("complex facts failed %s: %s", r["id"], exc)
+        if app_settings.get_bool("AI_COMPLEX_FACTS", True):
+            try:
+                await apply_complex_facts(r["id"], r["complex_name"], r["url"], result.get("complex_facts") or {})
+            except Exception as exc:
+                logger.warning("complex facts failed %s: %s", r["id"], exc)
         done += 1
     logger.info("ai text analysis: %d listings processed", done)
     return done

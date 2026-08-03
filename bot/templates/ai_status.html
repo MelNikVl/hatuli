@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.btn-big { border: none; border-radius: 10px; padding: 14px 24px; font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity .15s; }
+.btn-big:hover { opacity: .85; }
+.btn-money-on  { background: #f59e0b; color: #fff; }
+.btn-money-off { background: #64748b; color: #fff; }
+.ai-block { flex:1 1 0; min-width:340px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; }
+.ai-block h3 { margin:0 0 4px; font-size:15px; }
+.ai-block .desc { font-size:12.5px; color:#888; margin:0 0 12px; }
+.ai-block .signal { font-size:13px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.ai-block .signal div { margin:3px 0; }
+.ai-block .signal b { font-weight:700; }
+</style>
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">AI-анализ: статус</div>
+<p style="font-size:13px;color:#888;max-width:1100px;">
+  Реестр всех AI/эвристических слоёв в проекте — что именно они делают, включены ли они сейчас, и реально ли они
+  сейчас работают (а не просто "флаг стоит"). Настройки чек-детальных данных — на
+  <a href="/admin/analytics/ai-analysis">AI-анализ описаний</a> (там же — редактируемые списки слов).
+</p>
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-top:16px;">
+
+  <div class="ai-block">
+    <h3>🤖 AI-анализ описаний (DeepSeek)</h3>
+    <p class="desc">Читает title+описание каждого нового объявления через DeepSeek и достаёт отделку, срочность,
+      перепланировку, кондиционер, планировку, факты про ЖК и т.д. Платно (~$0.0001/объявление).</p>
+    <button class="btn-big {{ 'btn-money-on' if ai_text_analysis_on else 'btn-money-off' }}" id="btn-desc" onclick="toggleFlag('desc','/admin/ai-analysis/toggle','🤖 Описания LLM')">
+      {{ '🤖 Описания LLM: ВКЛ' if ai_text_analysis_on else '🤖 Описания LLM: ВЫКЛ' }}
+    </button>
+    <div class="signal">
+      <div>Обработано: <b>{{ "{:,}".format(desc_counts.processed or 0).replace(",", " ") }}</b> из <b>{{ "{:,}".format(desc_counts.eligible or 0).replace(",", " ") }}</b> подходящих</div>
+      <div>Последний прогон: <b>{{ desc_counts.last_run.strftime('%d.%m.%Y %H:%M') if desc_counts.last_run else 'ещё не запускался' }}</b></div>
+    </div>
+  </div>
+
+  <div class="ai-block">
+    <h3>🏢 ЖК-факты из текста</h3>
+    <p class="desc">Часть того же прохода DeepSeek — если в описании есть факты про сам ЖК (локация, охрана,
+      консьерж, паркинг и т.д.), которых ещё нет у ЖК — дополняет и шлёт уведомление в Telegram. Можно выключить
+      отдельно от анализа описаний.</p>
+    <button class="btn-big {{ 'btn-money-on' if ai_complex_facts_on else 'btn-money-off' }}" id="btn-facts" onclick="toggleFlag('facts','/admin/complex-facts/toggle','🏢 ЖК-факты')">
+      {{ '🏢 ЖК-факты: ВКЛ' if ai_complex_facts_on else '🏢 ЖК-факты: ВЫКЛ' }}
+    </button>
+    <div class="signal">
+      <div>ЖК дополнено фактами: <b>{{ complexes_enriched }}</b></div>
+      <div>Последний найденный факт: <b>{{ last_fact_at.strftime('%d.%m.%Y %H:%M') if last_fact_at else 'пока нет' }}</b></div>
+    </div>
+  </div>
+
+  <div class="ai-block">
+    <h3>🧱 Отделка по ключевым словам</h3>
+    <p class="desc">Бесплатная regex-эвристика по тексту (без LLM) — ищет явные фразы вроде "с отделкой"/"без
+      отделки"/"с мебелью" плюс слова, которые админ добавил вручную на странице AI-анализа описаний.</p>
+    <button class="btn-big {{ 'btn-money-on' if ai_finish_classify_on else 'btn-money-off' }}" id="btn-finish" onclick="toggleFlag('finish','/admin/finish-classify/toggle','🧱 Отделка (regex)')">
+      {{ '🧱 Отделка (regex): ВКЛ' if ai_finish_classify_on else '🧱 Отделка (regex): ВЫКЛ' }}
+    </button>
+    <div class="signal">
+      <div>Объявлений с определённой отделкой (finish_type): <b>{{ "{:,}".format(finish_type_cnt or 0).replace(",", " ") }}</b></div>
+    </div>
+  </div>
+
+  <div class="ai-block">
+    <h3>📐 Планировки на фото</h3>
+    <p class="desc">2-этапный детектор: быстрая эвристика OpenCV + локальный SigLIP (CPU) на кандидатах — находит
+      среди фото объявления план квартиры. Работает как фоновый таймер каждые ~20-30 минут
+      (krisha-floorplan.timer), раньше запускался только вручную.</p>
+    <button class="btn-big {{ 'btn-money-on' if ai_floorplan_scan_on else 'btn-money-off' }}" id="btn-fp" onclick="toggleFlag('fp','/admin/floorplan-scan/toggle','📐 Планировки на фото')">
+      {{ '📐 Планировки на фото: ВКЛ' if ai_floorplan_scan_on else '📐 Планировки на фото: ВЫКЛ' }}
+    </button>
+    <div class="signal">
+      <div>Обработано: <b>{{ "{:,}".format(fp_counts.processed or 0).replace(",", " ") }}</b>, найдено планов: <b>{{ fp_counts.found or 0 }}</b></div>
+      <div>Последний прогон: <b>{{ fp_counts.last_run.strftime('%d.%m.%Y %H:%M') if fp_counts.last_run else 'ещё не запускался' }}</b></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const FLAG_LABELS = {
+  desc: '🤖 Описания LLM', facts: '🏢 ЖК-факты', finish: '🧱 Отделка (regex)', fp: '📐 Планировки на фото',
+};
+async function toggleFlag(key, url, label) {
+  const btn = document.getElementById('btn-' + key);
+  btn.disabled = true;
+  try {
+    const r = await fetch(url, {method: 'POST'});
+    const d = await r.json();
+    btn.textContent = label + ': ' + (d.enabled ? 'ВКЛ' : 'ВЫКЛ');
+    btn.className = 'btn-big ' + (d.enabled ? 'btn-money-on' : 'btn-money-off');
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+{% endblock %}

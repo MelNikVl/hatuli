@@ -938,6 +938,36 @@ def make_extras_router(templates) -> APIRouter:
         logger.info("AI text analysis -> %s", new_value)
         return JSONResponse({"ok": True, "enabled": new_value == "1"})
 
+    @router.post("/admin/complex-facts/toggle")
+    async def complex_facts_toggle(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await app_settings.load()
+        new_value = "0" if app_settings.get_bool("AI_COMPLEX_FACTS", True) else "1"
+        await app_settings.set("AI_COMPLEX_FACTS", new_value)
+        logger.info("AI complex facts -> %s", new_value)
+        return JSONResponse({"ok": True, "enabled": new_value == "1"})
+
+    @router.post("/admin/finish-classify/toggle")
+    async def finish_classify_toggle(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await app_settings.load()
+        new_value = "0" if app_settings.get_bool("AI_FINISH_CLASSIFY", True) else "1"
+        await app_settings.set("AI_FINISH_CLASSIFY", new_value)
+        logger.info("finish classify (keywords) -> %s", new_value)
+        return JSONResponse({"ok": True, "enabled": new_value == "1"})
+
+    @router.post("/admin/floorplan-scan/toggle")
+    async def floorplan_scan_toggle(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        await app_settings.load()
+        new_value = "0" if app_settings.get_bool("AI_FLOORPLAN_SCAN", True) else "1"
+        await app_settings.set("AI_FLOORPLAN_SCAN", new_value)
+        logger.info("floorplan scan -> %s", new_value)
+        return JSONResponse({"ok": True, "enabled": new_value == "1"})
+
     @router.post("/admin/monetization/toggle")
     async def monetization_toggle(request: Request):
         if not is_authed(request):

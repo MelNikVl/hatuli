@@ -43,6 +43,25 @@ def db():
     return psycopg2.connect(load_database_url())
 
 
+def is_enabled() -> bool:
+    """Флаг AI_FLOORPLAN_SCAN в app_settings (по умолчанию включён — True).
+    Скрипт — отдельный процесс (свой venv, torch/opencv), общего async
+    app_settings-кеша (bot/db/settings.py) у него нет, поэтому читаем
+    напрямую через psycopg2, как и остальную БД в этом файле."""
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM app_settings WHERE key = 'AI_FLOORPLAN_SCAN'")
+        row = cur.fetchone()
+        conn.close()
+        if row is None:
+            return True
+        return str(row[0]).strip() in ("1", "true", "True", "on")
+    except Exception as e:
+        print(f"[WARN] не удалось прочитать AI_FLOORPLAN_SCAN, считаю включённым: {e}", flush=True)
+        return True
+
+
 def cache_path(url: str) -> Path:
     return PHOTO_CACHE / (hashlib.sha256(url.encode()).hexdigest() + ".jpg")
 
@@ -150,6 +169,10 @@ def main() -> None:
     ap.add_argument("--delay", type=float, default=1.0)
     ap.add_argument("--workers", type=int, default=3)
     a = ap.parse_args()
+
+    if not is_enabled():
+        print("AI_FLOORPLAN_SCAN выключен в /admin/analytics/ai-status — выхожу без обработки.", flush=True)
+        sys.exit(0)
 
     PHOTO_CACHE.mkdir(parents=True, exist_ok=True)
     conn = db()
