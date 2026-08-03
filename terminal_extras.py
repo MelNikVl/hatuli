@@ -389,7 +389,7 @@ def make_extras_router(templates) -> APIRouter:
         rows = await pg_fetch("""
             SELECT b.slug, b.short_name, b.name, b.website, p.name AS program_name,
                    p.housing_type, p.rate_min, p.rate_max, p.down_payment_min_pct,
-                   p.max_amount_tg, p.conditions
+                   p.max_amount_tg, p.conditions, p.rate_note
             FROM mortgage_programs p JOIN banks b ON b.id = p.bank_id
             WHERE p.rate_min IS NOT NULL
             ORDER BY b.sort_order, p.rate_min

@@ -53,6 +53,20 @@
       </div>
     </div>
 
+    <div id="mc-otbasy-score-wrap" style="display:none;margin-top:14px;padding:12px 14px;background:var(--bg);border-radius:10px;" class="no-print">
+      <label style="display:flex;justify-content:space-between;font-size:12.5px;color:#888;margin-bottom:6px;">
+        <span>Оценочный показатель (баллы за накопительный вклад)</span>
+        <span id="mc-otbasy-score-val" style="font-weight:700;color:var(--text);">16</span>
+      </label>
+      <input id="mc-otbasy-score" type="range" min="16" max="48" step="1" value="16" style="width:100%;" oninput="document.getElementById('mc-otbasy-score-val').textContent=this.value; mcCalc();">
+      <p style="font-size:11px;color:#888;margin-top:6px;line-height:1.5;">
+        У Отбасы банка ставка по накопительному займу зависит от «оценочного показателя» — баллов за срок и сумму
+        вклада. 16 баллов — минимум для займа (обычные, своевременные взносы 3+ года), 48 — максимум (досрочные и
+        повышенные взносы, продолжение накоплений после 3 лет). Точную формулу начисления баллов банк не публикует —
+        график ниже линейно интерполирует ставку между рамками программы по этому баллу, это оценка, не официальный расчёт банка.
+      </p>
+    </div>
+
     <div id="mc-result" style="margin-top:22px;"></div>
   </div>
 
@@ -122,9 +136,11 @@ function mcCalc() {
   const down = price * downPct / 100;
   const principal = Math.max(price - down, 0);
 
+  const scoreWrap = document.getElementById('mc-otbasy-score-wrap');
   if (!program) {
     printBtn.disabled = true; printBtn.style.opacity = '.5';
     resultEl.innerHTML = '<div style="color:#888;font-size:13.5px;padding:20px;text-align:center;" class="no-print">Выбери банк и программу, чтобы увидеть расчёт.</div>';
+    scoreWrap.style.display = 'none';
     return;
   }
 
@@ -132,7 +148,18 @@ function mcCalc() {
   if (downPct < (program.down_payment_min_pct || 0)) warnings.push(`У программы минимальный ПВ ${program.down_payment_min_pct}% — у тебя ${downPct}%.`);
   if (program.max_amount_tg && principal > program.max_amount_tg) warnings.push(`Сумма кредита превышает потолок программы (${(program.max_amount_tg/1e6).toFixed(0)} млн ₸).`);
 
-  const rate = program.rate_min != null ? program.rate_min : 0;
+  // Отбасы: ставка по накопительным программам зависит от "оценочного
+  // показателя" (16-48 баллов, см. пояснение у слайдера) — интерполируем
+  // между rate_max (минимум баллов) и rate_min (максимум баллов).
+  const scoreDependsOnPoints = program.rate_note && program.rate_note.includes('оценочного показателя');
+  scoreWrap.style.display = scoreDependsOnPoints ? 'block' : 'none';
+  let rate;
+  if (scoreDependsOnPoints && program.rate_min != null && program.rate_max != null) {
+    const score = parseFloat(document.getElementById('mc-otbasy-score').value) || 16;
+    rate = program.rate_max - (program.rate_max - program.rate_min) * (score - 16) / (48 - 16);
+  } else {
+    rate = program.rate_min != null ? program.rate_min : 0;
+  }
   const monthly = mcAnnuity(principal, rate, years);
   const totalPaid = monthly * years * 12;
   const overpay = totalPaid - principal;
@@ -154,7 +181,7 @@ function mcCalc() {
       <div><div style="font-size:11px;color:#888;">Банк</div><div style="font-weight:800;font-size:15px;">${escapeHtml(program.short_name)}</div></div>
       <div><div style="font-size:11px;color:#888;">Программа</div><div style="font-weight:700;font-size:14px;">${escapeHtml(program.program_name)}</div></div>
       <div><div style="font-size:11px;color:#888;">Сумма кредита</div><div style="font-weight:800;font-size:15px;">${(principal/1e6).toFixed(1)} млн ₸</div></div>
-      <div><div style="font-size:11px;color:#888;">Ставка</div><div style="font-weight:800;font-size:15px;">${rate ? rate.toFixed(1) + '%' : '—'}</div></div>
+      <div><div style="font-size:11px;color:#888;">Ставка${scoreDependsOnPoints ? ' (оценка)' : ''}</div><div style="font-weight:800;font-size:15px;">${rate ? rate.toFixed(1) + '%' : '—'}</div></div>
       <div><div style="font-size:11px;color:#888;">Срок</div><div style="font-weight:800;font-size:15px;">${years} лет (${years*12} мес.)</div></div>
       <div><div style="font-size:11px;color:#888;">Ежемесячный платёж</div><div style="font-weight:800;font-size:17px;color:#2563eb;">${Math.round(monthly).toLocaleString('ru')} ₸</div></div>
       <div><div style="font-size:11px;color:#888;">Всего выплат</div><div style="font-weight:800;font-size:15px;">${Math.round(totalPaid).toLocaleString('ru')} ₸</div></div>
