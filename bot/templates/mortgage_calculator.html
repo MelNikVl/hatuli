@@ -7,7 +7,9 @@
   .mc-card { box-shadow: none !important; border: 1px solid #999 !important; }
 }
 </style>
+{% if not request.query_params.get('embed') %}
 <div class="page-title no-print">🧮 Калькулятор ипотеки</div>
+{% endif %}
 <div style="max-width:760px;margin:0 auto;">
   <div class="mc-card" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px 26px;">
     <div class="no-print" style="font-size:13px;color:#888;margin-bottom:18px;">

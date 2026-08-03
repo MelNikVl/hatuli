@@ -69,11 +69,19 @@ def find_duplicates(listings: list[dict],
     match_rules: dict[str, str] = {}
     photo_idx: dict[str, str] = {}
     addr_idx: dict[tuple, list[str]] = {}
-    price_addr_idx: dict[tuple, str] = {}
+    price_addr_idx: dict[tuple, list[str]] = {}
     geo_idx: dict[tuple, list[str]] = {}
     # ~0.00055° по широте/долготе в Астане — примерно 55-60м, т.е. один дом
     # или соседние подъезды, не соседний квартал.
     GEO_EPS = 0.00055
+    # Допуск по цене для правил 3/4 (адрес+этаж+цена / гео+этаж+площадь+цена):
+    # та же квартира часто перевыставляется с небольшим торгом/переоценкой
+    # (десятки-сотни тысяч тенге), а раньше цена входила В КЛЮЧ словаря
+    # (округлена до 100к), из-за чего малейший сдвиг через границу бакета
+    # ломал совпадение при полностью идентичных остальных признаках. 250к —
+    # заметно меньше порога dup_needs_review (1 млн), т.е. не расширяет
+    # число ложных склеек в разных по цене квартирах того же дома/этажа.
+    PRICE_TOLERANCE = 250_000
 
     def is_owner(l: dict) -> bool:
         return l.get("is_owner") is True
@@ -159,28 +167,46 @@ def find_duplicates(listings: list[dict],
         # дополнительный сигнал "это точно другая квартира".
         if (matched_primary is None and addr and price > 0 and floor is not None
                 and rooms is not None):
-            key2 = (addr, round(price / 100_000) * 100_000, floor, rooms)
-            cand2 = price_addr_idx.get(key2)
-            if cand2 and cand2 != lid:
-                # Раньше это правило не проверяло площадь вообще — две РАЗНЫЕ
-                # квартиры на одном этаже с одинаковой (округлённой до 100к)
-                # ценой и комнатностью, но разной площадью, склеивались в
-                # дубль. area > 0 у обеих — единственный случай, когда стоит
-                # это правило применять (без площади у одной из сторон
-                # оставляем как запасной вариант без проверки, как раньше).
+            # ИЩЕМ по адресу+этажу+комнатам (без цены в ключе) и проверяем
+            # цену отдельно с допуском PRICE_TOLERANCE — раньше цена входила
+            # в ключ словаря округлённой до 100к, и та же квартира с
+            # торгом/переоценкой всего на 200к (напр. 23.2М -> 23.0М) уже не
+            # совпадала по ключу, хотя адрес/этаж/комнаты идентичны.
+            key2 = (addr, floor, rooms)
+            for cand2 in price_addr_idx.get(key2, []):
+                if cand2 == lid:
+                    continue
                 ex2 = by_id.get(cand2)
-                ex2_area = float(ex2.get("area") or 0) if ex2 else 0
-                if not ex2 or area <= 0 or ex2_area <= 0 or abs(ex2_area - area) <= 3:
+                if not ex2:
+                    continue
+                ex2_price = int(ex2.get("price") or 0)
+                if ex2_price <= 0 or abs(ex2_price - price) > PRICE_TOLERANCE:
+                    continue
+                # Раньше это правило не проверяло площадь вообще — две РАЗНЫЕ
+                # квартиры на одном этаже одного дома с похожей ценой и
+                # комнатностью, но разной площадью, склеивались в дубль.
+                # area > 0 у обеих — единственный случай, когда стоит это
+                # правило применять (без площади у одной из сторон оставляем
+                # как запасной вариант без проверки, как раньше).
+                ex2_area = float(ex2.get("area") or 0)
+                if area <= 0 or ex2_area <= 0 or abs(ex2_area - area) <= 3:
                     matched_primary = cand2
                     matched_rule = "addr_price"
+                    break
 
         # 4. координаты + комнаты + этаж + площадь + цена (см. docstring —
         # ловит те же дубли, что и правила 2/3, но независимо от текста
         # адреса, который у разных агентов на один и тот же дом расходится).
         if (matched_primary is None and lat is not None and lon is not None
                 and rooms is not None and floor is not None and price > 0):
-            geo_key = (rooms, floor, round(price / 100_000) * 100_000)
-            for ex_id in geo_idx.get(geo_key, []):
+            # ИЩЕМ по (комнаты, этаж) без цены в ключе — цена проверяется
+            # отдельно с допуском PRICE_TOLERANCE. Раньше цена входила в
+            # ключ (округлена до 100к), и тот же дубль на границе разных
+            # названий улицы (см. docstring: "Сыганак" vs "Е-10") с небольшим
+            # торгом по цене (напр. Е-429 14 за 23.2М и Айтматова 48 за
+            # 23.0М — тот же дом, тот же этаж/площадь) не ловился, т.к. 23.2М
+            # и 23.0М округляются в РАЗНЫЕ бакеты по 100к.
+            for ex_id in geo_idx.get((rooms, floor), []):
                 ex = by_id.get(ex_id)
                 if not ex:
                     continue
@@ -190,6 +216,9 @@ def find_duplicates(listings: list[dict],
                 if abs(float(ex_lat) - lat) > GEO_EPS or abs(float(ex_lon) - lon) > GEO_EPS:
                     continue
                 if abs(float(ex.get("area") or 0) - area) > 3:
+                    continue
+                ex_price = int(ex.get("price") or 0)
+                if ex_price <= 0 or abs(ex_price - price) > PRICE_TOLERANCE:
                     continue
                 matched_primary = ex_id
                 matched_rule = "geo"
@@ -212,10 +241,9 @@ def find_duplicates(listings: list[dict],
         if addr and rooms is not None and area > 0:
             addr_idx.setdefault((addr, rooms, round(area / 5) * 5), []).append(lid)
         if addr and price > 0 and floor is not None and rooms is not None:
-            price_addr_idx.setdefault(
-                (addr, round(price / 100_000) * 100_000, floor, rooms), lid)
+            price_addr_idx.setdefault((addr, floor, rooms), []).append(lid)
         if lat is not None and lon is not None and rooms is not None and floor is not None and price > 0:
-            geo_idx.setdefault((rooms, floor, round(price / 100_000) * 100_000), []).append(lid)
+            geo_idx.setdefault((rooms, floor), []).append(lid)
 
     return duplicates, match_rules
 

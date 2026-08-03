@@ -72,13 +72,31 @@ def _extract_rooms(title):
 
 
 async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000_000,
-                                     start_page=1):
+                                     start_page=1, stats: dict | None = None):
     """Parse apartment sale listings from krisha.kz.
-    start_page: с какой страницы начинать (для глубокого обхода всей выдачи)."""
+    start_page: с какой страницы начинать (для глубокого обхода всей выдачи).
+    max_price: 0/None — БЕЗ потолка цены (нужно для full_sweep.py — иначе
+    объявления 100-200М+ ₸ никогда не попадают даже в исходную выдачу с
+    Крыши, см. ниже про das[price][to]).
+    stats: если передан dict, заполняется pages_ok/pages_failed/reached_end —
+    нужно full_sweep.py, чтобы знать, когда реально дошли до конца выдачи,
+    а не просто наткнулись на временный сетевой сбой одной страницы."""
     listings = []
+    if stats is not None:
+        stats.setdefault("pages_ok", 0)
+        stats.setdefault("pages_failed", 0)
+        stats.setdefault("reached_end", False)
 
     for page in range(start_page, start_page + max_pages):
-        params = {"das[_sys.hasphoto]": 1, "das[price][to]": max_price}
+        # das[price][to]=0 в реальном запросе к Крыше означает "цена до 0" —
+        # т.е. пустая выдача, а не "без ограничения". Раньше max_price всегда
+        # был 80 000 000 по умолчанию И НИКОГДА не передавался вызывающими
+        # (analyze_apartments его не пробрасывал вообще) — поэтому ВЕСЬ обход
+        # (и обычный сервис, и full_sweep) молча ограничивался потолком 80М,
+        # и объявления 100-200М+ никогда не попадали даже в скачанную выдачу.
+        params = {"das[_sys.hasphoto]": 1}
+        if max_price:
+            params["das[price][to]"] = max_price
         if page > 1:
             params["page"] = page
         url = f"{BASE_URL}/prodazha/kvartiry/{city}/?{urlencode(params)}"
@@ -91,6 +109,8 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
                 REQUEST_COUNTS['search'] += 1
             except Exception as exc:
                 logger.warning("apt_parser: page %d failed: %s", page, exc)
+                if stats is not None:
+                    stats["pages_failed"] += 1
                 continue
 
         # Общее число объявлений в выдаче ("Найдено N объявлений") — для
@@ -107,7 +127,11 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
         soup = BeautifulSoup(resp.text, "html.parser")
         cards = soup.select("div.a-card") or soup.select("section.a-card")
         if not cards:
+            if stats is not None:
+                stats["reached_end"] = True
             break
+        if stats is not None:
+            stats["pages_ok"] += 1
 
         for card in cards:
             try:
@@ -159,15 +183,22 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
     return listings
 
 
-async def analyze_apartments(city="astana", max_pages=5, start_page=1):
-    """Full pipeline: parse sales + rentals, score, return sorted results."""
+async def analyze_apartments(city="astana", max_pages=5, start_page=1,
+                              max_price=80_000_000, stats: dict | None = None):
+    """Full pipeline: parse sales + rentals, score, return sorted results.
+    max_price/stats пробрасываются в parse_apartments_for_sale — раньше
+    ЭТА функция их не принимала вовсе, поэтому даже явный вызов с
+    max_price=0 (см. full_sweep.py) падал с TypeError, а обычный сервисный
+    цикл всегда получал скрытый потолок 80М (дефолт parse_apartments_for_sale),
+    так что дорогие объявления 100-200М+ не долетали даже до скрапинга."""
     from collections import defaultdict
 
     # 1. Build rental index
     rental_idx = None  # теперь используем rental_index из PostgreSQL
 
     # 2. Parse sales
-    sales = await parse_apartments_for_sale(city, max_pages=max_pages, start_page=start_page)
+    sales = await parse_apartments_for_sale(city, max_pages=max_pages, start_page=start_page,
+                                             max_price=max_price, stats=stats)
 
     # 3. Build price-per-m2 index by district
     district_prices = defaultdict(list)

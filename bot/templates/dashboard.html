@@ -367,13 +367,15 @@ function mortgageLineHtml(price, market, id, max) {
   const more = restN > 0
     ? ` &nbsp;<a href="javascript:void(0)" onclick="event.stopPropagation();openDetailModal('${id}', event)" style="color:#2563eb;font-weight:700;text-decoration:none;">ещё ${restN}</a>`
     : '';
-  // 3 строки: "Ипотека" (+10% крупнее), ставки банков (как раньше), кнопка
-  // открытия калькулятора (тот же расчёт, что на /admin/mortgage-calculator,
-  // во всплывающем окне — не уводим со страницы, см. openMortgageCalcPopup).
+  // 2 строки: строка 1 — "Ипотека" (+20% крупнее) и кнопка "рассчитать" в
+  // одной линии; строка 2 — ставки банков (как раньше). Кнопка открывает тот
+  // же калькулятор, что и раньше (во всплывающем окне, см. openMortgageCalcPopup).
   return `<div style="margin:8px 0;padding:8px 10px;background:#eff6ff;border-radius:8px;">
-  <div style="font-size:13.75px;font-weight:800;">Ипотека</div>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+    <div style="font-size:16.5px;font-weight:800;">Ипотека</div>
+    <button type="button" onclick="event.stopPropagation();openMortgageCalcPopup(${price || 0})" style="flex:0 0 auto;padding:5px 12px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;font-size:12px;cursor:pointer;">рассчитать</button>
+  </div>
   <div style="font-size:12.5px;font-weight:700;margin-top:3px;">${shown}${more}</div>
-  <button type="button" onclick="event.stopPropagation();openMortgageCalcPopup(${price || 0})" style="margin-top:6px;width:100%;padding:6px 8px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;font-size:12px;cursor:pointer;">🧮 Калькулятор ипотеки</button>
 </div>`;
 }
 function openMortgageCalcPopup(priceTenge) {
@@ -391,7 +393,7 @@ function openMortgageCalcPopup(priceTenge) {
     document.body.appendChild(overlay);
   }
   const priceM = priceTenge ? (priceTenge / 1e6).toFixed(1) : '';
-  document.getElementById('mc-popup-iframe').src = '/admin/mortgage-calculator' + (priceM ? '?price=' + priceM : '');
+  document.getElementById('mc-popup-iframe').src = '/admin/mortgage-calculator?embed=1' + (priceM ? '&price=' + priceM : '');
   overlay.style.display = 'flex';
 }
 function closeMortgageCalcPopup() {
@@ -427,7 +429,10 @@ function mortgageModalBlockHtml(price, market, id, bankEstimate) {
   </div>` : '';
   const banks = groupProgramsByBank(programs);
   const top2 = banks.slice(0, 2);
-  const rest = banks.slice(2, 7);
+  // Раньше показывали топ-7 банков + ссылку "ещё N" на страницу аналитики —
+  // теперь всё содержимое переносим в сам попап и никуда не уводим (см.
+  // задачу "перестать вести на /admin/analytics/{id} из большого попапа").
+  const rest = banks.slice(2);
   const top2Html = top2.map(b => `
     <div style="flex:1;min-width:200px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;">
       <div style="display:flex;align-items:center;gap:6px;font-weight:800;font-size:14.5px;">${bankIconHtml(b.website, 22)}${escapeHtml(b.bank)}</div>
@@ -440,14 +445,11 @@ function mortgageModalBlockHtml(price, market, id, bankEstimate) {
         ${bankProgramsListHtml(b.programs.slice(0, 1))}
       </div>`).join('')}
     </div>` : '';
-  const restN = banks.length - top2.length - rest.length;
-  const moreLink = restN > 0 ? `<div style="margin-top:8px;"><a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="color:#2563eb;font-weight:700;font-size:13px;text-decoration:none;">ещё ${restN} вариант${restN === 1 ? '' : (restN < 5 ? 'а' : 'ов')} →</a></div>` : '';
   return `
 <div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:14px;font-weight:800;margin-bottom:10px;">Ипотека: какие программы подходят под это объявление</div>
   ${bankEstimateHtml}
   <div style="display:flex;gap:10px;flex-wrap:wrap;">${top2Html}${restHtml}</div>
-  ${moreLink}
 </div>`;
 }
 loadMortgagePrograms();
@@ -461,18 +463,34 @@ loadMortgagePrograms();
 const MAP_FETCH_CACHE = new Map();  // url -> {data, at}
 const MAP_FETCH_CACHE_TTL_MS = 2 * 60 * 1000;
 const MAP_FETCH_CACHE_MAX = 60;
-function cachedFetchJson(url) {
+// signal (AbortController.signal) — опционально: раньше устаревшие батчи
+// (после смены фильтра/панорамирования на новую область) просто ИГНОРИРОВАЛИСЬ
+// по applyFiltersSeq, но сам fetch продолжал висеть в браузере до ответа
+// сервера, занимая один из ~6 параллельных HTTP-слотов на домен. При быстрой
+// смене фильтров/панорамировании это реально "вешало" загрузку: новый (нужный)
+// запрос ждал в очереди слота, который держал уже никому не нужный старый
+// запрос. abort() освобождает слот немедленно.
+function cachedFetchJson(url, signal) {
   const hit = MAP_FETCH_CACHE.get(url);
   if (hit && (Date.now() - hit.at) < MAP_FETCH_CACHE_TTL_MS) {
     return Promise.resolve(hit.data);
   }
-  return fetch(url).then(r => r.json()).then(data => {
+  return fetch(url, signal ? {signal} : undefined).then(r => r.json()).then(data => {
     if (MAP_FETCH_CACHE.size >= MAP_FETCH_CACHE_MAX) {
       MAP_FETCH_CACHE.delete(MAP_FETCH_CACHE.keys().next().value);  // выкидываем самый старый
     }
     MAP_FETCH_CACHE.set(url, {data, at: Date.now()});
     return data;
   });
+}
+// Один AbortController на "поколение" батчей карты (см. applyFiltersSeq) —
+// при смене фильтра/новой области панорамирования старый реально обрывается,
+// а не просто игнорируется после ответа (см. комментарий у cachedFetchJson).
+let mapFetchAbort = null;
+function newMapFetchSignal() {
+  if (mapFetchAbort) mapFetchAbort.abort();
+  mapFetchAbort = new AbortController();
+  return mapFetchAbort.signal;
 }
 const MINI_PIN_MARKERS = {};
 // Готовый HTML карточки объявления на id — раньше уходил в Leaflet-попап
@@ -645,6 +663,7 @@ function loadViewportIncremental() {
   base.set('min_lon', b.getWest()); base.set('max_lon', b.getEast());
   const BATCH = 300;
   const seq = ++applyFiltersSeq;
+  const mapSignal = newMapFetchSignal();  // одна на всю цепочку батчей этого панорамирования
   // Панорамирование/зум тоже догружает данные — тот же индикатор
   // "Подгружаем" + полоска прогресса, что и при applyFilters, иначе
   // подгрузка при движении карты происходит незаметно для пользователя.
@@ -670,7 +689,7 @@ function loadViewportIncremental() {
     if (seq !== applyFiltersSeq) return;
     const bp = new URLSearchParams(base);
     bp.set('offset', offset); bp.set('limit', BATCH);
-    cachedFetchJson('/admin/api/map-points?' + bp.toString()).then(d => {
+    cachedFetchJson('/admin/api/map-points?' + bp.toString(), mapSignal).then(d => {
       if (seq !== applyFiltersSeq) return;
       renderSaleBatch(d);
       loadedCount += (d.points || []).length;
@@ -905,7 +924,14 @@ document.getElementById('btn-draw-clear').addEventListener('click', function() {
 // умеет клизировать только L.Marker, а не L.circleMarker (аренда выше).
 // Отдалённый вид (zoom < ZOOM_GATE): вместо пустой карты — просто кружки
 // с числом объявлений в каждом кластере, без полных карточек (см. #27).
-const liteCluster = L.markerClusterGroup({maxClusterRadius: 70, showCoverageOnHover: false});
+// chunkedLoading: addLayers() на пачке в сотни маркеров без него пересчитывает
+// кластеры СИНХРОННО и блокирует главный поток на заметное время — это и
+// выглядело как "зависание" карты при применении фильтра/панорамировании
+// (особенно с открытой панелью объявления — лишний DOM/reflow панели делал
+// паузу ещё заметнее). chunkedLoading бьёт добавление на чанки через
+// requestAnimationFrame, не блокируя поток целиком.
+const liteCluster = L.markerClusterGroup({maxClusterRadius: 70, showCoverageOnHover: false,
+  chunkedLoading: true, chunkInterval: 50, chunkDelay: 30});
 function loadLiteCluster(paramsObj) {
   liteCluster.clearLayers();
   const lp = new URLSearchParams(paramsObj);
@@ -926,6 +952,7 @@ function loadLiteCluster(paramsObj) {
 const SMALL_CLUSTER_MAX = 5;  // кластеры до 5 меток — кружок с числом, клик открывает все сразу в панели справа (см. #26)
 const saleCluster = L.markerClusterGroup({
   maxClusterRadius: 45,
+  chunkedLoading: true, chunkInterval: 50, chunkDelay: 30,  // см. комментарий у liteCluster выше
   zoomToBoundsOnClick: false,  // клик обрабатываем сами (см. clusterclick ниже) — маленькие кластеры открывают панель, а не зумят/центрируют карту
   spiderfyOnMaxZoom: false,    // панель заменяет разлёт пинов — даже на макс. зуме кластер просто открывает список в панели
   iconCreateFunction: function(cluster) {
@@ -1413,7 +1440,7 @@ function applyFilters() {
   document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
   if (type === 'rental') {
-  cachedFetchJson('/admin/api/map-points?' + p.toString()).then(d => {
+  cachedFetchJson('/admin/api/map-points?' + p.toString(), newMapFetchSignal()).then(d => {
       map.removeLayer(pointsLayer);
       map.removeLayer(topLayer);
       pointsLayer.clearLayers();
@@ -1457,6 +1484,7 @@ function applyFilters() {
   topOnlyFilter = document.getElementById('f-top-only').checked;
   const BATCH = 300;
   const filterSeq = ++applyFiltersSeq;
+  const mapSignal = newMapFetchSignal();  // одна на всю цепочку батчей этого вызова
   let loadTarget = null;
   const resultEl = document.getElementById('result-count');
   const fbProgWrap = document.getElementById('fb-load-progress-wrap');
@@ -1480,7 +1508,7 @@ function applyFilters() {
     if (filterSeq !== applyFiltersSeq) return;  // фильтры сменились — бросаем старую цепочку батчей
     const bp = new URLSearchParams(p);
     bp.set('offset', offset); bp.set('limit', BATCH);
-    cachedFetchJson('/admin/api/map-points?' + bp.toString()).then(d => {
+    cachedFetchJson('/admin/api/map-points?' + bp.toString(), mapSignal).then(d => {
       if (filterSeq !== applyFiltersSeq) return;
       renderSaleBatch(d);
       // Общий ориентир для полосы загрузки — всего активных объявлений
@@ -1602,12 +1630,10 @@ function renderSaleBatch(d) {
             ? ` · <a href="/admin/developer/${pt.developer_id}" onclick="event.stopPropagation()" style="color:#888;font-weight:600;">🏗 ${escapeHtml(pt.developer_name)}</a>`
             : ` · <span style="color:#888;font-weight:600;">🏗 ${escapeHtml(pt.developer_name)}</span>`)
         : '';
-      const cxPhotosHtml = (pt.complex_photos && pt.complex_photos.length) ? `
-<div style="display:flex;gap:4px;margin-top:5px;">
-  ${pt.complex_photos.slice(0,3).map(p => `<img src="${proxyImg(p)}" style="width:56px;height:42px;object-fit:cover;border-radius:5px;flex-shrink:0;">`).join('')}
-</div>` : '';
+      // Фото-полоска ЖК под названием в превью убрана по просьбе пользователя
+      // (просили и сразу же отменили — не показываем complex_photos здесь).
       const cxLine = pt.complex
-        ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>${cxPhotosHtml}`
+        ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
         : (devTxt ? `<div style="font-size:13px;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : '');
       // Банки, где можно взять ипотеку под это объявление — над строкой ЖК,
       // топ-2 по ставке (полный список — на странице объявления/Аналитика).
@@ -1652,14 +1678,14 @@ function renderSaleBatch(d) {
         ${ownerPillHtml}
         ${extraPillsHtml}
       </div>
+  ${cxLine}
   </div>
   <div id="info-${pt.id}" style="font-size:12.5px;color:#555;margin-top:4px;"></div>
   <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
   ${pt.market === 'primary' ? '<div style="display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;margin-top:5px;">🏗 первичка</div>' : ''}
-  ${priceTrend ? `<div style="font-size:12px;color:#888;padding:8px 0;">${priceTrend.replace(/^ · /, '')}</div>` : ''}
+  ${priceTrend ? `<div style="font-size:12px;color:#888;padding:18px 0;">${priceTrend.replace(/^ · /, '')}</div>` : ''}
   <div id="ph-${pt.id}" style="margin:7px 0 1px;"></div>
   ${bankLine}
-  ${cxLine}
   ${descHtml}
   <div style="margin-top:9px;padding-top:7px;border-top:1px solid #eee;display:flex;gap:8px;font-size:13px;">
     ${!(pt.photos && pt.photos.length) ? `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" style="flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:34px;background:#f3f4f6;color:#ccc;font-size:18px;line-height:1;border-radius:7px;cursor:pointer;">☆</span>` : ''}

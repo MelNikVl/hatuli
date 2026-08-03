@@ -31,7 +31,25 @@
   </div>
 </div>
 
-<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
+<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-bottom:14px;">
+  <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
+    <b style="font-size:14px;">Разбор описаний по дням</b>
+    <span style="font-size:12px;color:#888;margin-left:6px;">последние 30 дней, по ai_analyzed_at</span>
+    {% if daily_ai %}
+    {% set max_cnt = daily_ai | map(attribute='cnt') | max %}
+    <div style="display:flex;align-items:flex-end;gap:3px;height:160px;margin-top:12px;overflow-x:auto;">
+      {% for d in daily_ai %}
+      <div style="flex:1;min-width:10px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;" title="{{ d.day }}: {{ d.cnt }}">
+        <div style="font-size:10px;color:#666;text-align:center;">{{ d.cnt }}</div>
+        <div style="height:{{ (d.cnt / max_cnt * 125) | round(0, 'floor') | int }}px;background:#2563eb;border-radius:2px 2px 0 0;"></div>
+        <div style="font-size:9px;color:#888;text-align:center;writing-mode:vertical-rl;transform:rotate(180deg);white-space:nowrap;margin-top:2px;">{{ d.day }}</div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div style="padding:20px 0;color:#888;font-size:13px;">пока нет обработанных описаний за последние 30 дней</div>
+    {% endif %}
+  </div>
   <div style="flex:1 1 0;min-width:300px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
     <b style="font-size:14px;">Квартира: что нашлось</b>
     <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">

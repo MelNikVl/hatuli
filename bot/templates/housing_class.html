@@ -22,6 +22,7 @@
       <th style="padding:8px;">ЖК</th>
       <th style="padding:8px;">Район</th>
       <th style="padding:8px;">Стены</th>
+      <th style="padding:8px;text-align:right;">Объявлений</th>
       <th style="padding:8px;text-align:right;">Цена/м² (40%)</th>
       <th style="padding:8px;text-align:right;">Этажность (10%, ↓)</th>
       <th style="padding:8px;text-align:right;">Потолок, м (20%)</th>
@@ -44,6 +45,7 @@
       <td style="padding:8px;font-weight:700;"><a href="/admin/complex/find?name={{ c.name|urlencode }}" style="color:var(--text);text-decoration:none;">{{ c.name }}</a></td>
       <td style="padding:8px;color:#888;">{{ c.district or '—' }}</td>
       <td style="padding:8px;color:#888;">{{ c.construction_type or '—' }}</td>
+      <td style="padding:8px;text-align:right;font-weight:700;">{{ c.listings_count or 0 }}</td>
       <td style="padding:8px;text-align:right;">{{ '%d'|format(c.price_per_m2) ~ ' ₸' if c.price_per_m2 else '—' }}</td>
       <td style="padding:8px;text-align:right;">{{ c.floors_total or '—' }}</td>
       <td style="padding:8px;text-align:right;">{{ '%.1f'|format(c.ceiling_height) if c.ceiling_height else '—' }}</td>

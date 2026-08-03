@@ -160,6 +160,8 @@
     or 'duplicates' in request.url.path or 'archived' in request.url.path or 'unbound' in request.url.path
     or 'zones' in request.url.path or 'settings' in request.url.path or 'logs' in request.url.path
     or 'issues' in request.url.path or request.url.path == '/admin/site-users' or request.url.path == '/admin/panel') %}
+{% set embed = request.query_params.get('embed') %}
+{% if not embed %}
 <header class="pub-header">
   <div class="pub-row1">
     <a href="/admin" class="pub-logo"><img src="/static/branding/logo-icon.png" alt=""> Hatuli</a>
@@ -186,6 +188,7 @@
     </nav>
   </div>
 </header>
+{% endif %}
 
 <main class="main">
 {% block content %}{% endblock %}

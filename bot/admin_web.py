@@ -684,6 +684,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             SELECT COALESCE(ai_analysis->>'finish', 'не определено') AS v, COUNT(*) AS cnt
             FROM apartment_listings WHERE ai_analysis IS NOT NULL GROUP BY 1 ORDER BY 2 DESC
         """)
+        # Динамика разбора по дням (последние 30 дней) — сколько описаний
+        # обработал AI-слой каждый день, см. ai_analyzed_at в ai_text_analysis.py.
+        daily_ai_rows = await pg_fetch("""
+            SELECT date_trunc('day', ai_analyzed_at)::date AS day, COUNT(*) AS cnt
+            FROM apartment_listings
+            WHERE ai_analyzed_at IS NOT NULL AND ai_analyzed_at > now() - interval '30 days'
+            GROUP BY 1 ORDER BY 1
+        """)
         urgency_rows = await pg_fetch("""
             SELECT COALESCE(ai_analysis->>'urgency', 'не определено') AS v, COUNT(*) AS cnt
             FROM apartment_listings WHERE ai_analysis IS NOT NULL GROUP BY 1 ORDER BY 2 DESC
@@ -713,6 +721,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "complexes_enriched": complexes_enriched["cnt"] if complexes_enriched else 0,
             "recent_facts": [dict(r) for r in recent_facts],
             "field_labels": field_labels,
+            "daily_ai": [{"day": r["day"].strftime("%d.%m"), "cnt": r["cnt"]} for r in daily_ai_rows],
         })
 
     @app.get("/admin/analytics/housing-class", response_class=HTMLResponse)
@@ -730,14 +739,16 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                    COALESCE(cts.ceiling_height_max, agg.ceiling_height)::float AS ceiling_height,
                    hct.elevator_count, hct.elevator_capacity_kg, hct.apartment_count,
                    hct.rooms_1, hct.rooms_2, hct.rooms_3, hct.rooms_4,
-                   cts.lifts_type, cts.construction_type
+                   cts.lifts_type, cts.construction_type,
+                   COALESCE(agg.listings_count, 0) AS listings_count
             FROM complexes c
             LEFT JOIN complex_tech_specs cts ON cts.complex_id = c.id
             LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
             LEFT JOIN (
                 SELECT lower(trim(complex_name)) AS key,
                        MAX(floors_total) AS floors_total,
-                       AVG(ceiling_height) AS ceiling_height
+                       AVG(ceiling_height) AS ceiling_height,
+                       COUNT(*) AS listings_count
                 FROM apartment_listings
                 WHERE complex_name IS NOT NULL
                 GROUP BY lower(trim(complex_name))
@@ -746,7 +757,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             ORDER BY c.name
         """)
         complexes = compute_housing_class_scores([dict(r) for r in rows])
-        complexes.sort(key=lambda r: (r["score"] is None, -(r["score"] or 0)))
+        # Сортировка по количеству объявлений (больше всего — сверху), не по скору —
+        # см. задачу "housing-class table sort + count column".
+        complexes.sort(key=lambda r: -(r.get("listings_count") or 0))
         return templates.TemplateResponse("housing_class.html", {
             "request": request, "atab": "housing_class", "complexes": complexes,
         })
