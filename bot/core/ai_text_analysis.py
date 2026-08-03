@@ -235,7 +235,7 @@ async def analyze_top_listings(limit: int = 10) -> int:
         if result is None:
             continue
         await execute(
-            "UPDATE apartment_listings SET ai_analysis = $2::jsonb WHERE id = $1",
+            "UPDATE apartment_listings SET ai_analysis = $2::jsonb, ai_analyzed_at = now() WHERE id = $1",
             r["id"], json.dumps(result, ensure_ascii=False),
         )
         try:

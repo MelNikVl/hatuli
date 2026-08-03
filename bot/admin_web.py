@@ -658,6 +658,63 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "request": request, "atab": "transport",
         })
 
+    @app.get("/admin/analytics/ai-analysis", response_class=HTMLResponse)
+    async def ai_analysis_status_page(request: Request):
+        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
+        # см. комментарий у transport_analytics_page выше.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
+        from bot.db import settings as app_settings
+        await app_settings.load()
+
+        counts = await pg_fetchrow("""
+            SELECT
+                COUNT(*) FILTER (WHERE is_active IS NOT FALSE AND description IS NOT NULL AND length(description) > 80) AS eligible,
+                COUNT(*) FILTER (WHERE ai_analysis IS NOT NULL) AS processed,
+                COUNT(*) FILTER (WHERE (ai_analysis->>'is_relayout')::boolean) AS relayout_cnt,
+                COUNT(*) FILTER (WHERE (ai_analysis->>'is_relayout_legal')::boolean) AS relayout_legal_cnt,
+                COUNT(*) FILTER (WHERE (ai_analysis->>'is_free_layout')::boolean) AS free_layout_cnt,
+                COUNT(*) FILTER (WHERE (ai_analysis->>'has_ac')::boolean) AS ac_cnt,
+                COUNT(*) FILTER (WHERE ai_analysis->>'layout' = 'распашонка') AS cross_layout_cnt,
+                COUNT(*) FILTER (WHERE layer_details->'layout' IS NOT NULL) AS layout_bonus_cnt
+            FROM apartment_listings
+        """)
+        finish_rows = await pg_fetch("""
+            SELECT COALESCE(ai_analysis->>'finish', 'не определено') AS v, COUNT(*) AS cnt
+            FROM apartment_listings WHERE ai_analysis IS NOT NULL GROUP BY 1 ORDER BY 2 DESC
+        """)
+        urgency_rows = await pg_fetch("""
+            SELECT COALESCE(ai_analysis->>'urgency', 'не определено') AS v, COUNT(*) AS cnt
+            FROM apartment_listings WHERE ai_analysis IS NOT NULL GROUP BY 1 ORDER BY 2 DESC
+        """)
+        complexes_enriched = await pg_fetchrow(
+            "SELECT COUNT(*) AS cnt FROM complexes WHERE ai_features IS NOT NULL")
+        recent_facts = await pg_fetch("""
+            SELECT c.name AS complex_name, kv.key AS field,
+                   kv.value->>'value' AS value, kv.value->>'source_url' AS source_url,
+                   (kv.value->>'added_at')::timestamptz AS added_at
+            FROM complexes c, jsonb_each(c.ai_features) AS kv
+            WHERE c.ai_features IS NOT NULL
+            ORDER BY added_at DESC LIMIT 30
+        """)
+        field_labels = {
+            "location": "локация", "nearby": "что рядом", "architecture": "архитектура/дизайн",
+            "lobby": "холл", "security": "охрана", "concierge": "консьерж",
+            "closed_yard": "закрытый двор", "playground": "детская площадка",
+            "parking": "паркинг", "closed_territory": "закрытая территория",
+        }
+        return templates.TemplateResponse("ai_analysis_status.html", {
+            "request": request, "atab": "ai_analysis",
+            "ai_enabled": app_settings.get_bool("AI_TEXT_ANALYSIS", False),
+            "counts": dict(counts) if counts else {},
+            "finish_rows": [dict(r) for r in finish_rows],
+            "urgency_rows": [dict(r) for r in urgency_rows],
+            "complexes_enriched": complexes_enriched["cnt"] if complexes_enriched else 0,
+            "recent_facts": [dict(r) for r in recent_facts],
+            "field_labels": field_labels,
+        })
+
     @app.get("/admin/analytics/housing-class", response_class=HTMLResponse)
     async def housing_class_page(request: Request):
         # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
