@@ -2540,6 +2540,13 @@ def make_extras_router(templates) -> APIRouter:
             except ValueError:
                 layers = None
 
+        ai_analysis = l.get("ai_analysis")
+        if isinstance(ai_analysis, str):
+            try:
+                ai_analysis = _json_ld.loads(ai_analysis)
+            except ValueError:
+                ai_analysis = None
+
         # Фото ЖК — для галереи в модалке объявления (переиспользуем то же
         # поле photos, что и на карточке ЖК)
         complex_photos = []
@@ -2599,6 +2606,7 @@ def make_extras_router(templates) -> APIRouter:
             "year_built": l.get("year_built"),
             "views_count": l.get("views_count"),
             "floorplan_url": l.get("floorplan_url") or "",
+            "ai_analysis": ai_analysis,
             "similar": similar_listings,
             "layers": layers,
             "description": l.get("description") or "",

@@ -540,10 +540,13 @@ async def run_cycle():
             log.warning("layers failed: %s", e)
 
     # ── AI-анализ текста (DeepSeek, включается настройкой) ────────────────
+    # Не трогает Крышу вообще (только DeepSeek, ~$0.0001/объявление) — лимит
+    # держим щедрым, чтобы разобрать весь бэклог за разумное число дней, а
+    # не годы (было 10/цикл ~= 240/день на 23к+ объявлений).
     if app_settings.get_bool("AI_TEXT_ANALYSIS", False):
         try:
             from bot.core.ai_text_analysis import analyze_top_listings
-            await analyze_top_listings(limit=10)
+            await analyze_top_listings(limit=150)
         except Exception as e:
             log.warning("ai text analysis failed: %s", e)
 

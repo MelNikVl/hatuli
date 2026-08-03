@@ -2697,6 +2697,22 @@ function openDetailModal(id, ev) {
     ${d.floorplan_url ? `<a href="${d.floorplan_url}" target="_blank" onclick="event.stopPropagation()" style="${modalPillStyle}text-decoration:none;">📐 План</a>` : ''}
     ${d.views_count ? `<span style="${modalPillStyle}background:#bfdbfe;">👁 ${d.views_count.toLocaleString('ru')}</span>` : ''}`;
 
+    // Плюсы, которые AI вытащил из текста описания (DeepSeek, см. /admin/info#ai)
+    // — только положительные факты, не весь разбор (отделка и так есть пилюлей выше).
+    const aiPluses = [];
+    if (d.ai_analysis) {
+      const ai = d.ai_analysis;
+      if (ai.layout === 'распашонка') aiPluses.push('🔀 распашонка');
+      if (ai.is_free_layout) aiPluses.push('🆓 свободная планировка');
+      if (ai.furniture) aiPluses.push('🛋 с мебелью');
+      if (ai.has_ac) aiPluses.push('❄️ кондиционер');
+      if (ai.is_relayout_legal) aiPluses.push('✅ перепланировка узаконена');
+    }
+    const aiPlusesHtml = aiPluses.length ? `
+<div style="margin:10px 22px 0;">
+  ${aiPluses.map(p => `<span style="${modalPillStyle}background:#dcfce7;color:#166534;">${p}</span>`).join('')}
+</div>` : '';
+
     const priceHistoryHtml = `
 <div id="modal-price-history-wrap" style="padding:18px 22px 0;display:none;">
   <div style="font-size:14px;color:var(--text);margin-bottom:6px;">История цены</div>
@@ -2718,6 +2734,7 @@ ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:v
   <div style="font-size:13px;color:var(--text);font-weight:700;margin-bottom:6px;">📝 Описание</div>
   <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(d.description).slice(0, 600)}${d.description.length > 600 ? '…' : ''}</div>
 </div>` : ''}
+${aiPlusesHtml}
 ${mortgageModalBlockHtml(d.price, d.market, id, d.bargain ? d.bargain.target_price : null)}
 ${scoreSectionHtml}
 ${yieldHtml}
