@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Щадящий парсер krisha-комплексов: «Количество квартир» → housing_class_test.
-Лимиты из parse_settings: krisha_delay_sec (пауза между ЖК), krisha_batch (макс за проход).
-Лог каждого прохода — в krisha_parse_log. Не грузим Крышу: по умолчанию 10 ЖК / 20 мин."""
+"""Щадящий парсер krisha-комплексов: количество квартир + описание + фото ЖК.
+- apartment_count → housing_class_test
+- description → complexes (ТОЛЬКО если пусто — «не менять существующие»)
+- photos → complexes.photos (замена всех)
+Лимиты из parse_settings. Лог — krisha_parse_log. Щадим Крышу (по умолч. 10 ЖК / 20 мин)."""
+import json
 import re
 import subprocess
 import sys
@@ -9,6 +12,7 @@ import time
 from urllib.request import Request, urlopen
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0 Safari/537.36"
+MAX_PHOTOS = 10
 
 
 def psql(sql: str) -> str:
@@ -30,9 +34,36 @@ def fetch(url: str) -> str:
 
 def extract_count(html: str):
     m = re.search(r"Количество квартир</dt>\s*<dd[^>]*>\s*([\d\s]+)", html)
-    if m:
-        return int(re.sub(r"\s", "", m.group(1)))
-    return None
+    return int(re.sub(r"\s", "", m.group(1))) if m else None
+
+
+def extract_description(html: str):
+    """«О жилой недвижимости» — есть не на всех страницах."""
+    m = re.search(r"О жилой недвижимости(.{0,2500}?)(<h[1-6]|О застройщике|</section>|</div>\s*</div>)", html, re.S)
+    if not m:
+        return None
+    t = re.sub(r"<[^>]+>", " ", m.group(1))
+    t = re.sub(r"\s+", " ", t).strip()
+    return t[:1500] if len(t) > 40 else None
+
+
+def extract_photos(html: str):
+    """Уникальные фото по базе URL (без размеров), максимум MAX_PHOTOS."""
+    bases = {}
+    for url in re.findall(r"https://krisha-photos\.kcdn\.online/[^\"\\ )]+", html):
+        url = url.rstrip("/")
+        if "kcdn" not in url:
+            continue
+        # база: убираем размерный суффикс (-120x90, -750x470, -400x300, -full...)
+        base = re.sub(r"-(?:photo-)?\d+x\d+\.\w+$|-full\.\w+$", "", url)
+        if base in bases:
+            # предпочитаем более крупный размер
+            cur = bases[base]
+            if ("-full" in url) or ("750x470" in url and "750x470" not in cur):
+                bases[base] = url
+        else:
+            bases[base] = url
+    return list(bases.values())[:MAX_PHOTOS]
 
 
 def main() -> int:
@@ -42,17 +73,18 @@ def main() -> int:
     delay = float(get_setting("krisha_delay_sec", "120"))
     batch = int(get_setting("krisha_batch", "10"))
 
-    # очередь: сначала ЖК без данных, потом с данными из других источников
+    # очередь: все ЖК с krisha_url, не обработанные полностью (счёт+описание+фото)
     rows = [r.split("|") for r in psql(f"""
         SELECT c.id, c.name, c.krisha_url FROM complexes c
         LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
         WHERE c.krisha_url IS NOT NULL
-          AND (hct.apartment_count IS NULL
-               OR hct.apartment_count_source IS DISTINCT FROM 'krisha')
-        ORDER BY (hct.apartment_count IS NULL) DESC, c.id
+          AND NOT (hct.apartment_count_source = 'krisha'
+                   AND c.photos IS NOT NULL
+                   AND c.description IS NOT NULL AND c.description != '')
+        ORDER BY c.id
         LIMIT {batch}""").splitlines() if r]
     if not rows:
-        print("очередь пуста — всё спарсено")
+        print("очередь пуста — всё обработано")
         return 0
 
     done, errors = 0, 0
@@ -60,24 +92,35 @@ def main() -> int:
         try:
             html = fetch(url)
             cnt = extract_count(html)
-            if cnt is None:
-                raise ValueError("параметр «Количество квартир» не найден")
-            psql(f"""INSERT INTO housing_class_test (complex_id, apartment_count, apartment_count_source, apartment_count_parsed_at, updated_at)
-                     VALUES ({cid}, {cnt}, 'krisha', now(), now())
-                     ON CONFLICT (complex_id) DO UPDATE
-                     SET apartment_count = EXCLUDED.apartment_count,
-                         apartment_count_source = 'krisha',
-                         apartment_count_parsed_at = now(), updated_at = now()""")
-            psql(f"INSERT INTO krisha_parse_log (complex_id, complex_name, apartment_count, status) "
-                 f"VALUES ({cid}, '{name.replace(chr(39), chr(39)*2)}', {cnt}, 'ok')")
+            desc = extract_description(html)
+            photos = extract_photos(html)
+            esc = lambda s: s.replace(chr(39), chr(39) * 2)
+
+            if cnt is not None:
+                psql(f"""INSERT INTO housing_class_test (complex_id, apartment_count, apartment_count_source, apartment_count_parsed_at, updated_at)
+                         VALUES ({cid}, {cnt}, 'krisha', now(), now())
+                         ON CONFLICT (complex_id) DO UPDATE
+                         SET apartment_count = EXCLUDED.apartment_count,
+                             apartment_count_source = 'krisha',
+                             apartment_count_parsed_at = now(), updated_at = now()""")
+            # описание — ТОЛЬКО если пусто
+            if desc:
+                psql(f"UPDATE complexes SET description = '{esc(desc)}' WHERE id = {cid} AND (description IS NULL OR description = '')")
+            # фото — замена всех
+            if photos:
+                psql(f"UPDATE complexes SET photos = '{json.dumps(photos, ensure_ascii=False)}'::jsonb WHERE id = {cid}")
+
+            psql(f"INSERT INTO krisha_parse_log (complex_id, complex_name, apartment_count, status, detail) "
+                 f"VALUES ({cid}, '{esc(name)}', {cnt if cnt is not None else 'NULL'}, 'ok', "
+                 f"'{esc('описание: ' + ('да' if desc else 'нет') + ', фото: ' + str(len(photos)))}')")
             done += 1
-            print(f"✅ {cid} {name}: {cnt} кв")
+            print(f"✅ {cid} {name}: кв={cnt} описание={'да' if desc else 'нет'} фото={len(photos)}")
         except Exception as e:
             psql(f"INSERT INTO krisha_parse_log (complex_id, complex_name, status, detail) "
-                 f"VALUES ({cid}, '{name.replace(chr(39), chr(39)*2)}', 'error', '{str(e)[:150].replace(chr(39), chr(39)*2)}')")
+                 f"VALUES ({cid}, '{esc(name)}', 'error', '{esc(str(e)[:150])}')")
             errors += 1
             print(f"❌ {cid} {name}: {e}")
-        time.sleep(delay)  # щадим Крышу
+        time.sleep(delay)
 
     print(f"итог: {done} ok, {errors} ошибок, пауза {delay:.0f}с")
     return 0

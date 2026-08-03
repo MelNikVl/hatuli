@@ -3,7 +3,13 @@
 <div class="page-title">🏢 Жилой Комплекс {{ cx.name }}
   <span id="cx-fav-star" onclick="toggleFavComplex()" title="В избранное — уведомления в Telegram об изменениях в ЖК" style="cursor:pointer;font-size:22px;vertical-align:middle;color:#ccc;user-select:none;">☆</span>
   {% if developer %}<small style="font-size:14px;font-weight:800;">· 🏗 Застройщик {% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer }}</span>{% endif %}</small>{% endif %}
-  <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% elif cx.housing_class_estimate %} · {{ cx.housing_class_estimate }}{% endif %}</small></div>
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% elif cx.housing_class_estimate %} · {{ cx.housing_class_estimate }}{% endif %}</small>
+  {% if cx.description %}
+  <div style="margin-top:10px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-left:3px solid #eab308;border-radius:8px;font-size:13px;line-height:1.55;color:var(--text);">
+    <span style="font-weight:700;color:#eab308;">📝 Описание ЖК</span>
+    <div style="margin-top:4px;">{{ cx.description }}</div>
+  </div>
+  {% endif %}</div>
 <script>
 (async function() {
   const star = document.getElementById('cx-fav-star');
