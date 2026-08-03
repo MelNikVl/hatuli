@@ -1020,6 +1020,48 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
   <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid ${pinBg};"></div>
 </div>`;
 }
+// Карточка аренды для боковой панели (см. #25/#26 в фидбеке — та же панель,
+// что у продажи, вместо старого Leaflet-попапа прямо над пином). Проще
+// карточки продажи: у аренды нет фото-модалки/торга/ипотеки/скора — только
+// то, что реально есть в rental_listings.
+function buildRentalCardHtml(pt) {
+  const priceTxt = pt.price ? Math.round(pt.price / 1000).toLocaleString('ru') + ' тыс ₸/мес' : '—';
+  const photos = pt.photos || [];
+  const carHtml = photos.length ? `
+<div style="position:relative;height:190px;overflow:hidden;">
+  <img src="${proxyImg(photos[0])}" style="width:100%;height:100%;object-fit:cover;display:block;">
+  ${photos.length > 1 ? `<span style="position:absolute;right:6px;bottom:5px;background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;border-radius:6px;padding:1px 7px;">1/${photos.length}</span>` : ''}
+</div>` : '';
+  const favStarHtml = `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" data-active="0" style="position:absolute;top:8px;left:8px;font-size:28px;line-height:1;cursor:pointer;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 3px rgba(0,0,0,.6);z-index:2;">♡</span>`;
+  const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+  let priceTrend = '';
+  if (pt.prev_price && pt.prev_price !== pt.price) {
+    const dp = (pt.price - pt.prev_price) / 1000;
+    const dir = dp > 0;
+    priceTrend = ` <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;font-size:14px;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(0)} тыс${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
+  }
+  const cxLine = pt.complex
+    ? `<div style="font-size:13px;margin-top:7px;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
+    : '';
+  return `
+<div style="width:100%;max-width:${POPUP_WIDTH}px;font-family:inherit;box-sizing:border-box;">
+  <div style="position:relative;${carHtml ? 'border-radius:11px 11px 0 0;overflow:hidden;' : ''}">${favStarHtml}${carHtml}</div>
+  <div style="padding:10px 2px 0;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <div style="font-size:21px;font-weight:800;">${priceTxt}</div>${priceTrend}
+      <span style="${pillStyle}margin:0;">${pt.rooms || '?'}-комн</span>
+      ${pt.area ? `<span style="${pillStyle}margin:0;">${Math.round(pt.area)} м²</span>` : ''}
+      ${pt.floor ? `<span style="${pillStyle}margin:0;">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : ''}
+    </div>
+    ${pt.address ? `<div style="font-size:13px;color:var(--text);margin-top:6px;">📍 ${escapeHtml(pt.address)}</div>` : ''}
+    ${cxLine}
+    <div style="font-size:11.5px;color:#888;margin-top:6px;">привязка к карте: по ${pt.binding} (приблизительно) · найдено ${pt.found}</div>
+    <div style="margin-top:9px;padding-top:7px;border-top:1px solid var(--border);">
+      <a href="${pt.url}" target="_blank" style="display:block;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:8px 8px;line-height:1;border-radius:7px;text-decoration:none;">Крыша</a>
+    </div>
+  </div>
+</div>`;
+}
 // Подсветка выбранного пина/кластера тёмно-синим при клике (см. #44) —
 // filter:brightness затемняет плашку любого исходного цвета (обычная синяя
 // или малиновая топ-10), не нужно пересчитывать конкретный тёмный оттенок.
@@ -1358,16 +1400,10 @@ function applyFilters() {
           pinMeta: {pt, pinBg: '#0077FF', isTop: false},
         }).addTo(saleCluster);
         MINI_PIN_MARKERS[pt.id] = m;
-        const cx = pt.complex ? `<a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}">${pt.complex}</a>` : 'ЖК не определён';
-        let priceTrend = '';
-        if (pt.prev_price && pt.prev_price !== pt.price) {
-          const dp = (pt.price - pt.prev_price) / 1000;
-          const dir = dp > 0;
-          priceTrend = ` · <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(0)} тыс${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
-        }
-        m.bindPopup(`<div style="min-width:250px;"><b>Аренда: ${pt.price ? (pt.price/1000).toFixed(0) + ' тыс ₸/мес' : '—'}</b> · ${pt.rooms || '?'}-комн${priceTrend}<br>🏢 ${cx}<br><span style="color:#888;">привязка к карте: по ${pt.binding} (приблизительно)</span><br>найдено ${pt.found}${pt.url ? ' · <a href="' + pt.url + '" target="_blank">Крыша</a>' : ''}</div>`, {autoPan: false});
-        m.on('popupopen', (e) => centerOnPopup(e.popup, pt.lat, pt.lon));
-        m.on('popupclose', (e) => stopCenterObserver(e.popup));
+        CARD_HTML[pt.id] = buildRentalCardHtml(pt);
+        // Клик — та же боковая панель, что и у продажи (раньше аренда
+        // отдельно жила на старом Leaflet-попапе прямо над пином).
+        m.on('click', () => { selectPin(pt.id); openSidePanel([pt.id]); });
       });
       document.getElementById('result-count').classList.remove('loading');
       document.getElementById('result-count').textContent = (d.no_geo ? `ещё ${d.no_geo} совсем без привязки` : '') + (drawnPolygons.length ? ' · в области' : '');

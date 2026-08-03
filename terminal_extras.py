@@ -1536,7 +1536,8 @@ def make_extras_router(templates) -> APIRouter:
                 GROUP BY lower(trim(complex_name))""")}
             rows = await pg_fetch(f"""
                 SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.district, r.found_at,
-                       r.lat AS own_lat, r.lon AS own_lon,
+                       r.lat AS own_lat, r.lon AS own_lon, r.area, r.floor, r.floors_total,
+                       r.address, r.photos,
                        ph.old_price AS prev_price, ph.changed_at AS price_changed_at
                 FROM rental_listings r
                 LEFT JOIN LATERAL (
@@ -1561,6 +1562,16 @@ def make_extras_router(templates) -> APIRouter:
                 GROUP BY district""")}
             pts, no_geo = [], 0
             import random as _rnd
+            import json as _json_rental
+
+            def _rental_photos(v):
+                if isinstance(v, str):
+                    try:
+                        v = _json_rental.loads(v)
+                    except ValueError:
+                        v = []
+                return (v or [])[:5]
+
             for r in rows:
                 d = dict(r)
                 cx_geo = complex_geo.get(str(d.get("complex_name") or "").strip().lower())
@@ -1586,6 +1597,10 @@ def make_extras_router(templates) -> APIRouter:
                     "found": d["found_at"].strftime("%d.%m") if d["found_at"] else "",
                     "prev_price": d["prev_price"],
                     "price_changed": d["price_changed_at"].strftime("%d.%m.%Y") if d["price_changed_at"] else None,
+                    "area": float(d["area"]) if d.get("area") else None,
+                    "floor": d.get("floor"), "floors_total": d.get("floors_total"),
+                    "address": d.get("address") or "",
+                    "photos": _rental_photos(d.get("photos")),
                 })
             return JSONResponse({"points": pts, "mode": "rental",
                                  "count": len(pts), "no_geo": no_geo})
