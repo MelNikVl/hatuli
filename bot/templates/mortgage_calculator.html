@@ -1,38 +1,64 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-title">🧮 Калькулятор ипотеки</div>
-<div style="font-size:13px;color:#888;max-width:1100px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
-  Считаем ежемесячный платёж (аннуитет) по каждой подходящей программе из <a href="/admin/banks">списка банков</a> —
-  подставь стоимость жилья, первоначальный взнос и срок, дальше фильтруем программы по типу жилья и потолку суммы кредита.
-</div>
-
-<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
-  <div style="flex:1 1 0;min-width:300px;max-width:360px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;">
-    <label style="display:block;font-size:12.5px;color:#888;margin-bottom:4px;">Стоимость жилья, млн ₸</label>
-    <input id="mc-price" type="number" value="30" step="0.5" min="1"
-           style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;margin-bottom:12px;">
-
-    <label style="display:block;font-size:12.5px;color:#888;margin-bottom:4px;">Первоначальный взнос, %</label>
-    <input id="mc-down" type="number" value="20" step="1" min="0" max="90"
-           style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;margin-bottom:12px;">
-
-    <label style="display:block;font-size:12.5px;color:#888;margin-bottom:4px;">Срок, лет</label>
-    <input id="mc-years" type="number" value="20" step="1" min="1" max="30"
-           style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;margin-bottom:12px;">
-
-    <label style="display:block;font-size:12.5px;color:#888;margin-bottom:6px;">Тип жилья</label>
-    <div style="display:flex;gap:6px;margin-bottom:4px;">
-      <button type="button" id="mc-t-secondary" onclick="mcSetMarket('secondary')"
-              style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">🏠 Вторичка</button>
-      <button type="button" id="mc-t-primary" onclick="mcSetMarket('primary')"
-              style="flex:1;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">🏗 Первичка</button>
+<style>
+@media print {
+  .pub-header, .no-print { display: none !important; }
+  body { background: #fff !important; color: #000 !important; }
+  .mc-card { box-shadow: none !important; border: 1px solid #999 !important; }
+}
+</style>
+<div class="page-title no-print">🧮 Калькулятор ипотеки</div>
+<div style="max-width:760px;margin:0 auto;">
+  <div class="mc-card" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px 26px;">
+    <div class="no-print" style="font-size:13px;color:#888;margin-bottom:18px;">
+      Выбери банк и программу из <a href="/admin/banks">списка</a>, укажи параметры — посчитаем срок,
+      ежемесячный платёж, полную переплату и график всех платежей по месяцам. Результат можно сохранить в PDF
+      (кнопка ниже открывает системный диалог печати — выбери «Сохранить как PDF»).
     </div>
 
-    <div id="mc-summary" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);font-size:12.5px;color:#888;"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;" class="no-print">
+      <div>
+        <label style="display:block;font-size:12.5px;color:#888;margin-bottom:4px;">Стоимость жилья, млн ₸</label>
+        <input id="mc-price" type="number" value="30" step="0.5" min="1"
+               style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;">
+      </div>
+      <div>
+        <label style="display:block;font-size:12.5px;color:#888;margin-bottom:4px;">Первоначальный взнос, %</label>
+        <input id="mc-down" type="number" value="20" step="1" min="0" max="90"
+               style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;">
+      </div>
+      <div>
+        <label style="display:block;font-size:12.5px;color:#888;margin-bottom:4px;">Тип жилья</label>
+        <select id="mc-market" onchange="mcRebuildBankOptions()" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;">
+          <option value="secondary">🏠 Вторичка</option>
+          <option value="primary">🏗 Первичка</option>
+        </select>
+      </div>
+      <div>
+        <label style="display:block;font-size:12.5px;color:#888;margin-bottom:4px;">Срок кредита, лет</label>
+        <input id="mc-years" type="number" value="20" step="1" min="1" max="30"
+               style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;">
+      </div>
+      <div>
+        <label style="display:block;font-size:12.5px;color:#888;margin-bottom:4px;">Банк</label>
+        <select id="mc-bank" onchange="mcRebuildProgramOptions()" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;">
+          <option value="">— выбери банк —</option>
+        </select>
+      </div>
+      <div>
+        <label style="display:block;font-size:12.5px;color:#888;margin-bottom:4px;">Программа</label>
+        <select id="mc-program" onchange="mcCalc()" style="width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;">
+          <option value="">— сначала выбери банк —</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="mc-result" style="margin-top:22px;"></div>
   </div>
 
-  <div style="flex:2 1 0;min-width:340px;">
-    <div id="mc-results" style="display:flex;flex-direction:column;gap:10px;"></div>
+  <div class="no-print" style="text-align:center;margin-top:16px;">
+    <button type="button" onclick="window.print()" id="mc-print-btn" disabled
+            style="padding:10px 22px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14px;cursor:pointer;opacity:.5;">📄 Сохранить как PDF</button>
   </div>
 </div>
 
@@ -41,15 +67,39 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 let MC_PROGRAMS = [];
-let MC_MARKET = 'secondary';
-function mcSetMarket(m) {
-  MC_MARKET = m;
-  document.getElementById('mc-t-secondary').style.background = m === 'secondary' ? '#2563eb' : 'var(--bg)';
-  document.getElementById('mc-t-secondary').style.color = m === 'secondary' ? '#fff' : 'var(--text)';
-  document.getElementById('mc-t-primary').style.background = m === 'primary' ? '#2563eb' : 'var(--bg)';
-  document.getElementById('mc-t-primary').style.color = m === 'primary' ? '#fff' : 'var(--text)';
-  mcRecalc();
+
+function mcRebuildBankOptions() {
+  const market = document.getElementById('mc-market').value;
+  const bankSel = document.getElementById('mc-bank');
+  const matching = MC_PROGRAMS.filter(p =>
+    !(p.housing_type === 'new' && market !== 'primary') &&
+    !(p.housing_type === 'secondary' && market === 'primary'));
+  const banks = [...new Map(matching.map(p => [p.slug, p])).values()];
+  const prevVal = bankSel.value;
+  bankSel.innerHTML = '<option value="">— выбери банк —</option>' +
+    banks.map(b => `<option value="${b.slug}">${escapeHtml(b.short_name)}</option>`).join('');
+  if (banks.some(b => b.slug === prevVal)) bankSel.value = prevVal;
+  mcRebuildProgramOptions();
 }
+
+function mcRebuildProgramOptions() {
+  const market = document.getElementById('mc-market').value;
+  const bankSlug = document.getElementById('mc-bank').value;
+  const progSel = document.getElementById('mc-program');
+  if (!bankSlug) {
+    progSel.innerHTML = '<option value="">— сначала выбери банк —</option>';
+    mcCalc();
+    return;
+  }
+  const matching = MC_PROGRAMS.filter(p => p.slug === bankSlug &&
+    !(p.housing_type === 'new' && market !== 'primary') &&
+    !(p.housing_type === 'secondary' && market === 'primary'));
+  progSel.innerHTML = matching.map((p, i) =>
+    `<option value="${i}">${escapeHtml(p.program_name)}${p.rate_min != null ? ' — от ' + (Math.round(p.rate_min * 10) / 10) + '%' : ''}</option>`).join('');
+  progSel.dataset.programs = JSON.stringify(matching);
+  mcCalc();
+}
+
 function mcAnnuity(principal, annualRatePct, years) {
   const n = years * 12;
   const r = annualRatePct / 100 / 12;
@@ -57,7 +107,14 @@ function mcAnnuity(principal, annualRatePct, years) {
   const pow = Math.pow(1 + r, n);
   return principal * r * pow / (pow - 1);
 }
-function mcRecalc() {
+
+function mcCalc() {
+  const progSel = document.getElementById('mc-program');
+  const printBtn = document.getElementById('mc-print-btn');
+  const resultEl = document.getElementById('mc-result');
+  const programs = progSel.dataset.programs ? JSON.parse(progSel.dataset.programs) : [];
+  const program = programs[parseInt(progSel.value)];
+
   const priceM = parseFloat(document.getElementById('mc-price').value) || 0;
   const downPct = parseFloat(document.getElementById('mc-down').value) || 0;
   const years = parseFloat(document.getElementById('mc-years').value) || 1;
@@ -65,50 +122,82 @@ function mcRecalc() {
   const down = price * downPct / 100;
   const principal = Math.max(price - down, 0);
 
-  const results = [];
-  MC_PROGRAMS.forEach(p => {
-    if (p.housing_type === 'new' && MC_MARKET !== 'primary') return;
-    if (p.housing_type === 'secondary' && MC_MARKET === 'primary') return;
-    const progDown = p.down_payment_min_pct || 0;
-    if (downPct < progDown) return;
-    if (p.max_amount_tg && principal > p.max_amount_tg) return;
-    if (p.rate_min == null) return;
-    const monthly = mcAnnuity(principal, p.rate_min, years);
-    results.push({
-      bank: p.short_name, slug: p.slug, website: p.website, program: p.program_name,
-      rate: Math.round(p.rate_min * 10) / 10,
-      monthly, total: monthly * years * 12, overpay: monthly * years * 12 - principal,
-    });
-  });
-  results.sort((a, b) => a.monthly - b.monthly);
-
-  const summary = document.getElementById('mc-summary');
-  summary.innerHTML = `Сумма кредита: <b style="color:var(--text);">${(principal/1e6).toFixed(1)} млн ₸</b><br>Первоначальный взнос: <b style="color:var(--text);">${(down/1e6).toFixed(1)} млн ₸</b>`;
-
-  const box = document.getElementById('mc-results');
-  if (!results.length) {
-    box.innerHTML = '<div style="color:#888;font-size:13.5px;padding:20px;text-align:center;">Подходящих программ не нашлось — уменьшите первоначальный взнос или срок.</div>';
+  if (!program) {
+    printBtn.disabled = true; printBtn.style.opacity = '.5';
+    resultEl.innerHTML = '<div style="color:#888;font-size:13.5px;padding:20px;text-align:center;" class="no-print">Выбери банк и программу, чтобы увидеть расчёт.</div>';
     return;
   }
-  box.innerHTML = results.map((r, i) => `
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
-      <div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          ${i === 0 ? '<span style="font-size:11px;background:rgba(16,185,129,.15);color:#34d399;border-radius:6px;padding:2px 7px;font-weight:700;">выгоднее всего</span>' : ''}
-          <a href="/admin/banks/${r.slug}" style="font-weight:800;font-size:15px;color:var(--text);text-decoration:none;">${escapeHtml(r.bank)}</a>
-        </div>
-        <div style="font-size:13px;color:#888;margin-top:3px;">${escapeHtml(r.program)} — от ${r.rate}%</div>
+
+  const warnings = [];
+  if (downPct < (program.down_payment_min_pct || 0)) warnings.push(`У программы минимальный ПВ ${program.down_payment_min_pct}% — у тебя ${downPct}%.`);
+  if (program.max_amount_tg && principal > program.max_amount_tg) warnings.push(`Сумма кредита превышает потолок программы (${(program.max_amount_tg/1e6).toFixed(0)} млн ₸).`);
+
+  const rate = program.rate_min != null ? program.rate_min : 0;
+  const monthly = mcAnnuity(principal, rate, years);
+  const totalPaid = monthly * years * 12;
+  const overpay = totalPaid - principal;
+
+  // Полный график платежей по месяцам (аннуитет: платёж постоянный,
+  // соотношение проценты/основной долг меняется).
+  const r = rate / 100 / 12;
+  let balance = principal;
+  const rows = [];
+  for (let m = 1; m <= years * 12; m++) {
+    const interest = balance * r;
+    const principalPart = monthly - interest;
+    balance = Math.max(0, balance - principalPart);
+    rows.push({ m, payment: monthly, interest, principalPart, balance });
+  }
+
+  const summaryHtml = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:6px;">
+      <div><div style="font-size:11px;color:#888;">Банк</div><div style="font-weight:800;font-size:15px;">${escapeHtml(program.short_name)}</div></div>
+      <div><div style="font-size:11px;color:#888;">Программа</div><div style="font-weight:700;font-size:14px;">${escapeHtml(program.program_name)}</div></div>
+      <div><div style="font-size:11px;color:#888;">Сумма кредита</div><div style="font-weight:800;font-size:15px;">${(principal/1e6).toFixed(1)} млн ₸</div></div>
+      <div><div style="font-size:11px;color:#888;">Ставка</div><div style="font-weight:800;font-size:15px;">${rate ? rate.toFixed(1) + '%' : '—'}</div></div>
+      <div><div style="font-size:11px;color:#888;">Срок</div><div style="font-weight:800;font-size:15px;">${years} лет (${years*12} мес.)</div></div>
+      <div><div style="font-size:11px;color:#888;">Ежемесячный платёж</div><div style="font-weight:800;font-size:17px;color:#2563eb;">${Math.round(monthly).toLocaleString('ru')} ₸</div></div>
+      <div><div style="font-size:11px;color:#888;">Всего выплат</div><div style="font-weight:800;font-size:15px;">${Math.round(totalPaid).toLocaleString('ru')} ₸</div></div>
+      <div><div style="font-size:11px;color:#888;">Переплата (проценты)</div><div style="font-weight:800;font-size:15px;color:#ef4444;">${Math.round(overpay).toLocaleString('ru')} ₸</div></div>
+    </div>
+    ${warnings.length ? `<div style="background:rgba(245,158,11,.12);border-radius:8px;padding:8px 12px;font-size:12.5px;color:#f59e0b;margin-top:8px;">⚠️ ${warnings.join(' ')}</div>` : ''}
+  `;
+
+  const scheduleRows = rows.map(row => `
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:4px 8px;">${row.m}</td>
+      <td style="padding:4px 8px;text-align:right;">${Math.round(row.payment).toLocaleString('ru')}</td>
+      <td style="padding:4px 8px;text-align:right;color:#ef4444;">${Math.round(row.interest).toLocaleString('ru')}</td>
+      <td style="padding:4px 8px;text-align:right;color:#16a34a;">${Math.round(row.principalPart).toLocaleString('ru')}</td>
+      <td style="padding:4px 8px;text-align:right;">${Math.round(row.balance).toLocaleString('ru')}</td>
+    </tr>`).join('');
+
+  resultEl.innerHTML = `
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:4px;">
+      ${summaryHtml}
+    </div>
+    <details style="margin-top:16px;" open>
+      <summary style="cursor:pointer;font-weight:700;font-size:13.5px;">📅 График платежей по месяцам (${rows.length})</summary>
+      <div style="max-height:420px;overflow-y:auto;margin-top:10px;">
+        <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+          <thead><tr style="border-bottom:2px solid var(--border);text-align:left;position:sticky;top:0;background:var(--surface);">
+            <th style="padding:4px 8px;">Месяц</th><th style="padding:4px 8px;text-align:right;">Платёж</th>
+            <th style="padding:4px 8px;text-align:right;">Проценты</th><th style="padding:4px 8px;text-align:right;">Основной долг</th>
+            <th style="padding:4px 8px;text-align:right;">Остаток</th>
+          </tr></thead>
+          <tbody>${scheduleRows}</tbody>
+        </table>
       </div>
-      <div style="text-align:right;">
-        <div style="font-weight:800;font-size:19px;">${Math.round(r.monthly).toLocaleString('ru')} ₸<span style="font-size:12px;font-weight:400;color:#888;">/мес</span></div>
-        <div style="font-size:11.5px;color:#888;">переплата ${(r.overpay/1e6).toFixed(1)} млн ₸</div>
-      </div>
-    </div>`).join('');
+    </details>
+  `;
+
+  printBtn.disabled = false; printBtn.style.opacity = '1';
 }
+
 fetch('/admin/api/mortgage-banks').then(r => r.json()).then(d => {
   MC_PROGRAMS = d.programs || [];
-  mcRecalc();
+  mcRebuildBankOptions();
 });
-['mc-price', 'mc-down', 'mc-years'].forEach(id => document.getElementById(id).addEventListener('input', mcRecalc));
+['mc-price', 'mc-down', 'mc-years'].forEach(id => document.getElementById(id).addEventListener('input', mcCalc));
 </script>
 {% endblock %}
