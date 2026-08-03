@@ -976,73 +976,10 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             }
 
         # 10 похожих вариантов — приоритет: тот же ЖК -> тот же/соседний гексагон
-        # (~300м) -> просто похожая цена по городу. Меньше 10 — показываем сколько есть.
-        similar_listings = []
-        if listing.get("rooms") and listing.get("price"):
-            price_lo, price_hi = int(listing["price"] * 0.75), int(listing["price"] * 1.25)
-            sim_rows = []
-
-            if listing.get("complex_name"):
-                sim_rows = list(await pg_fetch("""
-                    SELECT id, url, price, area, floor, floors_total, district,
-                           complex_name, photos, lat, lon
-                    FROM apartment_listings
-                    WHERE rooms = $1 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-                      AND id != $2 AND lower(trim(complex_name)) = lower(trim($3))
-                    ORDER BY ABS(price - $4) ASC
-                    LIMIT 10
-                """, listing["rooms"], listing_id, listing["complex_name"], listing["price"]))
-
-            if listing.get("lat") and listing.get("lon"):
-                # БАГ (найден, критично): раньше последний fallback здесь не
-                # имел вообще никакого гео-ограничения (просто ближайшая цена
-                # по всей БД), а потом — ограничение по district ILIKE, но
-                # текстовое совпадение района не гарантирует близость (нашли
-                # 2 объявления с district="Сарайшык р-н", но геокод у них
-                # улетел за сотни км от Астаны — см. fix в rebind.py). Теперь
-                # ВСЕГДА только гео: тот же гексагон (300м) + кольцо 1 + кольцо 2
-                # — никогда не расширяемся на весь город, даже если найдётся
-                # меньше 10 вариантов.
-                from bot.core.hexgrid import hex_id as _hex_id, neighbors as _hex_nb
-                HEX_EDGE = 300.0
-                my_hid = _hex_id(float(listing["lat"]), float(listing["lon"]), HEX_EDGE)
-                ring1 = set(_hex_nb(my_hid))
-                ring2 = set()
-                for h in ring1:
-                    ring2.update(_hex_nb(h))
-                wanted_hids = {my_hid} | ring1 | ring2
-                exclude_ids = [listing_id] + [r["id"] for r in sim_rows]
-                candidates = await pg_fetch("""
-                    SELECT id, url, price, area, floor, floors_total, district,
-                           complex_name, photos, lat, lon
-                    FROM apartment_listings
-                    WHERE rooms = $1 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-                      AND lat IS NOT NULL AND NOT (id = ANY($2::text[]))
-                    ORDER BY ABS(price - $3) ASC
-                    LIMIT 1500
-                """, listing["rooms"], exclude_ids, listing["price"])
-                for c in candidates:
-                    if len(sim_rows) >= 10:
-                        break
-                    if _hex_id(float(c["lat"]), float(c["lon"]), HEX_EDGE) in wanted_hids:
-                        sim_rows.append(c)
-
-            for r in sim_rows[:10]:
-                sp = r["photos"]
-                if isinstance(sp, str):
-                    try:
-                        sp = _json.loads(sp)
-                    except ValueError:
-                        sp = []
-                similar_listings.append({
-                    "id": r["id"], "url": r["url"], "price": r["price"],
-                    "area": float(r["area"]) if r["area"] else None,
-                    "floor": r["floor"], "floors_total": r["floors_total"],
-                    "district": r["district"], "complex_name": r["complex_name"],
-                    "photo": (sp or [None])[0],
-                    "lat": float(r["lat"]) if r["lat"] else None,
-                    "lon": float(r["lon"]) if r["lon"] else None,
-                })
+        # (~300м) -> просто похожая цена по городу. Общая логика с большим
+        # попапом на карте — см. bot/core/listing_intel.compute_similar_listings.
+        from bot.core.listing_intel import compute_similar_listings
+        similar_listings = await compute_similar_listings(listing, listing_id, limit=10)
 
         return templates.TemplateResponse(
             "analytics_detail.html",

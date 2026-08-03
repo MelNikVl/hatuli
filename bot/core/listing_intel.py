@@ -130,4 +130,76 @@ def build_seller_questions(listing: dict) -> list[str]:
         missing.append("ЖК не указан — уточни название комплекса и управляющую компанию.")
     if not listing.get("is_owner"):
         missing.append("Продавец не подтверждён как собственник — спроси, кто продаёт и какая комиссия.")
+    if not listing.get("floorplan_url"):
+        missing.append("В объявлении нет плана квартиры — запроси у продавца.")
     return missing + _BASE_QUESTIONS
+
+
+async def compute_similar_listings(listing: dict, listing_id: str, limit: int = 10) -> list[dict]:
+    """10 (или limit) похожих вариантов — приоритет: тот же ЖК -> тот же/
+    соседний гексагон (~300м) -> просто похожая цена по городу. Общая логика
+    для страницы объявления (/admin/analytics/{id}) и большого попапа на
+    карте (/admin/api/listing/{id}) — раньше жила только в admin_web.py,
+    вынесена сюда, чтобы не дублировать между двумя местами."""
+    import json as _json
+
+    from bot.db.pg import fetch as pg_fetch
+
+    similar_listings: list[dict] = []
+    if not (listing.get("rooms") and listing.get("price")):
+        return similar_listings
+
+    sim_rows = []
+    if listing.get("complex_name"):
+        sim_rows = list(await pg_fetch("""
+            SELECT id, url, price, area, floor, floors_total, district,
+                   complex_name, photos, lat, lon
+            FROM apartment_listings
+            WHERE rooms = $1 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND id != $2 AND lower(trim(complex_name)) = lower(trim($3))
+            ORDER BY ABS(price - $4) ASC
+            LIMIT $5
+        """, listing["rooms"], listing_id, listing["complex_name"], listing["price"], limit))
+
+    if listing.get("lat") and listing.get("lon"):
+        from bot.core.hexgrid import hex_id as _hex_id, neighbors as _hex_nb
+        HEX_EDGE = 300.0
+        my_hid = _hex_id(float(listing["lat"]), float(listing["lon"]), HEX_EDGE)
+        ring1 = set(_hex_nb(my_hid))
+        ring2 = set()
+        for h in ring1:
+            ring2.update(_hex_nb(h))
+        wanted_hids = {my_hid} | ring1 | ring2
+        exclude_ids = [listing_id] + [r["id"] for r in sim_rows]
+        candidates = await pg_fetch("""
+            SELECT id, url, price, area, floor, floors_total, district,
+                   complex_name, photos, lat, lon
+            FROM apartment_listings
+            WHERE rooms = $1 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND lat IS NOT NULL AND NOT (id = ANY($2::text[]))
+            ORDER BY ABS(price - $3) ASC
+            LIMIT 1500
+        """, listing["rooms"], exclude_ids, listing["price"])
+        for c in candidates:
+            if len(sim_rows) >= limit:
+                break
+            if _hex_id(float(c["lat"]), float(c["lon"]), HEX_EDGE) in wanted_hids:
+                sim_rows.append(c)
+
+    for r in sim_rows[:limit]:
+        sp = r["photos"]
+        if isinstance(sp, str):
+            try:
+                sp = _json.loads(sp)
+            except ValueError:
+                sp = []
+        similar_listings.append({
+            "id": r["id"], "url": r["url"], "price": r["price"],
+            "area": float(r["area"]) if r["area"] else None,
+            "floor": r["floor"], "floors_total": r["floors_total"],
+            "district": r["district"], "complex_name": r["complex_name"],
+            "photo": (sp or [None])[0],
+            "lat": float(r["lat"]) if r["lat"] else None,
+            "lon": float(r["lon"]) if r["lon"] else None,
+        })
+    return similar_listings

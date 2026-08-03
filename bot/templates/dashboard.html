@@ -1857,6 +1857,75 @@ function loadHexPriceMini(id, lat, lon, rooms) {
     drawHexPriceMini('hexmini-rental-' + id, d.rental, 'avg_price', v => Math.round(v/1000) + 'к/мес');
   }).catch(() => { wrap.innerHTML = ''; });
 }
+// Карта "похожие + гексагоны" в большом попапе — тот же паттерн, что на
+// странице объявления (/admin/analytics/{id}, см. listing-map там), только
+// переиспользует уже загруженный на дашборде Leaflet вместо своих <script>.
+let modalSimilarMap = null, modalSimilarLayer = null, modalHexLayer = null,
+    modalSimilarOn = false, modalHexOn = false, modalMapLat = null, modalMapLon = null;
+function initModalSimilarMap(d, id) {
+  if (modalSimilarMap) { modalSimilarMap.remove(); modalSimilarMap = null; }
+  const el = document.getElementById('modal-similar-map');
+  if (!el || d.lat == null || d.lon == null) return;
+  modalMapLat = d.lat; modalMapLon = d.lon;
+  modalSimilarOn = false; modalHexOn = false; modalHexLayer = null;
+  const map = L.map('modal-similar-map').setView([d.lat, d.lon], 15);
+  modalSimilarMap = map;
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
+  L.marker([d.lat, d.lon]).addTo(map);
+
+  modalSimilarLayer = L.layerGroup();
+  (d.similar || []).forEach(s => {
+    if (s.lat == null || s.lon == null) return;
+    const priceTxt = s.price ? (s.price / 1e6).toFixed(1) + ' М' : '—';
+    const m = L.marker([s.lat, s.lon], {icon: L.divIcon({className: '', html:
+      `<div style="display:inline-block;background:#0077FF;color:#fff;border-radius:10px;padding:3px 8px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);transform:translate(-50%,-100%);">${priceTxt}</div>`,
+      iconSize: [0, 0], iconAnchor: [0, 0]})});
+    m.bindPopup(`<b>${priceTxt} ₸</b> · ${d.rooms || '?'}-комн${s.area ? ', ' + Math.round(s.area) + ' м²' : ''}` +
+      `${s.complex_name ? '<br>🏢 ' + escapeHtml(s.complex_name) : ''}<br><a href="javascript:void(0)" onclick="openDetailModal('${s.id}', event)">Открыть →</a>`);
+    modalSimilarLayer.addLayer(m);
+  });
+  const btnSim = document.getElementById('modal-similar-btn');
+  const btnHex = document.getElementById('modal-hex-btn');
+  if (btnSim) { btnSim.style.background = '#2563eb'; btnSim.style.color = '#fff'; }
+  if (btnHex) { btnHex.style.background = '#fff'; btnHex.style.color = '#333'; }
+}
+function toggleModalSimilar() {
+  if (!modalSimilarMap || !modalSimilarLayer) return;
+  modalSimilarOn = !modalSimilarOn;
+  const btn = document.getElementById('modal-similar-btn');
+  if (modalSimilarOn) {
+    modalSimilarLayer.addTo(modalSimilarMap);
+    const bounds = [[modalMapLat, modalMapLon]];
+    modalSimilarLayer.eachLayer(l => bounds.push(l.getLatLng()));
+    if (bounds.length > 1) modalSimilarMap.fitBounds(bounds, {padding: [30, 30]});
+    if (btn) btn.style.background = '#16a34a';
+  } else {
+    modalSimilarMap.removeLayer(modalSimilarLayer);
+    if (btn) btn.style.background = '#2563eb';
+  }
+}
+function toggleModalHex() {
+  if (!modalSimilarMap) return;
+  modalHexOn = !modalHexOn;
+  const btn = document.getElementById('modal-hex-btn');
+  if (!modalHexOn) {
+    if (modalHexLayer) modalSimilarMap.removeLayer(modalHexLayer);
+    if (btn) { btn.style.background = '#fff'; btn.style.color = '#333'; }
+    return;
+  }
+  if (btn) { btn.style.background = '#7c3aed'; btn.style.color = '#fff'; }
+  if (modalHexLayer) { modalHexLayer.addTo(modalSimilarMap); return; }
+  fetch(`/admin/api/hex-prices?lat=${modalMapLat}&lon=${modalMapLon}`).then(r => r.json()).then(hd => {
+    modalHexLayer = L.layerGroup();
+    (hd.sale || []).forEach(c => {
+      L.polygon(c.corners, {
+        color: c.is_self ? '#1e3a8a' : '#7c3aed', weight: c.is_self ? 2.5 : 1.5,
+        fillColor: '#7c3aed', fillOpacity: 0.06,
+      }).bindTooltip(c.label, {sticky: true}).addTo(modalHexLayer);
+    });
+    if (modalHexOn) modalHexLayer.addTo(modalSimilarMap);
+  }).catch(() => {});
+}
 
 let lastPoints = [], hexOn = false, hexEdge = 50;
 let applyFiltersSeq = 0;  // растёт при каждом applyFilters() — обрывает устаревшие цепочки батчей
@@ -2550,20 +2619,32 @@ function openDetailModal(id, ev) {
   </div>
 </div>` : '';
 
-    const nearbyHtml = (d.nearby && d.nearby.length) ? `
-<div style="margin-top:20px;padding:14px 22px 4px;border-top:1px solid var(--border);">
-  <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">🔎 Похожие рядом (${d.nearby.length})</div>
-  <div style="display:flex;gap:12px;overflow-x:auto;">
-    ${d.nearby.map(n => `
-    <a href="javascript:void(0)" onclick="openDetailModal('${n.id}', event)" style="flex:0 0 180px;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:10px;overflow:hidden;display:block;">
-      ${n.photo ? `<img src="${n.photo}" style="width:100%;height:110px;object-fit:cover;display:block;">` : `<div style="width:100%;height:110px;background:var(--bg);"></div>`}
-      <div style="padding:8px 10px;">
-        <div style="font-weight:800;font-size:15px;">${n.price ? (n.price/1e6).toFixed(1) + ' М' : '—'}</div>
-        <div style="font-size:12.5px;color:var(--text);">${n.rooms || '?'}-комн · ${n.area ? Math.round(n.area) : '?'} м²</div>
-      </div>
-    </a>`).join('')}
+    // Карта "похожие + гексагоны" (как на странице объявления) вместо
+    // старой горизонтальной ленты по прямому расстоянию — см.
+    // initModalSimilarMap ниже, отрисовывается после вставки innerHTML.
+    const similarMapHtml = (d.lat != null && d.lon != null) ? `
+<div style="margin-top:20px;padding:14px 22px 0;border-top:1px solid var(--border);">
+  <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">📍 Карта: похожие варианты и гексагоны</div>
+  <div style="position:relative;">
+    <div id="modal-similar-map" style="height:360px;border-radius:10px;"></div>
+    <button onclick="toggleModalSimilar()" id="modal-similar-btn" type="button" style="position:absolute;right:8px;top:8px;z-index:1000;background:#2563eb;color:#fff;font-weight:700;font-size:12px;padding:7px 12px;border-radius:7px;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);">🔎 Похожие (${(d.similar||[]).length})</button>
+    <button onclick="toggleModalHex()" id="modal-hex-btn" type="button" style="position:absolute;right:8px;top:48px;z-index:1000;background:#fff;color:#333;font-weight:700;font-size:12px;padding:7px 12px;border-radius:7px;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);">⬡ Гексагоны</button>
   </div>
 </div>` : '';
+
+    const layerIcons = {noise:'🔊', schools:'🏫', transit:'🚌', amenities:'🛒', parks:'🌳', banks:'🏦', layout:'🏠'};
+    const locationLayersHtml = (d.layers && Object.keys(d.layers).length) ? `
+<details style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
+  <summary style="cursor:pointer;font-weight:700;font-size:14px;">📍 Локация: разбор по слоям</summary>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:10px;">
+    ${Object.entries(d.layers).map(([name, ld]) => `
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:6px 6px;width:26px;">${layerIcons[name] || '•'}</td>
+      <td style="padding:6px 6px;width:46px;font-weight:700;color:${ld.adj > 0 ? '#4ade80' : (ld.adj < 0 ? '#f87171' : '#888')};">${ld.adj > 0 ? '+' : ''}${ld.adj}</td>
+      <td style="padding:6px 6px;">${escapeHtml(ld.reason)}</td>
+    </tr>`).join('')}
+  </table>
+</details>` : '';
 
     // Те же плашки, что в превью на карте (см. CARD_HTML) — комнатность,
     // цена/м², площадь, срок на рынке, этаж, продавец — просили продублировать
@@ -2580,7 +2661,8 @@ function openDetailModal(id, ev) {
     <span style="${modalPillStyle}">${d.is_owner ? 'собственник' : 'риелтор'}</span>
     ${d.ceiling_height ? `<span style="${modalPillStyle}">потолок ${d.ceiling_height} м</span>` : ''}
     ${d.finish_type ? `<span style="${modalPillStyle}">${escapeHtml(d.finish_type)}</span>` : ''}
-    ${d.floorplan_url ? `<a href="${d.floorplan_url}" target="_blank" onclick="event.stopPropagation()" style="${modalPillStyle}text-decoration:none;">📐 План</a>` : ''}`;
+    ${d.floorplan_url ? `<a href="${d.floorplan_url}" target="_blank" onclick="event.stopPropagation()" style="${modalPillStyle}text-decoration:none;">📐 План</a>` : ''}
+    ${d.views_count ? `<span style="${modalPillStyle}background:#bfdbfe;">👁 ${d.views_count.toLocaleString('ru')}</span>` : ''}`;
 
     const priceHistoryHtml = `
 <div id="modal-price-history-wrap" style="padding:18px 22px 0;display:none;">
@@ -2596,7 +2678,6 @@ ${photoHtml}
   ${d.seller_name ? `<div style="font-size:13px;color:var(--text);margin-top:4px;">${escapeHtml(d.seller_name)}</div>` : ''}
   <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
   ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
-  ${d.views_count ? `<div style="font-size:13px;color:var(--text);margin-top:6px;">👁 просмотрели ${d.views_count.toLocaleString('ru')} раз${d.first_seen ? ' с ' + d.first_seen : ''}</div>` : ''}
 </div>
 ${bargainHtml}
 ${priceHistoryHtml}
@@ -2622,15 +2703,16 @@ ${(d.seller_questions && d.seller_questions.length) ? `
   <div style="font-size:14px;font-weight:700;margin-bottom:8px;">❓ Вопросы продавцу</div>
   <ul style="font-size:13.5px;line-height:1.7;padding-left:18px;margin:0;">${d.seller_questions.map(q => `<li>${escapeHtml(q)}</li>`).join('')}</ul>
 </div>` : ''}
-${nearbyHtml}
-<div id="hexwrap-modal" style="padding:18px 22px 0;"></div>
-<div style="margin:18px 22px 0;">
-  <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">Карта района</div>
-  <iframe src="https://yandex.ru/map-widget/v1/?um=constructor%3A1c828d0b5d4e475c9ee30454f42ffdfc8f61b8a002e61d9c807c9ee379a3d9ae&amp;source=constructor" width="100%" height="420" frameborder="0" style="border-radius:10px;display:block;"></iframe>
-</div>
+${locationLayersHtml}
+${similarMapHtml}
+<details style="margin:18px 22px 0;">
+  <summary style="cursor:pointer;font-size:14px;color:var(--text);font-weight:700;">🚦 Карта района — проверить пробки</summary>
+  <div style="margin-top:8px;">
+    <iframe src="https://yandex.ru/map-widget/v1/?um=constructor%3A1c828d0b5d4e475c9ee30454f42ffdfc8f61b8a002e61d9c807c9ee379a3d9ae&amp;source=constructor" width="100%" height="420" frameborder="0" style="border-radius:10px;display:block;"></iframe>
+  </div>
+</details>
 <div style="padding:20px 22px;display:flex;gap:10px;flex-wrap:wrap;">
   <a href="${d.url}" target="_blank" style="display:inline-block;padding:11px 20px;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;text-decoration:none;font-size:16px;">Открыть на Крыше ↗</a>
-  <a href="/admin/analytics/${id}" style="display:inline-block;padding:11px 20px;border-radius:8px;background:#0f766e;color:#fff;font-weight:700;text-decoration:none;font-size:16px;">Аналитика</a>
 </div>`;
 
     if (modalPhotos.length) {
@@ -2640,7 +2722,7 @@ ${nearbyHtml}
       if (mainImg) mainImg.onclick = () => { carIdx[id] = modalPhotoIdx; openLightbox(id, event); };
     }
 
-    if (d.lat != null && d.lon != null) loadHexPriceMini('modal', d.lat, d.lon, d.rooms);
+    if (d.lat != null && d.lon != null) initModalSimilarMap(d, id);
 
     fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(dh => {
       const wrap = document.getElementById('modal-price-history-wrap');

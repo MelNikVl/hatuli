@@ -2515,9 +2515,17 @@ def make_extras_router(templates) -> APIRouter:
         )
         bargain = analyze_bargain(l.get("price", 0), comps, l.get("is_owner"), l.get("is_urgent") is True, comps_meta)
 
-        from bot.core.listing_intel import build_negotiation_points, build_seller_questions
+        from bot.core.listing_intel import build_negotiation_points, build_seller_questions, compute_similar_listings
         negotiation_points = build_negotiation_points(l, bargain, len(comps))
         seller_questions = build_seller_questions(l)
+        similar_listings = await compute_similar_listings(l, listing_id, limit=5)
+
+        layers = l.get("layer_details")
+        if isinstance(layers, str):
+            try:
+                layers = _json_ld.loads(layers)
+            except ValueError:
+                layers = None
 
         # Фото ЖК — для галереи в модалке объявления (переиспользуем то же
         # поле photos, что и на карточке ЖК)
@@ -2578,6 +2586,8 @@ def make_extras_router(templates) -> APIRouter:
             "year_built": l.get("year_built"),
             "views_count": l.get("views_count"),
             "floorplan_url": l.get("floorplan_url") or "",
+            "similar": similar_listings,
+            "layers": layers,
             "description": l.get("description") or "",
             "first_seen": l["first_seen"].strftime("%d.%m.%Y") if l.get("first_seen") else None,
             "age": int((_dt.now(_tz.utc) - l["first_seen"]).days) if l.get("first_seen") else None,
