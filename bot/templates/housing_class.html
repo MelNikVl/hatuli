@@ -7,14 +7,18 @@
   Экспериментальный числовой скор (0–100), не связан с колонкой «Класс жилья» (эконом/комфорт/бизнес/премиум) на странице ЖК.
   Веса: <b>цена/м²</b> — наибольший, <b>потолки</b> и <b>кол-во квартир</b> — средние, <b>этажность</b> (чем выше, тем ниже класс) и <b>лифты</b> (кол-во + грузоподъёмность) — небольшие.
   Лифты (кол-во/грузоподъёмность) и кол-во квартир в базе нигде не хранятся — вбей вручную в соответствующих ячейках, они сохранятся и войдут в расчёт.
-  Материал стен — справочно, из <code>complex_tech_specs</code> (Homsters/Korter), в скор не входит. Крестик справа удаляет ЖК из базы (только карточку ЖК — объявления не трогает).
+  Материал стен — справочно, из <code>complex_tech_specs</code> (Homsters/Korter), в скор не входит. Отметь галочками несуществующие ЖК и удали их скопом (только карточку ЖК — объявления не трогает).
 </div>
 
+<div style="margin-bottom:10px;">
+  <button type="button" id="hc-bulk-btn" disabled onclick="hcBulkDelete()"
+          style="padding:7px 14px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:700;font-size:13px;cursor:pointer;opacity:.5;">🗑 Удалить выбранные (<span id="hc-bulk-count">0</span>)</button>
+</div>
 <div style="overflow-x:auto;">
 <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
   <thead>
     <tr style="border-bottom:2px solid var(--border);text-align:left;">
-      <th style="padding:8px;width:1%;"></th>
+      <th style="padding:8px;width:1%;"><input type="checkbox" id="hc-select-all" onclick="hcToggleAll(this)" title="Выбрать все"></th>
       <th style="padding:8px;">ЖК</th>
       <th style="padding:8px;">Район</th>
       <th style="padding:8px;">Стены</th>
@@ -35,9 +39,7 @@
     {% for c in complexes %}
     <tr style="border-bottom:1px solid var(--border);">
       <td style="padding:8px;text-align:center;">
-        <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/delete" onsubmit="return confirm('Удалить ЖК «{{ c.name }}» из базы? Объявления не удаляются, только карточка ЖК.');">
-          <button type="submit" title="Удалить ЖК (не существует в реальности)" style="border:none;background:none;color:#ef4444;cursor:pointer;font-size:16px;font-weight:700;line-height:1;padding:2px 6px;">✕</button>
-        </form>
+        <input type="checkbox" class="hc-del-cb" name="ids" value="{{ c.id }}" onclick="hcUpdateBulkBtn()" title="Отметить для удаления">
       </td>
       <td style="padding:8px;font-weight:700;"><a href="/admin/complex/find?name={{ c.name|urlencode }}" style="color:var(--text);text-decoration:none;">{{ c.name }}</a></td>
       <td style="padding:8px;color:#888;">{{ c.district or '—' }}</td>
@@ -99,4 +101,29 @@
 {% if not complexes %}
 <div style="padding:30px;text-align:center;color:#888;">Нет ЖК с достаточными данными.</div>
 {% endif %}
+<script>
+function hcUpdateBulkBtn() {
+  const n = document.querySelectorAll('.hc-del-cb:checked').length;
+  const btn = document.getElementById('hc-bulk-btn');
+  document.getElementById('hc-bulk-count').textContent = n;
+  btn.disabled = n === 0;
+  btn.style.opacity = n === 0 ? '.5' : '1';
+  const all = document.querySelectorAll('.hc-del-cb');
+  document.getElementById('hc-select-all').checked = n > 0 && n === all.length;
+}
+function hcToggleAll(cb) {
+  document.querySelectorAll('.hc-del-cb').forEach(el => { el.checked = cb.checked; });
+  hcUpdateBulkBtn();
+}
+function hcBulkDelete() {
+  const ids = [...document.querySelectorAll('.hc-del-cb:checked')].map(el => el.value);
+  if (!ids.length) return;
+  if (!confirm('Удалить ' + ids.length + ' ЖК из базы? Объявления не удаляются, только карточки ЖК.')) return;
+  const body = new URLSearchParams();
+  ids.forEach(id => body.append('ids', id));
+  fetch('/admin/analytics/housing-class/bulk-delete', {method: 'POST', body})
+    .then(() => location.reload())
+    .catch(() => alert('Не удалось удалить — попробуйте ещё раз.'));
+}
+</script>
 {% endblock %}

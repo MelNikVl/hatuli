@@ -629,6 +629,13 @@ function loadViewportIncremental() {
   resultEl.textContent = 'Подгружаем…'; resultEl.classList.add('loading');
   fbProgWrap.style.display = 'flex'; progBar.style.width = '0%'; if (progPct) progPct.textContent = '';
   if (mapBarWrap) { mapBarWrap.style.display = 'flex'; mapBar.style.width = '0%'; if (mapBarPct) mapBarPct.textContent = ''; }
+  // Подстраховка: даже с .catch() ниже что-то может зависнуть без явной
+  // ошибки (сервер завис на запросе и т.п.) — принудительно снимаем
+  // "Подгружаем…" через 45с, если эта же цепочка (seq) всё ещё висит.
+  setTimeout(() => { if (seq === applyFiltersSeq && resultEl.classList.contains('loading')) {
+    resultEl.textContent = drawnPolygons.length ? 'в области' : ''; resultEl.classList.remove('loading');
+    fbProgWrap.style.display = 'none'; if (mapBarWrap) mapBarWrap.style.display = 'none';
+  } }, 45000);
   function loadBatch(offset) {
     if (seq !== applyFiltersSeq) return;
     const bp = new URLSearchParams(base);
@@ -647,6 +654,13 @@ function loadViewportIncremental() {
         resultEl.textContent = drawnPolygons.length ? 'в области' : ''; resultEl.classList.remove('loading');
         setTimeout(() => { if (seq === applyFiltersSeq) { fbProgWrap.style.display = 'none'; if (mapBarWrap) mapBarWrap.style.display = 'none'; } }, 600);
       }
+    }).catch(err => {
+      // См. аналогичный catch в loadSaleBatch — без него сбой одного батча
+      // при панорамировании карты навсегда вешал "Подгружаем…".
+      console.warn('loadBatch (pan/zoom) failed', err);
+      if (seq !== applyFiltersSeq) return;
+      resultEl.textContent = drawnPolygons.length ? 'в области' : ''; resultEl.classList.remove('loading');
+      fbProgWrap.style.display = 'none'; if (mapBarWrap) mapBarWrap.style.display = 'none';
     });
   }
   loadBatch(0);
@@ -1390,6 +1404,12 @@ function applyFilters() {
   resultEl.textContent = 'Загружаем…'; resultEl.classList.add('loading');
   fbProgWrap.style.display = 'flex'; progBar.style.width = '0%'; if (progPct) progPct.textContent = '';
   if (mapBarWrap) { mapBarWrap.style.display = 'flex'; mapBar.style.width = '0%'; if (mapBarPct) mapBarPct.textContent = ''; }
+  // Подстраховка: см. аналогичный watchdog в loadMapPointsForView — снимает
+  // "Загружаем…" через 45с, если цепочка батчей всё ещё висит без явной ошибки.
+  setTimeout(() => { if (filterSeq === applyFiltersSeq && resultEl.classList.contains('loading')) {
+    resultEl.textContent = drawnPolygons.length ? 'в области' : ''; resultEl.classList.remove('loading');
+    fbProgWrap.style.display = 'none'; if (mapBarWrap) mapBarWrap.style.display = 'none';
+  } }, 45000);
   function loadSaleBatch(offset) {
     if (filterSeq !== applyFiltersSeq) return;  // фильтры сменились — бросаем старую цепочку батчей
     const bp = new URLSearchParams(p);
@@ -1427,6 +1447,15 @@ function applyFilters() {
         resultEl.textContent = drawnPolygons.length ? 'в области' : ''; resultEl.classList.remove('loading');
         setTimeout(() => { if (filterSeq === applyFiltersSeq) { fbProgWrap.style.display = 'none'; if (mapBarWrap) mapBarWrap.style.display = 'none'; } }, 600);
       }
+    }).catch(err => {
+      // Без этого сетевой сбой/ошибка на одном батче навсегда вешала
+      // "Загружаем…" — цепочка просто останавливалась молча (unhandled
+      // rejection), полоска прогресса зависала на текущем %.
+      console.warn('loadSaleBatch failed', err);
+      if (filterSeq !== applyFiltersSeq) return;
+      pendingBatchResume = null;
+      resultEl.textContent = drawnPolygons.length ? 'в области' : ''; resultEl.classList.remove('loading');
+      fbProgWrap.style.display = 'none'; if (mapBarWrap) mapBarWrap.style.display = 'none';
     });
   }
   // На отдалённом виде (весь город, zoom < ZOOM_GATE) полные карточки

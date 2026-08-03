@@ -728,6 +728,17 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         await pg_execute("DELETE FROM complexes WHERE id = $1", complex_id)
         return RedirectResponse(url="/admin/analytics/housing-class", status_code=303)
 
+    @app.post("/admin/analytics/housing-class/bulk-delete")
+    async def housing_class_bulk_delete(request: Request, ids: list[int] = Form(...)):
+        # Массовое удаление отмеченных галочками ЖК (см. housing_class_delete
+        # выше — та же семантика, только скопом; вызывается через fetch с
+        # location.reload(), поэтому просто отвечаем 204, без редиректа.
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import execute as pg_execute
+        await pg_execute("DELETE FROM complexes WHERE id = ANY($1::int[])", ids)
+        return JSONResponse({"deleted": len(ids)})
+
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
     async def analytics_detail(request: Request, listing_id: str):
         if not is_authed(request):

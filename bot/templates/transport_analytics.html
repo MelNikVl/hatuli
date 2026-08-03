@@ -79,10 +79,7 @@ function drawTrHexes() {
     L.polygon(trCorners(h.lat, h.lon, TR_EDGE), {
       color: 'transparent', weight: 0,
       fillColor: trColor(h.score), fillOpacity: 0.6,
-    }).bindTooltip(`доступность ${h.score.toFixed(2)} · ЛРТ ${Math.round(h.dist_lrt)} м · автобус ${Math.round(h.dist_bus)} м` +
-      (h.dist_road != null ? ` · дорога ${Math.round(h.dist_road)} м` : '') +
-      (h.dist_junction != null ? ` · развязка ${Math.round(h.dist_junction)} м` : ''), {sticky:true})
-      .addTo(trHexLayer);
+    }).addTo(trHexLayer);
   });
   document.getElementById('tr-result-count').textContent =
     shown.toLocaleString('ru') + ' гексов из ' + trHexes.length.toLocaleString('ru') + ' с транспортом рядом';
