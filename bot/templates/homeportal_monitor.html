@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🏛 Homeportal.kz <small>официальные данные ЖК (КЖК, долевое строительство)</small></div>
+
+<div style="font-size:13px;color:#888;max-width:1200px;margin-bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;">
+  Парсим <b>открытый API</b> портала АО «Казахстанская жилищная компания»: список ЖК (POST getobjects) → деталки (GET objects-detail/{{'{id}'}}): комнатность 1к/2к/3к/4к, этажность, кадастр, застройщик+БИН, БВУ, даты. Темп: <b>1 ЖК / 90 сек</b> (~15.5 ч на 619).
+</div>
+
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+  <div class="stat-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:120px;">
+    <div style="font-size:22px;font-weight:700;">{{ stats.total }}</div>
+    <div style="font-size:12px;color:#888;">ЖК Астаны в API</div>
+  </div>
+  <div class="stat-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:120px;">
+    <div style="font-size:22px;font-weight:700;color:#22c55e;">{{ stats.fetched }}</div>
+    <div style="font-size:12px;color:#888;">спарсено деталей</div>
+  </div>
+  <div class="stat-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:120px;">
+    <div style="font-size:22px;font-weight:700;color:#3b82f6;">{{ stats.matched }}</div>
+    <div style="font-size:12px;color:#888;">сматчено с complexes</div>
+  </div>
+  <div class="stat-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:120px;">
+    <div style="font-size:22px;font-weight:700;color:#f59e0b;">{{ stats.unmatched }}</div>
+    <div style="font-size:12px;color:#888;">без пары (ждать матчинга)</div>
+  </div>
+  <div class="stat-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:120px;">
+    <div style="font-size:22px;font-weight:700;color:#ef4444;">{{ stats.errors }}</div>
+    <div style="font-size:12px;color:#888;">ошибок</div>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1.4fr 1fr;gap:14px;max-width:1200px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;">
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px;">📊 Спарсено ЖК по часам</div>
+    <canvas id="hpChart" height="130"></canvas>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;">
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px;">🧩 Маппинг на complexes</div>
+    <div style="font-size:12.5px;color:#bbb;line-height:1.6;">
+      Сначала точное имя → потом нормализованное (убираем «ЖК», «(Комфорт+ Класс)», «— Формат…») → потом первое слово.<br><br>
+      <b>Как до-матчим остальных:</b> по БИН застройщика (одинаковый developer_bin ↔ complexes), по координатам (близость lat/lon), по району+адресу, и вручную через поиск на этой странице.
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:14px;max-width:1200px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;">
+  <div style="font-size:13px;font-weight:600;margin-bottom:8px;">🕒 Последние спарсенные</div>
+  <div style="overflow-x:auto;">
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+    <tr style="color:#888;text-align:left;">
+      <th style="padding:6px 8px;">Время</th><th style="padding:6px 8px;">ЖК</th>
+      <th style="padding:6px 8px;">1к</th><th style="padding:6px 8px;">2к</th><th style="padding:6px 8px;">3к</th><th style="padding:6px 8px;">4к</th>
+      <th style="padding:6px 8px;">Всего</th><th style="padding:6px 8px;">Застройщик</th><th style="padding:6px 8px;">Маппинг</th>
+    </tr>
+    {% for r in recent %}
+    <tr style="border-top:1px solid var(--border);">
+      <td style="padding:6px 8px;white-space:nowrap;">{{ r.ts }}</td>
+      <td style="padding:6px 8px;">{{ r.name }}</td>
+      <td style="padding:6px 8px;">{{ r.rooms_1 or '—' }}</td>
+      <td style="padding:6px 8px;">{{ r.rooms_2 or '—' }}</td>
+      <td style="padding:6px 8px;">{{ r.rooms_3 or '—' }}</td>
+      <td style="padding:6px 8px;">{{ r.rooms_4 or '—' }}</td>
+      <td style="padding:6px 8px;font-weight:600;">{{ r.apartments_total or '—' }}</td>
+      <td style="padding:6px 8px;">{{ r.developer_name or '—' }}</td>
+      <td style="padding:6px 8px;">
+        {% if r.matched_complex_id %}<span style="color:#22c55e;">✓ {{ r.cx_name }}</span>
+        {% else %}<span style="color:#f59e0b;">без пары</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+new Chart(document.getElementById('hpChart'), {
+  type: 'bar',
+  data: {
+    labels: {{ chart.hours | tojson }},
+    datasets: [{ label: 'спарсено', data: {{ chart.cnt | tojson }}, backgroundColor: '#3b82f6', borderRadius: 4 }],
+  },
+  options: {
+    responsive: true,
+    scales: { x: { ticks: { color: '#888', maxTicksLimit: 12 } }, y: { ticks: { color: '#888' }, beginAtZero: true } },
+    plugins: { legend: { display: false } },
+  },
+});
+</script>
+{% endblock %}

@@ -569,6 +569,36 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "request": request, "atab": "hype",
         })
 
+    @app.get("/admin/analytics/homeportal", response_class=HTMLResponse)
+    async def homeportal_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+
+        def one(rows):
+            return rows[0] if rows else {}
+
+        stats = {
+            "total": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects")).get("n", 0),
+            "fetched": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects WHERE fetched_at IS NOT NULL")).get("n", 0),
+            "matched": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects WHERE matched_complex_id IS NOT NULL")).get("n", 0),
+            "unmatched": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects WHERE matched_complex_id IS NULL")).get("n", 0),
+            "errors": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_parse_log WHERE status='error'")).get("n", 0),
+        }
+        recent = await pg_fetch("""SELECT h.fetched_at::timestamp(0) AS ts, h.name, h.rooms_1, h.rooms_2, h.rooms_3, h.rooms_4,
+                                   h.apartments_total, h.developer_name, h.matched_complex_id, c.name AS cx_name
+                                   FROM homeportal_objects h LEFT JOIN complexes c ON c.id = h.matched_complex_id
+                                   ORDER BY h.fetched_at DESC NULLS LAST LIMIT 15""")
+        hours = await pg_fetch("""SELECT to_char(date_trunc('hour', fetched_at), 'DD HH24:00') AS h,
+                                   count(*)::int AS cnt FROM homeportal_objects
+                                   WHERE fetched_at > now() - interval '24 hours'
+                                   GROUP BY 1 ORDER BY 1""")
+        return templates.TemplateResponse("homeportal_monitor.html", {
+            "request": request, "atab": "homeportal",
+            "stats": stats, "recent": recent,
+            "chart": {"hours": [h["h"] for h in hours], "cnt": [h["cnt"] for h in hours]},
+        })
+
     @app.get("/admin/analytics/parse-monitor", response_class=HTMLResponse)
     async def parse_monitor_page(request: Request):
         if not is_authed(request):
@@ -658,6 +688,31 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "request": request, "atab": "transport",
         })
 
+    async def _keyword_rows_with_counts(pg_fetch, category: str, text_source: str = "listings") -> list[dict]:
+        """Слова категории из ai_keywords + живой счётчик упоминаний —
+        для apartment_feature/finish считаем по apartment_listings
+        (title/description), для complex_feature — тоже по apartment_listings,
+        но только там, где complex_name заполнен (это и есть тот самый текст,
+        из которого apply_complex_facts() вытаскивает факты про ЖК —
+        в самих complexes нет свободно-текстового поля описания)."""
+        rows = await pg_fetch(
+            "SELECT word FROM ai_keywords WHERE category = $1 ORDER BY word", category)
+        out = []
+        for r in rows:
+            word = r["word"]
+            like = f"%{word}%"
+            if text_source == "complex":
+                cnt = await pg_fetch(
+                    "SELECT COUNT(*) AS c FROM apartment_listings WHERE is_active IS NOT FALSE "
+                    "AND complex_name IS NOT NULL "
+                    "AND (title ILIKE $1 OR description ILIKE $1)", like)
+            else:
+                cnt = await pg_fetch(
+                    "SELECT COUNT(*) AS c FROM apartment_listings WHERE is_active IS NOT FALSE "
+                    "AND (title ILIKE $1 OR description ILIKE $1)", like)
+            out.append({"word": word, "count": cnt[0]["c"] if cnt else 0})
+        return out
+
     @app.get("/admin/analytics/ai-analysis", response_class=HTMLResponse)
     async def ai_analysis_status_page(request: Request):
         # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
@@ -712,6 +767,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "closed_yard": "закрытый двор", "playground": "детская площадка",
             "parking": "паркинг", "closed_territory": "закрытая территория",
         }
+        apartment_feature_words = await _keyword_rows_with_counts(pg_fetch, "apartment_feature", "listings")
+        finish_words = await _keyword_rows_with_counts(pg_fetch, "finish", "listings")
+        complex_feature_words = await _keyword_rows_with_counts(pg_fetch, "complex_feature", "complex")
         return templates.TemplateResponse("ai_analysis_status.html", {
             "request": request, "atab": "ai_analysis",
             "ai_enabled": app_settings.get_bool("AI_TEXT_ANALYSIS", False),
@@ -722,6 +780,75 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "recent_facts": [dict(r) for r in recent_facts],
             "field_labels": field_labels,
             "daily_ai": [{"day": r["day"].strftime("%d.%m"), "cnt": r["cnt"]} for r in daily_ai_rows],
+            "apartment_feature_words": apartment_feature_words,
+            "finish_words": finish_words,
+            "complex_feature_words": complex_feature_words,
+        })
+
+    @app.post("/admin/analytics/ai-analysis/keywords/add")
+    async def ai_analysis_keyword_add(request: Request, category: str = Form(...), word: str = Form(...)):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import execute as pg_exec
+        word = word.strip().lower()
+        if word and category in ("apartment_feature", "finish", "complex_feature"):
+            await pg_exec(
+                "INSERT INTO ai_keywords (category, word) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                category, word)
+        return RedirectResponse(url="/admin/analytics/ai-analysis", status_code=303)
+
+    @app.post("/admin/analytics/ai-analysis/keywords/delete")
+    async def ai_analysis_keyword_delete(request: Request, category: str = Form(...), word: str = Form(...)):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import execute as pg_exec
+        await pg_exec("DELETE FROM ai_keywords WHERE category = $1 AND word = $2", category, word)
+        return RedirectResponse(url="/admin/analytics/ai-analysis", status_code=303)
+
+    @app.get("/admin/analytics/ai-status", response_class=HTMLResponse)
+    async def ai_status_page(request: Request):
+        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
+        # см. комментарий у transport_analytics_page выше.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
+        from bot.db import settings as app_settings
+        await app_settings.load()
+
+        desc_counts = await pg_fetchrow("""
+            SELECT
+                COUNT(*) FILTER (WHERE is_active IS NOT FALSE AND description IS NOT NULL AND length(description) > 80) AS eligible,
+                COUNT(*) FILTER (WHERE ai_analysis IS NOT NULL) AS processed,
+                MAX(ai_analyzed_at) AS last_run
+            FROM apartment_listings
+        """)
+        complexes_enriched = await pg_fetchrow(
+            "SELECT COUNT(*) AS cnt FROM complexes WHERE ai_features IS NOT NULL")
+        last_fact = await pg_fetchrow("""
+            SELECT MAX((kv.value->>'added_at')::timestamptz) AS last_at
+            FROM complexes c, jsonb_each(c.ai_features) AS kv
+            WHERE c.ai_features IS NOT NULL
+        """)
+        finish_type_cnt = await pg_fetchrow(
+            "SELECT COUNT(*) AS cnt FROM apartment_listings WHERE finish_type IS NOT NULL")
+        fp_counts = await pg_fetchrow("""
+            SELECT
+                COUNT(*) FILTER (WHERE floorplan_checked_at IS NOT NULL) AS processed,
+                COUNT(*) FILTER (WHERE floorplan_url IS NOT NULL) AS found,
+                MAX(floorplan_checked_at) AS last_run
+            FROM apartment_listings
+        """)
+        return templates.TemplateResponse("ai_status.html", {
+            "request": request, "atab": "ai_status",
+            "desc_counts": dict(desc_counts) if desc_counts else {},
+            "complexes_enriched": complexes_enriched["cnt"] if complexes_enriched else 0,
+            "last_fact_at": last_fact["last_at"] if last_fact else None,
+            "finish_type_cnt": finish_type_cnt["cnt"] if finish_type_cnt else 0,
+            "fp_counts": dict(fp_counts) if fp_counts else {},
+            "ai_text_analysis_on": app_settings.get_bool("AI_TEXT_ANALYSIS", False),
+            "ai_complex_facts_on": app_settings.get_bool("AI_COMPLEX_FACTS", True),
+            "ai_finish_classify_on": app_settings.get_bool("AI_FINISH_CLASSIFY", True),
+            "ai_floorplan_scan_on": app_settings.get_bool("AI_FLOORPLAN_SCAN", True),
         })
 
     @app.get("/admin/analytics/housing-class", response_class=HTMLResponse)
