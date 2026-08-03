@@ -31,7 +31,7 @@ def req(url: str, post=None) -> dict:
         return json.loads(resp.read().decode("utf-8", "ignore"))
 
 
-ESC = lambda s: s.replace(chr(39), chr(39) * 2) if s else s
+ESC = lambda s: str(s).replace(chr(39), chr(39) * 2) if s is not None else ""
 
 
 def main() -> int:
