@@ -217,7 +217,18 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1):
             rooms=rooms,
             prop_type="apartment",
         )
-        rent = rent_data["median_price"] if rent_data else None
+        # Предпочитаем ₸/м² × площадь этой конкретной квартиры вместо голого
+        # median_price группы — на широких фолбэках (район/город) комнатность
+        # плохо описывает площадь (4-комнатная 70м² и особняк 220м² с той же
+        # комнатностью в одной группе), из-за чего плоский median_price мог
+        # давать в разы завышенную/заниженную оценку аренды для конкретной
+        # площади. На уровне ЖК median_price и так обычно точен, но ₸/м² не
+        # хуже и точнее учитывает площадь именно этой квартиры.
+        area = s.get("area")
+        if rent_data and rent_data.get("price_per_sqm") and area and area > 0:
+            rent = round(rent_data["price_per_sqm"] * area)
+        else:
+            rent = rent_data["median_price"] if rent_data else None
         if rent and s["price"] > 0:
             s["yield_pct"] = round((rent * 12 / s["price"]) * 100, 1)
             s["est_rent"] = rent

@@ -450,11 +450,12 @@ const MINI_PIN_MARKERS = {};
 // (m.bindPopup), теперь рендерится в панели справа (см. openSidePanel) —
 // без центрирования карты и без ограничения высоты попапом.
 const CARD_HTML = {};
-// MarkerClusterGroup пересчитывает кластеры на каждый addLayer — если в
-// это время у пользователя открыта панель с объектом из того же кластера,
-// Leaflet может убрать его маркер с карты (спрятать в кружок кластера).
-// Пока панель открыта — новые маркеры для saleCluster копим в очереди и
-// реально добавляем на карту только после того, как панель закроют.
+// MarkerClusterGroup пересчитывает кластеры один раз на addLayers(batch),
+// а не на каждый маркер отдельно — копим маркеры одного батча тут и
+// добавляем все разом (быстрее и не блокирует карту, см. flush в конце
+// renderSaleBatch). Раньше, пока была открыта панель объявления, новые
+// маркеры вообще не добавлялись до закрытия панели — карта выглядела
+// зависшей; теперь копим только ради batch-add, без привязки к панели.
 let anyPopupOpen = false;
 let pendingClusterAdds = [];
 function flushPendingClusterAdds() {
@@ -1542,8 +1543,7 @@ function renderSaleBatch(d) {
         pinMeta: {pt, pinBg, isTop},
       });
       if (isTop) { m.addTo(topLayer); }
-      else if (anyPopupOpen) { pendingClusterAdds.push(m); }
-      else { m.addTo(saleCluster); }
+      else { pendingClusterAdds.push(m); }
       MINI_PIN_MARKERS[pt.id] = m;
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
       const areaTxt = pt.area ? Math.round(pt.area) : '?';
@@ -1637,6 +1637,12 @@ function renderSaleBatch(d) {
 </div>`);
       m.on('click', () => { selectPin(pt.id); openSidePanel([pt.id]); });
     });
+    // Раньше при открытой панели новые маркеры копились в очереди и
+    // добавлялись на карту только при её закрытии — карта выглядела
+    // "зависшей" (не грузилась/не реагировала на панорамирование), пока
+    // объявление открыто. Теперь просто добавляем маркеры пачкой сразу —
+    // addLayers() быстрее N вызовов addTo() и не создаёт видимого лага.
+    flushPendingClusterAdds();
     if (d.coverage) {
       hexEdge = d.coverage.hex_edge || 50;
       const kr = d.coverage.krisha_total;

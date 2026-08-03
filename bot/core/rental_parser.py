@@ -325,32 +325,47 @@ async def rebuild_rental_index() -> None:
         prop_type = row["prop_type"] or "apartment"
         price = row["price"]
         area = row["area"]
+        sqm = price / area if area and area > 0 else None
 
         # Полная группа (ЖК + комнаты)
         k = (city, district, complex_name, rooms, prop_type)
         groups[k].append(price)
-        if area and area > 0:
-            groups_sqm[k].append(price / area)
+        if sqm is not None:
+            groups_sqm[k].append(sqm)
 
         # Агрегат по ЖК без комнат
         k2 = (city, district, complex_name, None, prop_type)
         if k2 != k:
             groups[k2].append(price)
+            if sqm is not None:
+                groups_sqm[k2].append(sqm)
 
-        # Агрегат по району
+        # Агрегат по району — ₸/м² здесь ОБЯЗАТЕЛЕН: "комнаты" на уровне
+        # города/района — плохой прокси площади (4-комнатная квартира 70м²
+        # и особняк 220м² с 4 комнатами в одной группе), поэтому голый
+        # median_price по цене без привязки к площади конкретного объекта
+        # даёт мусорную оценку аренды (см. баг с 800к/мес на 63м² квартиру).
         k3 = (city, district, "", rooms, prop_type)
         groups[k3].append(price)
+        if sqm is not None:
+            groups_sqm[k3].append(sqm)
 
         k4 = (city, district, "", None, prop_type)
         if k4 != k3:
             groups[k4].append(price)
+            if sqm is not None:
+                groups_sqm[k4].append(sqm)
 
         # Агрегаты по городу (для честного фолбэка с сохранением комнатности)
         k5 = (city, "", "", rooms, prop_type)
         groups[k5].append(price)
+        if sqm is not None:
+            groups_sqm[k5].append(sqm)
         k6 = (city, "", "", None, prop_type)
         if k6 != k5:
             groups[k6].append(price)
+            if sqm is not None:
+                groups_sqm[k6].append(sqm)
 
     upserted = 0
     for (city, district, complex_name, rooms, prop_type), prices in groups.items():
