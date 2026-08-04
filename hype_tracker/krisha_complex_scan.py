@@ -97,6 +97,19 @@ def main() -> int:
     for cid, name, url in rows:
         try:
             html = fetch(url)
+        except Exception as e404:
+            # само-лечение: если страница умерла под astana, пробуем nur-sultan
+            alt = url.replace("/complex/show/astana/", "/complex/show/nur-sultan/")
+            if alt != url and "404" in str(e404):
+                try:
+                    html = fetch(alt)
+                    psql(f"UPDATE complexes SET krisha_url = '{alt.replace(chr(39), chr(39) * 2)}' WHERE id = {cid}")
+                    print(f"↪ {cid} {name}: переставлен на nur-sultan")
+                except Exception:
+                    raise e404
+            else:
+                raise e404
+        try:
             cnt = extract_count(html)
             desc = extract_description(html)
             photos = extract_photos(html)
