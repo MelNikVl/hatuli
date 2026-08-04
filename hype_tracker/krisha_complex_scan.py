@@ -66,6 +66,10 @@ def extract_photos(html: str):
     return list(bases.values())[:MAX_PHOTOS]
 
 
+def esc(s):
+    return s.replace(chr(39), chr(39) * 2) if s else s
+
+
 def main() -> int:
     if get_setting("krisha_enabled", "1") == "0":
         print("парсер выключен (krisha_enabled=0)")
@@ -78,6 +82,8 @@ def main() -> int:
         SELECT c.id, c.name, c.krisha_url FROM complexes c
         LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
         WHERE c.krisha_url IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM krisha_parse_log l WHERE l.complex_id = c.id
+                          AND l.status = 'error' AND l.ts > now() - interval '2 days')
           AND NOT (hct.apartment_count_source = 'krisha'
                    AND c.photos IS NOT NULL
                    AND c.description IS NOT NULL AND c.description != '')
@@ -94,7 +100,6 @@ def main() -> int:
             cnt = extract_count(html)
             desc = extract_description(html)
             photos = extract_photos(html)
-            esc = lambda s: s.replace(chr(39), chr(39) * 2)
 
             if cnt is not None:
                 psql(f"""INSERT INTO housing_class_test (complex_id, apartment_count, apartment_count_source, apartment_count_parsed_at, updated_at)
