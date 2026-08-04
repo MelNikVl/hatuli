@@ -2,8 +2,6 @@
 {% block content %}
 <style>
 .container { padding: 20px 20px 20px 0; max-width: 1400px; margin: 0; }
-.chart-box-1200 { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:14px; width:1200px; max-width:100%; height:600px; overflow-y:hidden; box-sizing:border-box; font-size:1em; }
-.chart-box-1200-inner { overflow-x:auto; overflow-y:hidden; height:520px; }
 </style>
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">💹 Цены</div>
@@ -24,22 +22,22 @@
   </div>
 
   <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;">
-    <div class="chart-box-1200" style="flex:1 1 0;min-width:340px;width:auto;">
+    <div class="chart-block" style="flex:1 1 0;min-width:340px;width:auto;">
       <b style="font-size:1em;">Изменения цен по дням: сколько объявлений подняли / снизили цену</b>
       <div style="display:flex;gap:14px;font-size:0.85em;color:#888;margin:6px 0 10px;">
         <span><span style="display:inline-block;width:9px;height:9px;background:#ef4444;border-radius:2px;"></span> 🔺 поднятие цены</span>
         <span><span style="display:inline-block;width:9px;height:9px;background:#16a34a;border-radius:2px;"></span> 🔻 снижение цены</span>
       </div>
-      <div id="price-trend-chart" class="chart-box-1200-inner" style="display:flex;justify-content:center;padding:0 8px;"></div>
+      <div id="price-trend-chart" class="chart-block-inner" style="display:flex;justify-content:center;padding:0 8px;"></div>
     </div>
 
-    <div class="chart-box-1200" style="flex:1 1 0;min-width:340px;width:auto;">
+    <div class="chart-block" style="flex:1 1 0;min-width:340px;width:auto;">
       <b style="font-size:1em;">Средняя сумма изменения цены по дням</b>
       <div style="font-size:0.85em;color:#888;margin:4px 0 10px;">млн ₸ — насколько в среднем поднимали/снижали цену в тот день</div>
-      <div id="price-amount-chart" class="chart-box-1200-inner"></div>
+      <div id="price-amount-chart" class="chart-block-inner"></div>
     </div>
 
-    <div class="chart-box-1200" style="flex:1 1 0;min-width:300px;max-width:360px;width:auto;display:flex;flex-direction:column;">
+    <div class="chart-block" style="flex:1 1 0;min-width:300px;max-width:360px;width:auto;display:flex;flex-direction:column;">
       <b style="font-size:1em;">Какие объекты повлияли на график</b>
       <div style="font-size:0.85em;color:#888;margin:4px 0 10px;">от самых больших изменений цены к самым маленьким</div>
       <div id="price-influencers-list" style="flex:1;overflow-y:auto;"></div>
@@ -95,15 +93,13 @@ function twoLineChart(divId, days, seriesUp, seriesDown, w, h, fmtVal) {
     const ax = Math.min(last[0] + 22, w - 14), ay = last[1];
     return `<text x="${ax}" y="${ay + 4}" font-size="15" text-anchor="middle" style="filter:drop-shadow(0 0 1.5px #fff) drop-shadow(0 0 1.5px #fff);">${glyph}</text>`;
   };
-  // ВАЖНО: без max-width:100% — у SVG нет viewBox, поэтому max-width сжимал
-  // ЛЕЙАУТ-бокс до ширины контейнера, а координаты точек внутри оставались
-  // не пересчитанными под эту ширину (раз w шире контейнера) — самые свежие
-  // (правые) точки/подписи рисовались ЗА пределами сжатого бокса и просто
-  // обрезались/перекрывались соседним блоком, а не становились доступны через
-  // scroll (overflow:visible красит мимо бокса, а не расширяет scrollWidth).
-  // Без max-width SVG получает свою реальную ширину w, и overflow-x:auto
-  // контейнера + автопрокрутка вправо (см. ниже) показывают их как есть.
-  el.innerHTML = `<svg width="${w}" height="${h}" style="display:block;overflow:visible;">` +
+  // viewBox + width:100% — SVG рисуется в своей "родной" системе координат
+  // (w×h), а браузер масштабирует её под фактическую ширину контейнера без
+  // обрезки и без горизонтального скролла (координаты точек пересчитывать
+  // не нужно — масштабируется весь viewBox целиком, включая подписи/стрелки
+  // у последней точки). Раньше без viewBox ширина SVG была специально шире
+  // контейнера (w*1.2) с ручной прокруткой вправо — теперь не нужно.
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="xMidYMid meet" style="display:block;max-width:100%;">` +
     yAxisHtml +
     `<path d="${pathOf(cUp)}" fill="none" stroke="#ef4444" stroke-width="2"/>` +
     `<path d="${pathOf(cDown)}" fill="none" stroke="#16a34a" stroke-width="2"/>` +
@@ -111,11 +107,6 @@ function twoLineChart(divId, days, seriesUp, seriesDown, w, h, fmtVal) {
     valueLabelsOf(cUp, seriesUp, '#ef4444', true) + valueLabelsOf(cDown, seriesDown, '#16a34a', false) +
     arrowAt(cUp, '#ef4444', '🔺') + arrowAt(cDown, '#16a34a', '🔻') +
     xLabels + `</svg>`;
-  // График шире контейнера (см. w = blockW * 1.2 ниже) специально, чтобы
-  // хватало места под подписи/стрелку у последней точки — но из-за этого
-  // самые свежие (правые) значения по умолчанию оказывались за пределами
-  // видимой области, требуя ручной прокрутки вправо. Прокручиваем автоматически.
-  el.scrollLeft = el.scrollWidth;
 }
 
 let currentRooms = '', currentDays = 30;
@@ -133,8 +124,8 @@ function loadPrices(rooms, days) {
     b.style.color = active ? '#fff' : 'var(--text)';
   });
   fetch('/admin/api/price-trend-history?days=' + currentDays + '&rooms=' + encodeURIComponent(rooms)).then(r => r.json()).then(d => {
-    const blockW = document.getElementById('price-trend-chart').parentElement.clientWidth - 4;
-    const w = Math.max(320, Math.round(blockW * 1.2));
+    const blockW = document.getElementById('price-trend-chart').clientWidth || (document.getElementById('price-trend-chart').parentElement.clientWidth - 4);
+    const w = Math.max(320, Math.round(blockW));
     twoLineChart('price-trend-chart', d.days || [], d.cnt_up || [], d.cnt_down || [], w, 480,
       v => v + ' объявл.');
     twoLineChart('price-amount-chart', d.days || [], (d.avg_up || []).map(v => v / 1e6),

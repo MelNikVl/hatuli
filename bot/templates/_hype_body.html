@@ -1,7 +1,10 @@
-{% extends "base.html" %}
-{% block content %}
-{% include "_analytics_tabs.html" with context %}
-<div class="page-title">🔥 Хайп (гексы 100 м)</div>
+{# Вкладка "Хайп" hub-страницы /admin/analytics/heatmaps — раньше отдельная
+   страница /admin/analytics/hype (теперь редирект сюда). Сохранён
+   недавний 3-колоночный редизайн (карта · Обход СМИ · Ресурсы во времени) —
+   это осознанное исключение из стандарта .chart-block 800×600: там 3 узких
+   графика в ряд, форсировать 800px ширины каждому сломало бы именно этот
+   недавно сделанный layout. Единственный график ВНЕ 3-колоночного блока
+   ("Новостей проанализировано") переведён на .chart-block. #}
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -28,6 +31,22 @@
     <span>хайп</span>
   </div>
   <span id="hp-result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
+</div>
+
+<div style="display:flex;gap:6px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+  <span style="font-size:12px;color:#888;">Период (хайп по новостям):</span>
+  <button type="button" class="hp-days-btn" data-days="" onclick="setHypeDays(null)"
+          style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:12.5px;cursor:pointer;">Всё время</button>
+  <button type="button" class="hp-days-btn" data-days="1" onclick="setHypeDays(1)"
+          style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12.5px;cursor:pointer;">1 день</button>
+  <button type="button" class="hp-days-btn" data-days="3" onclick="setHypeDays(3)"
+          style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12.5px;cursor:pointer;">3 дня</button>
+  <button type="button" class="hp-days-btn" data-days="7" onclick="setHypeDays(7)"
+          style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12.5px;cursor:pointer;">7 дней</button>
+  <button type="button" class="hp-days-btn" data-days="30" onclick="setHypeDays(30)"
+          style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12.5px;cursor:pointer;">30 дней</button>
+  <button type="button" class="hp-days-btn" data-days="90" onclick="setHypeDays(90)"
+          style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12.5px;cursor:pointer;">90 дней</button>
 </div>
 
 <!-- 3 колонки по трети ширины: карта · Обход СМИ · Ресурсы во времени
@@ -97,13 +116,13 @@
   </div>
 </div>
 
-<div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+<div class="chart-block" style="margin-top:14px;">
   <div style="font-weight:700;margin-bottom:4px;">📊 Новостей проанализировано (LLM)</div>
   <div style="font-size:12.5px;color:#888;margin-bottom:10px;">
     Каждый день в 21:00 LLM читает полные тексты новостей за сутки (не выжимки) и обновляет тепловую карту хайпа —
     по дням, включая Threads. (Перенесено со страницы «Анализ новостей» — график токенов убран за ненадобностью.)
   </div>
-  <div style="position:relative;height:260px;"><canvas id="na-news-chart"></canvas></div>
+  <div class="chart-block-inner"><canvas id="na-news-chart"></canvas></div>
 </div>
 
 <div style="margin-top:18px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
@@ -131,14 +150,24 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-function hpHexColor(t) {
+function hpHexColor(t, boost) {
   // ранговый скор 0..1 -> жёлто-золотая шкала
   const c = [[254,240,138],[250,204,21],[245,158,11],[180,83,9]];
   const x = Math.max(0, Math.min(1, (t - 0.2) / 0.8));
   const i = Math.min(3, Math.floor(x * 4));
   const f = x * 4 - i;
   const a = c[Math.min(3, i)], b = c[Math.min(3, i + 1)];
-  return `rgb(${Math.round(a[0] + (b[0]-a[0])*f)},${Math.round(a[1] + (b[1]-a[1])*f)},${Math.round(a[2] + (b[2]-a[2])*f)})`;
+  let rgb = [a[0] + (b[0]-a[0])*f, a[1] + (b[1]-a[1])*f, a[2] + (b[2]-a[2])*f];
+  // Вторая визуальная размерность — частота упоминаний (не рейтинг): чем
+  // больше раз локация всплывала в hype_location_history за выбранный
+  // период, тем ярче/насыщеннее жёлтый (тянем цвет к почти чистому яркому
+  // жёлтому), независимо от того, гдеت на шкале рейтинга.
+  if (boost) {
+    const bright = [255, 240, 60];
+    const k = Math.max(0, Math.min(1, boost)) * 0.65;
+    rgb = rgb.map((v, idx) => v + (bright[idx] - v) * k);
+  }
+  return `rgb(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])})`;
 }
 
 function hexCorners(lat, lon, edge) {
@@ -148,6 +177,29 @@ function hexCorners(lat, lon, edge) {
     pts.push([lat + edge * Math.sin(ang) / HP_MLAT, lon + edge * Math.cos(ang) / HP_MLON]);
   }
   return pts;
+}
+
+// БАГ (найден, задача "перекрывающиеся гексы"): drawNewsHexes рисовал
+// гексагон ПРЯМО вокруг сырых lat/lon каждой локации из hype_locations —
+// в отличие от рыночного слоя (hpComplexes, уже снэпленного на бэкенде
+// через hex_id/hex_center из bot/core/hexgrid), координаты новостных
+// локаций НЕ выровнены по общей сетке. Два ЖК в одном квартале (<100м
+// друг от друга) давали два гекса, рисуемых один поверх другого — визуально
+// "перекрывающиеся" гексы. Снэпим на клиенте той же осевой формулой, что и
+// остальные гекс-слои проекта (dashboard.html/hype-hexes), и агрегируем
+// несколько локаций, попавших в одну ячейку.
+function hpHexAxial(lat, lon, edge) {
+  const x = (lon - HP_LON0) * HP_MLON, y = (lat - HP_LAT0) * HP_MLAT;
+  let q = (Math.sqrt(3)/3 * x - y/3) / edge, r = (2/3 * y) / edge;
+  const s = -q - r;
+  let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+  const dq = Math.abs(rq-q), dr = Math.abs(rr-r), ds = Math.abs(rs-s);
+  if (dq > dr && dq > ds) rq = -rr - rs; else if (dr > ds) rr = -rq - rs;
+  return [rq, rr];
+}
+function hpHexCenter(q, r, edge) {
+  const x = edge * Math.sqrt(3) * (q + r/2), y = edge * 1.5 * r;
+  return [HP_LAT0 + y/HP_MLAT, HP_LON0 + x/HP_MLON];
 }
 
 function drawHypeHex() {
@@ -179,20 +231,65 @@ function setHypeMin(v) {
 }
 
 // --- Слой «Хайп по новостям» (основной): локации из анализа новостей ---
+// Снэпим каждую локацию на общую гекс-сетку (см. hpHexAxial/hpHexCenter
+// выше) и агрегируем несколько локаций одной ячейки в один гекс — иначе
+// близкие ЖК рисуют перекрывающиеся полигоны (задача "перекрывающиеся гексы").
+// Яркость/насыщенность жёлтого дополнительно растёт с числом упоминаний
+// (mentions — строки hype_location_history в выбранном периоде), не только
+// с рейтингом — см. hpHexColor(t, boost).
 function drawNewsHexes() {
   hpNewsLayer.clearLayers();
-  let shown = 0;
+  const cells = new Map();
   hpNewsLocations.forEach(l => {
     if (hpMin > 0 && (l.rating || 0) < hpMin) return;
+    if (l.lat == null || l.lon == null) return;
+    const [q, r] = hpHexAxial(l.lat, l.lon, HP_EDGE);
+    const key = q + ':' + r;
+    let cell = cells.get(key);
+    if (!cell) { cell = {q, r, rating: 0, mentions: 0, names: [], reasons: []}; cells.set(key, cell); }
+    cell.rating = Math.max(cell.rating, l.rating || 0);
+    cell.mentions += (l.mentions || 1);
+    cell.names.push(l.name);
+    if (l.reason) cell.reasons.push(l.reason);
+  });
+  const maxMentions = Math.max(1, ...[...cells.values()].map(c => c.mentions));
+  let shown = 0;
+  cells.forEach(cell => {
     shown++;
-    const s = Math.max(0.05, Math.min(1, (l.rating || 0) / 100));
-    L.polygon(hexCorners(l.lat, l.lon, HP_EDGE), {
+    const s = Math.max(0.05, Math.min(1, cell.rating / 100));
+    const boost = Math.min(1, cell.mentions / maxMentions);
+    const [clat, clon] = hpHexCenter(cell.q, cell.r, HP_EDGE);
+    const label = cell.names[0] + (cell.names.length > 1 ? ` +${cell.names.length - 1}` : '');
+    L.polygon(hexCorners(clat, clon, HP_EDGE), {
       color: 'transparent', weight: 0,
-      fillColor: hpHexColor(s), fillOpacity: 0.6,
-    }).bindTooltip(`${escapeHtml(l.name)} · хайп ${Math.round(l.rating || 0)} · ${escapeHtml((l.reason || '').slice(0, 90))}`, {sticky:true})
+      fillColor: hpHexColor(s, boost), fillOpacity: 0.6,
+    }).bindTooltip(`${escapeHtml(label)} · хайп ${Math.round(cell.rating)} · упоминаний: ${cell.mentions}${cell.reasons[0] ? ' · ' + escapeHtml(cell.reasons[0].slice(0, 90)) : ''}`, {sticky:true})
       .addTo(hpNewsLayer);
   });
   updateHpCount();
+}
+// --- Фильтр по периоду для слоя «Хайп по новостям» ---
+// days=null -> текущее состояние hype_locations (как раньше); days=N ->
+// агрегируем hype_location_history за последние N дней на бэкенде
+// (см. /admin/api/hype-locations?days=N в terminal_extras.py): максимум
+// рейтинга и число записей истории (упоминаний) на локацию за окно.
+let hpDays = null;
+function loadHypeLocations() {
+  const url = '/admin/api/hype-locations' + (hpDays ? ('?days=' + hpDays) : '');
+  return fetch(url).then(r => r.json()).then(d => {
+    hpNewsLocations = d.locations || [];
+    if (hpNewsOn) drawNewsHexes();
+    updateHpCount();
+  }).catch(() => {});
+}
+function setHypeDays(d) {
+  hpDays = d;
+  document.querySelectorAll('.hp-days-btn').forEach(b => {
+    const active = (b.dataset.days || null) === (d ? String(d) : null);
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  loadHypeLocations();
 }
 function toggleNewsLayer() {
   hpNewsOn = !hpNewsOn;
@@ -403,4 +500,3 @@ function loadHype() {
 }
 loadHype();
 </script>
-{% endblock %}

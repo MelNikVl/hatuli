@@ -213,7 +213,24 @@ async def fetch_apartment_details(url: str) -> dict:
     # get_text("\n") instead of " ": preserves the paragraph/line breaks
     # krisha uses (<br>, <p>) instead of squashing the whole description
     # into one run-on line.
-    desc_el = soup.select_one("div.offer__description")
+    #
+    # BUG (found & fixed): div.offer__description actually wraps THREE
+    # sibling blocks — a "О квартире" heading, div.offer__parameters (the
+    # structured санузел/парковка/высота потолков/... table, already
+    # captured field-by-field above via the `dl` loop), then a "Описание"
+    # heading followed by div.text > div.js-description (the real free-text
+    # description). Selecting the whole outer div.offer__description pulled
+    # the offer__parameters table text in ahead of the real description,
+    # producing rows like "О квартире Санузел совмещенный ... Описание
+    # <real text>". Select the innermost js-description node (or div.text
+    # as a fallback for older/alternate markup) so only the free-text
+    # description is captured — offer__parameters is redundant with the
+    # structured fields already parsed above.
+    desc_el = (
+        soup.select_one("div.offer__description div.js-description")
+        or soup.select_one("div.offer__description div.text")
+        or soup.select_one("div.offer__description")
+    )
     if desc_el:
         for br in desc_el.find_all("br"):
             br.replace_with("\n")

@@ -203,6 +203,8 @@ html, body { overflow: hidden !important; }
         <option value="">любая</option><option value="черновая">бетон (черновая)</option><option value="с отделкой">с отделкой</option><option value="с мебелью">с мебелью</option>
       </select>
       <span style="font-size:10.5px;color:#aaa;display:block;margin-top:4px;">по тексту объявления — не у всех определена</span></div>
+    <div id="f-floorplan-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <input id="f-floorplan" type="checkbox" onchange="applyFilters()"> Только с планом</label></div>
     <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;margin-bottom:6px;">Минимальный смарт рейтинг</label>
       <input id="f-score" type="number" min="0" max="100" step="5" onchange="applyFilters()" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
 
@@ -445,12 +447,36 @@ function mortgageModalBlockHtml(price, market, id, bankEstimate) {
         ${bankProgramsListHtml(b.programs.slice(0, 1))}
       </div>`).join('')}
     </div>` : '';
+  // Блок фиксированной высоты 500px (см. задачу "мортgage-блок full-height
+  // попапа") — если контент (топ2 банка + остальные) выше, не обрезаем
+  // молча, а показываем тумблер "показать все", который раскрывает блок
+  // на полную высоту содержимого (тот же паттерн max-height, что у
+  // toggleDesc для текста объявления). Тумблер появляется только если
+  // контент реально не влез — проверяется после вставки в DOM в
+  // initMortgageBlockToggle().
   return `
 <div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:14px;font-weight:800;margin-bottom:10px;">Ипотека: какие программы подходят под это объявление</div>
   ${bankEstimateHtml}
-  <div style="display:flex;gap:10px;flex-wrap:wrap;">${top2Html}${restHtml}</div>
+  <div id="mortgage-block-${id}" style="display:flex;gap:10px;flex-wrap:wrap;max-height:500px;overflow:hidden;">${top2Html}${restHtml}</div>
+  <div id="mortgage-block-toggle-${id}" style="display:none;text-align:center;margin-top:10px;">
+    <span onclick="toggleMortgageBlock('${id}', this)" style="color:#2563eb;cursor:pointer;font-weight:600;font-size:12.5px;">показать все ▾</span>
+  </div>
 </div>`;
+}
+function initMortgageBlockToggle(id) {
+  const el = document.getElementById('mortgage-block-' + id);
+  const tgl = document.getElementById('mortgage-block-toggle-' + id);
+  if (!el || !tgl) return;
+  if (el.scrollHeight > el.clientHeight + 2) tgl.style.display = 'block';
+}
+function toggleMortgageBlock(id, span) {
+  const el = document.getElementById('mortgage-block-' + id);
+  if (!el) return;
+  const collapsed = el.dataset.expanded !== '1';
+  el.style.maxHeight = collapsed ? 'none' : '500px';
+  el.dataset.expanded = collapsed ? '1' : '0';
+  span.textContent = collapsed ? 'свернуть ▴' : 'показать все ▾';
 }
 loadMortgagePrograms();
 // Реестр маркеров по id объявления — для дедупликации при инкрементальной
@@ -763,9 +789,9 @@ const HeatControls = L.Control.extend({
     box.style.cssText = 'display:none;position:absolute;top:60px;left:10px;flex-direction:column;gap:4px;background:#fff;border-radius:10px;padding:8px 10px;box-shadow:0 1px 4px rgba(0,0,0,.25);box-sizing:border-box;';
     box.innerHTML = `
       <label style="font-size:10.5px;font-weight:700;color:#333;">Сторона гекса (м): <span id="f-heat-edge-val">60</span></label>
-      <input id="f-heat-edge" type="range" min="40" max="200" step="10" value="60" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
-      <label style="font-size:10.5px;font-weight:700;color:#333;margin-top:4px;">Прозрачность гексов: <span id="f-heat-opacity-val">40</span>%</label>
-      <input id="f-heat-opacity" type="range" min="10" max="50" step="5" value="40" oninput="document.getElementById('f-heat-opacity-val').textContent=this.value;setHeatOpacity(this.value)" style="width:100%;">
+      <input id="f-heat-edge" type="range" min="10" max="80" step="5" value="60" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
+      <label style="font-size:10.5px;font-weight:700;color:#333;margin-top:4px;">Прозрачность гексов: <span id="f-heat-opacity-val">30</span>%</label>
+      <input id="f-heat-opacity" type="range" min="10" max="50" step="5" value="30" oninput="document.getElementById('f-heat-opacity-val').textContent=this.value;setHeatOpacity(this.value)" style="width:100%;">
       <button type="button" onclick="turnOffHeat()" style="margin-top:4px;height:26px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;">Убрать тепловую карту</button>
     `;
     L.DomEvent.disableClickPropagation(box);
@@ -1067,10 +1093,17 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
     trendHtml = `<span class="price-trend-arrow" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:4px;font-size:11px;color:${color};background:#fff;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">${down ? '▼' : '▲'}</span>`;
   }
   const svoyDomBadge = SVOY_DOM_DEV_IDS.has(pt.developer_id) ? `<span title="Застройщик: Свой Дом" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:8px;font-weight:800;color:#fff;background:#16a34a;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">SD</span>` : '';
+  // Топ-10 по умному рейтингу: раньше вся плашка цены красилась в малиновый
+  // (pinBg = #E91E8C) — теперь плашка ВСЕГДА обычная (переданный pinBg,
+  // обычно синий), а топ-10 отмечается отдельным маленьким красным
+  // кружком-бейджем со звездой СЛЕВА от плашки, той же высоты, что и сама
+  // плашка цены (~22px: padding 4px*2 + line-height шрифта 12px).
+  const topBadgeHtml = isTop ? `<span title="Топ-10 по умному рейтингу" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:22px;height:22px;margin-right:5px;font-size:12px;line-height:1;color:#fff;background:#E91E8C;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.4);">⭐</span>` : '';
   return `
 <div id="pin-${pt.id}" style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;transition:filter .15s ease;">
   <div style="display:flex;align-items:center;">
-    <div style="background:${pinBg};color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;gap:5px;">${isTop ? '<span style="font-size:11px;">⭐</span>' : ''}<span>${roomsTxt}</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${priceTxt}</span></div>
+    ${topBadgeHtml}
+    <div style="background:${pinBg};color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;gap:5px;"><span>${roomsTxt}</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${priceTxt}</span></div>
     ${trendHtml}${svoyDomBadge}
   </div>
   ${sellerTxt ? `<div style="font-size:9px;color:#fff;background:rgba(0,0,0,.55);border-radius:5px;padding:0 5px;margin-top:1px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sellerTxt}</div>` : ''}
@@ -1429,6 +1462,8 @@ function applyFilters() {
   if (finish && type === 'sale') p.set('finish', finish);
   const cheapestOnly = document.getElementById('f-cheapest-only').checked;
   if (cheapestOnly && type === 'sale') p.set('cheapest_only', '1');
+  const floorplanOnly = document.getElementById('f-floorplan').checked;
+  if (floorplanOnly && type === 'sale') p.set('has_floorplan', '1');
 
   lastFilterParams = new URLSearchParams(p);
   ['min_lat', 'max_lat', 'min_lon', 'max_lon', 'offset', 'limit'].forEach(k => lastFilterParams.delete(k));
@@ -1437,6 +1472,7 @@ function applyFilters() {
   document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-pricechange-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-finish-wrap').style.display = type === 'sale' ? '' : 'none';
+  document.getElementById('f-floorplan-wrap').style.display = type === 'sale' ? '' : 'none';
   document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
   if (type === 'rental') {
@@ -1585,13 +1621,15 @@ function renderSaleBatch(d) {
       // может вернуть точки, уже нарисованные раньше (перекрытие буферов) —
       // не создаём вторую копию маркера поверх существующей.
       if (MINI_PIN_MARKERS[pt.id]) return;
-      // Плашка с ценой: малиновая+звезда для топ-10 по скору, иначе синяя.
+      // Плашка с ценой всегда обычная синяя — топ-10 по скору отмечается
+      // отдельным круглым красным бейджем со звездой слева от плашки
+      // (см. buildPricePinHtml/topBadgeHtml), а не покраской самой плашки.
       // Треугольник тренда — только если реально была смена цены.
       // При включённом фильтре "только топ-10" все показанные точки — это
       // и есть топ-10 (по текущим фильтрам), поэтому подсвечиваем их все,
       // а не только тех, кто входит в ГЛОБАЛЬНЫЙ топ-10 сайта (pt.top).
       const isTop = topOnlyFilter ? true : pt.top;
-      const pinBg = isTop ? '#E91E8C' : '#0077FF';
+      const pinBg = '#0077FF';
       const sellerTxt = pt.seller_name || (pt.is_owner ? 'собственник' : '');
       const pinHtml = buildPricePinHtml(pt, pinBg, isTop, sellerTxt);
       const m = L.marker([pt.lat, pt.lon], {
@@ -2052,16 +2090,23 @@ const NOISE_BG_MAX = 300;
 // Грубая прикидка для интуиции: 0 -> ~35дБ (тихий двор), 1 (максимум шкалы) -> ~80дБ (оживлённая магистраль/ЖД под окнами).
 function noiseDb(t) { return Math.round(35 + Math.min(1, t) * 45); }
 // Расширенная палитра: зелёный (дёшево/тихо) -> жёлто-зелёный -> жёлтый ->
-// оранжевый -> красный -> бордовый (дорого/шумно) — 6 стопов вместо 2,
-// чтобы верхний край шкалы (самые дорогие/шумные гексы) отличался от
-// середины, а не сливался в один и тот же красный.
+// оранжевый -> красный -> бордовый -> тёмно-бордовый/коричневый (дорого/шумно).
+// 11 опорных точек (было 6) — heatColor() интерполирует непрерывно между ними,
+// так что итог — плавный градиент из 20+ визуально различимых полос вместо
+// нескольких широких цветовых зон, слипающихся в один и тот же оттенок.
 const HEAT_STOPS = [
+  [21, 128, 61],   // #15803d тёмно-зелёный (минимум)
   [22, 163, 74],   // #16a34a зелёный
+  [101, 163, 13],  // #65a30d оливково-зелёный
   [132, 204, 22],  // #84cc16 жёлто-зелёный
+  [202, 184, 15],  // жёлто-оливковый
   [234, 179, 8],   // #eab308 жёлтый
+  [245, 145, 15],  // янтарный
   [249, 115, 22],  // #f97316 оранжевый
   [239, 68, 68],   // #ef4444 красный
+  [185, 40, 40],   // тёмно-красный
   [127, 29, 29],   // #7f1d1d бордовый
+  [92, 30, 24],    // #5c1e18 тёмный красно-коричневый (максимум)
 ];
 function heatColor(t) {
   // t: 0 (зелёный, дёшево/тихо) .. 1 (бордовый, дорого/шумно)
@@ -2172,7 +2217,7 @@ function drawPriceHeat(points, archivedPoints) {
     L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
       color: b.isArchived ? '#8b5cf6' : '#fff', weight: b.isArchived ? 1.2 : 0.5,
       dashArray: b.isArchived ? '3,3' : null,
-      fillColor: heatColor(t), fillOpacity: 0.385,
+      fillColor: heatColor(t), fillOpacity: 0.3,  // дефолт цены — 30% (было 38.5%)
     }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatLayer);
   });
 }
@@ -2477,18 +2522,19 @@ async function toggleHeat(mode) {
   map.removeLayer(fineNoiseLayer);
   fineNoiseLayer.clearLayers();
   heatMode = mode;
-  // Внешний шум по умолчанию — гекс 40м и максимальная прозрачность (50%,
-  // потолок ползунка), в отличие от цен/аренды (60м/40%) — мелкий шум
-  // сильнее размазывается по соседним домам, крупный гекс его прячет.
-  // Применяем один раз при первом включении шума за сессию, не трогаем
-  // ползунки повторно, если пользователь уже сам их подвинул.
+  // Внешний шум по умолчанию — гекс 40м и прозрачность 25%, в отличие от
+  // цен/аренды (60м/30%) — мелкий шум сильнее размазывается по соседним
+  // домам, крупный гекс его прячет. Применяем один раз при первом включении
+  // шума за сессию, не трогаем ползунки повторно, если пользователь уже сам
+  // их подвинул. (Раньше прозрачность шума по умолчанию стояла на потолке
+  // ползунка 50% — по просьбе снижена до 25%, чтобы не забивать карту.)
   const applyingNoiseDefaults = mode === 'noise' && !noiseDefaultsApplied;
   if (applyingNoiseDefaults) {
     noiseDefaultsApplied = true;
     const edgeInput = document.getElementById('f-heat-edge'), edgeVal = document.getElementById('f-heat-edge-val');
     const opInput = document.getElementById('f-heat-opacity'), opVal = document.getElementById('f-heat-opacity-val');
     if (edgeInput) { edgeInput.value = 40; if (edgeVal) edgeVal.textContent = '40'; }
-    if (opInput) { opInput.value = 50; if (opVal) opVal.textContent = '50'; }
+    if (opInput) { opInput.value = 25; if (opVal) opVal.textContent = '25'; }
     HEAT_EDGE_M = 40; NOISE_BG_EDGE_M = 40; NOISE_EDGE_M = 40;
   }
   heatLayer.clearLayers();
@@ -2514,7 +2560,7 @@ async function toggleHeat(mode) {
     drawRoadHeatBackground(data);
     if (!map.hasLayer(fineNoiseLayer)) fineNoiseLayer.addTo(map);
     drawRoadHeat(data);
-    if (applyingNoiseDefaults) setHeatOpacity(50);
+    if (applyingNoiseDefaults) setHeatOpacity(25);
     // Догружаем/чистим детальный слой при панорамировании/зуме, пока режим
     // шума активен — debounce, чтобы не пересчитывать на каждый пиксель драга.
     let t;
@@ -2547,10 +2593,13 @@ function ensureModalRoot() {
   if (root) return root;
   root = document.createElement('div');
   root.id = 'detail-modal-overlay';
+  // Попап растянут на всю высоту вьюпорта (100vh, от самого верха до
+  // самого низа страницы) — раньше был 90vh с отступами сверху/снизу,
+  // просили убрать отступы и занять всю высоту экрана.
   root.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9998;display:none;align-items:center;justify-content:center;';
   root.onclick = (e) => { if (e.target === root) closeDetailModal(); };
   root.innerHTML = `
-<div id="detail-modal-box" style="width:66vw;min-width:640px;max-width:1000px;height:90vh;background:var(--surface);border-radius:14px;overflow-y:auto;position:relative;box-shadow:0 10px 40px rgba(0,0,0,.5);">
+<div id="detail-modal-box" style="width:66vw;min-width:640px;max-width:1000px;height:100vh;background:var(--surface);border-radius:0;overflow-y:auto;position:relative;box-shadow:0 10px 40px rgba(0,0,0,.5);">
   <button onclick="closeDetailModal()" style="position:absolute;top:10px;right:10px;background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:36px;height:36px;font-size:22px;cursor:pointer;z-index:2;line-height:1;">×</button>
   <div id="detail-modal-content" style="padding:0 0 20px;"></div>
 </div>`;
@@ -2799,6 +2848,7 @@ ${similarMapHtml}
     }
 
     if (d.lat != null && d.lon != null) initModalSimilarMap(d, id);
+    initMortgageBlockToggle(id);
 
     fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(dh => {
       const wrap = document.getElementById('modal-price-history-wrap');

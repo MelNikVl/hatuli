@@ -53,20 +53,40 @@
     }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
 
-    /* шапка в 2 строки — логотип+вход сверху, меню снизу (как у Циан) */
+    /* шапка в один ряд — логотип, меню и правый блок (тема/избранное/вход)
+       все на одной линии; .pub-nav занимает свободное место посередине
+       (flex:1), логотип и правый блок прижаты к краям. На узких экранах
+       весь ряд переносится (flex-wrap: wrap) вместо поломки макета. */
     .pub-header { background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 500; }
-    .pub-row1 { display: flex; align-items: center; justify-content: space-between; padding: 10px 24px; border-bottom: 1px solid var(--border); }
-    .pub-logo { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; font-size: 19px; font-weight: 800; color: var(--logo-color); letter-spacing: .3px; }
+    .pub-row1 { display: flex; align-items: center; gap: 14px; padding: 10px 24px; flex-wrap: wrap; }
+    .pub-logo { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; font-size: 21.85px; font-weight: 800; text-transform: uppercase; color: var(--logo-color); letter-spacing: .5px; flex-shrink: 0; }
     .pub-logo img { width: 26px; height: 26px; object-fit: contain; border-radius: 5px; }
-    .pub-row1-right { display: flex; align-items: center; gap: 14px; }
+    .pub-row1-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-left: auto; }
     .pub-fav-icon { font-size: 21px; text-decoration: none; color: var(--text); line-height: 1; position: relative; }
     .pub-login-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 18px; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 700; font-size: 13.5px; text-decoration: none; border: none; cursor: pointer; }
     .pub-user-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 8px; background: var(--surface2); color: var(--text); font-weight: 600; font-size: 13px; text-decoration: none; }
     .pub-theme-btn { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--text); cursor: pointer; }
-    .pub-row2 { display: flex; align-items: center; gap: 4px; padding: 0 24px; overflow-x: auto; }
-    .pub-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 11px 14px; color: var(--text); text-decoration: none; font-size: 13.5px; font-weight: 600; border-bottom: 2px solid transparent; white-space: nowrap; }
-    .pub-nav a:hover { color: var(--text); }
-    .pub-nav a.active { color: var(--accent2); border-bottom-color: var(--accent); }
+    /* flex-basis: 0% (не auto) — иначе браузер вычисляет "гипотетический"
+       размер .pub-nav по контенту (максимум без переноса) ДЛЯ РЕШЕНИЯ,
+       влезает ли он целиком в текущую flex-строку вместе с логотипом и
+       правым блоком; при большом наборе ссылок это приводило к переносу
+       ВСЕГО right-блока на вторую строку целиком (весь ряд как бы рвался
+       пополам), вместо того чтобы .pub-nav сжался и перенёс СВОИ ссылки
+       по себе (у него уже есть flex-wrap: wrap). basis:0% заставляет
+       браузер сразу трактовать nav как "тянущийся" от нуля, поэтому логотип
+       и правый блок остаются прижатыми по краям в одной строке, а сами
+       ссылки меню переносятся внутри nav на узких экранах. */
+    .pub-nav { display: flex; align-items: center; gap: 4px; flex: 1 1 0%; flex-wrap: wrap; min-width: 0; }
+    .pub-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 11px 10px; color: #000; text-decoration: none; font-size: 13px; font-weight: 600; border-bottom: 2px solid transparent; white-space: nowrap; }
+    .pub-nav a:hover { color: #000; }
+    .pub-nav a.active { color: #000; border-bottom-color: var(--accent); }
+    /* Тёмная тема (по умолчанию): текст меню светлый, иначе #000 невидим */
+    :root:not([data-theme="light"]) .pub-nav a,
+    :root:not([data-theme="light"]) .pub-nav a:hover,
+    :root:not([data-theme="light"]) .pub-nav a.active,
+    :root:not([data-theme="light"]) .atabs a,
+    :root:not([data-theme="light"]) .atabs a:hover,
+    :root:not([data-theme="light"]) .atabs a.active { color: #e8eaf6; }
     .pub-nav .sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
     .pub-nav .spacer { flex: 1; }
     .pub-nav a.admin-panel-link { background: rgba(88,101,242,.12); border-radius: 8px; margin: 6px 0; padding: 7px 14px; }
@@ -92,7 +112,6 @@
     }
     select:focus, input:focus { outline: 1px solid var(--accent); }
   </style>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
 </head>
 <body>
 
@@ -104,6 +123,18 @@
 <header class="pub-header">
   <div class="pub-row1">
     <a href="/admin" class="pub-logo"><img src="/static/branding/logo-icon.png" alt=""> Hatuli</a>
+    <nav class="pub-nav">
+      <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Карта</a>
+      <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
+      <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>
+      <a href="/admin/banks" class="{% if 'banks' in request.url.path %}active{% endif %}">Банки</a>
+      <a href="/admin/mortgage-calculator" class="{% if 'mortgage-calculator' in request.url.path %}active{% endif %}">Калькулятор ипотеки</a>
+      <a href="/admin/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
+      {% if admin %}
+      <a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path %}active{% endif %}">Инфо</a>
+            <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">🛠 Админ панель</a>
+      {% endif %}
+    </nav>
     <div class="pub-row1-right">
       <button class="pub-theme-btn" id="pub-theme-toggle" onclick="togglePubTheme()" type="button">🌓 <span id="pub-theme-label">тёмная</span></button>
       <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;background:rgba(37,99,235,.1);border-radius:8px;padding:4px 10px;"><span style="font-size:16px;line-height:1;">♡</span>Избранное</a>
@@ -114,21 +145,6 @@
       <a href="/cabinet" class="pub-login-btn">Войти</a>
       {% endif %}
     </div>
-  </div>
-  <div class="pub-row2">
-    <nav class="pub-nav">
-      <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Карта</a>
-      <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
-      <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>
-      <a href="/admin/banks" class="{% if 'banks' in request.url.path %}active{% endif %}">Банки</a>
-      <a href="/admin/mortgage-calculator" class="{% if 'mortgage-calculator' in request.url.path %}active{% endif %}">Калькулятор ипотеки</a>
-      <a href="/admin/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
-      {% if admin %}
-      <a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path %}active{% endif %}">Инфо</a>
-      <span class="spacer"></span>
-      <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">🛠 Админ панель</a>
-      {% endif %}
-    </nav>
   </div>
 </header>
 

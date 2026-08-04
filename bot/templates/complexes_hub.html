@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🏗 Жилые комплексы <small>класс жилья (тест) + ручная правка мусорных привязок</small></div>
+
+<div class="htabs">
+  <a href="?tab=housing_class" class="{{ 'active' if tab == 'housing_class' }}">🏗 Класс жилья</a>
+  <a href="?tab=complexes_fix" class="{{ 'active' if tab == 'complexes_fix' }}">🛠 ЖК под правку</a>
+</div>
+
+{% if tab == 'complexes_fix' %}
+  {% include "_complexes_fix_body.html" %}
+{% else %}
+  {% include "_housing_class_body.html" %}
+{% endif %}
+{% endblock %}

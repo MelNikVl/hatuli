@@ -10,12 +10,10 @@
 </p>
 
 <style>
-.dc-box { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; box-sizing:border-box; font-size:1em; flex:1 1 0; min-width:340px; }
-.dc-box-inner { position:relative; height:340px; }
 </style>
 
 <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-top:14px;">
-  <div class="dc-box">
+  <div class="chart-block">
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;">
       <div style="background:var(--bg);border-radius:10px;padding:10px 14px;">
         <div style="font-size:20px;font-weight:800;">{{ "{:,}".format(total_active).replace(",", " ") }}</div>
@@ -32,10 +30,10 @@
       <a href="?floor_days={{ d }}" class="floors-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
       {% endfor %}
     </div>
-    <div class="dc-box-inner"><canvas id="floor-missing-chart"></canvas></div>
+    <div class="chart-block-inner"><canvas id="floor-missing-chart"></canvas></div>
   </div>
 
-  <div class="dc-box">
+  <div class="chart-block">
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:12px;">
       <div style="background:var(--bg);border-radius:10px;padding:10px 14px;">
         <div style="font-size:20px;font-weight:800;">{{ "{:,}".format(total_active).replace(",", " ") }}</div>
@@ -52,7 +50,7 @@
       <a href="?ceiling_days={{ d }}" class="ceiling-days-link" data-days="{{ d }}" style="padding:4px 10px;border-radius:6px;font-size:12px;text-decoration:none;background:var(--bg);color:var(--text);border:1px solid var(--border);">{{ d }} дн.</a>
       {% endfor %}
     </div>
-    <div class="dc-box-inner"><canvas id="ceiling-missing-chart"></canvas></div>
+    <div class="chart-block-inner"><canvas id="ceiling-missing-chart"></canvas></div>
   </div>
 </div>
 
@@ -62,11 +60,11 @@
   <a href="/admin/archived">Ушедшие в архив</a>). Оба графика — только по объявлениям, где известен этаж.
 </p>
 <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;">
-  <div class="dc-box">
+  <div class="chart-block">
     <b style="font-size:0.95em;">По конкретному этажу дома</b>
-    <div class="dc-box-inner"><canvas id="chart-floor"></canvas></div>
+    <div class="chart-block-inner"><canvas id="chart-floor"></canvas></div>
   </div>
-  <div class="dc-box">
+  <div class="chart-block">
     <b style="font-size:0.95em;">Этаж vs количество проданных квартир</b>
     <span style="font-size:0.8em;color:#888;margin-left:6px;">"продано" — прокси через уход в архив</span>
     <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;">
@@ -75,7 +73,7 @@
               style="padding:5px 11px;border:1px solid var(--border);border-radius:8px;background:{{ '#2563eb' if val == 'month' else 'var(--bg)' }};color:{{ '#fff' if val == 'month' else 'var(--text)' }};font-size:12px;cursor:pointer;">{{ label }}</button>
       {% endfor %}
     </div>
-    <div class="dc-box-inner"><canvas id="chart-floor-sold"></canvas></div>
+    <div class="chart-block-inner"><canvas id="chart-floor-sold"></canvas></div>
   </div>
 </div>
 
@@ -122,7 +120,7 @@
   </div>
 
   <div style="flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
-    <div id="unbound-map" style="aspect-ratio:1/1;width:100%;min-height:280px;border-radius:8px;"></div>
+    <div id="unbound-map" style="aspect-ratio:1/1;width:100%;min-height:280px;max-height:50vh;border-radius:8px;"></div>
   </div>
 </div>
 
@@ -272,7 +270,9 @@ function unboundChartSVG(points, w, h) {
   const dots = coords.map((c, i) => `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="8" fill="transparent"><title>${points[i].at}: ${points[i].unbound} непривязано из ${points[i].total_active}</title></circle>` +
     `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="3.5" fill="#2563eb" stroke="#fff" stroke-width="1.3" style="pointer-events:none;"/>`).join('');
   const firstAt = points[0].at, lastAt = points[points.length - 1].at;
-  return `<svg width="${w}" height="${h}" style="display:block;overflow:visible;max-width:100%;">` +
+  // viewBox + width:100% — масштабирует весь SVG под контейнер без обрезки
+  // и без скролла (тот же фикс, что у price-history-chart и no-photo-chart).
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="xMidYMid meet" style="display:block;max-width:100%;">` +
     `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">` +
     `<stop offset="0%" stop-color="#2563eb" stop-opacity="0.35"/>` +
     `<stop offset="100%" stop-color="#2563eb" stop-opacity="0.02"/></linearGradient></defs>` +
@@ -283,8 +283,11 @@ function unboundChartSVG(points, w, h) {
 function loadUnboundChart() {
   fetch('/admin/api/unbound-history').then(r => r.json()).then(d => {
     const el = document.getElementById('unbound-chart');
-    const box = el.parentElement;
-    el.innerHTML = unboundChartSVG(d.points || [], Math.max(300, box.clientWidth - 32), 160);
+    // Раньше мерили box.clientWidth-32 (родитель минус padding) с полом
+    // Math.max(300, ...) — на узких контейнерах (<332px) пол в 300
+    // форсировал SVG шире реального места и обрезал последнюю точку.
+    // Меряем сам #unbound-chart (уже внутри отступов родителя).
+    el.innerHTML = unboundChartSVG(d.points || [], Math.max(200, el.clientWidth), 160);
   }).catch(() => {});
 }
 loadUnboundChart();

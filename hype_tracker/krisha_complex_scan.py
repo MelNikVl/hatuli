@@ -37,6 +37,17 @@ def extract_count(html: str):
     return int(re.sub(r"\s", "", m.group(1))) if m else None
 
 
+def extract_krisha_name(html: str):
+    """Каноничное название ЖК из встроенного JSON страницы (объект комплекса —
+    "name":"Hazar","prefix":"ЖК",... — идёт раньше названий самих объявлений
+    в том же блоке, так что паттерн с prefix рядом достаточно специфичен)."""
+    m = re.search(r'"name":"([^"]{2,80})","prefix":"ЖК"', html)
+    if not m:
+        return None
+    name = m.group(1).strip()
+    return name or None
+
+
 def extract_description(html: str):
     """«О жилой недвижимости» — есть не на всех страницах."""
     m = re.search(r"О жилой недвижимости(.{0,2500}?)(<h[1-6]|О застройщике|</section>|</div>\s*</div>)", html, re.S)
@@ -84,9 +95,14 @@ def main() -> int:
         WHERE c.krisha_url IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM krisha_parse_log l WHERE l.complex_id = c.id
                           AND l.status = 'error' AND l.ts > now() - interval '2 days')
-          AND NOT (hct.apartment_count_source = 'krisha'
-                   AND c.photos IS NOT NULL
-                   AND c.description IS NOT NULL AND c.description != '')
+          -- "готово" = была хотя бы одна успешная обработка за последние 30
+          -- дней (потом освежаем). Раньше тут требовалось ЕЩЁ и непустое
+          -- description — а «О жилой недвижимости» есть не на всех
+          -- страницах Крыши, так что для ЖК без этого блока условие никогда
+          -- не выполнялось, и очередь застревала на первых по id ЖК
+          -- навсегда вместо продвижения по всей базе.
+          AND NOT EXISTS (SELECT 1 FROM krisha_parse_log l2 WHERE l2.complex_id = c.id
+                          AND l2.status = 'ok' AND l2.ts > now() - interval '30 days')
         ORDER BY c.id
         LIMIT {batch}""").splitlines() if r]
     if not rows:
@@ -113,6 +129,27 @@ def main() -> int:
             cnt = extract_count(html)
             desc = extract_description(html)
             photos = extract_photos(html)
+            krisha_name = extract_krisha_name(html)
+
+            # Самовосстановление имени: держим complexes.name синхронным с
+            # тем, как ЖК называется на самой Крыше (источник истины по
+            # именам/фото). Обёрнуто в свой try — конфликт уникального
+            # индекса (name уже занят другой строкой, обычно недобитый
+            # дубль) не должен рушить учёт кв/описания/фото по этому ЖК.
+            if krisha_name and krisha_name.strip().casefold() != (name or "").strip().casefold():
+                try:
+                    old_name = name
+                    psql(f"UPDATE complexes SET name = '{esc(krisha_name)}' WHERE id = {cid}")
+                    # держим apartment_listings.complex_name (свободный текст,
+                    # не FK) в согласии с переименованием — иначе разъедемся
+                    # заново с тем же классом бага, который чинила консолидация.
+                    if old_name:
+                        psql(f"UPDATE apartment_listings SET complex_name = '{esc(krisha_name)}' "
+                             f"WHERE lower(btrim(complex_name)) = lower('{esc(old_name)}')")
+                    print(f"✏️ {cid}: имя «{old_name}» → «{krisha_name}» (по Крыше)")
+                    name = krisha_name
+                except Exception as e_name:
+                    print(f"⚠️ {cid} {name}: не удалось переименовать в «{krisha_name}»: {e_name}")
 
             if cnt is not None:
                 psql(f"""INSERT INTO housing_class_test (complex_id, apartment_count, apartment_count_source, apartment_count_parsed_at, updated_at)

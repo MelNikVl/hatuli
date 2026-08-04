@@ -56,15 +56,13 @@ tr:last-child td { border-bottom: none; }
 .legend-dot { width: 10px; height: 10px; border-radius: 2px; }
 
 .container { max-width: 100%; padding: 0; }
-.chart-box-1200 { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 16px; margin-bottom:14px; width:1200px; max-width:100%; height:600px; overflow-y:auto; box-sizing:border-box; font-size:1em; }
-.chart-box-1200-inner { margin-top:8px; width:100%; height:540px; }
 </style>
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">📊 Аналитика квартир</div>
 <div class="container">
 
 <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;">
-  <div class="chart-box-1200" style="flex:1 1 0;min-width:340px;width:auto;height:auto;">
+  <div class="chart-block" style="flex:1 1 0;min-width:340px;width:auto;height:auto;">
     <b style="font-size:1em;">🎯 Уверенность Смарт рейтинга по гексам</b>
     <span style="font-size:0.85em;color:#888;margin-left:6px;">% факторов, посчитанных на реальных данных (не риск сделки) — см. подсказку "?" у скора в превью</span>
     <div id="conf-summary-stats" class="stats-bar" style="margin-top:10px;"></div>
@@ -77,21 +75,21 @@ tr:last-child td { border-bottom: none; }
     </div>
     <div id="conf-hex-map" style="height:25vh;min-height:220px;border-radius:8px;"></div>
   </div>
-  <div class="chart-box-1200" style="flex:1 1 0;min-width:340px;width:auto;height:auto;">
+  <div class="chart-block" style="flex:1 1 0;min-width:340px;width:auto;height:auto;">
     <b style="font-size:1em;">📉 Объявления без фото во времени</b>
     <span style="font-size:0.85em;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж</span>
-    <div id="no-photo-chart" class="chart-box-1200-inner"></div>
+    <div id="no-photo-chart" class="chart-block-inner"></div>
   </div>
 </div>
 <div>
-  <div class="chart-box-1200">
+  <div class="chart-block">
     <b style="font-size:1em;">💸 Снижения цены по дням, по комнатности</b>
     <div style="display:flex;gap:14px;font-size:11px;color:#888;margin:6px 0;">
       <span><span style="display:inline-block;width:9px;height:9px;background:#3b82f6;border-radius:2px;"></span> 1-комн</span>
       <span><span style="display:inline-block;width:9px;height:9px;background:#22c55e;border-radius:2px;"></span> 2-комн</span>
       <span><span style="display:inline-block;width:9px;height:9px;background:#f59e0b;border-radius:2px;"></span> 3+-комн</span>
     </div>
-    <div id="price-drops-chart" class="chart-box-1200-inner" style="overflow-x:auto;"></div>
+    <div id="price-drops-chart" class="chart-block-inner"></div>
   </div>
 
   <script>
@@ -120,7 +118,10 @@ tr:last-child td { border-bottom: none; }
     }).join('');
     const dots = coords.map((c, i) => `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="7" fill="transparent"><title>${points[i].at}: ${points[i][valueKey]}</title></circle>` +
       `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="3.5" fill="#ef4444" stroke="#fff" stroke-width="1.3" style="pointer-events:none;"/>`).join('');
-    el.innerHTML = `<svg width="${w}" height="${h}" style="display:block;overflow:visible;max-width:100%;">` +
+    // viewBox + width:100% — SVG масштабируется под реальную ширину контейнера
+    // целиком (координаты точек не обрезаются и не требуют скролла), см. тот
+    // же фикс в price-history-chart на /admin/analytics/prices.
+    el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="xMidYMid meet" style="display:block;max-width:100%;">` +
       `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">` +
       `<stop offset="0%" stop-color="#ef4444" stop-opacity="0.3"/>` +
       `<stop offset="100%" stop-color="#ef4444" stop-opacity="0.02"/></linearGradient></defs>` +
@@ -130,7 +131,12 @@ tr:last-child td { border-bottom: none; }
   }
   fetch('/admin/api/no-photo-history?days=30').then(r => r.json()).then(d => {
     const npEl = document.getElementById('no-photo-chart');
-    const npW = Math.max(280, npEl.parentElement.clientWidth - 4);
+    // Раньше мерили npEl.parentElement.clientWidth (включает padding
+    // .chart-block) — ширина SVG получалась на ~28-32px БОЛЬШЕ реального
+    // контейнера (.chart-block-inner, width:100% от контента родителя),
+    // из-за чего max-width:100% обрезал самые свежие точки справа. Меряем
+    // сам контейнер графика, у него уже нет своего padding.
+    const npW = Math.max(280, npEl.clientWidth || (npEl.parentElement.clientWidth - 32));
     unboundStyleLineChart('no-photo-chart', d.points || [], 'no_photo', npW, 480);
   }).catch(() => {});
 
@@ -208,12 +214,20 @@ tr:last-child td { border-bottom: none; }
   }
   loadConfidenceHex('');
 
-  fetch('/admin/api/price-drops-history?days=30').then(r => r.json()).then(d => {
+  let priceDropsData = null;
+  function renderPriceDropsChart() {
+    const d = priceDropsData;
     const el = document.getElementById('price-drops-chart');
-    if (!d.days || !d.days.length) { el.innerHTML = '<div style="padding:14px;color:#888;font-size:12px;">пока нет данных</div>'; return; }
+    if (!d || !d.days || !d.days.length) { el.innerHTML = '<div style="padding:14px;color:#888;font-size:12px;">пока нет данных</div>'; return; }
     const colors = {1:'#3b82f6', 2:'#22c55e', 3:'#f59e0b'};
     const maxTotal = Math.max(1, ...d.days.map((_,i)=>d.series['1'][i]+d.series['2'][i]+d.series['3'][i]));
-    const barW = Math.max(32, Math.min(60, Math.floor(960/d.days.length)));
+    // Ширина бара считается от реальной ширины контейнера (а не от фикс.
+    // 960px) — раньше при узком/ресайзнутом блоке контент был шире контейнера
+    // (min-width на обёртке) и просто обрезался/скроллился. Теперь бары
+    // всегда влезают целиком без горизонтального скролла; при ресайзе блока
+    // (см. hatuli:chart-resize) пересчитываем и рисуем заново.
+    const containerW = Math.max(200, el.clientWidth || 760);
+    const barW = Math.max(14, Math.min(60, Math.floor(containerW / d.days.length) - 3));
     const H = 480;
     const bars = d.days.map((label,i)=>{
       const v1=d.series['1'][i], v2=d.series['2'][i], v3=d.series['3'][i];
@@ -232,8 +246,14 @@ tr:last-child td { border-bottom: none; }
         <div style="font-size:8px;color:#888;transform:rotate(-45deg);white-space:nowrap;margin-top:2px;">${label}</div>
       </div>`;
     }).join('');
-    el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:3px;height:${H}px;padding-bottom:20px;min-width:${d.days.length*(barW+3)}px;">${bars}</div>`;
+    el.innerHTML = `<div style="display:flex;align-items:flex-end;justify-content:center;gap:3px;height:${H}px;padding-bottom:20px;width:100%;">${bars}</div>`;
+  }
+  fetch('/admin/api/price-drops-history?days=30').then(r => r.json()).then(d => {
+    priceDropsData = d;
+    renderPriceDropsChart();
   }).catch(() => {});
+  document.getElementById('price-drops-chart').closest('.chart-block')
+    .addEventListener('hatuli:chart-resize', renderPriceDropsChart);
   </script>
 
   <!-- Компактный rental index + гистограмма скоров — левая колонка: графики и показатели -->

@@ -1,0 +1,159 @@
+{# Вкладка Korter/Homsters на /admin/parsers: длительность полных обходов +
+   таблица изменений (новые ЖК / изменённые параметры).
+   Ожидает: source, source_label, changes, runs, last_run, days, field_labels. #}
+{% macro fmt_dur(s) -%}
+{%- if s is none -%}—
+{%- elif s < 60 -%}{{ (s|round(0,'floor'))|int }} сек
+{%- elif s < 3600 -%}{{ ((s/60)|round(0,'floor'))|int }} мин {{ (s % 60)|round(0,'floor')|int }} сек
+{%- else -%}{{ ((s/3600)|round(1)) }} ч
+{%- endif -%}
+{%- endmacro %}
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px;">
+  <div class="prs-card" style="flex:1 1 0;min-width:280px;">
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:6px;">⏱ Последний полный обход</div>
+    {% if last_run %}
+      <div style="font-size:18px;font-weight:700;">{{ fmt_dur(last_run.duration_s) }}</div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:4px;">
+        {{ last_run.started_at.strftime('%d.%m.%Y %H:%M') }} ·
+        ЖК: {{ last_run.matched or 0 }} · создано: {{ last_run.created or 0 }} ·
+        изменений: {{ last_run.changed or 0 }}
+      </div>
+    {% else %}
+      <div style="font-size:14px;color:var(--muted);">прогонов ещё не было</div>
+    {% endif %}
+  </div>
+  <div class="prs-card" style="flex:1 1 0;min-width:280px;">
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:6px;">📈 Среднее время обхода ({{ runs|length }} прогон.)</div>
+    {% if runs %}
+      {% set avg = (runs|map(attribute='duration_s')|select('!=', none)|list) %}
+      {% if avg %}
+        <div style="font-size:18px;font-weight:700;">{{ fmt_dur((avg|sum) / avg|length) }}</div>
+      {% else %}
+        <div style="font-size:14px;color:var(--muted);">—</div>
+      {% endif %}
+      <div style="font-size:12.5px;color:var(--muted);margin-top:4px;">полный цикл {{ source_label }}</div>
+    {% else %}
+      <div style="font-size:14px;color:var(--muted);">—</div>
+    {% endif %}
+  </div>
+  <div class="prs-card" style="flex:1 1 0;min-width:280px;">
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:6px;">🕐 Периодичность парсинга</div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+      <span style="font-size:13px;">раз в</span>
+      <input id="intv-{{ source }}" type="number" min="1" max="720" value="{{ interval_h }}"
+             style="width:70px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13.5px;text-align:center;">
+      <span style="font-size:13px;">час.</span>
+      <button class="prs-btn off" id="btn-intv-{{ source }}" onclick="saveInterval('{{ source }}')">Сохранить</button>
+    </div>
+    <div id="intv-msg-{{ source }}" style="font-size:12px;color:var(--muted);margin-top:6px;min-height:15px;"></div>
+  </div>
+</div>
+
+<script>
+async function saveInterval(source) {
+  const btn = document.getElementById('btn-intv-' + source);
+  const msg = document.getElementById('intv-msg-' + source);
+  const val = parseInt(document.getElementById('intv-' + source).value, 10);
+  if (!val || val < 1) { msg.textContent = '⚠ введи число часов ≥ 1'; return; }
+  btn.disabled = true;
+  try {
+    const body = {};
+    body[source + '_interval_h'] = val;
+    const r = await fetch('/admin/api/parse-settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (!d.ok) { msg.textContent = '⚠ ' + (d.error || 'ошибка'); return; }
+    msg.textContent = '✅ сохранено: раз в ' + val + ' ч (±2 ч джиттер)';
+  } catch (e) {
+    msg.textContent = '⚠ ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+
+<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">
+  <div style="font-size:14.5px;font-weight:700;">🆕 Изменения за период</div>
+  <div style="display:flex;gap:6px;">
+    {% for d in [1, 3, 7, 30] %}
+      <a href="?tab={{ tab }}&days={{ d }}"
+         style="padding:4px 12px;border-radius:8px;font-size:12.5px;text-decoration:none;
+                {% if days == d %}background:var(--red);color:#fff;{% else %}background:var(--surface);border:1px solid var(--border);color:var(--text);{% endif %}">
+        {{ d }} дн
+      </a>
+    {% endfor %}
+  </div>
+</div>
+
+<table style="width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+  <colgroup>
+    <col style="width:110px;"><col style="width:26%;"><col style="width:110px;"><col style="width:16%;"><col style="width:22%;"><col style="width:22%;">
+  </colgroup>
+  <thead>
+    <tr style="text-align:left;color:var(--muted);font-size:12px;">
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">Дата</th>
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">ЖК</th>
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">Тип</th>
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">Параметр</th>
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">Было</th>
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">Стало</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in changes %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px 10px;color:var(--muted);white-space:nowrap;">{{ c.ts.strftime('%d.%m %H:%M') }}</td>
+      <td style="padding:8px 10px;font-weight:600;">{{ c.complex_name }}</td>
+      <td style="padding:8px 10px;">
+        {% if c.change_type == 'new' %}
+          <span style="background:#dcfce7;color:#166534;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:600;white-space:nowrap;">🆕 новый ЖК</span>
+        {% else %}
+          <span style="background:#fef3c7;color:#92400e;border-radius:6px;padding:2px 8px;font-size:12px;font-weight:600;white-space:nowrap;">✏️ изменено</span>
+        {% endif %}
+      </td>
+      <td style="padding:8px 10px;">{{ field_labels.get(c.field, c.field or '—') }}</td>
+      <td style="padding:8px 10px;color:var(--muted);">{{ c.old_value or '—' }}</td>
+      <td style="padding:8px 10px;font-weight:600;">{{ c.new_value or '—' }}</td>
+    </tr>
+    {% else %}
+    <tr>
+      <td colspan="6" style="padding:16px 10px;color:var(--muted);text-align:center;">
+        За {{ days }} дн изменений нет — всё стабильно ✅
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if runs|length > 1 %}
+<div style="font-size:14.5px;font-weight:700;margin:18px 0 8px;">🕐 Последние прогоны</div>
+<table style="width:100%;border-collapse:collapse;font-size:13px;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+  <colgroup>
+    <col style="width:140px;"><col style="width:110px;"><col><col><col><col>
+  </colgroup>
+  <thead>
+    <tr style="text-align:left;color:var(--muted);font-size:12px;">
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">Старт</th>
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">Длительность</th>
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">ЖК обработано</th>
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">Создано</th>
+      <th style="padding:9px 10px;border-bottom:1px solid var(--border);">Изменений</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in runs %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px 10px;color:var(--muted);white-space:nowrap;">{{ r.started_at.strftime('%d.%m %H:%M') }}</td>
+      <td style="padding:8px 10px;font-weight:600;">{{ fmt_dur(r.duration_s) }}</td>
+      <td style="padding:8px 10px;">{{ r.matched or 0 }}</td>
+      <td style="padding:8px 10px;">{{ r.created or 0 }}</td>
+      <td style="padding:8px 10px;">{{ r.changed or 0 }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

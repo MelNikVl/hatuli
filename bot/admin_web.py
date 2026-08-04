@@ -561,92 +561,41 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
 
     @app.get("/admin/analytics/hype", response_class=HTMLResponse)
-    async def hype_analytics_page(request: Request):
-        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id}.
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("hype_analytics.html", {
-            "request": request, "atab": "hype",
-        })
+    async def hype_analytics_page_old(request: Request):
+        # Слито во вкладку "Хайп" hub-страницы /admin/analytics/heatmaps —
+        # см. задачу "reorganize into 4 tabbed hub pages".
+        return RedirectResponse(url="/admin/analytics/heatmaps?tab=hype", status_code=301)
 
     @app.get("/admin/analytics/homeportal", response_class=HTMLResponse)
     async def homeportal_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        from bot.db.pg import fetch as pg_fetch
-
-        def one(rows):
-            return rows[0] if rows else {}
-
-        stats = {
-            "total": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects")).get("n", 0),
-            "fetched": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects WHERE fetched_at IS NOT NULL")).get("n", 0),
-            "matched": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects WHERE matched_complex_id IS NOT NULL")).get("n", 0),
-            "unmatched": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects WHERE matched_complex_id IS NULL")).get("n", 0),
-            "errors": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_parse_log WHERE status='error'")).get("n", 0),
-        }
-        recent = await pg_fetch("""SELECT h.fetched_at::timestamp(0) AS ts, h.name, h.rooms_1, h.rooms_2, h.rooms_3, h.rooms_4,
-                                   h.apartments_total, h.developer_name, h.matched_complex_id, c.name AS cx_name
-                                   FROM homeportal_objects h LEFT JOIN complexes c ON c.id = h.matched_complex_id
-                                   ORDER BY h.fetched_at DESC NULLS LAST LIMIT 15""")
-        hours = await pg_fetch("""SELECT to_char(date_trunc('hour', fetched_at), 'DD HH24:00') AS h,
-                                   count(*)::int AS cnt FROM homeportal_objects
-                                   WHERE fetched_at > now() - interval '24 hours'
-                                   GROUP BY 1 ORDER BY 1""")
-        return templates.TemplateResponse("homeportal_monitor.html", {
-            "request": request, "atab": "homeportal",
-            "stats": stats, "recent": recent,
-            "chart": {"hours": [h["h"] for h in hours], "cnt": [h["cnt"] for h in hours]},
-        })
+        # Слито во вкладку "Homeportal" hub-страницы /admin/parsers —
+        # см. задачу "reorganize into 4 tabbed hub pages". Логика/запросы
+        # переехали в _homeportal_data() (terminal_extras.py).
+        return RedirectResponse(url="/admin/parsers?tab=krisha-homeportal", status_code=301)
 
     @app.get("/admin/analytics/parse-monitor", response_class=HTMLResponse)
     async def parse_monitor_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        from bot.db.pg import fetch as pg_fetch
-
-        def one(rows):
-            return rows[0] if rows else {}
-
-        stats = {
-            "total": one(await pg_fetch("SELECT count(*)::int AS n FROM complexes WHERE krisha_url IS NOT NULL")).get("n", 0),
-            "filled": one(await pg_fetch("""SELECT count(*)::int AS n FROM housing_class_test hct
-                             JOIN complexes c ON c.id = hct.complex_id
-                             WHERE c.krisha_url IS NOT NULL AND hct.apartment_count_source = 'krisha'""")).get("n", 0),
-            "pending": one(await pg_fetch("""SELECT count(*)::int AS n FROM complexes c
-                              LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
-                              WHERE c.krisha_url IS NOT NULL
-                                AND (hct.apartment_count_source IS DISTINCT FROM 'krisha')""")).get("n", 0),
-            "errors": one(await pg_fetch("""SELECT count(*)::int AS n FROM krisha_parse_log
-                             WHERE status = 'error' AND ts > now() - interval '24 hours'""")).get("n", 0),
-        }
-        set_rows = await pg_fetch("SELECT key, value FROM parse_settings")
-        settings = {"delay": "120", "batch": "10", "enabled": "1"}
-        for r in set_rows:
-            settings[r["key"].replace("krisha_", "")] = r["value"]
-        log = await pg_fetch("""SELECT l.ts::timestamp(0) AS ts, c.name, l.apartment_count, l.status, l.detail
-                                      FROM krisha_parse_log l LEFT JOIN complexes c ON c.id = l.complex_id
-                                      ORDER BY l.id DESC LIMIT 20""")
-        hours = await pg_fetch("""SELECT to_char(date_trunc('hour', ts), 'DD HH24:00') AS h,
-                                        count(*) FILTER (WHERE status='ok')::int AS ok,
-                                        count(*) FILTER (WHERE status='error')::int AS err
-                                        FROM krisha_parse_log WHERE ts > now() - interval '24 hours'
-                                        GROUP BY 1 ORDER BY 1""")
-        return templates.TemplateResponse("parse_monitor.html", {
-            "request": request, "atab": "parse",
-            "stats": stats, "settings": settings, "log": log,
-            "chart": {"hours": [h["h"] for h in hours],
-                      "ok": [h["ok"] for h in hours],
-                      "err": [h["err"] for h in hours]},
-        })
+        # Слито во вкладку "ЖК (Крыша)" hub-страницы /admin/parsers —
+        # см. задачу "reorganize into 4 tabbed hub pages". Логика/запросы
+        # переехали в _parse_monitor_data() (terminal_extras.py).
+        return RedirectResponse(url="/admin/parsers?tab=krisha-complex-scan", status_code=301)
 
     @app.get("/admin/analytics/geo", response_class=HTMLResponse)
-    async def geo_analytics_page(request: Request):
-        # ВАЖНО: выше catch-all /admin/analytics/{listing_id}.
+    async def geo_analytics_page_old(request: Request):
+        # Слито во вкладку "Геоаналитика" hub-страницы /admin/analytics/heatmaps —
+        # см. задачу "reorganize into 4 tabbed hub pages".
+        return RedirectResponse(url="/admin/analytics/heatmaps?tab=geo", status_code=301)
+
+    @app.get("/admin/analytics/heatmaps", response_class=HTMLResponse)
+    async def heatmaps_hub_page(request: Request, tab: str = "hype"):
+        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
+        # см. комментарий у transport_analytics_page ниже.
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("geo_analytics.html", {
-            "request": request, "atab": "geo",
+        if tab not in ("hype", "geo"):
+            tab = "hype"
+        return templates.TemplateResponse("heatmaps_hub.html", {
+            "request": request, "atab": tab, "tab": tab,
         })
 
     @app.get("/admin/analytics/photo-analysis", response_class=HTMLResponse)
@@ -660,12 +609,11 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin/analytics/news-analysis", response_class=HTMLResponse)
     async def news_analysis_page(request: Request):
-        # ВАЖНО: выше catch-all /admin/analytics/{listing_id} ниже.
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("news_analysis.html", {
-            "request": request, "atab": "news_analysis",
-        })
+        # Страница слита с вкладкой "Хайп" hub-страницы /admin/analytics/heatmaps
+        # (график "Новостей проанализировано" переехал туда, "Токенов
+        # потрачено" убран по запросу) — оставляем редирект, чтобы старые
+        # ссылки не 404-или.
+        return RedirectResponse(url="/admin/analytics/heatmaps?tab=hype", status_code=301)
 
     @app.get("/admin/analytics/transport", response_class=HTMLResponse)
     async def transport_page(request: Request):
@@ -714,11 +662,12 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         return out
 
     @app.get("/admin/analytics/ai-analysis", response_class=HTMLResponse)
-    async def ai_analysis_status_page(request: Request):
-        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
-        # см. комментарий у transport_analytics_page выше.
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
+    async def ai_analysis_status_page_old(request: Request):
+        # Слито во вкладку "AI-анализ описаний" hub-страницы /admin/analytics/ai —
+        # см. задачу "reorganize into 4 tabbed hub pages".
+        return RedirectResponse(url="/admin/analytics/ai?tab=analysis", status_code=301)
+
+    async def _ai_analysis_data():
         from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
         from bot.db import settings as app_settings
         await app_settings.load()
@@ -770,8 +719,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         apartment_feature_words = await _keyword_rows_with_counts(pg_fetch, "apartment_feature", "listings")
         finish_words = await _keyword_rows_with_counts(pg_fetch, "finish", "listings")
         complex_feature_words = await _keyword_rows_with_counts(pg_fetch, "complex_feature", "complex")
-        return templates.TemplateResponse("ai_analysis_status.html", {
-            "request": request, "atab": "ai_analysis",
+        return {
             "ai_enabled": app_settings.get_bool("AI_TEXT_ANALYSIS", False),
             "counts": dict(counts) if counts else {},
             "finish_rows": [dict(r) for r in finish_rows],
@@ -783,7 +731,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "apartment_feature_words": apartment_feature_words,
             "finish_words": finish_words,
             "complex_feature_words": complex_feature_words,
-        })
+        }
 
     @app.post("/admin/analytics/ai-analysis/keywords/add")
     async def ai_analysis_keyword_add(request: Request, category: str = Form(...), word: str = Form(...)):
@@ -795,7 +743,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             await pg_exec(
                 "INSERT INTO ai_keywords (category, word) VALUES ($1, $2) ON CONFLICT DO NOTHING",
                 category, word)
-        return RedirectResponse(url="/admin/analytics/ai-analysis", status_code=303)
+        return RedirectResponse(url="/admin/analytics/ai?tab=analysis", status_code=303)
 
     @app.post("/admin/analytics/ai-analysis/keywords/delete")
     async def ai_analysis_keyword_delete(request: Request, category: str = Form(...), word: str = Form(...)):
@@ -803,14 +751,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import execute as pg_exec
         await pg_exec("DELETE FROM ai_keywords WHERE category = $1 AND word = $2", category, word)
-        return RedirectResponse(url="/admin/analytics/ai-analysis", status_code=303)
+        return RedirectResponse(url="/admin/analytics/ai?tab=analysis", status_code=303)
 
     @app.get("/admin/analytics/ai-status", response_class=HTMLResponse)
-    async def ai_status_page(request: Request):
-        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
-        # см. комментарий у transport_analytics_page выше.
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
+    async def ai_status_page_old(request: Request):
+        # Слито во вкладку "Статус слоёв" hub-страницы /admin/analytics/ai —
+        # см. задачу "reorganize into 4 tabbed hub pages".
+        return RedirectResponse(url="/admin/analytics/ai?tab=status", status_code=301)
+
+    async def _ai_status_data():
         from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
         from bot.db import settings as app_settings
         await app_settings.load()
@@ -838,8 +787,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 MAX(floorplan_checked_at) AS last_run
             FROM apartment_listings
         """)
-        return templates.TemplateResponse("ai_status.html", {
-            "request": request, "atab": "ai_status",
+        return {
             "desc_counts": dict(desc_counts) if desc_counts else {},
             "complexes_enriched": complexes_enriched["cnt"] if complexes_enriched else 0,
             "last_fact_at": last_fact["last_at"] if last_fact else None,
@@ -849,14 +797,27 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "ai_complex_facts_on": app_settings.get_bool("AI_COMPLEX_FACTS", True),
             "ai_finish_classify_on": app_settings.get_bool("AI_FINISH_CLASSIFY", True),
             "ai_floorplan_scan_on": app_settings.get_bool("AI_FLOORPLAN_SCAN", True),
-        })
+        }
 
-    @app.get("/admin/analytics/housing-class", response_class=HTMLResponse)
-    async def housing_class_page(request: Request):
+    @app.get("/admin/analytics/ai", response_class=HTMLResponse)
+    async def ai_hub_page(request: Request, tab: str = "analysis"):
         # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
         # см. комментарий у transport_analytics_page выше.
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
+        if tab not in ("analysis", "status"):
+            tab = "analysis"
+        ctx = {"request": request, "atab": "ai_analysis" if tab == "analysis" else "ai_status", "tab": tab}
+        if tab == "status":
+            ctx.update(await _ai_status_data())
+        else:
+            ctx.update(await _ai_analysis_data())
+        return templates.TemplateResponse("ai_hub.html", ctx)
+
+    async def _housing_class_rows():
+        # Раньше рендерилась напрямую на /admin/analytics/housing-class,
+        # теперь — данные для вкладки "Класс жилья" hub-страницы
+        # /admin/analytics/complexes (см. complexes_hub_page ниже).
         from bot.db.pg import fetch as pg_fetch
         from bot.core.housing_class_score import compute_housing_class_scores
 
@@ -864,10 +825,12 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             SELECT c.id, c.name, c.district, c.avg_price_m2::float AS price_per_m2,
                    COALESCE(cts.floors_total, agg.floors_total) AS floors_total,
                    COALESCE(cts.ceiling_height_max, agg.ceiling_height)::float AS ceiling_height,
-                   hct.elevator_count, hct.elevator_capacity_kg, hct.apartment_count,
+                   hct.elevator_count, hct.elevator_capacity_kg, hct.elevator_passenger, hct.elevator_freight, hct.apartment_count,
                    hct.rooms_1, hct.rooms_2, hct.rooms_3, hct.rooms_4,
                    cts.lifts_type, cts.construction_type,
-                   COALESCE(agg.listings_count, 0) AS listings_count
+                   COALESCE(agg.listings_count, 0) AS listings_count,
+                   (c.krisha_url IS NOT NULL) AS has_krisha,
+                   EXISTS (SELECT 1 FROM homeportal_objects h WHERE h.matched_complex_id = c.id) AS has_hp
             FROM complexes c
             LEFT JOIN complex_tech_specs cts ON cts.complex_id = c.id
             LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
@@ -887,13 +850,18 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # Сортировка по количеству объявлений (больше всего — сверху), не по скору —
         # см. задачу "housing-class table sort + count column".
         complexes.sort(key=lambda r: -(r.get("listings_count") or 0))
-        return templates.TemplateResponse("housing_class.html", {
-            "request": request, "atab": "housing_class", "complexes": complexes,
-        })
+        return complexes
+
+    @app.get("/admin/analytics/housing-class", response_class=HTMLResponse)
+    async def housing_class_page_old(request: Request):
+        # Слито во вкладку "Класс жилья" hub-страницы /admin/analytics/complexes —
+        # см. задачу "reorganize into 4 tabbed hub pages".
+        return RedirectResponse(url="/admin/analytics/complexes?tab=housing_class", status_code=301)
 
     @app.post("/admin/analytics/housing-class/{complex_id}/update")
     async def housing_class_update(request: Request, complex_id: int,
                                     elevator_count: str = Form(""), elevator_capacity_kg: str = Form(""),
+                                    elevator_passenger: str = Form(""), elevator_freight: str = Form(""),
                                     apartment_count: str = Form(""),
                                     rooms_1: str = Form(""), rooms_2: str = Form(""),
                                     rooms_3: str = Form(""), rooms_4: str = Form("")):
@@ -909,14 +877,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return int(s) if s.isdigit() else None
 
         await pg_execute("""
-            INSERT INTO housing_class_test (complex_id, elevator_count, elevator_capacity_kg, apartment_count, rooms_1, rooms_2, rooms_3, rooms_4, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+            INSERT INTO housing_class_test (complex_id, elevator_count, elevator_capacity_kg, elevator_passenger, elevator_freight, apartment_count, rooms_1, rooms_2, rooms_3, rooms_4, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
             ON CONFLICT (complex_id) DO UPDATE
-            SET elevator_count = $2, elevator_capacity_kg = $3, apartment_count = $4,
-                rooms_1 = $5, rooms_2 = $6, rooms_3 = $7, rooms_4 = $8, updated_at = now()
-        """, complex_id, _to_int(elevator_count), _to_int(elevator_capacity_kg), _to_int(apartment_count),
-            _to_int(rooms_1), _to_int(rooms_2), _to_int(rooms_3), _to_int(rooms_4))
-        return RedirectResponse(url="/admin/analytics/housing-class", status_code=303)
+            SET elevator_count = $2, elevator_capacity_kg = $3, elevator_passenger = $4, elevator_freight = $5,
+                apartment_count = $6, rooms_1 = $7, rooms_2 = $8, rooms_3 = $9, rooms_4 = $10, updated_at = now()
+        """, complex_id, _to_int(elevator_count), _to_int(elevator_capacity_kg), _to_int(elevator_passenger), _to_int(elevator_freight),
+            _to_int(apartment_count), _to_int(rooms_1), _to_int(rooms_2), _to_int(rooms_3), _to_int(rooms_4))
+        return RedirectResponse(url="/admin/analytics/complexes?tab=housing_class", status_code=303)
 
     @app.post("/admin/analytics/housing-class/{complex_id}/delete")
     async def housing_class_delete(request: Request, complex_id: int):
@@ -927,7 +895,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import execute as pg_execute
         await pg_execute("DELETE FROM complexes WHERE id = $1", complex_id)
-        return RedirectResponse(url="/admin/analytics/housing-class", status_code=303)
+        return RedirectResponse(url="/admin/analytics/complexes?tab=housing_class", status_code=303)
 
     @app.post("/admin/analytics/housing-class/bulk-delete")
     async def housing_class_bulk_delete(request: Request, ids: list[int] = Form(...)):
@@ -939,6 +907,103 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         from bot.db.pg import execute as pg_execute
         await pg_execute("DELETE FROM complexes WHERE id = ANY($1::int[])", ids)
         return JSONResponse({"deleted": len(ids)})
+
+    # ── ЖК под правку: объявления, всё ещё привязанные к мусорным именам ──
+
+    async def _complexes_fix_data():
+        # После консолидации complexes (дедуп/переименование по Крыше) часть
+        # объявлений осталась привязана к complex_name, который совпадает с
+        # уже помеченной is_garbage строкой из ПРЕДЫДУЩИХ чисток — обычно
+        # обрывок описания/эмодзи-реклама, а не настоящее имя ЖК. Разобрать
+        # такое автоматом рискованно (нет надёжного сигнала, какой это
+        # реальный ЖК), поэтому — ручная поштучная правка здесь.
+        # Раньше рендерилась напрямую на /admin/complexes-fix, теперь —
+        # данные для вкладки "ЖК под правку" hub-страницы
+        # /admin/analytics/complexes (см. complexes_hub_page ниже).
+        from bot.db.pg import fetch as pg_fetch
+
+        rows = await pg_fetch("""
+            SELECT a.id, a.title, a.address, a.district, a.complex_name, a.url,
+                   a.price, a.area, a.rooms
+            FROM apartment_listings a
+            JOIN complexes c ON lower(btrim(c.name)) = lower(btrim(a.complex_name))
+            WHERE c.is_garbage = true AND a.is_active IS NOT FALSE
+            ORDER BY a.complex_name, a.id
+        """)
+
+        def _suggest(name: str) -> str:
+            # Черновая подсказка для поля ввода: обрезаем по первому эмодзи/
+            # спецсимволу-разделителю рекламного хвоста — админ всё равно
+            # проверяет и правит руками, это просто чтобы не печатать с нуля.
+            import re as _re
+            m = _re.match(r"^[\w\-\.]+(?:[ \-][\w\-\.]+){0,3}", name.strip())
+            return (m.group(0).strip() if m else name.strip())[:60]
+
+        groups: dict[str, list] = {}
+        for r in rows:
+            d = dict(r)
+            groups.setdefault(d["complex_name"], []).append(d)
+
+        all_names = await pg_fetch(
+            "SELECT name FROM complexes WHERE is_garbage = false ORDER BY name")
+
+        return {
+            "groups": [{"garbage_name": k, "suggested": _suggest(k), "listings": v}
+                       for k, v in sorted(groups.items())],
+            "total": len(rows),
+            "all_names": [r["name"] for r in all_names],
+        }
+
+    @app.get("/admin/complexes-fix", response_class=HTMLResponse)
+    async def complexes_fix_page_old(request: Request):
+        # Слито во вкладку "ЖК под правку" hub-страницы /admin/analytics/complexes —
+        # см. задачу "reorganize into 4 tabbed hub pages".
+        return RedirectResponse(url="/admin/analytics/complexes?tab=complexes_fix", status_code=301)
+
+    @app.get("/admin/analytics/complexes", response_class=HTMLResponse)
+    async def complexes_hub_page(request: Request, tab: str = "housing_class"):
+        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
+        # см. комментарий у transport_analytics_page выше.
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        if tab not in ("housing_class", "complexes_fix"):
+            tab = "housing_class"
+        ctx = {"request": request, "atab": tab, "tab": tab}
+        if tab == "complexes_fix":
+            ctx.update(await _complexes_fix_data())
+        else:
+            ctx["complexes"] = await _housing_class_rows()
+        return templates.TemplateResponse("complexes_hub.html", ctx)
+
+    @app.post("/admin/complexes-fix/reassign")
+    async def complexes_fix_reassign(request: Request, listing_id: str = Form(...),
+                                      new_complex_name: str = Form(...)):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        new_complex_name = new_complex_name.strip()
+        if not new_complex_name:
+            return JSONResponse({"error": "empty name"}, status_code=400)
+        from bot.db.pg import execute as pg_execute
+        await pg_execute(
+            "UPDATE apartment_listings SET complex_name = $1 WHERE id = $2",
+            new_complex_name, listing_id)
+        return JSONResponse({"ok": True})
+
+    @app.post("/admin/complexes-fix/reassign-group")
+    async def complexes_fix_reassign_group(request: Request, garbage_name: str = Form(...),
+                                            new_complex_name: str = Form(...)):
+        # То же самое, но для всей группы объявлений с одним и тем же
+        # мусорным именем разом — когда админ уверен, что это один ЖК.
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        new_complex_name = new_complex_name.strip()
+        if not new_complex_name:
+            return JSONResponse({"error": "empty name"}, status_code=400)
+        from bot.db.pg import execute as pg_execute
+        result = await pg_execute(
+            "UPDATE apartment_listings SET complex_name = $1 WHERE lower(btrim(complex_name)) = lower(btrim($2))",
+            new_complex_name, garbage_name)
+        return JSONResponse({"ok": True, "result": result})
 
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
     async def analytics_detail(request: Request, listing_id: str):

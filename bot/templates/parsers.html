@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🎛 Парсеры <small>вкл/выкл + статистика по каждому парсеру, общие данные — отдельной вкладкой</small></div>
+
+<style>
+.prs-wrap { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+.prs-card { flex:1 1 0; min-width:340px; max-width:480px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+.prs-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
+.prs-name { font-size: 14.5px; font-weight: 700; }
+.prs-desc { font-size: 12.5px; color: var(--muted); margin-bottom: 12px; min-height: 32px; }
+.prs-activity { font-size: 12.5px; color: var(--text); margin-bottom: 12px; }
+.prs-toggle { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.prs-status { display:inline-flex; align-items:center; gap:6px; font-size: 12.5px; font-weight:600; }
+.prs-btn { padding: 6px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; border: none; cursor: pointer; }
+.prs-btn.on { background: var(--red); color: #fff; }
+.prs-btn.off { background: var(--green); color: #fff; }
+.prs-btn:disabled { opacity: .5; cursor: wait; }
+</style>
+
+<div class="htabs">
+  {% for t in tabs %}
+  <a href="?tab={{ t.key }}" class="{{ 'active' if t.key == tab }}">{{ t.label }}</a>
+  {% endfor %}
+</div>
+
+{% macro toggle_card(b) %}
+<div class="prs-wrap" style="margin-bottom:18px;">
+  <div class="prs-card" id="card-{{ b.key }}">
+    <div class="prs-head">
+      <div class="prs-name">{{ b.name }}</div>
+      <span class="prs-status" id="status-{{ b.key }}">
+        <span class="dot {{ 'g' if b.active else 'r' }}"></span>
+        {% if b.kind == 'systemd' %}{{ 'работает' if b.active else 'остановлен' }}{% else %}{{ 'включён' if b.active else 'выключен' }}{% endif %}
+      </span>
+    </div>
+    <div class="prs-desc">{{ b.desc }}</div>
+    <div class="prs-activity">
+      {{ b.activity }}
+      {% if b.last %}<br><span style="color:var(--muted);">последняя активность: {{ b.last.strftime('%d.%m.%Y %H:%M') }}</span>{% endif %}
+    </div>
+    <div class="prs-toggle">
+      <span style="font-size:11.5px;color:var(--muted);">
+        {% if b.kind == 'systemd' %}systemd: {{ b.key }}.service{% else %}cron + app_settings флаг{% endif %}
+      </span>
+      <button class="prs-btn {{ 'on' if b.active else 'off' }}" id="btn-{{ b.key }}" onclick="toggleParser('{{ b.key }}')">
+        {{ 'Остановить' if b.active else 'Запустить' }}
+      </button>
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+{% if tab == 'general' %}
+  {% include "_parser_general.html" %}
+{% elif tab == 'recheck' %}
+  {% include "_parser_recheck.html" %}
+{% elif tab == 'krisha-homeportal' %}
+  {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
+  {% include "_parser_homeportal.html" %}
+  {% include "_parser_activity_chart.html" %}
+{% elif tab == 'krisha-complex-scan' %}
+  {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
+  {% include "_parser_complexscan.html" %}
+  {% include "_parser_activity_chart.html" %}
+{% elif tab == 'krisha-korter' or tab == 'krisha-homsters' %}
+  {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
+  {% include "_parser_source_changes.html" %}
+  {% include "_parser_activity_chart.html" %}
+{% else %}
+  {% if active_block %}
+    {{ toggle_card(active_block) }}
+    {% if chart_activity is defined %}{% include "_parser_activity_chart.html" %}{% endif %}
+  {% else %}
+    <div style="color:var(--muted);font-size:13px;">Неизвестная вкладка.</div>
+  {% endif %}
+{% endif %}
+
+<script>
+async function toggleParser(key) {
+  const btn = document.getElementById('btn-' + key);
+  const statusEl = document.getElementById('status-' + key);
+  btn.disabled = true;
+  try {
+    const r = await fetch('/admin/parsers/toggle/' + key, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) {
+      alert('Не удалось переключить: ' + (d.msg || d.error || 'ошибка'));
+      return;
+    }
+    const active = d.active;
+    btn.className = 'prs-btn ' + (active ? 'on' : 'off');
+    btn.textContent = active ? 'Остановить' : 'Запустить';
+    statusEl.innerHTML = '<span class="dot ' + (active ? 'g' : 'r') + '"></span> ' +
+      (key === 'krisha-complex-scan' ? (active ? 'включён' : 'выключен') : (active ? 'работает' : 'остановлен'));
+  } catch (e) {
+    alert('Ошибка запроса: ' + e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+{% endblock %}

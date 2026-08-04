@@ -1,0 +1,145 @@
+{# Вкладка "Повторный обход" hub-страницы /admin/parsers (Task 2) — как
+   у нас работает переобход уже известных объявлений и сколько он занимает.
+   Раньше это была смесь: гистограмма покрытия recheck жила в НЕПОДКЛЮЧЁННОМ
+   bot/templates/parser_detail.html (шаблон существовал, но ни один route
+   его не рендерил — мёртвый код), а "полный обход Крыши: последний круг" —
+   строкой статистики и двумя графиками на вкладке "Общие данные". Теперь
+   всё в одном месте.
+   Ожидает: days, total_active, recheck_buckets, full_cycle_hours,
+   full_cycle_completed_at, deep_sweep_batch, absorption_labels, absorption_values. #}
+
+<div style="font-size:13px;color:#888;max-width:1200px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;">
+  Помимо поиска НОВЫХ объявлений, парсер регулярно перепроверяет уже известные (свежие страницы выдачи + периодический
+  «глубокий обход» — постранично до конца выдачи и обратно). Это нужно, чтобы вовремя заметить изменение цены или уход
+  объявления в архив. <code>last_seen</code> обновляется каждый раз, когда объявление снова попадается парсеру — чем оно
+  «старше», тем больше шанс, что цена/статус уже изменились, а мы ещё не знаем.
+</div>
+
+<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:18px;">
+  <div class="chart-block" style="flex:1 1 420px;min-width:340px;">
+    <b style="font-size:1em;">Покрытие recheck-обхода — возраст последней проверки</b>
+    <span style="font-size:0.85em;color:#888;margin-left:6px;">{{ "{:,}".format(total_active).replace(",", " ") }} активных объявлений</span>
+    <div class="chart-block-inner"><canvas id="recheck-chart"></canvas></div>
+  </div>
+
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;flex:1 1 320px;min-width:280px;max-width:420px;">
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px;">🔁 Полный обход Крыши</div>
+    <div style="font-size:13px;line-height:1.7;">
+      {% if full_cycle_hours %}
+      Последний круг глубокого обхода занял <b>{{ full_cycle_hours }} ч</b> — время, за которое парсер сверяет все
+      объявления в базе и находит новые по всей выдаче (не только свежие страницы).<br>
+      Завершён: {{ full_cycle_completed_at[:16].replace('T', ' ') if full_cycle_completed_at else '—' }} UTC.<br>
+      {% else %}
+      Ещё не накопилось ни одного полного круга — метрика появится после первого прохода глубокого обхода.<br>
+      {% endif %}
+      Батч глубокого обхода: <b>{{ deep_sweep_batch }}</b> объявлений/цикл.
+    </div>
+  </div>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;gap:16px;">
+  <div class="chart-block">
+    <b style="font-size:1em;">Сколько времени занимает цикл парсера</b>
+    <span style="font-size:0.85em;color:#888;margin-left:6px;">от старта до конца одного прохода (~раз в 50-80 минут)</span>
+    <div class="chart-block-inner"><canvas id="cycle-duration-chart"></canvas></div>
+  </div>
+
+  <div class="chart-block">
+    <b style="font-size:1em;">Примерная нагрузка на Крышу — HTTP-запросов за цикл</b>
+    <span style="font-size:0.85em;color:#888;margin-left:6px;">поиск (страницы выдачи) + детальные страницы объявлений</span>
+    <div class="chart-block-inner"><canvas id="cycle-requests-chart"></canvas></div>
+  </div>
+
+  <div class="chart-block">
+    <b style="font-size:1em;">Market absorption — уходит в архив по дням</b>
+    <span style="font-size:0.85em;color:#888;margin-left:6px;">скорость расчистки рынка (продано/снято), последние 30 дней</span>
+    <div class="chart-block-inner"><canvas id="absorption-chart"></canvas></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+new Chart(document.getElementById('recheck-chart'), {
+  type: 'bar',
+  data: {
+    labels: {{ recheck_buckets['labels'] | tojson }},
+    datasets: [{
+      label: 'активных объявлений', data: {{ recheck_buckets['values'] | tojson }},
+      backgroundColor: ['rgba(22,163,74,.75)', 'rgba(37,99,235,.75)', 'rgba(245,158,11,.75)', 'rgba(239,68,68,.75)'],
+      borderRadius: 3,
+    }],
+  },
+  options: {
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { font: { size: 13 } }, grid: { display: false } },
+      y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
+    },
+  },
+});
+
+fetch('/admin/api/parser-cycle-history?days=14').then(r => r.json()).then(d => {
+  const pts = d.points || [];
+  if (pts.length < 2) {
+    document.getElementById('cycle-duration-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 циклов</div>';
+    document.getElementById('cycle-requests-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 циклов</div>';
+    return;
+  }
+  new Chart(document.getElementById('cycle-duration-chart'), {
+    type: 'line',
+    data: {
+      labels: pts.map(p => p.at),
+      datasets: [{
+        label: 'мин.', data: pts.map(p => p.duration_min),
+        borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.25, pointRadius: 2,
+      }],
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+        y: { beginAtZero: true, title: { display: true, text: 'минут' }, ticks: { font: { size: 13 } } },
+      },
+    },
+  });
+  new Chart(document.getElementById('cycle-requests-chart'), {
+    type: 'bar',
+    data: {
+      labels: pts.map(p => p.at),
+      datasets: [
+        { label: 'поиск (страницы выдачи)', data: pts.map(p => p.search_requests), backgroundColor: 'rgba(37,99,235,.75)', borderRadius: 3 },
+        { label: 'детальные страницы', data: pts.map(p => p.detail_requests), backgroundColor: 'rgba(245,158,11,.75)', borderRadius: 3 },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 14 } } } },
+      scales: {
+        x: { stacked: true, ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+        y: { stacked: true, beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
+      },
+    },
+  });
+}).catch(() => {});
+
+const absLabels = {{ absorption_labels | tojson }};
+const absValues = {{ absorption_values | tojson }};
+if (absLabels.length < 2) {
+  document.getElementById('absorption-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 дней архивации</div>';
+} else {
+  new Chart(document.getElementById('absorption-chart'), {
+    type: 'bar',
+    data: { labels: absLabels, datasets: [{ label: 'ушло в архив', data: absValues, backgroundColor: 'rgba(239,68,68,.7)', borderRadius: 3 }] },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 31, font: { size: 13 } }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
+      },
+    },
+  });
+}
+</script>

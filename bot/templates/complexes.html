@@ -7,7 +7,6 @@
   <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} всего в базе{% if shown < total %} · показано {{ shown }}{% endif %}</small>
 </div>
 <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-  <button onclick="auditCx(false)" style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">🔍 Найти ЖК-улицы</button>
   <button onclick="auditCx(true)" style="padding:8px 14px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">🧹 Отвязать улицы от ЖК</button>
   <a href="/admin/complexes/data-audit" style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;text-decoration:none;">🧾 Аудит данных по ЖК</a>
   <span id="audit-status" style="font-size:13px;color:#888;"></span>
@@ -58,6 +57,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   fetch('/admin/api/complexes-map').then(r => r.json()).then(d => {
     document.getElementById('cxmap-count').textContent = d.complexes.length;
+    const labelLayer = L.layerGroup().addTo(map);
     d.complexes.forEach(c => {
       // размер = активные объявления (рейтинг), цвет = год (старее -> серее, новее -> синее)
       const radius = Math.min(14, 5 + Math.sqrt(c.active || 0) * 1.6);
@@ -70,6 +70,18 @@ document.addEventListener('DOMContentLoaded', function() {
         fillColor: `rgb(${col[0]},${col[1]},${col[2]})`,
         color: '#fff', weight: 1, fillOpacity: 0.85,
       }).addTo(map);
+      // Постоянная подпись: название на синем фоне + квартир сейчас + класс.
+      // Показывается только при зуме >= 13 (иначе карта превращается в кашу).
+      const cls = c.class ? `<span class="cx-label-cls">${c.class}</span>` : '';
+      const lbl = L.marker([c.lat, c.lon], {
+        icon: L.divIcon({
+          className: 'cx-label-icon',
+          html: `<div class="cx-label">${c.name}</div><div class="cx-label-sub">${c.active || 0} кв.${cls}</div>`,
+          iconSize: [0, 0],
+        }),
+        interactive: false,
+      }).addTo(labelLayer);
+      // Полный тултип по наведению на точку
       m.bindTooltip(
         (c.photo ? `<img src="${c.photo}" style="width:200px;height:110px;object-fit:cover;border-radius:6px;display:block;margin-bottom:4px;" onerror="this.style.display='none'">` : '') +
         `<b>${c.name}</b>${c.class ? ' · ' + c.class : ''}<br>` +
@@ -80,6 +92,11 @@ document.addEventListener('DOMContentLoaded', function() {
       );
       m.on('click', () => location.href = '/admin/complex/' + c.id);
     });
+    function applyLabels() {
+      if (map.getZoom() >= 13) labelLayer.addTo(map); else map.removeLayer(labelLayer);
+    }
+    map.on('zoomend', applyLabels);
+    applyLabels();
   });
 });
 </script>
@@ -102,6 +119,10 @@ tr:last-child td{border-bottom:none}
 .dev-badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;background:#dbeafe;color:#1e40af}
 .data-bar{height:4px;background:#e2e8f0;border-radius:2px;margin-top:3px}
 .data-bar-fill{height:100%;border-radius:2px;background:#2196f3}
+.cx-label-icon{background:none;border:none}
+.cx-label{background:#2563eb;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;white-space:nowrap;line-height:1.3;box-shadow:0 1px 3px rgba(0,0,0,.35);transform:translate(-50%,-130%);text-align:center;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.cx-label-sub{display:flex;gap:4px;align-items:center;justify-content:center;margin-top:2px;font-size:10.5px;font-weight:700;color:#fff;background:rgba(15,23,42,.75);padding:1px 6px;border-radius:5px;white-space:nowrap}
+.cx-label-cls{background:rgba(255,255,255,.22);border-radius:4px;padding:0 4px;font-weight:600}
 .edit-btn{padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer;font-size:11px}
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center}
 .modal-overlay.open{display:flex}
@@ -139,6 +160,12 @@ tr:last-child td{border-bottom:none}
         {% if c.avg_yield %}
           {% set y = c.avg_yield %}
           <span class="yield-tag {% if y >= 12 %}yield-hi{% elif y >= 8 %}yield-md{% else %}yield-lo{% endif %}" style="align-self:flex-start;">{{ y|round(1) }}% yield</span>
+        {% endif %}
+        {% if c.hp_apartments_total or c.hp_passenger_elevators or c.hp_freight_elevators %}
+        <div style="font-size:11px;color:#166534;background:#f0fdf4;border-radius:6px;padding:3px 7px;display:flex;gap:6px;flex-wrap:wrap;">
+          {% if c.hp_apartments_total %}<span>🏠 {{ c.hp_apartments_total }}{% if c.hp_apartments_sold %} ({{ c.hp_apartments_sold }} продано){% endif %}</span>{% endif %}
+          {% if c.hp_passenger_elevators or c.hp_freight_elevators %}<span>🛗 {{ (c.hp_passenger_elevators or 0) + (c.hp_freight_elevators or 0) }}</span>{% endif %}
+        </div>
         {% endif %}
         <button class="edit-btn" style="margin-top:auto;align-self:flex-start;" onclick='openEdit({{ c | tojson }})'>✏️ править</button>
       </div>

@@ -468,14 +468,43 @@ def make_extras_router(templates) -> APIRouter:
         return templates.TemplateResponse("transport_analytics.html", {"request": request})
 
     @router.get("/admin/api/hype-locations")
-    async def hype_locations_api(request: Request):
+    async def hype_locations_api(request: Request, days: int | None = None):
+        # БАГ (найден при расследовании "хайп только у ЛРТ"): раньше отдавали
+        # ORDER BY rating DESC LIMIT 80 без учёта времени — ЛРТ-сид (169 из 212
+        # локаций, рейтинг стабильно 45-85) вытеснял из топ-80 более свежие,
+        # но ниже оценённые настоящие новостные хиты (rating 5-40). На деле
+        # 67 из 80 отдаваемых записей были ЛРТ-сидом. LIMIT поднят до 300
+        # (весь датасет — 212 строк, запас на рост), это отдаёт ВСЕ реальные
+        # новостные хиты, а не только самые высокооценённые.
+        # Параметр days — окно по hype_location_history.ts (задача "хайп по
+        # периоду"): агрегируем по локации максимальный рейтинг за окно и
+        # число упоминаний (строк истории) в этом окне — это и "как оно
+        # выглядело тогда", и метрика "сколько раз упоминали".
         db = _hype_db_conn()
         cur = db.cursor()
-        cur.execute("""
-            SELECT name, district, lat, lon, rating, reason, last_seen
-            FROM hype_locations
-            WHERE lat IS NOT NULL AND lon IS NOT NULL AND rating > 0
-            ORDER BY rating DESC LIMIT 80""")
+        if days:
+            cur.execute("""
+                SELECT l.name, l.district, l.lat, l.lon,
+                       MAX(h.rating) AS rating,
+                       COUNT(h.id) AS mentions,
+                       (array_agg(h.note ORDER BY h.ts DESC))[1] AS reason,
+                       MAX(h.ts) AS last_seen
+                FROM hype_locations l
+                JOIN hype_location_history h ON h.location_id = l.id
+                WHERE l.lat IS NOT NULL AND l.lon IS NOT NULL
+                  AND h.ts >= now() - (%s || ' days')::interval
+                GROUP BY l.id, l.name, l.district, l.lat, l.lon
+                HAVING MAX(h.rating) > 0
+                ORDER BY rating DESC LIMIT 300""", (days,))
+        else:
+            cur.execute("""
+                SELECT l.name, l.district, l.lat, l.lon, l.rating,
+                       COALESCE((SELECT COUNT(*) FROM hype_location_history h
+                                 WHERE h.location_id = l.id), 0) AS mentions,
+                       l.reason, l.last_seen
+                FROM hype_locations l
+                WHERE l.lat IS NOT NULL AND l.lon IS NOT NULL AND l.rating > 0
+                ORDER BY l.rating DESC LIMIT 300""")
         cols = [d[0] for d in cur.description]
         locs = [dict(zip(cols, row)) for row in cur.fetchall()]
         for l in locs:
@@ -483,6 +512,84 @@ def make_extras_router(templates) -> APIRouter:
                 l["last_seen"] = str(l["last_seen"])
         cur.close(); db.close()
         return JSONResponse({"locations": locs})
+
+    @router.get("/admin/api/population-hexes")
+    async def population_hexes_api(request: Request):
+        # Оценка плотности населения по гексам (100м, та же сетка, что и
+        # hype-hexes/transport_hexes): apartment_count * оценка людей/квартиру
+        # по разбивке комнатности, где она известна (housing_class_test —
+        # 593 ЖК, затем homeportal_objects — 550 ЖК), иначе — усреднённая по
+        # городу занятость на квартиру (см. BLENDED_OCC ниже).
+        from bot.db.pg import fetch as pg_fetch
+        from bot.core.hexgrid import hex_id, hex_center
+        # homeportal_objects может матчиться НЕСКОЛЬКИМИ строками на один
+        # complex_id (отдельные корпуса/пятна одного ЖК) — агрегируем суммой
+        # ДО join'а с complexes, иначе LEFT JOIN размножит строку ЖК и
+        # апартаменты/население посчитаются в разы больше реальных.
+        rows = await pg_fetch("""
+            SELECT c.id, c.name, c.lat, c.lon,
+                   hc.apartment_count, hc.rooms_1, hc.rooms_2, hc.rooms_3, hc.rooms_4,
+                   ho.apartments_total,
+                   ho.rooms_1 AS h_rooms_1, ho.rooms_2 AS h_rooms_2,
+                   ho.rooms_3 AS h_rooms_3, ho.rooms_4 AS h_rooms_4
+            FROM complexes c
+            LEFT JOIN housing_class_test hc ON hc.complex_id = c.id
+            LEFT JOIN (
+                SELECT matched_complex_id,
+                       SUM(apartments_total) AS apartments_total,
+                       SUM(rooms_1) AS rooms_1, SUM(rooms_2) AS rooms_2,
+                       SUM(rooms_3) AS rooms_3, SUM(rooms_4) AS rooms_4
+                FROM homeportal_objects
+                WHERE matched_complex_id IS NOT NULL
+                GROUP BY matched_complex_id
+            ) ho ON ho.matched_complex_id = c.id
+            WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL
+        """)
+        # Точечные оценки людей/квартиру по числу комнат — нижняя граница
+        # диапазонов, которые задал пользователь (1к≈3, 2к≈4-5, 3к≈6+, 4к+≈8+):
+        # 1->3, 2->4, 3->6, 4+->8.
+        OCC = {1: 3, 2: 4, 3: 6, 4: 8}
+        # Усреднённая занятость/квартиру по городскому распределению комнатности
+        # (apartment_listings.rooms, посчитано отдельно): 1к 10046, 2к 15587,
+        # 3к 9614, 4+к 2327 -> (10046*3+15587*4+9614*6+2327*8)/37574 ≈ 4.49.
+        # Используется, если для ЖК нет разбивки по комнатам вообще.
+        BLENDED_OCC = 4.49
+        # Защита от выбросов в источнике (напр. apartment_count=4000 у одного
+        # ЖК в housing_class_test — явно ошибка парсинга/ввода, не реальный
+        # ЖК на 4000 квартир): режем apartment_count разумным потолком перед
+        # оценкой населения, а не отбрасываем ЖК целиком.
+        MAX_PLAUSIBLE_APT = 1500
+        EDGE_M = 100.0
+        cells: dict[str, dict] = {}
+        considered = 0
+        for r in rows:
+            pop = None
+            r1, r2, r3, r4 = r["rooms_1"], r["rooms_2"], r["rooms_3"], r["rooms_4"]
+            hr1, hr2, hr3, hr4 = r["h_rooms_1"], r["h_rooms_2"], r["h_rooms_3"], r["h_rooms_4"]
+            if any(v for v in (r1, r2, r3, r4)):
+                pop = (r1 or 0) * OCC[1] + (r2 or 0) * OCC[2] + (r3 or 0) * OCC[3] + (r4 or 0) * OCC[4]
+            elif any(v for v in (hr1, hr2, hr3, hr4)):
+                pop = (hr1 or 0) * OCC[1] + (hr2 or 0) * OCC[2] + (hr3 or 0) * OCC[3] + (hr4 or 0) * OCC[4]
+            elif r["apartment_count"]:
+                pop = min(r["apartment_count"], MAX_PLAUSIBLE_APT) * BLENDED_OCC
+            elif r["apartments_total"]:
+                pop = min(r["apartments_total"], MAX_PLAUSIBLE_APT) * BLENDED_OCC
+            if not pop:
+                continue
+            considered += 1
+            hid = hex_id(float(r["lat"]), float(r["lon"]), EDGE_M)
+            cell = cells.setdefault(hid, {"pop": 0.0, "complexes": 0, "names": []})
+            cell["pop"] += pop
+            cell["complexes"] += 1
+            cell["names"].append(r["name"])
+        hexes = []
+        for hid, c in cells.items():
+            clat, clon = hex_center(hid, EDGE_M)
+            label = c["names"][0] + (f" +{len(c['names'])-1}" if len(c["names"]) > 1 else "")
+            hexes.append({"name": label, "lat": clat, "lon": clon,
+                          "population": round(c["pop"]), "complexes": c["complexes"]})
+        hexes.sort(key=lambda h: h["population"], reverse=True)
+        return JSONResponse({"hexes": hexes, "complexes_considered": considered})
 
 
     @router.get("/admin/api/geo-sales.geojson")
@@ -518,6 +625,17 @@ def make_extras_router(templates) -> APIRouter:
             if val is not None:
                 await pg_fetch("""INSERT INTO parse_settings (key, value, updated_at)
                                   VALUES ('krisha_' || $1, $2, now())
+                                  ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()""",
+                               key, str(val))
+        for key in ("korter_interval_h", "homsters_interval_h"):
+            val = body.get(key)
+            if val is not None:
+                try:
+                    val = max(1, int(val))
+                except (TypeError, ValueError):
+                    return JSONResponse({"ok": False, "error": f"{key}: ожидается число часов"})
+                await pg_fetch("""INSERT INTO parse_settings (key, value, updated_at)
+                                  VALUES ($1, $2, now())
                                   ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()""",
                                key, str(val))
         return JSONResponse({"ok": True})
@@ -989,11 +1107,19 @@ def make_extras_router(templates) -> APIRouter:
         return proc.returncode == 0, out.decode(errors="replace").strip()
 
     async def _is_active(service: str) -> bool:
+        # "--quiet" (exit-code only) считает работающим только состояние
+        # "active" — для долгих Type=oneshot юнитов (например
+        # krisha-homeportal, один прогон ~15+ минут) systemd всё это время
+        # показывает "activating", и is-active --quiet ошибочно говорит
+        # "не работает", хотя процесс реально жив и делает дело. Читаем
+        # состояние текстом и считаем работающим оба варианта.
         proc = await asyncio.create_subprocess_exec(
-            "systemctl", "is-active", "--quiet", f"{service}.service",
+            "systemctl", "is-active", f"{service}.service",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
-        await proc.wait()
-        return proc.returncode == 0
+        out, _ = await proc.communicate()
+        state = out.decode().strip()
+        return state in ("active", "activating")
 
     @router.get("/admin/project/status")
     async def project_status(request: Request):
@@ -1024,73 +1150,297 @@ def make_extras_router(templates) -> APIRouter:
             results[svc] = {"ok": ok, "msg": msg}
         return JSONResponse({"ok": all(r["ok"] for r in results.values()), "results": results})
 
-    # ── Топ-10 по скору ──────────────────────────────────────────────────
+    # ── /admin/parsers: единая страница со всеми парсерами/скрейперами и
+    # реальными вкл/выкл переключателями (systemctl stop/start через sudo,
+    # либо app_settings-флаг для скриптов без своего systemd-юнита) ────────
 
-    @router.get("/admin/top10", response_class=HTMLResponse)
-    async def top10_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        rows = await fetch("""
-            SELECT id, url, title, rooms, district, complex_name, area, floor,
-                   floors_total, price, est_rent, yield_pct, score_total,
-                   COALESCE(zone_bonus, 0) AS zone_bonus, zone_name,
-                   COALESCE(layer_bonus, 0) AS layer_bonus, layer_details, market_type,
-                   COALESCE(price_drop_bonus, 0) AS price_drop_bonus,
-                   bargain_rec, bargain_target, is_owner, year_built, last_seen
-            FROM apartment_listings
-            WHERE score_total IS NOT NULL
-              AND COALESCE(is_duplicate, FALSE) = FALSE
-              AND is_active IS NOT FALSE
-              AND last_seen > now() - interval '14 days'
-              AND price >= 500000
-              AND COALESCE(yield_pct, 0) <= 100
-            ORDER BY (score_total + COALESCE(zone_bonus, 0) + COALESCE(layer_bonus, 0) + COALESCE(price_drop_bonus, 0)) DESC,
-                     yield_pct DESC NULLS LAST
-            LIMIT 10
-        """)
-        return templates.TemplateResponse("top10.html", {
-            "request": request,
-            "listings": [dict(r) for r in rows],
-        })
+    # Только эти сервисы разрешено дёргать с этой страницы (белый список —
+    # не даём POST'у управлять произвольным systemd-юнитом по имени).
+    PARSERS_SYSTEMD = {
+        "krisha-apartments": "Основной парсер объявлений о ПРОДАЖЕ с krisha.kz",
+        "krisha-rental": "Парсер объявлений об АРЕНДЕ с krisha.kz",
+        "krisha-korter": "Обогащение данными korter.kz (класс жилья, застройщик, район, цена/м²)",
+        "krisha-homsters": "Обогащение данными homsters.kz (первичный рынок, данные по ЖК)",
+        "krisha-market": "Внешние рыночные данные: ставка НБРК, депозиты КДИФ, индекс жилья stat.gov.kz",
+        "krisha-viewcount": "Реальные просмотры объявлений (Playwright) на krisha.kz",
+        "krisha-homeportal": "homeportal.kz — официальные данные КЖК по ЖК (долевое строительство)",
+    }
 
-    # ── Инфо-страница: объяснения метрик ─────────────────────────────────
-
-    @router.get("/admin/info", response_class=HTMLResponse)
-    async def info_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
+    async def _parser_registry_blocks():
+        """Строит список карточек парсеров (used by /admin/parsers AND
+        /admin/parser — держим в одном месте, чтобы обе страницы не
+        расходились со временем)."""
+        from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
         await app_settings.load()
-        return templates.TemplateResponse("info.html", {
-            "request": request,
-            "deposit_rate": app_settings.get_float("DEPOSIT_RATE", 14.0),
-            "appreciation": app_settings.get_float("APPRECIATION_PCT", 8.0),
-            "max_pages": app_settings.get_int("PARSER_MAX_PAGES", 5),
-            # Рыночные данные (справочные, собирает service_market_data раз в ~7 дней)
-            "nbrk_rate": app_settings.get("NBRK_BASE_RATE", None),
-            "kdif_rates": (app_settings.get("KDIF_RATES_RAW", "") or "").split(" ;; "),
-            "otbasy_rates": (app_settings.get("OTBASY_RATES_RAW", "") or "").split(" ;; "),
-            "stat_rows": (app_settings.get("STAT_HOUSING_ASTANA_RAW", "") or "").split("\n"),
-            "stat_url": app_settings.get("STAT_HOUSING_FILE_URL", None),
-            "market_updated": app_settings.get("MARKET_DATA_UPDATED_AT", None),
+
+        def one(rows):
+            return rows[0] if rows else {}
+
+        blocks = []
+
+        # 1) krisha-apartments — листинги ПРОДАЖА
+        active = await _is_active("krisha-apartments")
+        r = await pg_fetchrow("""SELECT
+            count(*) FILTER (WHERE last_seen > now() - interval '1 hour') AS h1,
+            count(*) FILTER (WHERE last_seen > now() - interval '1 day') AS d1,
+            max(last_seen) AS last
+            FROM apartment_listings""")
+        blocks.append({
+            "key": "krisha-apartments", "kind": "systemd", "active": active,
+            "name": "🏠 Продажа (krisha.kz)", "desc": PARSERS_SYSTEMD["krisha-apartments"],
+            "activity": f"тронуто за час: {r['h1'] or 0}, за сутки: {r['d1'] or 0}",
+            "last": r["last"],
         })
 
-    # ── API: точки для карты на дашборде ─────────────────────────────────
+        # 2) krisha-rental — листинги АРЕНДА
+        active = await _is_active("krisha-rental")
+        r = await pg_fetchrow("""SELECT
+            count(*) FILTER (WHERE last_seen > now() - interval '1 hour') AS h1,
+            count(*) FILTER (WHERE last_seen > now() - interval '1 day') AS d1,
+            max(last_seen) AS last
+            FROM rental_listings""")
+        blocks.append({
+            "key": "krisha-rental", "kind": "systemd", "active": active,
+            "name": "🔑 Аренда (krisha.kz)", "desc": PARSERS_SYSTEMD["krisha-rental"],
+            "activity": f"тронуто за час: {r['h1'] or 0}, за сутки: {r['d1'] or 0}",
+            "last": r["last"],
+        })
 
-    # ── Детализация парсера: один график продажи+аренда, разными цветами ───
+        # 3) krisha-korter
+        active = await _is_active("krisha-korter")
+        r = await pg_fetchrow("""SELECT count(*) AS cnt, max(updated_at) AS last
+            FROM complexes WHERE source_info ? 'korter'""")
+        blocks.append({
+            "key": "krisha-korter", "kind": "systemd", "active": active,
+            "name": "🏢 Korter.kz", "desc": PARSERS_SYSTEMD["krisha-korter"],
+            "activity": f"ЖК с данными korter: {r['cnt'] or 0}",
+            "last": r["last"],
+        })
 
-    @router.get("/admin/parser/sales")
-    async def parser_sales_redirect(days: int = 1):
-        return RedirectResponse(url=f"/admin/parser?days={days}", status_code=301)
+        # 4) krisha-homsters
+        active = await _is_active("krisha-homsters")
+        r = await pg_fetchrow("""SELECT count(*) AS cnt, max(updated_at) AS last
+            FROM complexes WHERE source_info ? 'homsters'""")
+        blocks.append({
+            "key": "krisha-homsters", "kind": "systemd", "active": active,
+            "name": "🏗 Homsters.kz", "desc": PARSERS_SYSTEMD["krisha-homsters"],
+            "activity": f"ЖК с данными homsters: {r['cnt'] or 0}",
+            "last": r["last"],
+        })
 
-    @router.get("/admin/parser/rental")
-    async def parser_rental_redirect(days: int = 1):
-        return RedirectResponse(url=f"/admin/parser?days={days}", status_code=301)
+        # 5) krisha-market
+        active = await _is_active("krisha-market")
+        market_updated = app_settings.get("MARKET_DATA_UPDATED_AT", None)
+        blocks.append({
+            "key": "krisha-market", "kind": "systemd", "active": active,
+            "name": "📊 Рыночные данные", "desc": PARSERS_SYSTEMD["krisha-market"],
+            "activity": f"обновлено: {market_updated or '—'}",
+            "last": None,
+        })
 
-    @router.get("/admin/parser", response_class=HTMLResponse)
-    async def parser_combined(request: Request, days: int = 1):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        days = days if days in (1, 3, 5) else 1
+        # 6) krisha-viewcount
+        active = await _is_active("krisha-viewcount")
+        r = await pg_fetchrow("""SELECT
+            count(*) FILTER (WHERE views_count_updated_at > now() - interval '1 day') AS d1,
+            max(views_count_updated_at) AS last
+            FROM apartment_listings""")
+        blocks.append({
+            "key": "krisha-viewcount", "kind": "systemd", "active": active,
+            "name": "👁 Просмотры (Playwright)", "desc": PARSERS_SYSTEMD["krisha-viewcount"],
+            "activity": f"обновлено просмотров за сутки: {r['d1'] or 0}",
+            "last": r["last"],
+        })
+
+        # 7) hype_tracker/krisha_complex_scan.py — cron, флаг app_settings
+        enabled = app_settings.get_bool("PARSER_KRISHA_COMPLEX_SCAN", True)
+        last_log = await pg_fetchrow("SELECT ts, status FROM krisha_parse_log ORDER BY id DESC LIMIT 1")
+        ok_24h = one(await pg_fetch("""SELECT count(*)::int AS n FROM krisha_parse_log
+            WHERE status='ok' AND ts > now() - interval '1 day'""")).get("n", 0)
+        blocks.append({
+            "key": "krisha-complex-scan", "kind": "flag", "active": enabled,
+            "name": "📸 ЖК по krisha.kz (cron, раз в 20 мин)",
+            "desc": "Количество квартир + описание + фото ЖК со страниц комплексов на krisha.kz",
+            "activity": f"успешных за сутки: {ok_24h}" + (f", последний запуск: {last_log['ts']:%d.%m %H:%M} ({last_log['status']})" if last_log else ", ещё не запускался"),
+            "last": last_log["ts"] if last_log else None,
+        })
+
+        # 8) hype_tracker/homeportal_scan.py — теперь systemd timer (см. Task A)
+        active = await _is_active("krisha-homeportal")
+        stats = one(await pg_fetch("SELECT count(*)::int AS n, max(fetched_at) AS last FROM homeportal_objects"))
+        blocks.append({
+            "key": "krisha-homeportal", "kind": "systemd", "active": active,
+            "name": "🏛 Homeportal.kz", "desc": PARSERS_SYSTEMD["krisha-homeportal"],
+            "activity": f"объектов в БД: {stats.get('n', 0)}",
+            "last": stats.get("last"),
+        })
+
+        return blocks
+
+    async def _activity_over_time(table: str, ts_col: str, days: int,
+                                  extra_where: str = "") -> dict:
+        """Универсальная гистограмма «что и когда спарсилось» для вкладок
+        /admin/parsers (Task 1: график активности на каждой вкладке парсера).
+        table/ts_col/extra_where — ВСЕГДА внутренние константы из вызовов
+        ниже (никогда не пользовательский ввод), поэтому f-string в SQL тут
+        безопасен. bucket='hour' для 1-3 дней (иначе не видно детали),
+        'day' для 7/30 (иначе тысячи точек на графике)."""
+        from bot.db.pg import fetch as pg_fetch
+        bucket = "hour" if days <= 3 else "day"
+        fmt = "%d.%m %H:00" if bucket == "hour" else "%d.%m"
+        where = f"{ts_col} > now() - ($1 || ' days')::interval"
+        if extra_where:
+            where += f" AND {extra_where}"
+        rows = await pg_fetch(f"""
+            SELECT date_trunc('{bucket}', {ts_col}) AS b, COUNT(*) AS cnt
+            FROM {table}
+            WHERE {where}
+            GROUP BY 1 ORDER BY 1
+        """, str(days))
+        return {
+            "bucket": bucket,
+            "labels": [r["b"].strftime(fmt) for r in rows],
+            "values": [r["cnt"] for r in rows],
+        }
+
+    # Табличка/колонка/фильтр для графика "что спарсилось со временем" на
+    # каждой вкладке — что именно значит "спарсено" разное для каждого
+    # источника (см. задачу Task 1 в тикете): апартаменты/аренда — новые
+    # объявления по first_seen/found_at; korter/homsters — обогащение
+    # complexes, сигнал берём из source_changes (реальные события записи,
+    # точнее чем complexes.updated_at, который может тронуть и другой
+    # источник); market — прогоны source_runs (см. market_data.update_all,
+    # теперь тоже пишет туда); viewcount — apartment_listings.views_count_updated_at;
+    # complex-scan — krisha_parse_log status='ok'; homeportal — homeportal_objects.fetched_at.
+    PARSER_ACTIVITY_SPEC = {
+        "krisha-apartments": ("apartment_listings", "first_seen", "", "Новые объявления о продаже (first_seen)"),
+        "krisha-rental": ("rental_listings", "found_at", "", "Новые объявления об аренде (found_at)"),
+        "krisha-korter": ("source_changes", "ts", "source = 'korter'", "События обогащения korter.kz (новые ЖК + изменения)"),
+        "krisha-homsters": ("source_changes", "ts", "source = 'homsters'", "События обогащения homsters.kz (новые ЖК + изменения)"),
+        "krisha-market": ("source_runs", "started_at", "source = 'market'", "Прогоны сбора рыночных данных (раз в ~7 дней)"),
+        "krisha-viewcount": ("apartment_listings", "views_count_updated_at", "", "Обновлено просмотров объявлений"),
+        "krisha-complex-scan": ("krisha_parse_log", "ts", "status = 'ok'", "Успешно спарсено ЖК со страниц krisha.kz"),
+        "krisha-homeportal": ("homeportal_objects", "fetched_at", "", "Спарсено объектов homeportal.kz"),
+    }
+
+    async def _source_changes_data(source: str, days: int):
+        """Данные для вкладок Korter/Homsters: прогоны (длительность полного
+        обхода) и изменения (новые ЖК / изменённые параметры)."""
+        from bot.db.pg import fetch as pg_fetch
+        changes = await pg_fetch(
+            """SELECT sc.ts, sc.complex_id,
+                        COALESCE(c.name, sc.complex_name) AS complex_name,
+                        sc.change_type, sc.field, sc.old_value, sc.new_value
+                 FROM source_changes sc
+                 LEFT JOIN complexes c ON c.id = sc.complex_id
+                 WHERE sc.source = $1 AND sc.ts > now() - make_interval(days => $2)
+                 ORDER BY sc.ts DESC, sc.id DESC
+                 LIMIT 300""", source, days)
+        runs = await pg_fetch(
+            """SELECT started_at, duration_s, matched, created, changed
+               FROM source_runs WHERE source = $1
+               ORDER BY started_at DESC LIMIT 12""", source)
+        runs_list = [dict(r) for r in runs]
+        interval_row = await pg_fetch(
+            "SELECT value FROM parse_settings WHERE key = $1",
+            f"{source}_interval_h")
+        interval_h = 120
+        if interval_row and interval_row[0]["value"]:
+            try:
+                interval_h = max(1, int(interval_row[0]["value"]))
+            except (TypeError, ValueError):
+                pass
+        return {
+            "source": source,
+            "interval_h": interval_h,
+            "changes": [dict(r) for r in changes],
+            "runs": runs_list,
+            "last_run": runs_list[0] if runs_list else None,
+            "field_labels": {
+                "housing_class": "Класс жилья", "developer": "Застройщик",
+                "district": "Район", "price_from": "Цена от", "price_m2": "Цена за м²",
+                "area_min": "Площадь мин", "area_max": "Площадь макс",
+                "rooms_min": "Комнат мин", "rooms_max": "Комнат макс",
+                "stage_badge": "Стадия", "name": "Название",
+            },
+        }
+
+
+    # Порядок и подписи вкладок hub-страницы /admin/parsers — "Общие данные"
+    # первой (была самостоятельной страницей /admin/parser), дальше по
+    # одной вкладке на каждый реальный парсер/скрейпер из _parser_registry_blocks().
+    PARSERS_HUB_TABS = [
+        {"key": "general", "label": "📊 Общие данные"},
+        {"key": "krisha-apartments", "label": "🏠 Продажа"},
+        {"key": "krisha-rental", "label": "🔑 Аренда"},
+        {"key": "krisha-korter", "label": "🏢 Korter"},
+        {"key": "krisha-homsters", "label": "🏗 Homsters"},
+        {"key": "krisha-market", "label": "📊 Рынок"},
+        {"key": "krisha-viewcount", "label": "👁 Просмотры"},
+        {"key": "krisha-complex-scan", "label": "📸 ЖК (Крыша)"},
+        {"key": "krisha-homeportal", "label": "🏛 Homeportal"},
+        {"key": "recheck", "label": "🔁 Повторный обход"},
+    ]
+
+    async def _recheck_data(days: int):
+        """Вкладка "Повторный обход" hub-страницы /admin/parsers (Task 2):
+        покрытие recheck-обхода (возраст last_seen активных объявлений) +
+        длительность полного круга глубокого обхода — раньше жило в
+        неподключённом bot/templates/parser_detail.html (шаблон существовал,
+        но ни один route его не рендерил) и вперемешку в "Общие данные";
+        теперь отдельная вкладка, т.к. это один и тот же вопрос пользователя
+        ("как у нас работает переобход уже известных объявлений и сколько
+        он занимает")."""
+        from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval
+
+        total_active = await pg_fetchval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE") or 0
+        buckets_row = await pg_fetch("""
+            SELECT
+              count(*) FILTER (WHERE last_seen > now() - interval '1 hour') AS b0,
+              count(*) FILTER (WHERE last_seen <= now() - interval '1 hour' AND last_seen > now() - interval '6 hours') AS b1,
+              count(*) FILTER (WHERE last_seen <= now() - interval '6 hours' AND last_seen > now() - interval '24 hours') AS b2,
+              count(*) FILTER (WHERE last_seen <= now() - interval '24 hours' OR last_seen IS NULL) AS b3
+            FROM apartment_listings WHERE is_active IS NOT FALSE
+        """)
+        b = buckets_row[0] if buckets_row else {}
+        recheck_buckets = {
+            "labels": ["< 1 ч", "1-6 ч", "6-24 ч", "> 24 ч"],
+            "values": [b.get("b0", 0) or 0, b.get("b1", 0) or 0, b.get("b2", 0) or 0, b.get("b3", 0) or 0],
+        }
+
+        from bot.db import settings as app_settings
+        await app_settings.load()
+        full_cycle_sec = app_settings.get_int("DEEP_SWEEP_CIRCLE_DURATION_SEC", 0)
+        full_cycle_completed_at = app_settings.get("DEEP_SWEEP_CIRCLE_COMPLETED_AT", "")
+        full_cycle_hours = round(full_cycle_sec / 3600, 1) if full_cycle_sec else None
+        deep_sweep_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
+
+        # Market absorption — сколько объявлений уходит в архив по дням (тот
+        # же концептуальный вопрос: как быстро мы "переобходим и списываем"
+        # то, что уже есть в базе). 30 дней, независимо от фильтра days вкладки.
+        absorption = await pg_fetch("""
+            SELECT archived_at::date AS d, COUNT(*) AS cnt
+            FROM apartment_listings
+            WHERE archived_at > now() - interval '30 days'
+            GROUP BY 1 ORDER BY 1
+        """)
+
+        return {
+            "days": days,
+            "total_active": total_active,
+            "recheck_buckets": recheck_buckets,
+            "full_cycle_hours": full_cycle_hours,
+            "full_cycle_completed_at": full_cycle_completed_at,
+            "deep_sweep_batch": deep_sweep_batch,
+            "absorption_labels": [r["d"].strftime("%d.%m") for r in absorption],
+            "absorption_values": [r["cnt"] for r in absorption],
+        }
+
+    async def _general_parser_stats(days: int):
+        """Общая статистика продажи/аренды + графики — раньше вся страница
+        /admin/parser (singular), теперь вкладка "Общие данные" hub-страницы
+        /admin/parsers. Смотри также parser_sales_redirect/parser_rental_redirect
+        ниже — старые URL всё ещё редиректят сюда."""
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval
 
         sale_hourly = await pg_fetch("""
@@ -1131,16 +1481,9 @@ def make_extras_router(templates) -> APIRouter:
         today_new_rental = await pg_fetchval(
             "SELECT COUNT(*) FROM rental_listings WHERE found_at::date = CURRENT_DATE") or 0
 
-        # Время полного обхода Крыши (см. service_apartments.py: DEEP_SWEEP_*) —
-        # длина одного круга глубокого обхода = время, за которое сверяются
-        # все объявления в базе + парсятся новые.
         from bot.db import settings as app_settings
         await app_settings.load()
-        full_cycle_sec = app_settings.get_int("DEEP_SWEEP_CIRCLE_DURATION_SEC", 0)
-        full_cycle_completed_at = app_settings.get("DEEP_SWEEP_CIRCLE_COMPLETED_AT", "")
-        full_cycle_hours = round(full_cycle_sec / 3600, 1) if full_cycle_sec else None
 
-        # Просмотры (микросервис krisha-viewcount, Playwright)
         viewcount_total = await pg_fetchval(
             "SELECT COUNT(*) FROM apartment_listings WHERE views_count IS NOT NULL") or 0
         viewcount_fresh = await pg_fetchval(
@@ -1148,9 +1491,11 @@ def make_extras_router(templates) -> APIRouter:
         viewcount_last_at = await pg_fetchval(
             "SELECT MAX(views_count_updated_at) FROM apartment_listings")
 
-        # Частота пересчёта топ-10 по скору (Deal Score v3, apply_deal_scores)
         top10_recalc_at = app_settings.get("DEAL_SCORE_LAST_RUN_AT", "")
 
+        # "Полный обход Крыши: последний круг" переехал на отдельную вкладку
+        # "🔁 Повторный обход" (Task 2) — не дублируем тут, это тот же вопрос
+        # "как у нас работает переобход уже известных объявлений".
         stats = [
             {"label": "продажа: активных в мониторинге", "value": f"{total_active:,}".replace(",", " ")},
             {"label": "продажа: спаршено сегодня", "value": today_new_sale},
@@ -1160,23 +1505,260 @@ def make_extras_router(templates) -> APIRouter:
             {"label": "аренда: живых (видели за 3 дня)", "value": f"{rental_fresh:,}".replace(",", " ")},
             {"label": "аренда: всего в базе", "value": f"{rental_total:,}".replace(",", " ")},
             {"label": "аренда: спаршено сегодня", "value": today_new_rental},
-            {"label": "полный обход Крыши: последний круг", "value": f"{full_cycle_hours} ч" if full_cycle_hours else "считается…"},
             {"label": "просмотры: покрыто объявлений", "value": f"{viewcount_total:,}".replace(",", " ")},
             {"label": "просмотры: обновлено за 6 ч", "value": f"{viewcount_fresh:,}".replace(",", " ")},
         ]
-        return templates.TemplateResponse("parser_detail.html", {
-            "request": request, "title": "🕷 Парсер — продажа и аренда",
-            "atab": "rental",
+        return {
             "days": days, "stats": stats,
             "chart_labels": labels,
             "sale_values": sale_values, "rental_values": rental_values,
-            "full_cycle_hours": full_cycle_hours,
-            "full_cycle_completed_at": full_cycle_completed_at,
             "viewcount_total": viewcount_total,
             "viewcount_fresh": viewcount_fresh,
             "viewcount_last_at": viewcount_last_at.strftime("%d.%m %H:%M") if viewcount_last_at else None,
             "top10_recalc_at": top10_recalc_at,
+        }
+
+    async def _homeportal_data():
+        """Раньше отдельная страница /admin/analytics/homeportal, теперь
+        вкладка "Homeportal" hub-страницы /admin/parsers."""
+        from bot.db.pg import fetch as pg_fetch
+
+        def one(rows):
+            return rows[0] if rows else {}
+
+        stats = {
+            "total": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects")).get("n", 0),
+            "fetched": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects WHERE fetched_at IS NOT NULL")).get("n", 0),
+            "matched": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects WHERE matched_complex_id IS NOT NULL")).get("n", 0),
+            "unmatched": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_objects WHERE matched_complex_id IS NULL")).get("n", 0),
+            "errors": one(await pg_fetch("SELECT count(*)::int AS n FROM homeportal_parse_log WHERE status='error'")).get("n", 0),
+        }
+        recent = await pg_fetch("""SELECT h.fetched_at::timestamp(0) AS ts, h.name, h.rooms_1, h.rooms_2, h.rooms_3, h.rooms_4,
+                                   h.apartments_total, h.developer_name, h.matched_complex_id, c.name AS cx_name
+                                   FROM homeportal_objects h LEFT JOIN complexes c ON c.id = h.matched_complex_id
+                                   ORDER BY h.fetched_at DESC NULLS LAST LIMIT 15""")
+        hours = await pg_fetch("""SELECT to_char(date_trunc('hour', fetched_at), 'DD HH24:00') AS h,
+                                   count(*)::int AS cnt FROM homeportal_objects
+                                   WHERE fetched_at > now() - interval '24 hours'
+                                   GROUP BY 1 ORDER BY 1""")
+        return {
+            "stats": stats, "recent": recent,
+            "chart": {"hours": [h["h"] for h in hours], "cnt": [h["cnt"] for h in hours]},
+        }
+
+    async def _parse_monitor_data():
+        """Раньше отдельная страница /admin/analytics/parse-monitor, теперь
+        вкладка "ЖК (Крыша)" hub-страницы /admin/parsers."""
+        from bot.db.pg import fetch as pg_fetch
+
+        def one(rows):
+            return rows[0] if rows else {}
+
+        stats = {
+            "total": one(await pg_fetch("SELECT count(*)::int AS n FROM complexes WHERE krisha_url IS NOT NULL")).get("n", 0),
+            "filled": one(await pg_fetch("""SELECT count(*)::int AS n FROM housing_class_test hct
+                             JOIN complexes c ON c.id = hct.complex_id
+                             WHERE c.krisha_url IS NOT NULL AND hct.apartment_count_source = 'krisha'""")).get("n", 0),
+            "pending": one(await pg_fetch("""SELECT count(*)::int AS n FROM complexes c
+                              LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
+                              WHERE c.krisha_url IS NOT NULL
+                                AND (hct.apartment_count_source IS DISTINCT FROM 'krisha')""")).get("n", 0),
+            "errors": one(await pg_fetch("""SELECT count(*)::int AS n FROM krisha_parse_log
+                             WHERE status = 'error' AND ts > now() - interval '24 hours'""")).get("n", 0),
+        }
+        set_rows = await pg_fetch("SELECT key, value FROM parse_settings")
+        settings = {"delay": "120", "batch": "10", "enabled": "1"}
+        for r in set_rows:
+            settings[r["key"].replace("krisha_", "")] = r["value"]
+        log = await pg_fetch("""SELECT l.ts::timestamp(0) AS ts, c.name, l.apartment_count, l.status, l.detail
+                                      FROM krisha_parse_log l LEFT JOIN complexes c ON c.id = l.complex_id
+                                      ORDER BY l.id DESC LIMIT 20""")
+        hours = await pg_fetch("""SELECT to_char(date_trunc('hour', ts), 'DD HH24:00') AS h,
+                                        count(*) FILTER (WHERE status='ok')::int AS ok,
+                                        count(*) FILTER (WHERE status='error')::int AS err
+                                        FROM krisha_parse_log WHERE ts > now() - interval '24 hours'
+                                        GROUP BY 1 ORDER BY 1""")
+        return {
+            "stats": stats, "settings": settings, "log": log,
+            "chart": {"hours": [h["h"] for h in hours],
+                      "ok": [h["ok"] for h in hours],
+                      "err": [h["err"] for h in hours]},
+        }
+
+    @router.get("/admin/parsers", response_class=HTMLResponse)
+    async def parsers_page(request: Request, tab: str = "general", days: int = 1):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        blocks = await _parser_registry_blocks()
+        valid_keys = {t["key"] for t in PARSERS_HUB_TABS}
+        if tab not in valid_keys:
+            tab = "general"
+        active_block = next((b for b in blocks if b["key"] == tab), None)
+
+        ctx = {
+            "request": request, "atab": "parsers",
+            "tabs": PARSERS_HUB_TABS, "tab": tab,
+            "blocks": blocks, "active_block": active_block,
+        }
+        if tab == "general":
+            days = days if days in (1, 3, 5) else 1
+            ctx.update(await _general_parser_stats(days))
+        elif tab == "recheck":
+            days = days if days in (1, 3, 7, 30) else 7
+            ctx.update(await _recheck_data(days))
+        elif tab == "krisha-homeportal":
+            ctx.update(await _homeportal_data())
+        elif tab == "krisha-complex-scan":
+            ctx.update(await _parse_monitor_data())
+        elif tab in ("krisha-korter", "krisha-homsters"):
+            days = days if days in (1, 3, 7, 30) else 7
+            src = "korter" if tab == "krisha-korter" else "homsters"
+            ctx["days"] = days
+            ctx["source_label"] = "Korter.kz" if src == "korter" else "Homsters.kz"
+            ctx.update(await _source_changes_data(src, days))
+
+        # Task 1: график "что и когда спарсилось" — на каждой вкладке
+        # реального парсера (все, кроме general/recheck, у которых свои
+        # графики уже есть выше). Один и тот же helper для всех 8, разница
+        # только в table/ts_col/фильтре (PARSER_ACTIVITY_SPEC).
+        if tab in PARSER_ACTIVITY_SPEC:
+            adays = days if days in (1, 3, 7, 30) else 7
+            table, ts_col, extra_where, title = PARSER_ACTIVITY_SPEC[tab]
+            ctx["activity_days"] = adays
+            ctx["activity_title"] = title
+            ctx["chart_activity"] = await _activity_over_time(table, ts_col, adays, extra_where)
+
+        return templates.TemplateResponse("parsers.html", ctx)
+
+    @router.post("/admin/parsers/toggle/{key}")
+    async def parsers_toggle(request: Request, key: str):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+
+        if key == "krisha-complex-scan":
+            await app_settings.load()
+            new_value = "0" if app_settings.get_bool("PARSER_KRISHA_COMPLEX_SCAN", True) else "1"
+            await app_settings.set("PARSER_KRISHA_COMPLEX_SCAN", new_value)
+            logger.info("PARSER_KRISHA_COMPLEX_SCAN -> %s", new_value)
+            return JSONResponse({"ok": True, "active": new_value == "1"})
+
+        if key not in PARSERS_SYSTEMD:
+            return JSONResponse({"error": "unknown parser"}, status_code=404)
+
+        active = await _is_active(key)
+        # Просто stop/start (НЕ disable/enable) — пауза процесса, но systemd
+        # всё равно поднимет его после перезагрузки сервера (это и нужно).
+        action = "stop" if active else "start"
+        ok, msg = await _systemctl(action, key)
+        new_active = await _is_active(key)
+        logger.info("parser %s -> %s (%s)", key, action, "ok" if ok else msg)
+        return JSONResponse({"ok": ok, "active": new_active, "msg": msg})
+
+    # ── Топ-10 по скору ──────────────────────────────────────────────────
+
+    @router.get("/admin/top10", response_class=HTMLResponse)
+    async def top10_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        rows = await fetch("""
+            SELECT id, url, title, rooms, district, complex_name, area, floor,
+                   floors_total, price, est_rent, yield_pct, score_total,
+                   COALESCE(zone_bonus, 0) AS zone_bonus, zone_name,
+                   COALESCE(layer_bonus, 0) AS layer_bonus, layer_details, market_type,
+                   COALESCE(price_drop_bonus, 0) AS price_drop_bonus,
+                   bargain_rec, bargain_target, is_owner, year_built, last_seen
+            FROM apartment_listings
+            WHERE score_total IS NOT NULL
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND is_active IS NOT FALSE
+              AND last_seen > now() - interval '14 days'
+              AND price >= 500000
+              AND COALESCE(yield_pct, 0) <= 100
+            ORDER BY (score_total + COALESCE(zone_bonus, 0) + COALESCE(layer_bonus, 0) + COALESCE(price_drop_bonus, 0)) DESC,
+                     yield_pct DESC NULLS LAST
+            LIMIT 10
+        """)
+        return templates.TemplateResponse("top10.html", {
+            "request": request,
+            "listings": [dict(r) for r in rows],
         })
+
+    # ── Инфо-страница: объяснения метрик ─────────────────────────────────
+
+    @router.get("/admin/info", response_class=HTMLResponse)
+    async def info_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        await app_settings.load()
+        # «Путь объявления» — живые цифры из БД (блок в info.html)
+        from bot.db.pg import fetchval as pg_fval
+        lifecycle_active_total = await pg_fval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE") or 0
+        lifecycle_recheck_1h = await pg_fval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE last_seen > now() - interval '1 hour'") or 0
+        lifecycle_recheck_24h = await pg_fval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE last_seen > now() - interval '24 hours'") or 0
+        lifecycle_price_changes_7d = 0
+        try:
+            lifecycle_price_changes_7d = await pg_fval(
+                "SELECT COUNT(*) FROM price_history WHERE changed_at > now() - interval '7 days'") or 0
+        except Exception:
+            pass
+        lifecycle_archived_7d = await pg_fval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE archived_at > now() - interval '7 days'") or 0
+        lifecycle_recheck_1h_pct = round(100.0 * lifecycle_recheck_1h / lifecycle_active_total, 1) if lifecycle_active_total else 0
+        lifecycle_recheck_24h_pct = round(100.0 * lifecycle_recheck_24h / lifecycle_active_total, 1) if lifecycle_active_total else 0
+        deep_sweep_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
+        detail_fetch_batch = app_settings.get_int("DETAIL_FETCH_BATCH", 30)
+        # Длительность полного круга deep-sweep (если завершался): от последнего
+        # завершения до предыдущего маркера — берём упрощённо: если завершался,
+        # показываем '>24ч' как оценку; точных данных старта круга нет.
+        deep_sweep_circle_hours = None
+        if app_settings.get("DEEP_SWEEP_CIRCLE_COMPLETED_AT", None):
+            deep_sweep_circle_hours = ">24"
+        return templates.TemplateResponse("info.html", {
+            "request": request,
+            "deposit_rate": app_settings.get_float("DEPOSIT_RATE", 14.0),
+            "appreciation": app_settings.get_float("APPRECIATION_PCT", 8.0),
+            "max_pages": app_settings.get_int("PARSER_MAX_PAGES", 5),
+            # Рыночные данные (справочные, собирает service_market_data раз в ~7 дней)
+            "nbrk_rate": app_settings.get("NBRK_BASE_RATE", None),
+            "kdif_rates": (app_settings.get("KDIF_RATES_RAW", "") or "").split(" ;; "),
+            "otbasy_rates": (app_settings.get("OTBASY_RATES_RAW", "") or "").split(" ;; "),
+            "stat_rows": (app_settings.get("STAT_HOUSING_ASTANA_RAW", "") or "").split("\n"),
+            "stat_url": app_settings.get("STAT_HOUSING_FILE_URL", None),
+            "market_updated": app_settings.get("MARKET_DATA_UPDATED_AT", None),
+            # «Путь объявления»
+            "lifecycle_active_total": lifecycle_active_total,
+            "lifecycle_recheck_1h": lifecycle_recheck_1h,
+            "lifecycle_recheck_1h_pct": lifecycle_recheck_1h_pct,
+            "lifecycle_recheck_24h_pct": lifecycle_recheck_24h_pct,
+            "lifecycle_price_changes_7d": lifecycle_price_changes_7d,
+            "lifecycle_archived_7d": lifecycle_archived_7d,
+            "deep_sweep_batch": deep_sweep_batch,
+            "deep_sweep_circle_hours": deep_sweep_circle_hours,
+            "detail_fetch_batch": detail_fetch_batch,
+        })
+
+    # ── API: точки для карты на дашборде ─────────────────────────────────
+
+    # ── Детализация парсера: один график продажи+аренда, разными цветами ───
+
+    # /admin/parser (singular) и его старые под-URL слиты во вкладку
+    # "Общие данные" hub-страницы /admin/parsers — см. задачу "reorganize
+    # into 4 tabbed hub pages". Оставляем редиректы, чтобы старые ссылки/
+    # закладки не 404-или.
+    @router.get("/admin/parser/sales")
+    async def parser_sales_redirect(days: int = 1):
+        return RedirectResponse(url=f"/admin/parsers?tab=general&days={days}", status_code=301)
+
+    @router.get("/admin/parser/rental")
+    async def parser_rental_redirect(days: int = 1):
+        return RedirectResponse(url=f"/admin/parsers?tab=general&days={days}", status_code=301)
+
+    @router.get("/admin/parser", response_class=HTMLResponse)
+    async def parser_combined_redirect(days: int = 1):
+        return RedirectResponse(url=f"/admin/parsers?tab=general&days={days}", status_code=301)
 
     @router.get("/admin/duplicates", response_class=HTMLResponse)
     async def duplicates_page(request: Request):
@@ -1471,7 +2053,8 @@ def make_extras_router(templates) -> APIRouter:
     async def map_points_lite(request: Request, type: str = "sale", rooms: str = "",
                               price_min: float = 0, price_max: float = 0,
                               area_min: float = 0, area_max: float = 0,
-                              seller: str = "", market: str = ""):
+                              seller: str = "", market: str = "",
+                              has_floorplan: bool = False):
         """Только id/lat/lon, без джойнов и фото — для отдалённого вида карты
         (zoom < ZOOM_GATE в dashboard.html), где нужно просто показать, ГДЕ
         есть объявления (кластерами-кружками с числом), а не тянуть полные
@@ -1514,6 +2097,8 @@ def make_extras_router(templates) -> APIRouter:
             conds.append("AND market_type = 'primary'")
         elif market == "secondary":
             conds.append("AND COALESCE(market_type, 'secondary') <> 'primary'")
+        if has_floorplan:
+            conds.append("AND floorplan_url IS NOT NULL")
 
         rows = await pg_fetch(f"""
             SELECT lat, lon FROM apartment_listings
@@ -1532,6 +2117,7 @@ def make_extras_router(templates) -> APIRouter:
                          area_min: float = 0, area_max: float = 0,
                          min_score: int = 0, seller: str = "", market: str = "",
                          price_change: str = "", finish: str = "", cheapest_only: bool = False,
+                         has_floorplan: bool = False,
                          offset: int = 0, limit: int = 15000,
                          min_lat: float = 0, max_lat: float = 0,
                          min_lon: float = 0, max_lon: float = 0):
@@ -1685,6 +2271,10 @@ def make_extras_router(templates) -> APIRouter:
         # покрывает только объявления с явным сигналом в описании.
         if finish in ("черновая", "с отделкой", "с мебелью"):
             conds.append(f"AND a.finish_type = ${i}"); params.append(finish); i += 1
+        # Только объявления с распознанным планом квартиры (см. floorplan_scan.py,
+        # заполняет apartment_listings.floorplan_url).
+        if has_floorplan:
+            conds.append("AND a.floorplan_url IS NOT NULL")
         # Ограничение по текущей видимой области карты — вместо того чтобы
         # тянуть весь город (тысячи объектов), когда пользователь смотрит
         # на один квартал. Приходит от dashboard.html при zoom >= ZOOM_GATE.
@@ -2276,6 +2866,19 @@ def make_extras_router(templates) -> APIRouter:
             if isinstance(_si, dict):
                 cx_sources = _si
 
+        # Официальные данные homeportal.kz (реестр КЖК) — блок в шаблоне.
+        # Раньше hp не передавался, блок «Официальные данные» не рендерился.
+        hp_rows = await fetch(
+            """SELECT * FROM homeportal_objects
+               WHERE matched_complex_id = $1 ORDER BY object_id""", complex_id)
+        hp = None
+        if hp_rows:
+            hp = {"count": len(hp_rows)}
+            for r in hp_rows:
+                for k, v in dict(r).items():
+                    if v is not None and v != '' and k not in hp:
+                        hp[k] = v
+
         return templates.TemplateResponse("complex_detail.html", {
             "request": request,
             "cx": dict(cx),
@@ -2297,6 +2900,7 @@ def make_extras_router(templates) -> APIRouter:
             "hex_cells_rental": hex_cells_rental,
             "price_trend_by_rooms": price_trend_by_rooms,
             "tech_specs": tech_specs,
+            "hp": hp,
         })
 
     @router.post("/admin/complex/{complex_id}/photos")
@@ -2503,10 +3107,33 @@ def make_extras_router(templates) -> APIRouter:
               AND COALESCE(c.is_street, FALSE) = FALSE
             ORDER BY active_cnt DESC, sold_cnt DESC
         """, dev_id)
+        # Официальные данные homeportal.kz: контакты + проекты застройщика
+        # (раньше не передавались, блоки «Официальные контакты» и «Проекты
+        # по данным homeportal.kz» не рендерились).
+        hp_rows = await fetch(
+            """SELECT h.*, c.id AS cx_id, c.name AS cx_name
+               FROM homeportal_objects h
+               JOIN complexes c ON c.id = h.matched_complex_id
+               WHERE c.developer_id = $1
+               ORDER BY h.name, h.object_id""", dev_id)
+        hp_contact = None
+        if hp_rows:
+            first = dict(hp_rows[0])
+            cand = {
+                "bin": first.get("developer_bin"),
+                "phone": first.get("developer_phone"),
+                "email": first.get("developer_email"),
+            }
+            if any(cand.values()):
+                hp_contact = cand
+        hp_projects = [dict(r) for r in hp_rows] or None
+
         return templates.TemplateResponse("developer_detail.html", {
             "request": request,
             "dev": dict(dev),
             "complexes": [dict(r) for r in complexes],
+            "hp_contact": hp_contact,
+            "hp_projects": hp_projects,
         })
 
     # ── Дороги (кол-во полос) — для предварительной карты шума ─────────────

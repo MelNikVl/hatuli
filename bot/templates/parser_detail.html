@@ -8,10 +8,10 @@
 </style>
 
 <div style="margin-bottom:14px;">
-  {% for d in [1,3,5] %}
-  <a href="?days={{ d }}" style="display:inline-block;padding:6px 16px;border-radius:8px;margin-right:6px;text-decoration:none;font-size:13px;font-weight:600;
-     {% if days == d %}background:#2563eb;color:#fff;{% else %}background:var(--surface);color:inherit;border:1px solid var(--border);{% endif %}">
-    {{ d }} {{ 'день' if d == 1 else 'дня' if d < 5 else 'дней' }}
+  {% for d, dl in [(1,'1 день'), (3,'3 дня'), (7,'Неделя'), (30,'Месяц')] %}
+  <a href="?days={{ d }}" class="hp-min-btn" style="display:inline-block;padding:7px 14px;border-radius:8px;margin-right:6px;text-decoration:none;font-size:13px;font-weight:600;
+     {% if days == d %}background:#2563eb;color:#fff;{% else %}background:var(--bg);color:var(--text);border:1px solid var(--border);{% endif %}">
+    {{ dl }}
   </a>
   {% endfor %}
 </div>
@@ -44,16 +44,29 @@
   {% if top10_recalc_at %} — последний пересчёт: {{ top10_recalc_at[:16].replace('T', ' ') }} UTC{% endif %}.
 </div>
 
-<div>
+{% if parser_blocks %}
+<div class="page-title" style="font-size:16px;margin-top:24px;">🎛 Парсеры и скрейперы</div>
+{% with blocks = parser_blocks %}
+{% include "_parser_blocks.html" %}
+{% endwith %}
+{% endif %}
+
+<div style="margin-top:24px;">
 <div class="chart-box-1200">
-  <b style="font-size:1em;">Добавлено объявлений по часам — продажа и аренда</b>
+  <b style="font-size:1em;">{{ chart_title }}</b>
   <div class="chart-box-1200-inner"><canvas id="chart"></canvas></div>
 </div>
 
 <div class="chart-box-1200">
-  <b style="font-size:1em;">Доля активных объявлений с известным этажом, во времени</b>
-  <span style="font-size:0.85em;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж; этаж приходит только с детальной страницы</span>
-  <div class="chart-box-1200-inner"><canvas id="floor-chart"></canvas></div>
+  <b style="font-size:1em;">Покрытие recheck-обхода — возраст последней проверки активных объявлений</b>
+  <span style="font-size:0.85em;color:#888;margin-left:6px;">last_seen обновляется, когда объявление снова попадается парсеру (свежие страницы + глубокий обход) — устаревшие могли поменять цену или уйти в архив незамеченными</span>
+  <div class="chart-box-1200-inner"><canvas id="recheck-chart"></canvas></div>
+</div>
+
+<div class="chart-box-1200">
+  <b style="font-size:1em;">Market absorption — сколько объявлений уходит в архив по дням</b>
+  <span style="font-size:0.85em;color:#888;margin-left:6px;">скорость расчистки рынка (продано/снято с публикации), последние 30 дней</span>
+  <div class="chart-box-1200-inner"><canvas id="absorption-chart"></canvas></div>
 </div>
 
 <div class="chart-box-1200">
@@ -117,34 +130,8 @@ fetch('/admin/api/parser-cycle-history?days=14').then(r => r.json()).then(d => {
 }).catch(() => {});
 </script>
 <script>
-fetch('/admin/api/floor-history?days=30').then(r => r.json()).then(d => {
-  const pts = d.points || [];
-  if (pts.length < 2) {
-    document.getElementById('floor-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 точек</div>';
-    return;
-  }
-  new Chart(document.getElementById('floor-chart'), {
-    type: 'line',
-    data: {
-      labels: pts.map(p => p.at),
-      datasets: [{
-        label: '% с известным этажом', data: pts.map(p => p.pct),
-        borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.25, pointRadius: 2,
-      }],
-    },
-    options: {
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
-        y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%', font: { size: 13 } } },
-      },
-    },
-  });
-}).catch(() => {});
-</script>
-<script>
 const labels = {{ chart_labels | tojson }};
+const chartBucket = {{ chart_bucket | tojson }};
 {% if sale_values is defined %}
 const saleValues = {{ sale_values | tojson }};
 const rentalValues = {{ rental_values | tojson }};
@@ -161,7 +148,8 @@ new Chart(document.getElementById('chart'), {
     maintainAspectRatio: false,
     plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 14 } } } },
     scales: {
-      x: { stacked: true, ticks: { maxTicksLimit: 24, font: { size: 13 } }, grid: { display: false } },
+      x: { stacked: true, ticks: { maxTicksLimit: chartBucket === 'day' ? 31 : 24, font: { size: 13 } }, grid: { display: false },
+           title: { display: true, text: chartBucket === 'day' ? 'день' : 'час' } },
       y: { stacked: true, beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } }
     }
   }
@@ -181,5 +169,48 @@ new Chart(document.getElementById('chart'), {
   }
 });
 {% endif %}
+</script>
+<script>
+// Покрытие recheck-обхода: гистограмма возраста last_seen (Task 2)
+new Chart(document.getElementById('recheck-chart'), {
+  type: 'bar',
+  data: {
+    labels: {{ recheck_buckets['labels'] | tojson }},
+    datasets: [{
+      label: 'активных объявлений', data: {{ recheck_buckets['values'] | tojson }},
+      backgroundColor: ['rgba(22,163,74,.75)', 'rgba(37,99,235,.75)', 'rgba(245,158,11,.75)', 'rgba(239,68,68,.75)'],
+      borderRadius: 3,
+    }],
+  },
+  options: {
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { font: { size: 13 } }, grid: { display: false } },
+      y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
+    },
+  },
+});
+</script>
+<script>
+// Market absorption: архивация по дням (Task 3)
+const absLabels = {{ absorption_labels | tojson }};
+const absValues = {{ absorption_values | tojson }};
+if (absLabels.length < 2) {
+  document.getElementById('absorption-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 дней архивации</div>';
+} else {
+  new Chart(document.getElementById('absorption-chart'), {
+    type: 'bar',
+    data: { labels: absLabels, datasets: [{ label: 'ушло в архив', data: absValues, backgroundColor: 'rgba(239,68,68,.7)', borderRadius: 3 }] },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { maxTicksLimit: 31, font: { size: 13 } }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
+      },
+    },
+  });
+}
 </script>
 {% endblock %}

@@ -158,6 +158,8 @@ async def fetch_stat_housing() -> tuple[list[str], str | None]:
 async def update_all(write: bool = True) -> dict:
     """Прогоняет все источники. write=False — только показать (--test)."""
     from datetime import datetime, timezone
+    import time as _time
+    _t0 = _time.monotonic()
     results: dict = {}
 
     try:
@@ -202,4 +204,18 @@ async def update_all(write: bool = True) -> dict:
             await app_settings.set("STAT_HOUSING_FILE_URL", results["STAT_HOUSING_FILE_URL"])
         await app_settings.set("MARKET_DATA_UPDATED_AT",
                                datetime.now(timezone.utc).isoformat())
+        # Раньше прогоны market нигде не логировались построчно (только
+        # перезаписываемые скаляры в app_settings) — не было истории для
+        # графика "что спарсилось со временем" на вкладке /admin/parsers.
+        # Пишем в тот же source_runs, что уже используют korter/homsters —
+        # переиспользуем поле matched как "сколько источников успешно
+        # ответили" (0-4: НБРК/KDIF/Отбасы/stat.gov.kz).
+        try:
+            from bot.core.site_enrichment import record_run
+            ok_sources = sum(1 for k in ("NBRK_BASE_RATE", "KDIF_RATES_RAW", "OTBASY_RATES_RAW", "STAT_HOUSING_ASTANA_RAW")
+                             if results.get(k))
+            await record_run("market", datetime.now(timezone.utc), _time.monotonic() - _t0,
+                             matched=ok_sources, created=0, changed=0)
+        except Exception as e:
+            logger.warning("market source_runs log failed: %s", e)
     return results

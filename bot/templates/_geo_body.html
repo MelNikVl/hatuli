@@ -1,0 +1,158 @@
+{# Вкладка "Геоаналитика" hub-страницы /admin/analytics/heatmaps — раньше
+   отдельная страница /admin/analytics/geo (теперь редирект сюда). #}
+
+<div style="font-size:13px;color:#888;max-width:1100px;margin-bottom:12px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;">
+  Тепловая карта по <b>активным объявлениям о продаже</b> ({{ '—' }} шт.). Режим: <b>количество</b> объявлений или <b>цена/м²</b>.
+  Клик по карте — попап с объектом. WebGL-слой deck.gl — тот же движок, что у Kepler.gl.
+</div>
+
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+  <button id="geo-mode-count" onclick="geoSetMode('count')" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">🔢 Количество</button>
+  <button id="geo-mode-price" onclick="geoSetMode('price')" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">💰 Цена/м²</button>
+  <button id="geo-mode-population" onclick="geoSetMode('population')" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">👥 Плотность населения</button>
+  <span style="flex:1;"></span>
+  <button id="geo-sandbox-btn" onclick="geoToggleSandbox()" style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">🧪 Kepler.gl (песочница)</button>
+  <span id="geo-count" style="font-size:12.5px;color:#888;">загрузка…</span>
+</div>
+
+<div id="geo-map" style="width:100%;height:50vh;border-radius:12px;overflow:hidden;border:1px solid var(--border);"></div>
+<div id="geo-sandbox" style="display:none;width:100%;height:50vh;border-radius:12px;overflow:hidden;border:1px solid var(--border);">
+  <iframe id="geo-sandbox-frame" src="" style="width:100%;height:100%;border:none;" allowfullscreen></iframe>
+</div>
+
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.0.31/dist.min.js"></script>
+<script>
+let geoPoints = [];
+let geoMode = 'count';
+let geoOverlay = null;
+let geoPopHexes = [];  // задача "плотность населения" — гексы с bot/core/hexgrid (edge 100м)
+const GEO_LAT0 = 51.128, GEO_LON0 = 71.430,
+      GEO_MLAT = 110574.0, GEO_MLON = 111320.0 * Math.cos(GEO_LAT0 * Math.PI/180);
+function geoHexCorners(lat, lon, edge) {
+  const out = [];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI/180 * (60*i - 30);
+    out.push([lon + (edge*Math.cos(a))/GEO_MLON, lat + (edge*Math.sin(a))/GEO_MLAT]);  // deck.gl: [lon, lat]
+  }
+  out.push(out[0]);  // замкнуть кольцо
+  return out;
+}
+// Синяя -> фиолетовая -> красная последовательная палитра — отдельная от
+// зелёно-красной шкалы цены (просили визуально различимую палитру для
+// нового слоя населения).
+const GEO_POP_STOPS = [[37,99,235],[99,66,215],[147,51,180],[192,38,140],[219,39,80]];
+function geoPopColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = GEO_POP_STOPS.length - 1;
+  const pos = t * n, i = Math.min(Math.floor(pos), n - 1), f = pos - i;
+  const a = GEO_POP_STOPS[i], b = GEO_POP_STOPS[i + 1];
+  return [Math.round(a[0]+(b[0]-a[0])*f), Math.round(a[1]+(b[1]-a[1])*f), Math.round(a[2]+(b[2]-a[2])*f)];
+}
+function geoLoadPopHexes() {
+  if (geoPopHexes.length) return Promise.resolve();
+  return fetch('/admin/api/population-hexes').then(r => r.json()).then(d => {
+    geoPopHexes = d.hexes || [];
+  }).catch(() => {});
+}
+const GEO_MAP = new maplibregl.Map({
+  container: 'geo-map',
+  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  center: [71.430, 51.128],
+  zoom: 11,
+});
+GEO_MAP.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+function geoMakeLayer() {
+  const data = geoPoints;
+  if (geoMode === 'population') {
+    const hi = Math.max(1, ...geoPopHexes.map(h => h.population || 0));
+    return new deck.PolygonLayer({
+      id: 'geo-pop-hex',
+      data: geoPopHexes,
+      getPolygon: h => geoHexCorners(h.lat, h.lon, 100),
+      getFillColor: h => { const [r,g,b] = geoPopColor((h.population || 0) / hi); return [r, g, b, 190]; },
+      stroked: false,
+      pickable: true,
+      opacity: 1,
+    });
+  }
+  if (geoMode === 'price') {
+    return new deck.HeatmapLayer({
+      id: 'geo-heat-price',
+      data,
+      getPosition: d => [d.lon, d.lat],
+      getWeight: d => d.price_m2 || d.price || 0,
+      radiusPixels: 42,
+      intensity: 1.4,
+      threshold: 0.02,
+      colorRange: [[10, 25, 90], [60, 120, 200], [180, 90, 30], [230, 140, 20], [240, 200, 60], [255, 240, 160]],
+    });
+  }
+  return new deck.HeatmapLayer({
+    id: 'geo-heat-count',
+    data,
+    getPosition: d => [d.lon, d.lat],
+    radiusPixels: 30,
+    intensity: 1.2,
+    threshold: 0.02,
+    colorRange: [[10, 25, 90], [60, 120, 200], [120, 180, 120], [230, 140, 20], [240, 200, 60], [255, 255, 200]],
+  });
+}
+
+function geoRender() {
+  if (!geoOverlay) {
+    geoOverlay = new deck.MapboxOverlay({ layers: [geoMakeLayer()] });
+    GEO_MAP.addControl(geoOverlay);
+  } else {
+    geoOverlay.setProps({ layers: [geoMakeLayer()] });
+  }
+}
+
+const GEO_KEpler_URL = 'https://kepler.gl/demo/map?mapUrl=' + encodeURIComponent('https://hatuli.ai-groundtruth.com/admin/api/geo-sales.geojson');
+function geoToggleSandbox() {
+  const sb = document.getElementById('geo-sandbox');
+  const gm = document.getElementById('geo-map');
+  const btn = document.getElementById('geo-sandbox-btn');
+  const on = sb.style.display !== 'none';
+  if (!on) {
+    document.getElementById('geo-sandbox-frame').src = GEO_KEpler_URL;
+    sb.style.display = 'block';
+    gm.style.display = 'none';
+    btn.style.background = '#2563eb'; btn.style.color = '#fff';
+  } else {
+    sb.style.display = 'none';
+    gm.style.display = 'block';
+    document.getElementById('geo-sandbox-frame').src = '';
+    btn.style.background = 'var(--bg)'; btn.style.color = 'var(--text)';
+  }
+}
+
+function geoSetMode(m) {
+  geoMode = m;
+  document.getElementById('geo-mode-count').style.background = m === 'count' ? '#2563eb' : 'var(--bg)';
+  document.getElementById('geo-mode-count').style.color = m === 'count' ? '#fff' : 'var(--text)';
+  document.getElementById('geo-mode-price').style.background = m === 'price' ? '#2563eb' : 'var(--bg)';
+  document.getElementById('geo-mode-price').style.color = m === 'price' ? '#fff' : 'var(--text)';
+  document.getElementById('geo-mode-population').style.background = m === 'population' ? '#2563eb' : 'var(--bg)';
+  document.getElementById('geo-mode-population').style.color = m === 'population' ? '#fff' : 'var(--text)';
+  if (m === 'population') {
+    document.getElementById('geo-count').textContent = 'загрузка…';
+    geoLoadPopHexes().then(() => {
+      document.getElementById('geo-count').textContent =
+        'гексов: ' + geoPopHexes.length.toLocaleString('ru-RU') + ' · оценка населения по ЖК';
+      geoRender();
+    });
+    return;
+  }
+  document.getElementById('geo-count').textContent = 'точек: ' + geoPoints.length.toLocaleString('ru-RU');
+  geoRender();
+}
+
+fetch('/admin/api/geo-sales').then(r => r.json()).then(d => {
+  geoPoints = d.points || [];
+  document.getElementById('geo-count').textContent = 'точек: ' + geoPoints.length.toLocaleString('ru-RU');
+  geoRender();
+}).catch(() => { document.getElementById('geo-count').textContent = 'ошибка загрузки'; });
+</script>

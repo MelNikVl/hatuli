@@ -29,6 +29,11 @@ H_INK_MAX = 0.50
 # SigLIP: строже
 FP_MARGIN = 0.05      # план должен быть заметно выше интерьера
 FP_MIN = 0.25
+# Эталонные «мусорные» фото (реклама/заглушки, повторяются во всех
+# объявлениях): если фото объявления совпадает с эталоном (cosine >= порога),
+# URL уходит в blocked_photo_urls и вычищается из photos объявления.
+REF_FILES = ["/tmp/ref1.jpg", "/tmp/ref2.jpg"]
+REF_THRESHOLD = 0.82  # подобрать по факту; идентичные/пережатые ~0.95+
 
 
 def load_database_url() -> str:
@@ -119,6 +124,7 @@ def is_candidate(f):
 _model = None
 _preprocess = None
 _text_features = None
+_ref_features = None
 _device = "cpu"
 _TEXTS = [
     "apartment floor plan diagram",
@@ -129,11 +135,12 @@ _TEXTS = [
 
 
 def load_model():
-    global _model, _preprocess, _text_features, _device
+    global _model, _preprocess, _text_features, _ref_features, _device
     if _model is not None:
         return
     import torch
     import open_clip
+    from PIL import Image
     print("Загружаю SigLIP...", flush=True)
     _model, _, _preprocess = open_clip.create_model_and_transforms("ViT-B-16-SigLIP", pretrained="webli")
     tokenizer = open_clip.get_tokenizer("ViT-B-16-SigLIP")
@@ -144,6 +151,17 @@ def load_model():
         tt = tokenizer(_TEXTS).to(_device)
         tf = _model.encode_text(tt)
         _text_features = tf / tf.norm(dim=-1, keepdim=True)
+        # Эмбеддинги эталонных «мусорных» фото
+        ref_imgs = []
+        for rf in REF_FILES:
+            p = Path(rf)
+            if p.exists():
+                ref_imgs.append(_preprocess(Image.open(p).convert("RGB")).unsqueeze(0).to(_device))
+        if ref_imgs:
+            rx = torch.cat(ref_imgs)
+            re = _model.encode_image(rx)
+            _ref_features = re / re.norm(dim=-1, keepdim=True)
+            print(f"Эталоны: {len(ref_imgs)} фото, threshold={REF_THRESHOLD}", flush=True)
     print(f"SigLIP на: {_device}", flush=True)
 
 
@@ -159,6 +177,21 @@ def siglip_probs(path: Path):
         sim = (100.0 * im @ _text_features.T).softmax(dim=-1)
         p = sim[0].cpu().numpy()
     return float(p[0] + p[1]), float(p[2] + p[3])
+
+
+def max_sim_to_refs(path: Path) -> float:
+    """Максимальный cosine с эталонными «мусорными» фото (0..1)."""
+    import torch
+    from PIL import Image
+    load_model()
+    if _ref_features is None:
+        return 0.0
+    image = _preprocess(Image.open(path).convert("RGB")).unsqueeze(0).to(_device)
+    with torch.no_grad():
+        im = _model.encode_image(image)
+        im = im / im.norm(dim=-1, keepdim=True)
+        sims = (im @ _ref_features.T)[0]
+    return float(sims.max().cpu())
 
 
 def main() -> None:
@@ -191,6 +224,7 @@ def main() -> None:
     print(f"Объявлений к обработке: {len(rows)}", flush=True)
 
     done = found = candidates = 0
+    blocked_total = 0
     for lid, photos_json in rows:
         try:
             urls = [u for u in json.loads(photos_json) if isinstance(u, str) and u.startswith("http")]
@@ -199,11 +233,24 @@ def main() -> None:
         urls = urls[: a.max_photos]
         floorplan_url = None
 
+        blocked_urls = []
         for url in urls:
             try:
                 p = dl.submit(download, url, a.delay).result(timeout=60)
                 with dl_lock:
                     dl_count += 1
+                # Эталонные «мусорные» фото: каждое скачанное фото сравниваем
+                try:
+                    ref_sim = max_sim_to_refs(p)
+                    if ref_sim >= REF_THRESHOLD:
+                        cur.execute(
+                            "INSERT INTO blocked_photo_urls (url, score, reason) VALUES (%s, %s, 'siglip_etalon') "
+                            "ON CONFLICT (url) DO UPDATE SET score = EXCLUDED.score",
+                            (url, ref_sim))
+                        blocked_urls.append(url)
+                        blocked_total += 1
+                except Exception as e:
+                    print(f"    [ERR-ref] {lid}: {type(e).__name__}: {e}", flush=True)
                 f = heuristic_features(p)
                 h_pass = is_candidate(f)
                 if not h_pass:
@@ -228,16 +275,25 @@ def main() -> None:
         cur.execute(
             "UPDATE apartment_listings SET floorplan_url = %s, floorplan_checked_at = now() WHERE id = %s",
             (floorplan_url, lid))
+        if blocked_urls:
+            try:
+                cur.execute(
+                    "UPDATE apartment_listings SET photos = ("
+                    "SELECT COALESCE(jsonb_agg(x), '[]'::jsonb) FROM jsonb_array_elements_text(photos) x "
+                    "WHERE x <> ALL(%s::text[])) WHERE id = %s",
+                    (blocked_urls, lid))
+            except Exception as e:
+                print(f"    [ERR-block-upd] {lid}: {type(e).__name__}: {e}", flush=True)
         done += 1
         if floorplan_url:
             found += 1
         if done % 10 == 0:
             conn.commit()
-            print(f"  {done}/{len(rows)} · планов: {found} · кандидатов SigLIP: {candidates} · фото: {dl_count}", flush=True)
+            print(f"  {done}/{len(rows)} · планов: {found} · кандидатов SigLIP: {candidates} · фото: {dl_count} · мусорных URL: {blocked_total}", flush=True)
 
     conn.commit()
     conn.close()
-    print(f"Готово: {done} объявлений, планов {found}, кандидатов на SigLIP {candidates}", flush=True)
+    print(f"Готово: {done} объявлений, планов {found}, кандидатов на SigLIP {candidates}, мусорных URL {blocked_total}", flush=True)
 
 
 if __name__ == "__main__":

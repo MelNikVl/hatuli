@@ -49,7 +49,7 @@
     <span><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;"></span> 3+-комн</span>
     <span style="color:#555;">·  два бара в день: <b>продажа</b> / <b>аренда</b> (аренда: ≥3 дня не видели)</span>
   </div>
-  <div id="archived-chart" style="overflow-x:auto;"></div>
+  <div id="archived-chart"></div>
 </div>
 
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:0 0 calc(50% - 7px);min-width:320px;max-width:calc(50% - 7px);overflow:hidden;box-sizing:border-box;">
@@ -62,7 +62,10 @@
       {% endfor %}
     </div>
   </div>
-  <div style="height:420px;position:relative;"><canvas id="archived-pm2-chart"></canvas></div>
+  {# Инлайн-соседняя колонка 50/50 с SVG-графиком слева — оставляем ширину
+     гибкой (fixed 800px сломал бы этот 2-колоночный сплит), но высоту
+     canvas-области берём из общего стандарта .chart-block-inner (520px). #}
+  <div class="chart-block-inner"><canvas id="archived-pm2-chart"></canvas></div>
 </div>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -261,9 +264,14 @@ function loadArchivedChart(days) {
       const rentT = d.series.rental_1[i] + d.series.rental_2[i] + d.series.rental_3[i];
       return Math.max(saleT, rentT);
     }));
-    const containerW = (el.clientWidth || 900) * 0.9;
-    const slotW = Math.max(40, Math.min(220, Math.floor(containerW / d.days.length) - 6));
-    const barW = Math.round((slotW - 4) / 2);
+    // Раньше нижняя граница slotW (40px/день) гарантировала переполнение
+    // контейнера на длинных диапазонах (90 дн = мин. 3600px) — это скрывалось
+    // горизонтальным скроллом (overflow-x:auto). По требованию "без скролла
+    // внутри блока графика" убрали overflow и снизили нижнюю границу, чтобы
+    // бары всегда сжимались под реальную ширину контейнера целиком.
+    const containerW = (el.clientWidth || 900) * 0.98;
+    const slotW = Math.max(6, Math.min(220, Math.floor(containerW / d.days.length) - 3));
+    const barW = Math.max(2, Math.round((slotW - 2) / 2));
     const H = Math.round(640 * 2 / 3);
     function stack(v1, v2, v3, w) {
       const h1 = Math.round(v1 / maxTotal * (H - 20));
@@ -279,22 +287,28 @@ function loadArchivedChart(days) {
       const s1 = d.series['1'][i], s2 = d.series['2'][i], s3 = d.series['3'][i];
       const r1 = d.series.rental_1[i], r2 = d.series.rental_2[i], r3 = d.series.rental_3[i];
       const saleTotal = s1 + s2 + s3, rentTotal = r1 + r2 + r3;
-      return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:0 0 ${slotW}px;">
-        <div style="display:flex;gap:4px;align-items:flex-end;">
-          <div style="display:flex;flex-direction:column;align-items:center;">
-            <div style="font-size:12.5px;font-weight:700;color:#888;">${saleTotal || ''}</div>
+      // min-width:0 — без него флекс-айтем не сжимается ниже "естественной"
+      // ширины своего контента (числа/подписи), даже если flex-basis
+      // (slotW) меньше — именно это раньше срывало расчёт под контейнер и
+      // требовало горизонтального скролла. С min-width:0 контент реально
+      // сжимается до slotW (при очень узком блоке подписи будут просто
+      // теснее, а не вылезать за пределы контейнера).
+      return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:0 0 ${slotW}px;min-width:0;overflow:hidden;">
+        <div style="display:flex;gap:2px;align-items:flex-end;">
+          <div style="display:flex;flex-direction:column;align-items:center;min-width:0;">
+            <div style="font-size:10px;font-weight:700;color:#888;">${saleTotal || ''}</div>
             ${stack(s1, s2, s3, barW)}
           </div>
-          <div style="display:flex;flex-direction:column;align-items:center;">
-            <div style="font-size:12.5px;font-weight:700;color:#888;">${rentTotal || ''}</div>
+          <div style="display:flex;flex-direction:column;align-items:center;min-width:0;">
+            <div style="font-size:10px;font-weight:700;color:#888;">${rentTotal || ''}</div>
             ${stack(r1, r2, r3, barW)}
           </div>
         </div>
-        <div style="font-size:9px;color:#888;text-align:center;line-height:1.3;margin-top:1px;">прод. · аренда</div>
-        <div style="font-size:11.5px;font-weight:600;color:#888;transform:rotate(-45deg);white-space:nowrap;margin-top:4px;" title="${label}: продажа 1к=${s1},2к=${s2},3+к=${s3} · аренда 1к=${r1},2к=${r2},3+к=${r3}">${label}</div>
+        <div style="font-size:8px;color:#888;text-align:center;line-height:1.2;margin-top:1px;white-space:nowrap;">прод.·аренда</div>
+        <div style="font-size:9.5px;font-weight:600;color:#888;transform:rotate(-45deg);white-space:nowrap;margin-top:4px;" title="${label}: продажа 1к=${s1},2к=${s2},3+к=${s3} · аренда 1к=${r1},2к=${r2},3+к=${r3}">${label}</div>
       </div>`;
     }).join('');
-    el.innerHTML = `<div style="display:flex;align-items:flex-end;gap:6px;height:${H}px;padding-bottom:28px;min-width:${d.days.length*(slotW+6)}px;">${bars}</div>`;
+    el.innerHTML = `<div style="display:flex;align-items:flex-end;justify-content:center;gap:3px;height:${H}px;padding-bottom:28px;width:100%;">${bars}</div>`;
   }).catch(() => {});
 }
 loadArchivedChart(30);

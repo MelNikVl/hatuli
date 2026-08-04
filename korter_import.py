@@ -167,8 +167,8 @@ async def fetch_all(test: bool) -> dict[str, dict]:
     return all_found
 
 
-async def save_to_db(found: dict) -> None:
-    await save_enrichment(found, "korter", set_housing_class=True)
+async def save_to_db(found: dict) -> dict:
+    return await save_enrichment(found, "korter", set_housing_class=True)
 
 
 async def main():

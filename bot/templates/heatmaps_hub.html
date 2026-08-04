@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🔥 Тепловые карты <small>хайп по ЖК/новостям + геоаналитика продаж</small></div>
+
+<div class="htabs">
+  <a href="?tab=hype" class="{{ 'active' if tab == 'hype' }}">🔥 Хайп</a>
+  <a href="?tab=geo" class="{{ 'active' if tab == 'geo' }}">🗺 Геоаналитика</a>
+</div>
+
+{% if tab == 'geo' %}
+  {% include "_geo_body.html" %}
+{% else %}
+  {% include "_hype_body.html" %}
+{% endif %}
+{% endblock %}

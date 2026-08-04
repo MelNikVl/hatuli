@@ -487,6 +487,37 @@ drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }}, 'avg_price', 
     </div>
   </div>
 
+  {% if hp %}
+  <div class="cx-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 style="margin:0;">🏛 Официальные данные (homeportal.kz)</h3>
+      <span style="font-size:11px;color:#888;">реестр КЖК{% if hp.count > 1 %} · {{ hp.count }} очередей объединено{% endif %}</span>
+    </div>
+    <p style="font-size:12px;color:#888;margin:6px 0 10px;">Данные housing-savings-bank реестра долевого строительства (Homeportal.kz), автоматически сопоставленные с этим ЖК.</p>
+    <table style="font-size:13.5px;border-collapse:collapse;width:100%;">
+      {% if hp.apartments_total %}<tr><td style="padding:4px 12px 4px 0;color:#888;width:220px;">Квартир всего / продано</td><td>{{ hp.apartments_total }}{% if hp.apartments_sold %} / {{ hp.apartments_sold }}{% endif %}</td></tr>{% endif %}
+      {% if hp.no_of_floors %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Этажность</td><td>{{ hp.no_of_floors }}</td></tr>{% endif %}
+      {% if hp.no_of_houses %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Кол-во домов</td><td>{{ hp.no_of_houses }}</td></tr>{% endif %}
+      {% if hp.no_of_entrances %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Подъездов</td><td>{{ hp.no_of_entrances }}</td></tr>{% endif %}
+      {% if hp.passenger_elevators or hp.freight_elevators %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Лифты (пасс. / груз.)</td><td>{{ hp.passenger_elevators or 0 }} / {{ hp.freight_elevators or 0 }}</td></tr>{% endif %}
+      {% if hp.ceiling_height %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Высота потолков</td><td>{{ hp.ceiling_height }} м</td></tr>{% endif %}
+      {% if hp.building_type %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Тип строения</td><td>{{ hp.building_type }}</td></tr>{% endif %}
+      {% if hp.wall_filling %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Материал стен</td><td>{{ hp.wall_filling }}</td></tr>{% endif %}
+      {% if hp.facade_finishing %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Отделка фасада</td><td>{{ hp.facade_finishing }}</td></tr>{% endif %}
+      {% if hp.comfort_class %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Класс комфортности</td><td>{{ hp.comfort_class }}</td></tr>{% endif %}
+      {% if hp.parking_places %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Парковочных мест</td><td>{{ hp.parking_places }}</td></tr>{% endif %}
+      {% if hp.playgrounds or hp.sports_fields %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Детские / спортплощадки</td><td>{{ hp.playgrounds or 0 }} / {{ hp.sports_fields or 0 }}</td></tr>{% endif %}
+      {% if hp.program %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Госпрограмма</td><td>{{ hp.program }}{% if hp.program_link %} · <a href="{{ hp.program_link }}" target="_blank">подробнее ↗</a>{% endif %}</td></tr>{% endif %}
+      {% if hp.warranty_number %}<tr><td style="padding:4px 12px 4px 0;color:#888;">№ гарантийного обязательства</td><td>{{ hp.warranty_number }}</td></tr>{% endif %}
+      {% if hp.commissioning_date %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Срок сдачи (по КЖК)</td><td>{{ hp.commissioning_date }}</td></tr>{% endif %}
+      {% if hp.authorized_name %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Авторизованное лицо</td><td>{{ hp.authorized_name }}</td></tr>{% endif %}
+      {% if hp.supervising_name %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Стройнадзор</td><td>{{ hp.supervising_name }}</td></tr>{% endif %}
+      {% if hp.tech_name %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Технадзор</td><td>{{ hp.tech_name }}</td></tr>{% endif %}
+      {% if hp.developer_phone or hp.developer_email %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Контакты застройщика (КЖК)</td><td>{{ hp.developer_phone or '' }}{% if hp.developer_phone and hp.developer_email %} · {% endif %}{{ hp.developer_email or '' }}</td></tr>{% endif %}
+    </table>
+  </div>
+  {% endif %}
+
   <div class="cx-card">
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <h3 style="margin:0;">🏗 Технические характеристики</h3>

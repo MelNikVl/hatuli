@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🤖 AI-анализ <small style="font-size:13px;color:#888;font-weight:400;">описания объявлений (DeepSeek) + статус всех AI-слоёв</small></div>
+
+<div class="htabs">
+  <a href="?tab=analysis" class="{{ 'active' if tab == 'analysis' }}">🤖 AI-анализ описаний</a>
+  <a href="?tab=status" class="{{ 'active' if tab == 'status' }}">⚙️ Статус слоёв</a>
+</div>
+
+{% if tab == 'status' %}
+  {% include "_ai_status_body.html" %}
+{% else %}
+  {% include "_ai_analysis_body.html" %}
+{% endif %}
+{% endblock %}

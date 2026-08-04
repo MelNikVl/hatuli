@@ -2,12 +2,15 @@
 """Парсер homeportal.kz: официальные данные по ЖК (долевое строительство КЖК).
 Список: POST /api/v1/getobjects (публичный) → детали: GET /api/v1/objects-detail/{id}.
 Щадящий: пауза 1с между деталками. Заполняет homeportal_objects + маппинг на complexes."""
+import difflib
 import json
 import re
 import subprocess
 import sys
 import time
 import urllib.request
+
+FUZZY_THRESHOLD = 0.75
 
 API = "https://api.homeportal.kz/api/v1"
 UA = "Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0 Safari/537.36"
@@ -138,18 +141,37 @@ def main() -> int:
                 rooms_1 = EXCLUDED.rooms_1, rooms_2 = EXCLUDED.rooms_2, rooms_3 = EXCLUDED.rooms_3,
                 rooms_4 = EXCLUDED.rooms_4, apartment_data = EXCLUDED.apartment_data,
                 images = EXCLUDED.images, fetched_at = now()""")
-            # маппинг на complexes: точное → нормализованное → LIKE; помечаем matched
+            # маппинг на complexes: точное → нормализованное → fuzzy (difflib,
+            # порог FUZZY_THRESHOLD, лучшее совпадение среди всех ЖК) → первое
+            # слово (самый слабый fallback). Метод матчинга сохраняем в
+            # match_method — виден в /admin/analytics/homeportal.
             obj_name = o.get("name") or ""
+            cid, method = None, None
             cid = COMPLEX_INDEX.get(obj_name.strip().lower())
-            if not cid:
-                nm = norm_name(obj_name)
+            if cid:
+                method = "exact"
+            nm = norm_name(obj_name)
+            if not cid and nm:
                 cid = NORM_INDEX.get(nm)
+                if cid:
+                    method = "normalized"
+            if not cid and nm:
+                best_ratio, best_cid = 0.0, None
+                for cand_norm, cand_cid in NORM_INDEX.items():
+                    ratio = difflib.SequenceMatcher(None, nm, cand_norm).ratio()
+                    if ratio > best_ratio:
+                        best_ratio, best_cid = ratio, cand_cid
+                if best_ratio >= FUZZY_THRESHOLD:
+                    cid, method = best_cid, f"fuzzy:{best_ratio:.2f}"
             if not cid and nm:
                 parts = nm.split()
                 if len(parts) >= 2:
                     cid = NORM_INDEX.get(parts[0])
+                    if cid:
+                        method = "first_word"
             if cid:
-                psql(f"UPDATE homeportal_objects SET matched_complex_id = {cid}, matched_at = now() WHERE object_id = {oid}")
+                psql(f"UPDATE homeportal_objects SET matched_complex_id = {cid}, matched_at = now(), "
+                     f"match_method = '{ESC(method)}' WHERE object_id = {oid}")
                 psql(f"""INSERT INTO housing_class_test (complex_id, apartment_count, rooms_1, rooms_2, rooms_3, rooms_4, elevator_count, apartment_count_source, updated_at)
                          VALUES ({cid}, {apt_total}, {r1}, {r2}, {r3}, {r4},
                          {(objd.get('freight_elevators_at_the_entrance') or 0) + (objd.get('passenger_elevators_in_the_entrance') or 0)}, 'homeportal', now())

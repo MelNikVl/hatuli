@@ -14,9 +14,8 @@
 </p>
 
 <style>
-.chart-box-1200-inner { position:relative; height:520px; }
 </style>
-<div class="chart-box-1200" style="height:auto;">
+<div class="chart-block">
   <b style="font-size:1em;">📈 Покрытие данными о просмотрах во времени</b>
   <span style="font-size:0.85em;color:#888;margin-left:6px;">сколько активных объявлений вообще имеют известный views_count — снимок раз в цикл парсера продаж</span>
   <div style="display:inline-flex;gap:6px;margin-left:12px;">
@@ -25,7 +24,7 @@
     {% endfor %}
   </div>
   <div id="v-coverage-stat" style="display:flex;gap:14px;margin:10px 0;"></div>
-  <div class="chart-box-1200-inner"><canvas id="views-coverage-chart"></canvas></div>
+  <div class="chart-block-inner"><canvas id="views-coverage-chart"></canvas></div>
 </div>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -46,7 +45,7 @@
 
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
   <div style="flex:3 1 0;min-width:320px;">
-    <div id="views-map" style="height:640px;border-radius:12px;border:1px solid var(--border);"></div>
+    <div id="views-map" style="height:50vh;min-height:340px;border-radius:12px;border:1px solid var(--border);"></div>
     <div id="v-hex-detail" style="display:none;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;max-height:260px;overflow-y:auto;"></div>
   </div>
   <div style="flex:1 1 0;min-width:240px;max-width:25%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
@@ -100,9 +99,8 @@
 </script>
 
 <style>
-.chart-box-1200 { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-top:14px; width:1200px; max-width:100%; height:600px; overflow-y:auto; box-sizing:border-box; font-size:1em; }
 </style>
-<div class="chart-box-1200">
+<div class="chart-block">
   <b style="font-size:1em;">👁 Просмотры по комнатности во времени</b>
   <span style="font-size:0.85em;color:#888;margin-left:6px;">снимок раз в цикл парсера продаж; накопительный счётчик, не прирост за день</span>
   <div style="display:inline-flex;gap:6px;margin-left:12px;">
@@ -117,7 +115,7 @@
     <span><span style="display:inline-block;width:9px;height:9px;background:#f59e0b;border-radius:2px;"></span> 3-комн</span>
     <span><span style="display:inline-block;width:9px;height:9px;background:#a855f7;border-radius:2px;"></span> 4+-комн</span>
   </div>
-  <div id="views-rooms-chart" style="overflow-x:auto;"></div>
+  <div id="views-rooms-chart"></div>
 </div>
 
 <script>
@@ -285,7 +283,9 @@ function roomsHistoryChart(divId, points, w, h) {
     if (i !== 0 && i !== points.length - 1 && i % labelEvery !== 0) return '';
     return `<text x="${(i * stepX).toFixed(1)}" y="${h - 2}" text-anchor="middle" font-size="11" fill="#888">${p.at}</text>`;
   }).join('');
-  el.innerHTML = `<svg width="${w}" height="${h}" style="display:block;overflow:visible;max-width:100%;">${linesHtml}${xLabels}</svg>`;
+  // viewBox + width:100% — масштабирует весь SVG под контейнер без обрезки
+  // и без скролла (тот же фикс, что у price-history-chart и no-photo-chart).
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="xMidYMid meet" style="display:block;max-width:100%;">${linesHtml}${xLabels}</svg>`;
 }
 
 function loadRoomsHistory(days) {
@@ -296,7 +296,11 @@ function loadRoomsHistory(days) {
   });
   fetch('/admin/api/views-history?days=' + days).then(r => r.json()).then(d => {
     const blockEl = document.getElementById('views-rooms-chart');
-    const blockW = Math.max(320, blockEl.parentElement.clientWidth - 4);
+    // Раньше мерили blockEl.parentElement.clientWidth-4 (родитель .chart-block
+    // минус фиксированные 4px, но не его реальный padding 14px/16px) — SVG
+    // получался на ~28px шире реального контейнера и обрезал последнюю точку.
+    // Меряем сам #views-rooms-chart — он уже внутри отступов родителя.
+    const blockW = Math.max(320, blockEl.clientWidth || (blockEl.parentElement.clientWidth - 32));
     roomsHistoryChart('views-rooms-chart', d.points || [], blockW, 480);
   }).catch(() => {});
 }

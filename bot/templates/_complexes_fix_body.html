@@ -1,0 +1,116 @@
+{# Вкладка "ЖК под правку" hub-страницы /admin/analytics/complexes — раньше
+   отдельная страница /admin/complexes-fix (теперь редирект сюда).
+   Ожидает: groups, total, all_names. #}
+
+<div style="font-size:13px;color:#888;max-width:1100px;margin:14px 0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  Объявлений на мусорных именах: <b>{{ total }}</b>. После консолидации базы ЖК часть объявлений осталась привязана к complex_name, совпадающему с уже помеченной мусорной строкой (обрывок описания/рекламы, а не настоящее имя ЖК) — автоматически это разобрать нельзя, нет надёжного сигнала какой это реальный ЖК. Поле ввода ниже предзаполнено черновой подсказкой — проверь и поправь перед сохранением. Можно исправить всю группу разом (если уверен, что это один ЖК) или объявление за объявлением. Список названий существующих (не мусорных) ЖК — для автодополнения.
+</div>
+
+<datalist id="cf-complex-names">
+  {% for n in all_names %}<option value="{{ n }}">{% endfor %}
+</datalist>
+
+{% if not groups %}
+<div style="padding:24px;color:#888;">Мусорных привязок не найдено — всё чисто.</div>
+{% endif %}
+
+{% for g in groups %}
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+  <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:10px;">
+    <div style="font-weight:700;font-size:14px;">
+      «{{ g.garbage_name }}» <span style="color:#888;font-weight:400;">— {{ g.listings|length }} объявл.</span>
+    </div>
+    <form class="cf-group-form" data-garbage="{{ g.garbage_name }}" style="display:flex;gap:8px;align-items:center;">
+      <input type="text" class="cf-input" list="cf-complex-names" value="{{ g.suggested }}"
+             placeholder="Правильное имя ЖК для всей группы"
+             style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;min-width:260px;">
+      <button type="submit" style="padding:6px 12px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;font-size:12.5px;cursor:pointer;">Применить ко всей группе</button>
+      <span class="cf-group-status" style="font-size:12px;"></span>
+    </form>
+  </div>
+
+  <div style="overflow-x:auto;">
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead>
+      <tr style="border-bottom:1px solid var(--border);text-align:left;color:#888;">
+        <th style="padding:6px;">Объявление</th>
+        <th style="padding:6px;">Адрес</th>
+        <th style="padding:6px;">Район</th>
+        <th style="padding:6px;">Правильный ЖК</th>
+        <th style="padding:6px;"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for l in g.listings %}
+      <tr class="cf-row" data-id="{{ l.id }}" style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px;">
+          <a href="{{ l.url }}" target="_blank" style="color:var(--text);text-decoration:none;">{{ l.title }}</a><br>
+          <span style="color:#888;font-size:12px;">{{ l.price and '{:,.0f}'.format(l.price)|replace(',', ' ') ~ ' ₸' or '' }}</span>
+        </td>
+        <td style="padding:6px;color:#888;">{{ l.address or '—' }}</td>
+        <td style="padding:6px;color:#888;">{{ l.district or '—' }}</td>
+        <td style="padding:6px;">
+          <form class="cf-row-form" data-id="{{ l.id }}" style="display:flex;gap:6px;">
+            <input type="text" class="cf-input" list="cf-complex-names" value="{{ g.suggested }}"
+                   style="padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12.5px;min-width:200px;">
+            <button type="submit" style="padding:5px 10px;border:none;border-radius:6px;background:var(--surface2);color:var(--text);border:1px solid var(--border);font-size:12px;cursor:pointer;">Сохранить</button>
+          </form>
+        </td>
+        <td style="padding:6px;"><span class="cf-row-status" style="font-size:12px;"></span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endfor %}
+
+<script>
+document.querySelectorAll('.cf-group-form').forEach(form => {
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const garbage = form.dataset.garbage;
+    const name = form.querySelector('.cf-input').value.trim();
+    const statusEl = form.querySelector('.cf-group-status');
+    if (!name) return;
+    statusEl.textContent = '...';
+    const r = await fetch('/admin/complexes-fix/reassign-group', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({garbage_name: garbage, new_complex_name: name}),
+    });
+    if (r.ok) {
+      statusEl.textContent = '✅ сохранено';
+      statusEl.style.color = '#16a34a';
+      setTimeout(() => location.reload(), 600);
+    } else {
+      statusEl.textContent = '❌ ошибка';
+      statusEl.style.color = '#ef4444';
+    }
+  });
+});
+document.querySelectorAll('.cf-row-form').forEach(form => {
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const id = form.dataset.id;
+    const name = form.querySelector('.cf-input').value.trim();
+    const row = form.closest('.cf-row');
+    const statusEl = row.querySelector('.cf-row-status');
+    if (!name) return;
+    statusEl.textContent = '...';
+    const r = await fetch('/admin/complexes-fix/reassign', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: new URLSearchParams({listing_id: id, new_complex_name: name}),
+    });
+    if (r.ok) {
+      statusEl.textContent = '✅';
+      statusEl.style.color = '#16a34a';
+      row.style.opacity = '0.5';
+    } else {
+      statusEl.textContent = '❌';
+      statusEl.style.color = '#ef4444';
+    }
+  });
+});
+</script>

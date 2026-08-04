@@ -6,6 +6,24 @@
   body { background: #fff !important; color: #000 !important; }
   .mc-card { box-shadow: none !important; border: 1px solid #999 !important; }
 }
+{% if request.query_params.get('embed') %}
+/* Попап на главной: всегда светлая тема, весь шрифт чёрный */
+:root, :root[data-theme], :root[data-theme="light"] {
+  --bg: #f5f6fa !important;
+  --surface: #ffffff !important;
+  --text: #111111 !important;
+  --muted: #333333 !important;
+  --border: #c8ccd6 !important;
+}
+body { background: #f5f6fa !important; color: #111 !important; }
+.mc-card { background: #ffffff !important; border-color: #c8ccd6 !important; }
+.mc-card * { color: #111 !important; }
+.mc-card input, .mc-card select, .mc-card textarea {
+  color: #111 !important; background: #fff !important; border-color: #c8ccd6 !important;
+}
+.mc-card label { color: #111 !important; }
+.mc-card a { color: #1d4ed8 !important; }
+{% endif %}
 </style>
 {% if not request.query_params.get('embed') %}
 <div class="page-title no-print">🧮 Калькулятор ипотеки</div>

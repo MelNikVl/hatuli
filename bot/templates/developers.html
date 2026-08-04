@@ -31,7 +31,7 @@
 <table class="aud-table">
   <tr>
     <th>Застройщик</th><th>Активных объявл.</th><th>ЖК</th><th>Год основания</th>
-    <th>Сайт</th><th>Описание</th><th>Рейтинг</th><th>Просрочки</th><th>Суд. дела</th><th>Homsters</th>
+    <th>Сайт</th><th>Описание</th><th>Рейтинг</th><th>Просрочки</th><th>Суд. дела</th><th>Homsters</th><th>Homeportal (КЖК)</th>
   </tr>
   {% for d in developers %}
   <tr>
@@ -45,6 +45,7 @@
     <td class="{{ 'aud-ok' if d.has_delay_data else 'aud-no' }}">{{ (d.avg_delay_months ~ ' мес.') if d.has_delay_data else '✕' }}</td>
     <td class="{{ 'aud-no' if d.has_court_cases else 'aud-ok' }}">{{ d.court_cases_count if d.has_court_cases else '—' }}</td>
     <td class="{{ 'aud-ok' if d.has_homsters else 'aud-no' }}">{{ '✅' if d.has_homsters else '✕' }}</td>
+    <td class="{{ 'aud-ok' if d.hp_cnt else 'aud-no' }}">{{ d.hp_cnt if d.hp_cnt else '✕' }}</td>
   </tr>
   {% endfor %}
 </table>

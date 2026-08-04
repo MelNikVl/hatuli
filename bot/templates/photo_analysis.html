@@ -28,12 +28,15 @@
   <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
     <div style="font-weight:700;margin-bottom:4px;">🖼 Фото классифицировано</div>
     <div style="font-size:12.5px;color:#888;margin-bottom:10px;">По часам (SigLIP, CPU, ~1 фото/сек).</div>
-    <div style="position:relative;height:240px;"><canvas id="pa-photos-chart"></canvas></div>
+    {# 2 узкие колонки side-by-side под сводкой — ширину оставляем гибкой
+       (fixed 800px сломал бы этот парный layout), высоту canvas-области
+       берём из общего стандарта .chart-block-inner (520px). #}
+    <div class="chart-block-inner"><canvas id="pa-photos-chart"></canvas></div>
   </div>
   <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
     <div style="font-weight:700;margin-bottom:4px;">📐 Планов найдено</div>
     <div style="font-size:12.5px;color:#888;margin-bottom:10px;">Накопленным итогом.</div>
-    <div style="position:relative;height:240px;"><canvas id="pa-fp-chart"></canvas></div>
+    <div class="chart-block-inner"><canvas id="pa-fp-chart"></canvas></div>
   </div>
 </div>
 

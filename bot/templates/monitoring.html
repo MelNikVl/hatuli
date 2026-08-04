@@ -9,8 +9,6 @@
 .set-card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
 .set-label { font-weight: 600; font-size: 14px; margin-bottom: 4px; display: flex; justify-content: space-between; }
 .set-value { font-weight: 700; color: #2563eb; }
-.chart-box-1200 { width:1200px; max-width:100%; height:300px; box-sizing:border-box; font-size:1em; }
-.chart-box-1200-inner { position:relative; height:270px; }
 </style>
 
 <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
@@ -38,11 +36,11 @@
     <div style="font-size:11.5px;color:#888;margin-top:4px;" id="sys-project-detail"></div>
   </div>
 </div>
-<div class="chart-box-1200">
+<div class="chart-block">
   <div style="font-size:0.85em;color:#888;margin-bottom:6px;">
     График — снимки раз в цикл парсера продаж (~50-80 мин), не зависит от частоты выше (та влияет только на 4 живые цифры).
   </div>
-  <div class="chart-box-1200-inner"><canvas id="sys-chart"></canvas></div>
+  <div class="chart-block-inner"><canvas id="sys-chart"></canvas></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -74,31 +72,59 @@ function setMonFreq(sec) {
 setMonFreq(10);
 
 let sysChartInst = null;
-fetch('/admin/api/system-stats-history?hours=72').then(r => r.json()).then(d => {
-  const pts = d.points || [];
-  if (pts.length < 2) {
-    document.getElementById('sys-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 снимков — график появится после следующих циклов парсера</div>';
-    return;
-  }
-  sysChartInst = new Chart(document.getElementById('sys-chart'), {
-    type: 'line',
-    data: {
-      labels: pts.map(p => p.at),
-      datasets: [
-        { label: 'CPU %', data: pts.map(p => p.cpu_pct), borderColor: '#2563eb', backgroundColor: 'transparent', tension: 0.25, pointRadius: 1 },
-        { label: 'Память %', data: pts.map(p => p.mem_pct), borderColor: '#16a34a', backgroundColor: 'transparent', tension: 0.25, pointRadius: 1 },
-        { label: 'Диск %', data: pts.map(p => p.disk_pct), borderColor: '#f59e0b', backgroundColor: 'transparent', tension: 0.25, pointRadius: 1 },
-      ],
-    },
-    options: {
-      maintainAspectRatio: false,
-      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 13 } } } },
-      scales: {
-        x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
-        y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%', font: { size: 13 } } },
+async function refreshChartHistory() {
+  try {
+    const d = await (await fetch('/admin/api/system-stats-history?hours=72')).json();
+    const pts = d.points || [];
+    if (pts.length < 2) {
+      const box = document.querySelector('.chart-block-inner');
+      if (box && !document.getElementById('sys-chart')) return; // уже заменено на заглушку
+      if (box) box.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 снимков — график появится после следующих циклов парсера</div>';
+      return;
+    }
+    const labels = pts.map(p => p.at);
+    const cpu = pts.map(p => p.cpu_pct);
+    const mem = pts.map(p => p.mem_pct);
+    const disk = pts.map(p => p.disk_pct);
+    if (sysChartInst) {
+      // Обновляем данные существующего графика вместо пересоздания —
+      // раньше здесь всё строилось один раз при загрузке страницы и
+      // больше никогда не перерисовывалось, поэтому график визуально
+      // "замирал", хотя живые цифры выше продолжали опрашиваться каждые 10с.
+      sysChartInst.data.labels = labels;
+      sysChartInst.data.datasets[0].data = cpu;
+      sysChartInst.data.datasets[1].data = mem;
+      sysChartInst.data.datasets[2].data = disk;
+      sysChartInst.update();
+      return;
+    }
+    const canvas = document.getElementById('sys-chart');
+    if (!canvas) return;
+    sysChartInst = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          { label: 'CPU %', data: cpu, borderColor: '#2563eb', backgroundColor: 'transparent', tension: 0.25, pointRadius: 1 },
+          { label: 'Память %', data: mem, borderColor: '#16a34a', backgroundColor: 'transparent', tension: 0.25, pointRadius: 1 },
+          { label: 'Диск %', data: disk, borderColor: '#f59e0b', backgroundColor: 'transparent', tension: 0.25, pointRadius: 1 },
+        ],
       },
-    },
-  });
-}).catch(() => {});
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 12, font: { size: 13 } } } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+          y: { beginAtZero: true, max: 100, ticks: { callback: v => v + '%', font: { size: 13 } } },
+        },
+      },
+    });
+  } catch (e) {}
+}
+refreshChartHistory();
+// Снимки пишутся раз в цикл парсера (~50-80 мин), но опрашиваем чаще
+// (раз в 2 мин), чтобы новая точка появлялась на графике вскоре после
+// того как парсер её создаст, без необходимости перезагружать страницу.
+setInterval(refreshChartHistory, 120000);
 </script>
 {% endblock %}

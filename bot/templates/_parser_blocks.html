@@ -1,0 +1,68 @@
+{# Реестр парсеров с реальными вкл/выкл переключателями.
+   Переиспользуется на /admin/parsers и /admin/parser — ожидает переменную
+   `blocks` (список карточек, см. _parser_registry_blocks() в terminal_extras.py).
+   Стиль — как на /admin/analytics/ai-status (btn-big / btn-money-on/off). #}
+<style>
+.prb-wrap { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+.prb-block { flex:1 1 0; min-width:340px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; }
+.prb-block h3 { margin:0 0 4px; font-size:15px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.prb-block .desc { font-size:12.5px; color:#888; margin:0 0 12px; min-height:32px; }
+.prb-block .signal { font-size:13px; margin-top:12px; padding-top:12px; border-top:1px solid var(--border); }
+.prb-block .signal div { margin:3px 0; }
+.prb-status { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600; white-space:nowrap; }
+.btn-big { border: none; border-radius: 10px; padding: 14px 24px; font-size: 15px; font-weight: 700; cursor: pointer; transition: opacity .15s; }
+.btn-big:hover { opacity: .85; }
+.btn-big:disabled { opacity: .5; cursor: wait; }
+.btn-money-on  { background: #f59e0b; color: #fff; }
+.btn-money-off { background: #64748b; color: #fff; }
+</style>
+
+<div class="prb-wrap">
+  {% for b in blocks %}
+  <div class="prb-block" id="prb-card-{{ b.key }}">
+    <h3>
+      <span>{{ b.name }}</span>
+      <span class="prb-status" id="prb-status-{{ b.key }}">
+        <span class="dot {{ 'g' if b.active else 'r' }}"></span>
+        {% if b.kind == 'systemd' %}{{ 'работает' if b.active else 'остановлен' }}{% else %}{{ 'включён' if b.active else 'выключен' }}{% endif %}
+      </span>
+    </h3>
+    <p class="desc">{{ b.desc }}</p>
+    <button class="btn-big {{ 'btn-money-on' if b.active else 'btn-money-off' }}" id="prb-btn-{{ b.key }}"
+            onclick="prbToggle('{{ b.key }}')">
+      {{ (b.name ~ ': ВКЛ') if b.active else (b.name ~ ': ВЫКЛ') }}
+    </button>
+    <div class="signal">
+      <div>{{ b.activity }}</div>
+      {% if b.last %}<div style="color:var(--muted);">последняя активность: {{ b.last.strftime('%d.%m.%Y %H:%M') }}</div>{% endif %}
+      <div style="color:var(--muted);font-size:11.5px;">{% if b.kind == 'systemd' %}systemd: {{ b.key }}.service{% else %}cron + app_settings флаг{% endif %}</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+async function prbToggle(key) {
+  const btn = document.getElementById('prb-btn-' + key);
+  const statusEl = document.getElementById('prb-status-' + key);
+  const label = btn.textContent.replace(/:\s*(ВКЛ|ВЫКЛ)\s*$/, '').trim();
+  btn.disabled = true;
+  try {
+    const r = await fetch('/admin/parsers/toggle/' + key, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) {
+      alert('Не удалось переключить: ' + (d.msg || d.error || 'ошибка'));
+      return;
+    }
+    const active = d.active;
+    btn.className = 'btn-big ' + (active ? 'btn-money-on' : 'btn-money-off');
+    btn.textContent = label + ': ' + (active ? 'ВКЛ' : 'ВЫКЛ');
+    statusEl.innerHTML = '<span class="dot ' + (active ? 'g' : 'r') + '"></span> ' +
+      (key === 'krisha-complex-scan' ? (active ? 'включён' : 'выключен') : (active ? 'работает' : 'остановлен'));
+  } catch (e) {
+    alert('Ошибка запроса: ' + e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>

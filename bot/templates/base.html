@@ -58,27 +58,36 @@
     }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
 
-    /* верхнее меню — тот же паттерн, что на публичной карте (base_public.html) */
+    /* верхнее меню — один ряд, тот же паттерн, что на публичной карте
+       (base_public.html): .pub-nav занимает свободное место (flex:1)
+       между логотипом и правым блоком (тема/избранное/вход), с
+       flex-wrap для узких экранов вместо поломки макета. */
     .pub-header { background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 500; }
-    .pub-row1 { display: flex; align-items: center; justify-content: space-between; padding: 10px 24px; border-bottom: 1px solid var(--border); }
-    .pub-logo { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; font-size: 19px; font-weight: 800; color: var(--logo-color); letter-spacing: .3px; }
+    .pub-row1 { display: flex; align-items: center; gap: 14px; padding: 10px 24px; flex-wrap: wrap; }
+    .pub-logo { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; font-size: 21.85px; font-weight: 800; text-transform: uppercase; color: var(--logo-color); letter-spacing: .5px; flex-shrink: 0; }
     .pub-logo img { width: 26px; height: 26px; object-fit: contain; border-radius: 5px; }
-    .pub-row1-right { display: flex; align-items: center; gap: 14px; }
+    .pub-row1-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-left: auto; }
     .pub-theme-btn { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--text); cursor: pointer; }
-    .pub-row2 { display: flex; align-items: center; gap: 4px; padding: 0 24px; overflow-x: auto; }
-    .pub-nav { display: flex; align-items: center; width: 100%; }
-    .pub-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 11px 14px; color: var(--text); text-decoration: none; font-size: 13.5px; font-weight: 600; border-bottom: 2px solid transparent; white-space: nowrap; }
-    .pub-nav a:hover { color: var(--text); }
-    .pub-nav a.active { color: var(--accent2); border-bottom-color: var(--accent); }
+    /* flex-basis: 0% (не auto) — см. комментарий в base_public.html:
+       иначе браузер переносит ВЕСЬ правый блок на вторую строку, если
+       .pub-nav не влезает по своему контенту, вместо переноса собственных
+       ссылок nav внутри себя (flex-wrap: wrap уже есть). */
+    .pub-nav { display: flex; align-items: center; gap: 4px; flex: 1 1 0%; flex-wrap: wrap; min-width: 0; }
+    .pub-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 11px 10px; color: #000; text-decoration: none; font-size: 13px; font-weight: 600; border-bottom: 2px solid transparent; white-space: nowrap; }
+    .pub-nav a:hover { color: #000; }
+    .pub-nav a.active { color: #000; border-bottom-color: var(--accent); }
     .pub-nav .spacer { flex: 1; }
     .pub-nav a.admin-panel-link { background: rgba(88,101,242,.12); border-radius: 8px; margin: 6px 0; padding: 7px 14px; }
     .pub-nav a.admin-panel-link:hover { background: rgba(88,101,242,.22); }
 
-    /* вкладки раздела АНАЛИТИКА (Продажи/Аренда/Дубли/Архив/Без ЖК) */
+    /* вкладки раздела АНАЛИТИКА (Продажи/Аренда/Дубли/Архив/Без ЖК) — размер
+       шрифта/паддинги приведены к тому же формату, что и .pub-nav (единый
+       ряд верхней навигации после её редизайна), чтобы вся навигация
+       админки выглядела как одна система. */
     .atabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; position: sticky; top: 98px; z-index: 490; background: var(--bg); padding-top: 6px; }
-    .atabs a { padding: 9px 16px; font-size: 13.5px; font-weight: 600; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; }
-    .atabs a:hover { color: var(--text); }
-    .atabs a.active { color: var(--accent2); border-bottom-color: var(--accent); }
+    .atabs a { padding: 11px 10px; font-size: 13px; font-weight: 600; color: #000; text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+    .atabs a:hover { color: #000; }
+    .atabs a.active { color: #000; border-bottom-color: var(--accent); }
 
     /* main */
     .main { padding: 32px 36px; }
@@ -150,8 +159,43 @@
       border-radius: 6px; padding: 6px 10px; font-size: 13px;
     }
     select:focus, input:focus { outline: 1px solid var(--accent); }
+
+    /* Блок графика по всей админке — базовый размер 800×600, но теперь
+       ресайзабельный (нативный CSS resize:both, тянуть за правый нижний
+       угол) и перетаскиваемый (drag handle сверху справа, реордер внутри
+       родительского контейнера). Chart.js сам переотрисовывается при ресайзе
+       контейнера (встроенный ResizeObserver при responsive:true), для
+       инлайн-SVG графиков используем viewBox+width:100% — см. JS ниже и
+       initChartGrid(). Размер/порядок сохраняются per-browser в localStorage,
+       см. задачу "drag+resize chart grid". */
+    .chart-block { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; width:800px; max-width:100%; height:600px; min-width:320px; min-height:260px; resize:both; overflow:hidden; box-sizing:border-box; font-size:1em; position:relative; display:flex; flex-direction:column; }
+    .chart-block-inner { position:relative; flex:1 1 auto; min-height:0; width:100%; overflow:hidden; }
+    .chart-block-inner canvas { max-width:100%; max-height:100%; }
+    .chart-block-inner svg { width:100%; height:100%; }
+    .chart-drag-handle { position:absolute; top:6px; right:8px; font-size:13px; line-height:1; color:var(--muted); cursor:grab; padding:3px 6px; border-radius:4px; z-index:20; user-select:none; opacity:.5; background:var(--surface); }
+    .chart-drag-handle:hover { opacity:1; background:var(--surface2); }
+    .chart-block.hcb-dragging { opacity:.35; }
+    .chart-block.hcb-dragover { outline:2px dashed var(--accent); outline-offset:-2px; }
+
+    /* Внутренняя вкладочная полоса hub-страниц (Парсеры / ЖК / AI-анализ /
+       Тепловые карты) — НЕ путать с .atabs (верхняя навигация между
+       разделами) — это переключатель ВНУТРИ одной hub-страницы. */
+    .htabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .htabs a { padding: 8px 14px; font-size: 13px; font-weight: 600; color: #000; text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+    .htabs a:hover { color: #000; }
+    .htabs a.active { color: #000; border-bottom-color: var(--accent); background: rgba(88,101,242,.08); border-radius: 6px 6px 0 0; }
+    /* Тёмная тема (по умолчанию): текст меню/вкладок светлый, иначе #000 невидим */
+    :root:not([data-theme="light"]) .pub-nav a,
+    :root:not([data-theme="light"]) .pub-nav a:hover,
+    :root:not([data-theme="light"]) .pub-nav a.active,
+    :root:not([data-theme="light"]) .atabs a,
+    :root:not([data-theme="light"]) .atabs a:hover,
+    :root:not([data-theme="light"]) .atabs a.active,
+    :root:not([data-theme="light"]) .htabs a,
+    :root:not([data-theme="light"]) .htabs a:hover,
+    :root:not([data-theme="light"]) .htabs a.active { color: #e8eaf6; }
+    .ap-tabs { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 6px; margin-left:6px; border-radius:10px; background:rgba(88,101,242,.14); color:var(--accent2); font-size:11.5px; font-weight:700; vertical-align:1px; }
   </style>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏠</text></svg>">
 </head>
 <body>
 
@@ -165,14 +209,6 @@
 <header class="pub-header">
   <div class="pub-row1">
     <a href="/admin" class="pub-logo"><img src="/static/branding/logo-icon.png" alt=""> Hatuli</a>
-    <div class="pub-row1-right">
-      <button class="pub-theme-btn" id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button">🌓 <span id="sidebar-theme-label">тёмная</span></button>
-      <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;text-decoration:none;color:var(--text);background:rgba(37,99,235,.1);border-radius:8px;padding:4px 10px;"><span style="font-size:16px;line-height:1;">♡</span>Избранное</a>
-      {% if admin %}<a href="/admin/logout" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Выйти</a>
-      {% else %}<a href="/cabinet" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Войти</a>{% endif %}
-    </div>
-  </div>
-  <div class="pub-row2">
     <nav class="pub-nav">
       <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Карта</a>
       <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
@@ -181,11 +217,16 @@
       <a href="/admin/mortgage-calculator" class="{% if 'mortgage-calculator' in request.url.path %}active{% endif %}">Калькулятор ипотеки</a>
       <a href="/admin/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
       {% if admin %}<a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path %}active{% endif %}">Инфо</a>{% endif %}
-      <span class="spacer"></span>
       {% if admin %}
       <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">🛠 Админ панель</a>
       {% endif %}
     </nav>
+    <div class="pub-row1-right">
+      <button class="pub-theme-btn" id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button">🌓 <span id="sidebar-theme-label">тёмная</span></button>
+      <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;text-decoration:none;color:var(--text);background:rgba(37,99,235,.1);border-radius:8px;padding:4px 10px;"><span style="font-size:16px;line-height:1;">♡</span>Избранное</a>
+      {% if admin %}<a href="/admin/logout" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Выйти</a>
+      {% else %}<a href="/cabinet" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Войти</a>{% endif %}
+    </div>
   </div>
 </header>
 {% endif %}
@@ -207,6 +248,156 @@ function toggleSidebarTheme() {
   _applySidebarTheme(next);
 }
 _applySidebarTheme(localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark');
+</script>
+<script>
+// ── Grafana-style сетка графиков (.chart-block): ресайз (нативный CSS
+// resize:both) + драг-реордер (HTML5 drag&drop за ручку в углу) + сохранение
+// размера/порядка в localStorage per-browser, per-URL. Один общий скрипт
+// для всех страниц /admin/analytics/* и /admin/parsers — блоки должны быть
+// `.chart-block`, id блока стабильно назначается по позиции в DOM, если не
+// задан вручную через data-chart-id.
+(function () {
+  function layoutKey() { return 'hatuli-chart-layout:' + location.pathname; }
+  function loadLayout() {
+    try { return JSON.parse(localStorage.getItem(layoutKey()) || '{}'); } catch (e) { return {}; }
+  }
+  function saveLayout(layout) {
+    try { localStorage.setItem(layoutKey(), JSON.stringify(layout)); } catch (e) {}
+  }
+
+  function initChartGrid() {
+    const blocks = Array.from(document.querySelectorAll('.chart-block'));
+    if (!blocks.length) return;
+    blocks.forEach((b, i) => { if (!b.dataset.chartId) b.dataset.chartId = 'auto-' + i; });
+
+    // Некоторые страницы кладут .chart-block в flex-ряд с flex:1 1 0 (равная
+    // ширина). flex-grow постоянно пересчитывает ширину при каждом рефлоу и
+    // "перетягивает" её обратно, конфликтуя с ручным resize:both — фиксируем
+    // текущую вычисленную ширину как явную и убираем flex-grow/shrink, чтобы
+    // ручной ресайз не боролся с layout'ом на каждом кадре.
+    blocks.forEach(b => {
+      const cs = getComputedStyle(b);
+      if (parseFloat(cs.flexGrow) > 0 || parseFloat(cs.flexShrink) > 0) {
+        const rect = b.getBoundingClientRect();
+        b.style.flex = '0 0 auto';
+        if (!b.style.width || b.style.width === 'auto') b.style.width = Math.round(rect.width) + 'px';
+      }
+    });
+
+    const layout = loadLayout();
+    layout.sizes = layout.sizes || {};
+    layout.order = layout.order || {};
+
+    // группируем по родителю — реордер драгом происходит только среди
+    // "соседей" внутри одного контейнера (обычно flex-ряд или просто main)
+    const parents = new Set(blocks.map(b => b.parentElement));
+
+    // применяем сохранённый порядок ДО применения размеров
+    parents.forEach(parent => {
+      const items = Array.from(parent.children).filter(el => el.classList && el.classList.contains('chart-block'));
+      const anyOrdered = items.some(el => layout.order[el.dataset.chartId] !== undefined);
+      if (!anyOrdered) return;
+      items.sort((a, b) => (layout.order[a.dataset.chartId] ?? 999) - (layout.order[b.dataset.chartId] ?? 999));
+      items.forEach(el => parent.appendChild(el));
+    });
+
+    function persistOrder() {
+      const cur = loadLayout();
+      cur.order = cur.order || {};
+      parents.forEach(parent => {
+        Array.from(parent.children)
+          .filter(el => el.classList && el.classList.contains('chart-block'))
+          .forEach((el, i) => { cur.order[el.dataset.chartId] = i; });
+      });
+      saveLayout(cur);
+    }
+
+    function getDragAfterElement(container, x, y) {
+      const els = [...container.querySelectorAll(':scope > .chart-block:not(.hcb-dragging)')];
+      let closest = { dist: Infinity, element: null };
+      for (const el of els) {
+        const box = el.getBoundingClientRect();
+        const cx = box.left + box.width / 2, cy = box.top + box.height / 2;
+        const dist = Math.hypot(x - cx, y - cy);
+        const before = (y < cy) || (Math.abs(y - cy) < box.height / 2 && x < cx);
+        if (before && dist < closest.dist) closest = { dist, element: el };
+      }
+      return closest.element;
+    }
+
+    parents.forEach(parent => {
+      parent.addEventListener('dragover', e => {
+        const dragging = parent.querySelector(':scope > .chart-block.hcb-dragging');
+        if (!dragging) return;
+        e.preventDefault();
+        const after = getDragAfterElement(parent, e.clientX, e.clientY);
+        if (after == null) parent.appendChild(dragging);
+        else if (after !== dragging) parent.insertBefore(dragging, after);
+      });
+      parent.addEventListener('drop', e => e.preventDefault());
+    });
+
+    blocks.forEach(b => {
+      const id = b.dataset.chartId;
+
+      // сохранённый размер
+      const s = layout.sizes[id];
+      if (s && s.w > 0 && s.h > 0) { b.style.width = s.w + 'px'; b.style.height = s.h + 'px'; }
+
+      // ручка для драга — весь блок оставляем НЕ draggable, чтобы не мешать
+      // взаимодействию с графиком (hover-тултипы, клик по легенде, resize-хват
+      // в углу), драгается только ручка сверху справа.
+      if (!b.querySelector(':scope > .chart-drag-handle')) {
+        const handle = document.createElement('div');
+        handle.className = 'chart-drag-handle';
+        handle.title = 'Перетащить блок';
+        handle.textContent = '⠿';
+        handle.setAttribute('draggable', 'true');
+        b.appendChild(handle);
+        handle.addEventListener('dragstart', e => {
+          b.classList.add('hcb-dragging');
+          e.dataTransfer.effectAllowed = 'move';
+          try { e.dataTransfer.setData('text/plain', id); } catch (er) {}
+        });
+        handle.addEventListener('dragend', () => {
+          b.classList.remove('hcb-dragging');
+          persistOrder();
+        });
+      }
+
+      // ResizeObserver: сохраняем размер + пинаем Chart.js/кастомные SVG
+      // на переотрисовку под новый размер контейнера.
+      let resizeTimer = null;
+      const ro = new ResizeObserver(() => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          const cur = loadLayout();
+          cur.sizes = cur.sizes || {};
+          cur.sizes[id] = { w: b.offsetWidth, h: b.offsetHeight };
+          saveLayout(cur);
+          // Chart.js v3+ уже слушает ResizeObserver на канвасе сам при
+          // responsive:true — это на всякий случай подталкивает и
+          // прочие (canvas-инстансы, не подхваченные авто), и уведомляет
+          // страницу, если там свой рендер SVG/DIV-графика зависит от
+          // ширины контейнера (см. 'hatuli:chart-resize').
+          b.querySelectorAll('canvas').forEach(cv => {
+            try {
+              if (window.Chart && typeof Chart.getChart === 'function') {
+                const inst = Chart.getChart(cv);
+                if (inst) inst.resize();
+              }
+            } catch (e) {}
+          });
+          b.dispatchEvent(new CustomEvent('hatuli:chart-resize', { bubbles: true, detail: { id: id, w: b.offsetWidth, h: b.offsetHeight } }));
+        }, 150);
+      });
+      ro.observe(b);
+    });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initChartGrid);
+  else initChartGrid();
+})();
 </script>
 </body>
 </html>

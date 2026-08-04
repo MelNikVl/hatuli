@@ -220,8 +220,8 @@ async def fetch_all(max_pages: int = DEFAULT_MAX_PAGES) -> dict[str, dict]:
     return all_found
 
 
-async def save_to_db(found: dict) -> None:
-    await save_enrichment(found, "homsters", set_housing_class=False)
+async def save_to_db(found: dict) -> dict:
+    return await save_enrichment(found, "homsters", set_housing_class=False)
 
 
 async def main():

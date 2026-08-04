@@ -10,20 +10,22 @@
 .ap-card a { display: block; padding: 7px 0; font-size: 14px; color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); }
 .ap-card a:last-child { border-bottom: none; }
 .ap-card a:hover { color: var(--accent2); }
+.ap-tabs { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 6px; margin-left:6px; border-radius:10px; background:rgba(88,101,242,.14); color:var(--accent2); font-size:11.5px; font-weight:700; vertical-align:1px; }
 </style>
 
 <div class="ap-grid">
   <div class="ap-card">
     <h3>Управление</h3>
-    <a href="/admin/settings">⚙️ Настройки</a>
+    <a href="/admin/settings">⚙️ Настройки<span class="ap-tabs" title="вкладок на странице">4</span></a>
     <a href="/admin/site-users">👥 Пользователи сайта</a>
     <a href="/admin/zones">📐 Зоны приоритета</a>
+    <a href="/admin/parsers">🎛 Управление парсерами<span class="ap-tabs" title="вкладок на странице">9</span></a>
   </div>
   <div class="ap-card">
     <h3>Аналитика</h3>
     <a href="/admin/analytics">Продажи</a>
     <a href="/admin/analytics/prices">Цены</a>
-    <a href="/admin/parser">Парсеры</a>
+    <a href="/admin/parser">Парсеры<span class="ap-tabs" title="вкладок на странице">9</span></a>
     <a href="/admin/duplicates">Дубли</a>
     <a href="/admin/archived">Ушедшие в архив</a>
     <a href="/admin/unbound">Квартиры без координат</a>
@@ -34,8 +36,7 @@
     <a href="/admin/analytics/floors">Этажи</a>
     <a href="/admin/analytics/ceiling">Потолок</a>
     <a href="/admin/analytics/floor-performance">Этаж vs продажи</a>
-    <a href="/admin/analytics/hype">🔥 Хайп</a>
-    <a href="/admin/analytics/transport">🚌 Транспорт</a>
+    <a href="/admin/analytics/hype">🔥 Хайп<span class="ap-tabs" title="вкладок на странице">2</span></a>
   </div>
 </div>
 {% endblock %}
