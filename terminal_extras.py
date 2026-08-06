@@ -492,7 +492,8 @@ def make_extras_router(templates) -> APIRouter:
                        MAX(h.rating) AS rating,
                        COUNT(h.id) AS mentions,
                        (array_agg(h.note ORDER BY h.ts DESC))[1] AS reason,
-                       MAX(h.ts) AS last_seen
+                       MAX(h.ts) AS last_seen,
+                       AVG(h.sentiment) AS sentiment
                 FROM hype_locations l
                 JOIN hype_location_history h ON h.location_id = l.id
                 WHERE l.lat IS NOT NULL AND l.lon IS NOT NULL
@@ -505,7 +506,7 @@ def make_extras_router(templates) -> APIRouter:
                 SELECT l.name, l.district, l.lat, l.lon, l.rating,
                        COALESCE((SELECT COUNT(*) FROM hype_location_history h
                                  WHERE h.location_id = l.id), 0) AS mentions,
-                       l.reason, l.last_seen
+                       l.reason, l.last_seen, l.sentiment
                 FROM hype_locations l
                 WHERE l.lat IS NOT NULL AND l.lon IS NOT NULL AND l.rating > 0
                 ORDER BY l.rating DESC LIMIT 300""")
@@ -516,6 +517,28 @@ def make_extras_router(templates) -> APIRouter:
                 l["last_seen"] = str(l["last_seen"])
         cur.close(); db.close()
         return JSONResponse({"locations": locs})
+
+    @router.get("/admin/api/demolition-points")
+    async def demolition_points_api(request: Request):
+        """Точки домов под снос/реновацию (см. /admin/analytics/demolition и
+        задачу "Снос кнопкой в тепловые карты") — для слоя на главной карте
+        и карты на /admin/info#demolition. Публичный, как и сама карта —
+        адреса из утверждённого перечня, не приватные данные."""
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT address, district, apartments, demolish_year, year_built, wear_pct, lat, lon
+            FROM demolition_houses WHERE lat IS NOT NULL AND lon IS NOT NULL
+        """)
+        points = []
+        for r in rows:
+            points.append({
+                "lat": float(r["lat"]), "lon": float(r["lon"]),
+                "address": r["address"], "district": r["district"],
+                "apartments": r["apartments"], "demolish_year": r["demolish_year"],
+                "year_built": r["year_built"],
+                "wear_pct": float(r["wear_pct"]) if r["wear_pct"] is not None else None,
+            })
+        return JSONResponse({"points": points})
 
     @router.get("/admin/api/population-hexes")
     async def population_hexes_api(request: Request):
@@ -2539,7 +2562,7 @@ def make_extras_router(templates) -> APIRouter:
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
                    a.is_owner, a.seller_name, a.year_built, a.views_count,
-                   a.description, a.ceiling_height, a.finish_type, a.floor, a.floors_total,
+                   a.description, a.ceiling_height, a.kitchen_area, a.finish_type, a.floor, a.floors_total,
                    a.floorplan_url,
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
@@ -2626,6 +2649,7 @@ def make_extras_router(templates) -> APIRouter:
             "year_built": r["year_built"],
             "description": r["description"] or "",
             "ceiling_height": float(r["ceiling_height"]) if r["ceiling_height"] is not None else None,
+            "kitchen_area": float(r["kitchen_area"]) if r["kitchen_area"] is not None else None,
             "floorplan_url": r["floorplan_url"] or "",
             "complex_photos": _complex_photos_of(r),
             "url": r["url"] or "",
@@ -3672,6 +3696,12 @@ def make_extras_router(templates) -> APIRouter:
             "year_built": l.get("year_built"),
             "views_count": l.get("views_count"),
             "floorplan_url": l.get("floorplan_url") or "",
+            # ceiling_height не отдавался тут вообще — d.ceiling_height в
+            # модалке (dashboard.html) был мёртвым полем (всегда undefined),
+            # плашка "потолок N м" никогда не показывалась. kitchen_area —
+            # новое поле (см. задачу "кухня в парсерах продажи").
+            "ceiling_height": float(l["ceiling_height"]) if l.get("ceiling_height") is not None else None,
+            "kitchen_area": float(l["kitchen_area"]) if l.get("kitchen_area") is not None else None,
             "ai_analysis": ai_analysis,
             "similar": similar_listings,
             "layers": layers,

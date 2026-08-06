@@ -58,7 +58,10 @@ import location_upsert  # noqa: E402  (переиспользуем апсерт
 BASE = Path("/home/nik/krisha_bot")
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 ARTICLE_WINDOW_DAYS = 10
-MAX_ARTICLES_PER_RUN = 40
+# Поднято с 40 — news_collect.py теперь тянет до 100 статей/день с
+# поимёнными запросами по ~80 ЖК (было 4 общих запроса) — 40/прогон душило
+# бы именно новый, самый ценный поток.
+MAX_ARTICLES_PER_RUN = 80
 LRT_RADIUS_M = 500
 PARK_RADIUS_M = 700  # парк больше станции ЛРТ — радиус щедрее
 
@@ -75,6 +78,7 @@ SYSTEM_PROMPT = """Ты аналитик рынка недвижимости А�
  "lrt_station": "название станции ЛРТ без слова ЛРТ (например 'Есиль'), если упомянута, иначе null",
  "park": "название парка/сквера/зелёной зоны, если он упомянут В ПОЛОЖИТЕЛЬНОМ КОНТЕКСТЕ (открытие, благоустройство, реконструкция, новая зона отдыха, озеленение) и это не ТРЦ/торговый центр; иначе null",
  "rating": 0-100,
+ "sentiment": -1.0..1.0,
  "reason": "одно предложение — почему это важно, с опорой на факт из новости"
 }
 rating: открытие метро/ЛРТ рядом, крупный инфраструктурный проект, запуск/сдача
@@ -82,6 +86,12 @@ rating: открытие метро/ЛРТ рядом, крупный инфра
 небольшое/косвенное упоминание = низкий (10-39). Если новость вообще не про
 конкретную недвижимость/локацию (общие законы, ипотечная статистика без привязки
 к месту и т.п.) — relevant=false и остальные поля null/0.
+sentiment — тональность самой новости про этот ЖК/локацию, НЕ связана с
+rating (важность/интенсивность) — высокий rating бывает и у скандала:
+  +0.5..+1.0 — позитив (старт продаж, сдача, открытие, раскупили, ажиотаж)
+  -0.2..+0.2 — нейтрально (просто факт/статистика без явной окраски)
+  -1.0..-0.5 — негатив (долгострой, задержка сдачи, обманутые дольщики,
+    проблемный застройщик, судебные иски, жалобы дольщиков)
 Не выдумывай факты и названия, которых нет в тексте."""
 
 
@@ -332,6 +342,10 @@ def main() -> None:
         rating = float(result.get("rating") or 0)
         reason = (result.get("reason") or "").strip()
         district = result.get("district") or None
+        try:
+            sentiment = max(-1.0, min(1.0, float(result.get("sentiment"))))
+        except (TypeError, ValueError):
+            sentiment = None
         lrt_station = (result.get("lrt_station") or "").strip()
         park_name = (result.get("park") or "").strip()
         sources = [f"{art.get('title', '')[:120]} ({art.get('url', '')})"]
@@ -351,6 +365,7 @@ def main() -> None:
                         "rating": round(scaled, 1),
                         "reason": f"рядом парк «{park['name']}» ({reason})",
                         "sources": sources,
+                        "sentiment": sentiment,
                     })
 
         if lrt_station:
@@ -366,6 +381,7 @@ def main() -> None:
                         "rating": round(scaled, 1),
                         "reason": reason,
                         "sources": sources,
+                        "sentiment": sentiment,
                     })
 
         if not targets and name:
@@ -379,6 +395,7 @@ def main() -> None:
                     "rating": rating,
                     "reason": reason,
                     "sources": sources,
+                    "sentiment": sentiment,
                 })
 
         if not targets:

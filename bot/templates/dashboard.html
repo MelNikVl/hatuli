@@ -168,6 +168,7 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="hype" onclick="toggleHeat('hype')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔥 Хайп (новости)</button>
         <button type="button" class="heat-btn" data-mode="population" onclick="toggleHeat('population')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">👥 Плотность нас.</button>
         <button type="button" class="heat-btn" data-mode="count" onclick="toggleHeat('count')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔢 Кол-во объявлений</button>
+        <button type="button" class="heat-btn" data-mode="demolition" onclick="toggleHeat('demolition')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🏚 Снос домов</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
         <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
@@ -1708,6 +1709,7 @@ function renderSaleBatch(d) {
       const floorPillHtml = pt.floor ? `<span style="${pillStyle}">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : '';
       const ownerPillHtml = `<span style="${ownerPillStyle}">${isOwner ? 'собственник' : 'риелтор'}</span>`;
       if (pt.ceiling_height) pillList.push(`Потолок ${pt.ceiling_height} м`);
+      if (pt.kitchen_area) pillList.push(`Кухня ${pt.kitchen_area} м²`);
       // "с отделкой"/"с мебелью" овалы убрали (просили) — черновая осталась,
       // так как это единственное реально полезное предупреждение из трёх.
       if (pt.finish_type === 'черновая') pillList.push(`🧱 ${pt.finish_type}`);
@@ -2199,6 +2201,26 @@ function hypeNewsColor(t) {
   const a = c[Math.min(3, i)], b = c[Math.min(3, i + 1)];
   return `rgb(${Math.round(a[0] + (b[0]-a[0])*f)},${Math.round(a[1] + (b[1]-a[1])*f)},${Math.round(a[2] + (b[2]-a[2])*f)})`;
 }
+// Снос/реновация (см. /admin/analytics/demolition, задача "Снос кнопкой в
+// тепловые карты") — точки, не гексы: это конкретные дома из утверждённого
+// перечня (174 адреса на всю Астану), а не непрерывное поле, размазывать
+// его в гекс-density было бы обманчиво. Цвет — по году сноса: 2026 (скоро)
+// красный -> 2030 (нескоро) бледно-жёлтый.
+const DEMOLITION_YEAR_COLORS = {2026: '#dc2626', 2027: '#ea580c', 2028: '#f59e0b', 2029: '#eab308', 2030: '#facc15'};
+function drawDemolitionHeat(points) {
+  (points || []).forEach(p => {
+    if (p.lat == null || p.lon == null) return;
+    const color = DEMOLITION_YEAR_COLORS[p.demolish_year] || '#a16207';
+    L.circleMarker([p.lat, p.lon], {
+      radius: 7, color: '#fff', weight: 1.5, fillColor: color, fillOpacity: 0.9,
+    }).bindTooltip(
+      `🏚 ${escapeHtml(p.address || '')}${p.district ? ' · ' + escapeHtml(p.district) : ''}<br>` +
+      `снос: ${p.demolish_year || '?'} г.${p.year_built ? ' · построен ' + p.year_built : ''}${p.apartments ? ' · ' + p.apartments + ' кв.' : ''}`,
+      {sticky:true}
+    ).addTo(heatLayer);
+  });
+}
+
 function drawHypeNewsHeat(hexes) {
   // Тот же баг, что чинили здесь уже 3 раза: "гексы" рисовались не по
   // ячейкам общей сетки, а как фигура-маркер вокруг СЫРОЙ точки хайп-локации
@@ -2628,6 +2650,9 @@ async function loadHeatData(mode) {
       cachedFetchJson('/admin/api/map-points?type=rental'),
     ]);
     heatCache.count = [...(s.points || []), ...(r.points || [])].filter(p => p.lat != null && p.lon != null);
+  } else if (mode === 'demolition') {
+    const d = await fetch('/admin/api/demolition-points').then(r => r.json());
+    heatCache.demolition = d.points || [];
   }
   return heatCache[mode];
 }
@@ -2711,6 +2736,8 @@ async function toggleHeat(mode) {
     drawPopulationHeat(data);
   } else if (mode === 'count') {
     drawListingCountHeat(data);
+  } else if (mode === 'demolition') {
+    drawDemolitionHeat(data);
   }
 }
 
@@ -2998,6 +3025,7 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
     ${d.floor ? `<span style="${modalPillStyle}">${d.floor}/${d.floors_total || '?'} эт.</span>` : ''}
     <span style="${modalPillStyle}">${d.is_owner ? 'собственник' : 'риелтор'}</span>
     ${d.ceiling_height ? `<span style="${modalPillStyle}">потолок ${d.ceiling_height} м</span>` : ''}
+    ${d.kitchen_area ? `<span style="${modalPillStyle}">кухня ${d.kitchen_area} м²</span>` : ''}
     ${d.finish_type ? `<span style="${modalPillStyle}">${escapeHtml(d.finish_type)}</span>` : ''}
     ${d.floorplan_url ? `<a href="${d.floorplan_url}" target="_blank" onclick="event.stopPropagation()" style="${modalPillStyle}text-decoration:none;">📐 План</a>` : ''}
     ${d.views_count ? `<span style="${modalPillStyle}background:#bfdbfe;">👁 ${d.views_count.toLocaleString('ru')}</span>` : ''}`;
@@ -3066,8 +3094,10 @@ ${similarMapHtml}
     <iframe src="https://yandex.ru/map-widget/v1/?um=constructor%3A1c828d0b5d4e475c9ee30454f42ffdfc8f61b8a002e61d9c807c9ee379a3d9ae&amp;source=constructor&amp;l=trf" width="100%" height="420" frameborder="0" style="border-radius:10px;display:block;"></iframe>
   </div>
 </details>
-<div style="padding:20px 22px;display:flex;gap:10px;flex-wrap:wrap;">
+<div style="padding:20px 22px;display:flex;gap:10px;flex-wrap:wrap;position:relative;">
   <a href="${d.url}" target="_blank" style="display:inline-block;padding:11px 20px;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;text-decoration:none;font-size:16px;">Открыть на Крыше ↗</a>
+  <button type="button" onclick="toggleShareMenu(event, '${id}')" style="display:inline-flex;align-items:center;gap:6px;padding:11px 20px;border-radius:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);font-weight:700;font-size:16px;cursor:pointer;">📤 Поделиться</button>
+  <div id="share-menu" style="display:none;position:absolute;bottom:calc(100% + 6px);left:22px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.25);padding:6px;z-index:20;min-width:220px;"></div>
 </div>`;
 
     if (modalPhotos.length) {
@@ -3103,6 +3133,52 @@ ${similarMapHtml}
   }).catch(() => {
     content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Ошибка загрузки</div>';
   });
+}
+
+// Поделиться объявлением — ссылка на /admin/listing/{id} (та же
+// адресуемая "страница" объявления, что открывает попап напрямую, см.
+// комментарий про history.pushState ниже). Instagram/Threads не поддерживают
+// прямые share-ссылки по URL — для них (и для всего остального на мобиле)
+// используем нативный navigator.share(), с копированием ссылки как
+// универсальным фолбэком на десктопе.
+function shareListingUrl(id) {
+  return location.origin + '/admin/listing/' + encodeURIComponent(id);
+}
+function toggleShareMenu(ev, id) {
+  ev.stopPropagation();
+  const menu = document.getElementById('share-menu');
+  if (!menu) return;
+  if (menu.style.display === 'block') { menu.style.display = 'none'; return; }
+  const url = shareListingUrl(id);
+  const text = 'Смотри квартиру на Hatuli';
+  const itemStyle = 'display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:none;background:none;color:var(--text);font-size:14px;text-align:left;cursor:pointer;border-radius:6px;white-space:nowrap;';
+  const items = [];
+  items.push(`<button type="button" style="${itemStyle}" onclick="shareCopyLink('${id}', this)">🔗 Скопировать ссылку</button>`);
+  items.push(`<a href="https://wa.me/?text=${encodeURIComponent(text + ' ' + url)}" target="_blank" style="${itemStyle}text-decoration:none;">💬 WhatsApp</a>`);
+  items.push(`<a href="https://threads.net/intent/post?text=${encodeURIComponent(text + ' ' + url)}" target="_blank" style="${itemStyle}text-decoration:none;">🧵 Threads</a>`);
+  // У Instagram нет веб-интента "поделиться ссылкой" (только Stories через
+  // мобильное приложение) — на мобиле это закрывает navigator.share ниже
+  // (системный шэринг умеет "отправить в Instagram"), на десктопе даём
+  // скопировать ссылку и открыть Instagram, чтобы вставить в сообщение/бно.
+  if (navigator.share) {
+    items.push(`<button type="button" style="${itemStyle}" onclick="navigator.share({title:'Hatuli',text:'${text}',url:'${url}'}).catch(()=>{}); document.getElementById('share-menu').style.display='none';">📱 Ещё (Instagram и др.)</button>`);
+  } else {
+    items.push(`<a href="https://www.instagram.com/" target="_blank" style="${itemStyle}text-decoration:none;" onclick="shareCopyLink('${id}', null)">📷 Instagram (сначала скопируется ссылка)</a>`);
+  }
+  menu.innerHTML = items.join('');
+  menu.style.display = 'block';
+  const closeOnce = (e) => {
+    if (!menu.contains(e.target)) { menu.style.display = 'none'; document.removeEventListener('click', closeOnce); }
+  };
+  setTimeout(() => document.addEventListener('click', closeOnce), 0);
+}
+function shareCopyLink(id, btn) {
+  const url = shareListingUrl(id);
+  navigator.clipboard.writeText(url).then(() => {
+    if (btn) { const old = btn.textContent; btn.textContent = '✅ Скопировано'; setTimeout(() => { btn.textContent = old; }, 1500); }
+  }).catch(() => { prompt('Скопируйте ссылку:', url); });
+  const menu = document.getElementById('share-menu');
+  if (menu && !btn) menu.style.display = 'none';
 }
 
 function closeDetailModal() {

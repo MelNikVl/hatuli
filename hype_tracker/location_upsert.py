@@ -49,6 +49,13 @@ def upsert_location(cur, loc: dict) -> int | None:
     reason = (loc.get("reason") or "")[:600]
     district = (loc.get("district") or "")[:60] or None
     sources = json.dumps(loc.get("sources") or [], ensure_ascii=False)
+    # Тональность -1..+1 (скандальный хайп — «обманутые дольщики», задержка
+    # сдачи — должен отличаться цветом на карте от позитивного хайпа —
+    # «старт продаж», «раскупили»). None, если пайплайн его не считал
+    # (ручной location_upsert.py --file без этого поля) — не путаем с 0
+    # (нейтральный, посчитанный и подтверждённый).
+    sentiment = loc.get("sentiment")
+    sentiment = float(sentiment) if sentiment is not None else None
 
     cur.execute("SELECT id, rating, reason, last_seen FROM hype_locations WHERE name = %s", (name,))
     row = cur.fetchone()
@@ -69,8 +76,8 @@ def upsert_location(cur, loc: dict) -> int | None:
 
         cur.execute(
             "UPDATE hype_locations SET rating = %s, reason = %s, lat = %s, lon = %s, "
-            "district = %s, last_seen = now() WHERE id = %s",
-            (rating, reason, lat, lon, district, lid))
+            "district = %s, sentiment = COALESCE(%s, sentiment), last_seen = now() WHERE id = %s",
+            (rating, reason, lat, lon, district, sentiment, lid))
 
         # Не плодим шумные дубли в истории, если за последние 3ч уже
         # записан ровно такой же рейтинг для этой локации (неважно, каким
@@ -83,15 +90,15 @@ def upsert_location(cur, loc: dict) -> int | None:
             return lid
     else:
         cur.execute(
-            "INSERT INTO hype_locations (name, district, lat, lon, rating, reason) "
-            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (name, district, lat, lon, rating, reason))
+            "INSERT INTO hype_locations (name, district, lat, lon, rating, reason, sentiment) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (name, district, lat, lon, rating, reason, sentiment))
         r = cur.fetchone()
         lid = r["id"] if isinstance(r, dict) else r[0]
     cur.execute(
-        "INSERT INTO hype_location_history (location_id, ts, rating, sources, note) "
-        "VALUES (%s, now(), %s, %s::jsonb, %s)",
-        (lid, rating, sources, reason or None))
+        "INSERT INTO hype_location_history (location_id, ts, rating, sources, note, sentiment) "
+        "VALUES (%s, now(), %s, %s::jsonb, %s, %s)",
+        (lid, rating, sources, reason or None, sentiment))
     return lid
 
 

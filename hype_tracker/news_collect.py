@@ -22,12 +22,95 @@ def load_database_url() -> str:
 def conn():
     return psycopg2.connect(load_database_url().rsplit("/", 1)[0] + "/krisha_bot")
 
+# 4-уровневый список запросов (см. задачу "тепловая карта хайпа" — раньше
+# было 4 общих фразы, поэтому и точек на карте было мало: 80% обсуждений
+# идёт по именам ЖК, а не общими словами). Порядок = порядок в
+# "Итог-приоритет" из спеки: сначала поимённые (дают больше всего точек).
+
+# Уровень 3 — топ-50 ЖК Астаны для поимённого мониторинга (см. Notion/задачу).
+# Список статичный (проверенные написания), ДОПОЛНЯЕТСЯ динамически топ-30
+# по listings_count из complexes в load_queries() — так ловим и известные
+# бренды, и то, что реально набирает объявления прямо сейчас, даже если в
+# этот статичный список ещё не попало.
+COMPLEX_NAMES = [
+    # BI Group
+    "Parkside Astana", "Vivaldi ЖК Астана", "La Vie ЖК Астана", "Akbulak Riviera",
+    "Garden View ЖК Астана", "Aisar ЖК Астана", "AruPark ЖК", "GreenLine ЖК Астана",
+    "Capital Park ЖК Астана", "Auez ЖК Астана", "MOD Urban ЖК", "Nexpo Aura ЖК",
+    "Jetisu ЖК Астана", "Expo Plaza ЖК", "UIA.BIRLIK ЖК", "Park City Forum ЖК",
+    "Koktobe City ЖК",
+    # Элит/бизнес
+    "The One Bazis ЖК", "Dara Residence ЖК", "Европа Сити ЖК Астана",
+    "Swiss Collection ЖК", "GRAND MONACO ЖК Астана", "Highvill Astana",
+    "Highvill Ishim", "London ЖК Астана", "England ЖК Астана", "Вивальди ЖК",
+    "LANDMARK GOLD ЖК", "SALZBURG ЖК Астана", "LEVEL ЖК Астана",
+    # Масс-маркет/комфорт
+    "Imran ЖК Астана", "Salman City ЖК", "Altyn Säulet ЖК", "Rauda ЖК Астана",
+    "Tasty ЖК Астана", "Фирдаус ЖК Астана", "Aviator 2 ЖК", "Altyn City ЖК",
+    "Time City ЖК Астана", "Alatau Park ЖК", "PARKLAND ЖК Астана", "Manar ЖК Астана",
+    "W TOWERS ЖК", "UIA.TARIH ЖК", "Sharyn ЖК Астана", "Turan Palace ЖК",
+    "Galaxy Star ЖК", "Мирадж ЖК Астана", "Столичный 2 ЖК", "Evolution ЖК Астана",
+]
+
+_QUERIES_L1_MONEY = [
+    "ипотека Казахстан 2026", "Отбасы банк ипотека", "ипотека 2% Астана",
+    "НДС застройщики 2026", "цены на квартиры Астана", "квадратный метр Астана цена",
+    "льготная ипотека Казахстан", "арендное жильё очередь",
+]
+_QUERIES_L2_DISTRICTS = [
+    "левый берег новостройки Астана", "район Есиль ЖК", "район Нура квартиры",
+    "Ботанический сад Астана ЖК", "Триатлон парк ЖК", "проспект Туран новостройки",
+    "Кабанбай батыра ЖК Астана", "район вокзала Нурлы Жол недвижимость",
+]
+_QUERIES_L4_HYPE = [
+    # позитив
+    "старт продаж ЖК Астана", "очередь с ночи ЖК Астана", "раскупили новостройку Астана",
+    "котлован цена ЖК Астана", "сдача ЖК Астана 2026", "ключи выдача ЖК Астана",
+    # негатив
+    "долгострой Астана", "задержка сдачи ЖК Астана", "обманутые дольщики Астана",
+    "ЖК не стоит покупать Астана", "проблемный застройщик Астана",
+    # инвест
+    "ЖК для инвестиций Астана", "перепродажа новостройки Астана", "флиппинг квартиры Астана",
+]
+
 QUERIES = [
     "Астана недвижимость",
     "Астана новостройки ЖК",
     "ипотека Казахстан жильё",
     "рынок недвижимости Астана",
+    *_QUERIES_L1_MONEY,
+    *_QUERIES_L2_DISTRICTS,
+    *COMPLEX_NAMES,
+    *_QUERIES_L4_HYPE,
 ]
+
+
+def load_queries() -> list[str]:
+    """QUERIES + топ-30 ЖК по listings_count из complexes (динамически, не
+    только статичный список выше) — самообновляется по мере роста базы,
+    ловит то, что реально набирает объявления прямо сейчас."""
+    out = list(QUERIES)
+    try:
+        db = conn()
+        cur = db.cursor()
+        cur.execute("""
+            SELECT DISTINCT ON (lower(trim(complex_name))) complex_name, COUNT(*) OVER (PARTITION BY lower(trim(complex_name))) AS cnt
+            FROM apartment_listings
+            WHERE complex_name IS NOT NULL AND complex_name != ''
+            ORDER BY lower(trim(complex_name)), cnt DESC
+        """)
+        rows = cur.fetchall()
+        db.close()
+        top = sorted(rows, key=lambda r: r[1] or 0, reverse=True)[:30]
+        seen_lower = {q.lower() for q in out}
+        for name, _cnt in top:
+            q = f"{name} ЖК Астана"
+            if q.lower() not in seen_lower:
+                out.append(q)
+                seen_lower.add(q.lower())
+    except Exception as e:
+        print(f"# load_queries: top-complexes fallback failed: {e}", file=sys.stderr)
+    return out
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
 MAX_IMAGE_FETCH = 10  # сколько страниц статей открываем за прогон ради фото
 
@@ -165,18 +248,22 @@ def main() -> None:
     seen_urls = {r["url"] for r in cur.fetchall()}
 
     items: list[dict] = []
-    for q in QUERIES:
+    seen_this_run: set[str] = set()
+    for q in load_queries():
         try:
             for it in parse_rss(get_rss(q)):
-                if it["url"] in seen_urls or it["url"] in [x["url"] for x in items]:
+                if it["url"] in seen_urls or it["url"] in seen_this_run:
                     continue
                 items.append(it)
+                seen_this_run.add(it["url"])
             time.sleep(2)
         except Exception as e:
             print(f"# rss error {q}: {e}", file=sys.stderr)
 
-    # лимит: не больше 15 новых за день
-    items = items[:15]
+    # Лимит подняли с 15 до 100 — со старыми 4 общими запросами 15/день
+    # хватало с запасом, но с поимёнными запросами по ~50-80 ЖК (см.
+    # load_queries()) 15 сразу же душило самую ценную часть охвата.
+    items = items[:100]
     # сначала простой og:image (для прямых ссылок), потом Playwright для Google News
     for it in items:
         if not it["image"] and not it["url"].startswith("https://news.google.com"):

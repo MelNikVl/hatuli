@@ -29,6 +29,8 @@
     <span>тихо</span>
     <span style="width:140px;height:12px;border-radius:6px;background:linear-gradient(90deg,#fef08a,#facc15,#f59e0b,#b45309);display:inline-block;"></span>
     <span>хайп</span>
+    <span style="width:12px;height:12px;border-radius:3px;background:#7c3aed;display:inline-block;margin-left:10px;" title="скандальный хайп — негативная тональность (долгострой, обманутые дольщики и т.п.)"></span>
+    <span>скандал</span>
   </div>
   <span id="hp-result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
 </div>
@@ -163,6 +165,28 @@ function hpHexColor(t, boost) {
   return `rgb(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])})`;
 }
 
+// Скандальный/негативный хайп («обманутые дольщики», долгострой) — другая
+// шкала (сине-фиолетовая), чтобы не путать с позитивным золотым хайпом
+// (см. sentiment из hype_tracker/news_analyze.py: -1..+1). Порог -0.25 —
+// заметно негативная тональность, не просто нейтральная новость.
+function hpSentimentIsNegative(avgSentiment) {
+  return avgSentiment != null && avgSentiment < -0.25;
+}
+function hpHexColorNegative(t, boost) {
+  const c = [[221,214,254],[167,139,250],[124,58,237],[76,29,149]];
+  const x = Math.max(0, Math.min(1, (t - 0.2) / 0.8));
+  const i = Math.min(3, Math.floor(x * 4));
+  const f = x * 4 - i;
+  const a = c[Math.min(3, i)], b = c[Math.min(3, i + 1)];
+  let rgb = [a[0] + (b[0]-a[0])*f, a[1] + (b[1]-a[1])*f, a[2] + (b[2]-a[2])*f];
+  if (boost) {
+    const bright = [236, 72, 153];
+    const k = Math.max(0, Math.min(1, boost)) * 0.5;
+    rgb = rgb.map((v, idx) => v + (bright[idx] - v) * k);
+  }
+  return `rgb(${Math.round(rgb[0])},${Math.round(rgb[1])},${Math.round(rgb[2])})`;
+}
+
 function hexCorners(lat, lon, edge) {
   const pts = [];
   for (let i = 0; i < 6; i++) {
@@ -239,11 +263,12 @@ function drawNewsHexes() {
     const [q, r] = hpHexAxial(l.lat, l.lon, HP_EDGE);
     const key = q + ':' + r;
     let cell = cells.get(key);
-    if (!cell) { cell = {q, r, rating: 0, mentions: 0, names: [], reasons: []}; cells.set(key, cell); }
+    if (!cell) { cell = {q, r, rating: 0, mentions: 0, names: [], reasons: [], sentSum: 0, sentN: 0}; cells.set(key, cell); }
     cell.rating = Math.max(cell.rating, l.rating || 0);
     cell.mentions += (l.mentions || 1);
     cell.names.push(l.name);
     if (l.reason) cell.reasons.push(l.reason);
+    if (l.sentiment != null) { cell.sentSum += l.sentiment; cell.sentN++; }
   });
   const maxMentions = Math.max(1, ...[...cells.values()].map(c => c.mentions));
   let shown = 0;
@@ -251,12 +276,15 @@ function drawNewsHexes() {
     shown++;
     const s = Math.max(0.05, Math.min(1, cell.rating / 100));
     const boost = Math.min(1, cell.mentions / maxMentions);
+    const avgSentiment = cell.sentN ? cell.sentSum / cell.sentN : null;
+    const isNegative = hpSentimentIsNegative(avgSentiment);
     const [clat, clon] = hpHexCenter(cell.q, cell.r, HP_EDGE);
     const label = cell.names[0] + (cell.names.length > 1 ? ` +${cell.names.length - 1}` : '');
+    const sentTxt = isNegative ? ` · ⚠️ скандальный хайп (тональность ${avgSentiment.toFixed(2)})` : '';
     L.polygon(hexCorners(clat, clon, HP_EDGE), {
       color: 'transparent', weight: 0,
-      fillColor: hpHexColor(s, boost), fillOpacity: 0.6,
-    }).bindTooltip(`${escapeHtml(label)} · хайп ${Math.round(cell.rating)} · упоминаний: ${cell.mentions}${cell.reasons[0] ? ' · ' + escapeHtml(cell.reasons[0].slice(0, 90)) : ''}`, {sticky:true})
+      fillColor: isNegative ? hpHexColorNegative(s, boost) : hpHexColor(s, boost), fillOpacity: 0.6,
+    }).bindTooltip(`${escapeHtml(label)} · хайп ${Math.round(cell.rating)} · упоминаний: ${cell.mentions}${sentTxt}${cell.reasons[0] ? ' · ' + escapeHtml(cell.reasons[0].slice(0, 90)) : ''}`, {sticky:true})
       .addTo(hpNewsLayer);
   });
   updateHpCount();

@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <div class="page-title">ℹ️ Как всё устроено</div>
 
 <style>
@@ -370,43 +372,67 @@
 
 <div id="tab-demolition" style="display:none;">
   <h2>🏚 Снос и реновация домов в Астане (2026–2030)</h2>
-  <p style="font-size:12px;color:#888;margin-top:-6px;">Страница данных: <a href="/admin/analytics/demolition" style="color:#2563eb;">/admin/analytics/demolition</a> · Генплан: <a href="/admin/analytics/genplan" style="color:#2563eb;">/admin/analytics/genplan</a></p>
+  <p style="font-size:12px;color:#888;margin-top:-6px;">174 дома, 4 182 квартиры — программа реновации жилища до 2030 (решение маслихата Астаны № 356/47-VIII от 12.12.2025). Тот же слой доступен кнопкой «🏚 Снос домов» в тепловых картах на <a href="/admin" style="color:#2563eb;">главной карте</a>.</p>
 
-  <h3>📥 Откуда берём перечень</h3>
-  <ul>
-    <li><b>Официальный источник</b> — решение маслихата Астаны № 356/47-VIII от 12.12.2025 «Об утверждении Программы реновации жилища в городе Астане до 2030 года» + перечень объектов управления жилья и жилищной инспекции (обновление <b>18.06.2026</b>): <a href="https://www.gov.kz/memleket/entities/astana-uzh/documents/details/1028796" style="color:#2563eb;">gov.kz (перечень)</a>.</li>
-    <li><b>Перекрёстная сверка</b> — TengriNews (полный список по годам), Homsters/Otau, Krisha (годы постройки 2026), статьи о сносе.</li>
-    <li>Программа: <b>174 дома, 4 182 квартиры</b>, износ более 60% (двухэтажки советских лет, общежития, дома 1929–1989 гг.).</li>
-  </ul>
+  <div class="chart-block" style="width:100%;height:480px;margin-bottom:14px;">
+    <div id="demolition-info-map" class="chart-block-inner" style="border-radius:8px;"></div>
+  </div>
 
-  <h3>🗓 Разбивка по годам</h3>
-  <table style="width:100%;border-collapse:collapse;font-size:13px;">
-    <tr style="border-bottom:2px solid var(--border);text-align:left;"><th style="padding:6px 8px;">Год</th><th style="padding:6px 8px;text-align:right;">Домов</th><th style="padding:6px 8px;text-align:right;">Квартир</th><th style="padding:6px 8px;">Районы</th></tr>
-    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">2026</td><td style="padding:6px 8px;text-align:right;">25</td><td style="padding:6px 8px;text-align:right;">675</td><td style="padding:6px 8px;color:#888;">Сарыарка (16), Байконыр (9)</td></tr>
-    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">2027</td><td style="padding:6px 8px;text-align:right;">29</td><td style="padding:6px 8px;text-align:right;">745</td><td style="padding:6px 8px;color:#888;">Сарыарка (23), Байконыр (6)</td></tr>
-    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">2028</td><td style="padding:6px 8px;text-align:right;">32</td><td style="padding:6px 8px;text-align:right;">765</td><td style="padding:6px 8px;color:#888;">Сарыарка (6), Байконыр (26)</td></tr>
-    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">2029</td><td style="padding:6px 8px;text-align:right;">74</td><td style="padding:6px 8px;text-align:right;">1 154</td><td style="padding:6px 8px;color:#888;">Сарыарка, Байконыр, Алматы (3), Есиль (3)</td></tr>
-    <tr><td style="padding:6px 8px;">2030</td><td style="padding:6px 8px;text-align:right;">14</td><td style="padding:6px 8px;text-align:right;">843</td><td style="padding:6px 8px;color:#888;">Алматы, Сарыарка, Байконыр, Сарайшык</td></tr>
-  </table>
-
-  <h3>🗺 Геокодирование</h3>
-  <ul>
-    <li>Адреса → координаты через <b>OSM Nominatim</b> (пауза 1–1.1 с, щадящий режим).</li>
-    <li><b>Ошибка, которую исправили</b>: «ул. Толстого» геокодировалась в одноимённую улицу <b>Актобе</b> (в Актобе есть свой «район Астана»!). Решение — принудительный поиск по viewbox Астаны + ручная проверка «улица Льва Толстого, Байконур» (51.1764, 71.4502).</li>
-    <li>Контроль: после геокода все точки проверяются на попадание в bounding box Астаны (lat 51.0–51.35, lon 71.1–71.8); выбросы перегеокодируются вручную.</li>
-    <li>Покрытие: <b>168/174</b> адресов с координатами (остальные — переименованные/мелкие улицы).</li>
-  </ul>
-
-  <h3>🧮 Уровни уверенности (как оцениваем перспективу)</h3>
-  <ul>
-    <li><b style="color:#16a34a;">100%</b> — адрес в утверждённом перечне (наша таблица) — официально подлежит сносу.</li>
-    <li><b style="color:#f59e0b;">Высокая</b> — решение/ПДП + процедура изъятия земель.</li>
-    <li><b style="color:#f59e0b;">Средняя</b> — территория в утверждённом ПДП, адресного решения нет.</li>
-    <li><b style="color:#888;">Слабый сигнал</b> — новости, заявления акимата, общий Генплан.</li>
-    <li><b style="color:#888;">Не подтверждено</b> — только объявления риелторов/слухи.</li>
-  </ul>
-  <p style="font-size:12px;color:#888;">⚠️ Планы и списки периодически корректируются (последнее обновление 18.06.2026) — перечень стоит перепроверять раз в месяц. Инвестиционный сигнал: дома из перечня = будущие площадки под застройку (после переселения участок переходит городу и распределяется по генплану).</p>
+  <div style="max-height:420px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead style="position:sticky;top:0;background:var(--surface);">
+        <tr style="border-bottom:2px solid var(--border);text-align:left;">
+          <th style="padding:6px 8px;">Адрес</th><th style="padding:6px 8px;">Район</th>
+          <th style="padding:6px 8px;text-align:right;">Квартир</th>
+          <th style="padding:6px 8px;text-align:right;">Год сноса</th>
+          <th style="padding:6px 8px;text-align:right;">Построен</th>
+        </tr>
+      </thead>
+      <tbody id="demolition-info-tbody">
+        <tr><td colspan="5" style="padding:16px;color:#888;text-align:center;">загрузка…</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
+
+<script>
+// Инициализируется лениво при первом открытии вкладки (см. activate() ниже)
+// — Leaflet, инициализированный в display:none контейнере, меряет нулевой
+// размер и рисует поломанную/пустую карту (тот же класс багов, что и с
+// .chart-block-inner в других местах проекта).
+let demolitionTabInited = false;
+function initDemolitionTab() {
+  if (demolitionTabInited) return;
+  demolitionTabInited = true;
+  fetch('/admin/api/demolition-points').then(r => r.json()).then(d => {
+    const points = (d.points || []).slice().sort((a, b) => (a.demolish_year||9999) - (b.demolish_year||9999) || (a.address||'').localeCompare(b.address||''));
+    const tbody = document.getElementById('demolition-info-tbody');
+    if (tbody) {
+      tbody.innerHTML = points.length ? points.map(p => `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:6px 8px;">${(p.address||'—').replace(/</g,'&lt;')}</td>
+        <td style="padding:6px 8px;color:#888;">${(p.district||'—').replace(/</g,'&lt;')}</td>
+        <td style="padding:6px 8px;text-align:right;">${p.apartments ?? '—'}</td>
+        <td style="padding:6px 8px;text-align:right;font-weight:700;">${p.demolish_year ?? '—'}</td>
+        <td style="padding:6px 8px;text-align:right;color:#888;">${p.year_built ?? '—'}</td>
+      </tr>`).join('') : '<tr><td colspan="5" style="padding:16px;color:#888;text-align:center;">нет данных</td></tr>';
+    }
+    if (!window.L || !points.length) return;
+    const map = L.map('demolition-info-map').setView([51.16, 71.42], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OSM'}).addTo(map);
+    const colors = {2026:'#dc2626', 2027:'#ea580c', 2028:'#f59e0b', 2029:'#eab308', 2030:'#facc15'};
+    points.forEach(p => {
+      if (p.lat == null || p.lon == null) return;
+      L.circleMarker([p.lat, p.lon], {radius:6, color:'#fff', weight:1.5, fillColor: colors[p.demolish_year]||'#a16207', fillOpacity:0.9})
+        .bindTooltip(`${(p.address||'').replace(/</g,'&lt;')} · снос ${p.demolish_year||'?'}`, {sticky:true})
+        .addTo(map);
+    });
+    setTimeout(() => map.invalidateSize(), 50);
+  }).catch(() => {
+    const tbody = document.getElementById('demolition-info-tbody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="padding:16px;color:#ef4444;text-align:center;">не удалось загрузить</td></tr>';
+  });
+}
+</script>
 
 <script>
 (function() {
@@ -420,6 +446,7 @@
     document.getElementById('tab-transport').style.display = name === 'transport' ? '' : 'none';
     document.getElementById('tab-ai').style.display = name === 'ai' ? '' : 'none';
     document.getElementById('tab-demolition').style.display = name === 'demolition' ? '' : 'none';
+    if (name === 'demolition' && typeof initDemolitionTab === 'function') initDemolitionTab();
   }
   tabs.forEach(t => t.addEventListener('click', (e) => {
     e.preventDefault();
@@ -427,7 +454,10 @@
     activate(t.dataset.tab);
   }));
   const initial = (location.hash || '').replace('#', '');
-  activate(['score', 'noise', 'hype', 'transport', 'ai'].includes(initial) ? initial : 'general');
+  // "demolition" раньше не было в этом списке — прямая ссылка
+  // /admin/info#demolition открывала вкладку "Общая информация" вместо
+  // нужной (закладку/ссылку от пользователя игнорировало).
+  activate(['score', 'noise', 'hype', 'transport', 'ai', 'demolition'].includes(initial) ? initial : 'general');
 })();
 </script>
 
