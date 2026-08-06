@@ -163,6 +163,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             }
         )
 
+    @app.get("/")
+    async def root_redirect(request: Request):
+        # Голый домен (hatuli.ai-groundtruth.com без пути) — самый обычный
+        # способ, которым реальный посетитель заходит на сайт — раньше не
+        # был замаплен вообще ни на что и отдавал голый JSON 404 вместо
+        # сайта. Карта живёт на /admin (публична сама по себе, см. ниже) —
+        # редиректим туда.
+        return RedirectResponse(url="/admin", status_code=302)
+
     @app.get("/admin", response_class=HTMLResponse)
     async def dashboard(request: Request):
         # Публичная страница: карта и фильтры без логина; админ-элементы
