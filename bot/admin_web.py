@@ -1060,6 +1060,27 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             ctx.update(await _complexes_fix_data())
         else:
             ctx["complexes"] = await _housing_class_rows()
+            # Сводка сверху страницы: сколько ЖК реально закрыты данными по
+            # квартирам/этажности/подъездам — нужна была, чтобы видеть охват
+            # без прокрутки всей таблицы (тем более entrances — новое поле,
+            # почти везде ещё не заполнено вручную).
+            from bot.db.pg import fetchrow as pg_fetchrow
+            coverage_row = await pg_fetchrow("""
+                SELECT
+                  count(*) FILTER (WHERE hc.apartment_count IS NOT NULL OR ho.apartments_total IS NOT NULL) AS with_apt_count,
+                  count(*) FILTER (WHERE cts.floors_total IS NOT NULL) AS with_floors,
+                  count(*) FILTER (WHERE hc.entrances IS NOT NULL) AS with_entrances,
+                  count(*) AS total
+                FROM complexes c
+                LEFT JOIN housing_class_test hc ON hc.complex_id = c.id
+                LEFT JOIN complex_tech_specs cts ON cts.complex_id = c.id
+                LEFT JOIN (
+                    SELECT matched_complex_id, SUM(apartments_total) AS apartments_total
+                    FROM homeportal_objects WHERE matched_complex_id IS NOT NULL
+                    GROUP BY matched_complex_id
+                ) ho ON ho.matched_complex_id = c.id
+            """)
+            ctx["coverage"] = dict(coverage_row) if coverage_row else None
         return templates.TemplateResponse("complexes_hub.html", ctx)
 
     @app.post("/admin/complexes-fix/reassign")
