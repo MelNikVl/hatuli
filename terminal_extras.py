@@ -2952,6 +2952,8 @@ def make_extras_router(templates) -> APIRouter:
         """, complex_id)
         if not cx:
             return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+        if cx.get("is_garbage") is True or cx.get("is_street") is True:
+            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
         cx = dict(cx)
         # photos — JSONB, asyncpg отдаёт как строку; без парсинга шаблон
         # итерировался бы по символам строки, а не по элементам массива
@@ -3169,6 +3171,46 @@ def make_extras_router(templates) -> APIRouter:
             # is_orda_plus в БД хранится как text '0'/'1'
             hp["is_orda_plus_bool"] = str(hp.get("is_orda_plus") or "0").strip() == "1"
 
+        # Материалы ЖК: 1) complex_materials (открытые источники), 2) fallback — complex_tech_specs
+        materials = None
+        try:
+            from bot.db.pg import fetch as _mfetch
+            mrows = await _mfetch(
+                "SELECT facade, walls, windows, elevators, heating, doors, notes, source_name, source_url "
+                "FROM complex_materials WHERE complex_id = $1 ORDER BY id", complex_id)
+            if mrows:
+                materials = [dict(r) for r in mrows]
+        except Exception:
+            materials = None
+        if not materials and tech_specs:
+            ts = tech_specs
+            fall = []
+            def _add(label, val):
+                if val and str(val).strip():
+                    fall.append({"label": label, "val": str(val).strip(),
+                                 "src": "тех. характеристики (Крыша)"})
+            _add("Фасад", ts.get("facade_type"))
+            _add("Стены / каркас", ts.get("construction_type"))
+            _add("Отопление", ts.get("heating_type"))
+            _add("Лифты", ts.get("lifts_brand") and (str(ts.get("lifts_brand")) + ((" " + str(ts["lifts_model"])) if ts.get("lifts_model") else "")))
+            if ts.get("ceiling_height_min"):
+                _add("Высота потолков", str(ts["ceiling_height_min"]) + ("–" + str(ts["ceiling_height_max"]) if ts.get("ceiling_height_max") and ts["ceiling_height_max"] != ts["ceiling_height_min"] else "") + " м")
+            if ts.get("notes"):
+                _add("Примечания", ts["notes"])
+            if fall:
+                materials = [{"rows": fall}]
+
+        # Локационный скор ЖК (backlog #31) — бесплатные слои (OSM Overpass +
+        # уже посчитанная transport_hexes + demolition_houses), без Yandex/
+        # 2GIS (доступа к ним нет). См. bot/core/location_score.py.
+        # Локационный скор (backlog #31) считается ОТДЕЛЬНЫМ AJAX-запросом
+        # с фронта (см. /admin/api/complex/{id}/location-score ниже), а не
+        # тут синхронно — на холодном кэше Overpass (несколько зеркал,
+        # retry на каждом) это реально кладёт страницу ЖК целиком (524 от
+        # прокси, воспроизведено и исправлено). Отдельный запрос не блокирует
+        # рендер страницы и может позволить себе больший таймаут.
+        loc_score = None
+
         return templates.TemplateResponse("complex_detail.html", {
             "request": request,
             "cx": dict(cx),
@@ -3187,7 +3229,41 @@ def make_extras_router(templates) -> APIRouter:
             "live_no_coords": (cx_total["live_no_coords"] or 0) if cx_total else 0,
             "tech_specs": tech_specs,
             "hp": hp,
+            "materials": materials,
+            "loc_score": loc_score,
         })
+
+    @router.get("/admin/api/complex/{complex_id}/location-score")
+    async def complex_location_score_api(request: Request, complex_id: int):
+        """Локационный скор ЖК (backlog #31) — асинхронно с фронта (см.
+        комментарий у complex_detail выше почему не синхронно в самой
+        странице). Свой большой таймаут: не блокирует рендер страницы,
+        может позволить себе подождать медленный Overpass."""
+        from bot.db.pg import fetchrow
+        cx = await fetchrow("SELECT name, year_built, district FROM complexes WHERE id = $1", complex_id)
+        if not cx:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        cx = dict(cx)
+        geo = await fetchrow("""
+            SELECT AVG(lat) AS lat, AVG(lon) AS lon
+            FROM apartment_listings
+            WHERE lower(trim(complex_name)) = lower(trim($1)) AND lat IS NOT NULL
+        """, cx["name"])
+        if not geo or not geo["lat"]:
+            return JSONResponse({"error": "no_coords"}, status_code=404)
+        try:
+            from bot.core.location_score import compute_complex_location_score
+            loc_score = await asyncio.wait_for(
+                compute_complex_location_score(
+                    float(geo["lat"]), float(geo["lon"]),
+                    year_built=cx.get("year_built"), district=cx.get("district"),
+                ), timeout=90.0)
+        except asyncio.TimeoutError:
+            return JSONResponse({"error": "timeout"}, status_code=504)
+        except Exception as exc:
+            logger.warning("location_score API failed for complex %s: %s", complex_id, exc)
+            return JSONResponse({"error": "failed"}, status_code=500)
+        return JSONResponse(loc_score or {"error": "no_result"})
 
     @router.get("/admin/api/complex/{complex_id}/price-dynamics")
     async def complex_price_dynamics(request: Request, complex_id: int,

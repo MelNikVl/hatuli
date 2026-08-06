@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🏗 Генплан и градостроительство Астаны</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-bottom:14px;">
+  <b>Статус:</b> «Астанагенплан» выполнил корректировку Генерального плана развития столицы <b>до 2030 года</b>.
+  Общественные слушания по корректировке прошли <b>22 июля 2026</b>; ранее (4 февраля 2026) — слушания по стратегической
+  экологической оценке (СЭО). Корректировка предусматривает <b>130+ инвестиционных проектов</b>: промышленность,
+  логистика, социальная и деловая инфраструктура.
+</div>
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
+  <div class="chart-block" style="flex:1 1 48%;height:auto;">
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px;">📐 Иерархия градостроительных сигналов</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;"><b>Генплан</b></td><td style="padding:6px 8px;color:#888;">общая перспектива города до 2030</td></tr>
+      <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;"><b>ПДП</b></td><td style="padding:6px 8px;color:#888;">что появится на конкретной территории</td></tr>
+      <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;"><b>Проект застройки</b></td><td style="padding:6px 8px;color:#888;">ближе к практической реализации</td></tr>
+      <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;"><b>Изъятие земель</b></td><td style="padding:6px 8px;color:#888;">серьёзный юридический сигнал для собственников</td></tr>
+      <tr><td style="padding:6px 8px;"><b>Разрешение на стройку</b></td><td style="padding:6px 8px;color:#888;">высокая вероятность реализации</td></tr>
+    </table>
+  </div>
+  <div class="chart-block" style="flex:1 1 48%;height:auto;">
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px;">🎯 Ключевые зоны внимания</div>
+    <ul style="margin:0;padding-left:18px;font-size:13px;line-height:1.7;">
+      <li><b>Центр района Байконыр</b> — реновация ~343 га (старые/ветхие дома → жильё, школы, медицина, коммерция)</li>
+      <li><b>За ул. Валиханова</b>, у рынка «Артем», вдоль Кенесары к Ишиму — частный сектор послевоенной постройки</li>
+      <li><b>Сарыарка</b> — большинство домов сноса 2026–2029 (54% программы)</li>
+      <li>Изъятие <b>224 земельных участков</b> под школы и скверы</li>
+    </ul>
+  </div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-bottom:14px;">
+  <div style="font-size:13px;font-weight:700;margin-bottom:8px;">📚 Официальные источники</div>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">Управление жилья и жилищной инспекции</td><td style="padding:6px 8px;"><a href="https://www.gov.kz/memleket/entities/astana-uzh" target="_blank" style="color:#2563eb;">gov.kz/astana-uzh</a> — перечни аварийных домов, программа реновации</td></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">Управление архитектуры и градостроительства</td><td style="padding:6px 8px;"><a href="https://www.gov.kz/memleket/entities/astana-saulet" target="_blank" style="color:#2563eb;">gov.kz/astana-saulet</a> — Генплан, ПДП, проекты застройки, красные линии</td></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">Маслихат Астаны</td><td style="padding:6px 8px;"><a href="https://www.gov.kz/memleket/entities/astana-maslihat" target="_blank" style="color:#2563eb;">gov.kz/astana-maslihat</a> — решения об утверждении программ (№356/47-VIII от 12.12.2025)</td></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">Правовые акты</td><td style="padding:6px 8px;"><a href="https://adilet.zan.kz/" target="_blank" style="color:#2563eb;">adilet.zan.kz</a> — НПА по градостроительству</td></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">Экологические слушания</td><td style="padding:6px 8px;"><a href="https://ndbecology.gov.kz/" target="_blank" style="color:#2563eb;">ndbecology.gov.kz</a> — материалы слушаний по СЭО/ПДП</td></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">Открытые данные</td><td style="padding:6px 8px;"><a href="https://data.egov.kz/" target="_blank" style="color:#2563eb;">data.egov.kz</a> — свободные участки, ввод жилья, разрешения (API v4)</td></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">Кадастровая карта</td><td style="padding:6px 8px;"><a href="https://map.gov4c.kz/egkn/" target="_blank" style="color:#2563eb;">map.gov4c.kz</a> — земельные участки, кадастры</td></tr>
+    <tr><td style="padding:6px 8px;">Е-Құрылыс</td><td style="padding:6px 8px;">электронный реестр разрешений в сфере градостроительства (внедряется)</td></tr>
+  </table>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 20px;">
+  <div style="font-size:13px;font-weight:700;margin-bottom:8px;">🔍 Поисковые запросы для мониторинга</div>
+  <div style="font-size:13px;line-height:1.8;color:#888;">
+    <b style="color:var(--text);">Рус:</b> Астана программа реновации 2030 · Астана аварийные дома снос · Астана реновация ПДП · Астана изъятие земель · Астана общественные слушания<br>
+    <b style="color:var(--text);">Каз:</b> Астана сүрілетін үйлер · Астана апатты тұрғын үйлер · Астана тұрғын үй қорын реновациялау
+  </div>
+</div>
+{% endblock %}

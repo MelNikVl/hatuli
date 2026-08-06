@@ -35,6 +35,7 @@
   <a href="#hype" data-tab="hype">🔥 Хайп</a>
   <a href="#transport" data-tab="transport">🚌 Транспорт</a>
   <a href="#ai" data-tab="ai">🤖 AI-анализ описаний</a>
+  <a href="#demolition" data-tab="demolition">🏚 Снос домов</a>
 </div>
 
 <div id="tab-general">
@@ -367,6 +368,46 @@
 <p>Если для ЖК ещё нет такого поля в карточке — AI дополняет её и <b>присылает уведомление в Telegram</b> админу со ссылкой на объявление-источник. Уже заполненные вручную или найденные раньше поля никогда не перезаписываются — первый найденный факт остаётся источником истины.</p>
 </div>
 
+<div id="tab-demolition" style="display:none;">
+  <h2>🏚 Снос и реновация домов в Астане (2026–2030)</h2>
+  <p style="font-size:12px;color:#888;margin-top:-6px;">Страница данных: <a href="/admin/analytics/demolition" style="color:#2563eb;">/admin/analytics/demolition</a> · Генплан: <a href="/admin/analytics/genplan" style="color:#2563eb;">/admin/analytics/genplan</a></p>
+
+  <h3>📥 Откуда берём перечень</h3>
+  <ul>
+    <li><b>Официальный источник</b> — решение маслихата Астаны № 356/47-VIII от 12.12.2025 «Об утверждении Программы реновации жилища в городе Астане до 2030 года» + перечень объектов управления жилья и жилищной инспекции (обновление <b>18.06.2026</b>): <a href="https://www.gov.kz/memleket/entities/astana-uzh/documents/details/1028796" style="color:#2563eb;">gov.kz (перечень)</a>.</li>
+    <li><b>Перекрёстная сверка</b> — TengriNews (полный список по годам), Homsters/Otau, Krisha (годы постройки 2026), статьи о сносе.</li>
+    <li>Программа: <b>174 дома, 4 182 квартиры</b>, износ более 60% (двухэтажки советских лет, общежития, дома 1929–1989 гг.).</li>
+  </ul>
+
+  <h3>🗓 Разбивка по годам</h3>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <tr style="border-bottom:2px solid var(--border);text-align:left;"><th style="padding:6px 8px;">Год</th><th style="padding:6px 8px;text-align:right;">Домов</th><th style="padding:6px 8px;text-align:right;">Квартир</th><th style="padding:6px 8px;">Районы</th></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">2026</td><td style="padding:6px 8px;text-align:right;">25</td><td style="padding:6px 8px;text-align:right;">675</td><td style="padding:6px 8px;color:#888;">Сарыарка (16), Байконыр (9)</td></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">2027</td><td style="padding:6px 8px;text-align:right;">29</td><td style="padding:6px 8px;text-align:right;">745</td><td style="padding:6px 8px;color:#888;">Сарыарка (23), Байконыр (6)</td></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">2028</td><td style="padding:6px 8px;text-align:right;">32</td><td style="padding:6px 8px;text-align:right;">765</td><td style="padding:6px 8px;color:#888;">Сарыарка (6), Байконыр (26)</td></tr>
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:6px 8px;">2029</td><td style="padding:6px 8px;text-align:right;">74</td><td style="padding:6px 8px;text-align:right;">1 154</td><td style="padding:6px 8px;color:#888;">Сарыарка, Байконыр, Алматы (3), Есиль (3)</td></tr>
+    <tr><td style="padding:6px 8px;">2030</td><td style="padding:6px 8px;text-align:right;">14</td><td style="padding:6px 8px;text-align:right;">843</td><td style="padding:6px 8px;color:#888;">Алматы, Сарыарка, Байконыр, Сарайшык</td></tr>
+  </table>
+
+  <h3>🗺 Геокодирование</h3>
+  <ul>
+    <li>Адреса → координаты через <b>OSM Nominatim</b> (пауза 1–1.1 с, щадящий режим).</li>
+    <li><b>Ошибка, которую исправили</b>: «ул. Толстого» геокодировалась в одноимённую улицу <b>Актобе</b> (в Актобе есть свой «район Астана»!). Решение — принудительный поиск по viewbox Астаны + ручная проверка «улица Льва Толстого, Байконур» (51.1764, 71.4502).</li>
+    <li>Контроль: после геокода все точки проверяются на попадание в bounding box Астаны (lat 51.0–51.35, lon 71.1–71.8); выбросы перегеокодируются вручную.</li>
+    <li>Покрытие: <b>168/174</b> адресов с координатами (остальные — переименованные/мелкие улицы).</li>
+  </ul>
+
+  <h3>🧮 Уровни уверенности (как оцениваем перспективу)</h3>
+  <ul>
+    <li><b style="color:#16a34a;">100%</b> — адрес в утверждённом перечне (наша таблица) — официально подлежит сносу.</li>
+    <li><b style="color:#f59e0b;">Высокая</b> — решение/ПДП + процедура изъятия земель.</li>
+    <li><b style="color:#f59e0b;">Средняя</b> — территория в утверждённом ПДП, адресного решения нет.</li>
+    <li><b style="color:#888;">Слабый сигнал</b> — новости, заявления акимата, общий Генплан.</li>
+    <li><b style="color:#888;">Не подтверждено</b> — только объявления риелторов/слухи.</li>
+  </ul>
+  <p style="font-size:12px;color:#888;">⚠️ Планы и списки периодически корректируются (последнее обновление 18.06.2026) — перечень стоит перепроверять раз в месяц. Инвестиционный сигнал: дома из перечня = будущие площадки под застройку (после переселения участок переходит городу и распределяется по генплану).</p>
+</div>
+
 <script>
 (function() {
   const tabs = document.querySelectorAll('#info-tabs a');
@@ -378,6 +419,7 @@
     document.getElementById('tab-hype').style.display = name === 'hype' ? '' : 'none';
     document.getElementById('tab-transport').style.display = name === 'transport' ? '' : 'none';
     document.getElementById('tab-ai').style.display = name === 'ai' ? '' : 'none';
+    document.getElementById('tab-demolition').style.display = name === 'demolition' ? '' : 'none';
   }
   tabs.forEach(t => t.addEventListener('click', (e) => {
     e.preventDefault();

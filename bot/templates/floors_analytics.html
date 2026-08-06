@@ -121,14 +121,14 @@
   <div id="unbound-chart" class="chart-block-inner" style="margin-top:10px;"></div>
 </div>
 
-<div class="admin-block" data-chart-id="unbound-map-block">
-  <div id="unbound-map" style="aspect-ratio:1/1;width:100%;min-height:280px;max-height:50vh;border-radius:8px;"></div>
+<div class="admin-block" data-chart-id="unbound-map-block" style="display:flex;overflow:hidden;">
+  <div id="unbound-map" style="width:100%;border-radius:8px;"></div>
 </div>
 
-<div class="admin-block" data-chart-id="no-coords-list-block">
-  <b style="font-size:14px;">📋 Объявления совсем без координат</b>
-  <span style="font-size:12px;color:#888;margin-left:6px;">чтобы проставить локацию вручную — открыть на Крыше, найти адрес/карту, вбить координаты</span>
-  <div id="no-coords-list" style="margin-top:10px;max-height:520px;overflow-y:auto;display:flex;flex-direction:column;gap:1px;">
+<div class="admin-block" data-chart-id="no-coords-list-block" style="display:flex;flex-direction:column;overflow:hidden;">
+  <b style="font-size:14px;flex:none;">📋 Объявления совсем без координат</b>
+  <span style="font-size:12px;color:#888;margin-left:6px;flex:none;">чтобы проставить локацию вручную — открыть на Крыше, найти адрес/карту, вбить координаты</span>
+  <div id="no-coords-list" style="margin-top:10px;flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:1px;">
     <div style="color:#888;font-size:12px;padding:10px;">загрузка…</div>
   </div>
 </div>

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<div class="page-title">🏚 Снос и реновация домов (Астана 2026–2030)</div>
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:14px;">
+  <div style="flex:1 1 180px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;">Домов в программе</div>
+    <div style="font-size:24px;font-weight:800;">{{ total_houses }}</div>
+  </div>
+  <div style="flex:1 1 180px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;">Квартир</div>
+    <div style="font-size:24px;font-weight:800;">{{ total_flats }}</div>
+  </div>
+  {% for st in stats %}
+  <div style="flex:1 1 120px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+    <div style="font-size:12px;color:var(--muted);">{{ st.year }} год</div>
+    <div style="font-size:18px;font-weight:700;">{{ st.houses }} д. / {{ st.flats }} кв.</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+  <a href="/admin/analytics/demolition" style="padding:6px 12px;border-radius:8px;text-decoration:none;font-size:13px;{% if not f_year %}background:#2563eb;color:#fff;{% else %}background:var(--surface);color:var(--text);border:1px solid var(--border);{% endif %}">Все</a>
+  {% for y in [2026,2027,2028,2029,2030] %}
+  <a href="/admin/analytics/demolition?year={{ y }}" style="padding:6px 12px;border-radius:8px;text-decoration:none;font-size:13px;{% if f_year == y|string %}background:#2563eb;color:#fff;{% else %}background:var(--surface);color:var(--text);border:1px solid var(--border);{% endif %}">{{ y }}</a>
+  {% endfor %}
+  <span style="width:1px;height:22px;background:var(--border);"></span>
+  {% for d in districts %}
+  <a href="/admin/analytics/demolition?district={{ d }}" style="padding:6px 12px;border-radius:8px;text-decoration:none;font-size:13px;{% if f_district == d %}background:#2563eb;color:#fff;{% else %}background:var(--surface);color:var(--text);border:1px solid var(--border);{% endif %}">{{ d }}</a>
+  {% endfor %}
+</div>
+
+<div class="chart-block" style="width:100%;height:420px;margin-bottom:14px;">
+  <div id="demolition-map" style="width:100%;height:100%;"></div>
+</div>
+
+<div style="overflow-x:auto;background:var(--surface);border:1px solid var(--border);border-radius:12px;">
+<table style="width:100%;border-collapse:collapse;font-size:13px;">
+  <thead>
+    <tr style="border-bottom:2px solid var(--border);text-align:left;">
+      <th style="padding:8px 10px;">Год</th>
+      <th style="padding:8px 10px;">Адрес</th>
+      <th style="padding:8px 10px;">Район</th>
+      <th style="padding:8px 10px;text-align:right;">Квартир</th>
+      <th style="padding:8px 10px;text-align:right;">Год постр.</th>
+      <th style="padding:8px 10px;text-align:right;">Износ, %</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for h in houses %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:7px 10px;font-weight:700;color:#2563eb;">{{ h.demolish_year }}</td>
+      <td style="padding:7px 10px;">{{ h.address }}</td>
+      <td style="padding:7px 10px;color:#888;">{{ h.district }}</td>
+      <td style="padding:7px 10px;text-align:right;">{{ h.apartments }}</td>
+      <td style="padding:7px 10px;text-align:right;color:#888;">{{ h.year_built or '—' }}</td>
+      <td style="padding:7px 10px;text-align:right;color:#888;">{{ '%.0f'|format(h.wear_pct) if h.wear_pct else '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="padding:16px;color:#888;text-align:center;">Нет домов по выбранному фильтру</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<script>
+(function(){
+  const hs = {{ houses | tojson }};
+  const withGeo = hs.filter(h => h.lat && h.lon);
+  const map = L.map('demolition-map').setView([51.16, 71.42], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '© OSM'}).addTo(map);
+  const colors = {2026:'#ef4444', 2027:'#f97316', 2028:'#eab308', 2029:'#22c55e', 2030:'#2563eb'};
+  if (withGeo.length) {
+    const fg = L.featureGroup();
+    withGeo.forEach(h => {
+      L.circleMarker([h.lat, h.lon], {
+        radius: 7, color: '#fff', weight: 1.5,
+        fillColor: colors[h.demolish_year] || '#888', fillOpacity: 0.85
+      }).bindPopup(`<b>${h.address}</b><br>${h.demolish_year} · ${h.apartments} кв.${h.year_built ? '<br>постройки ' + h.year_built : ''}`).addTo(fg);
+    });
+    fg.addTo(map);
+    map.fitBounds(fg.getBounds().pad(0.1));
+  }
+})();
+</script>
+{% endblock %}

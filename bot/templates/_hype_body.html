@@ -1,10 +1,10 @@
 {# Вкладка "Хайп" hub-страницы /admin/analytics/heatmaps — раньше отдельная
-   страница /admin/analytics/hype (теперь редирект сюда). Сохранён
-   недавний 3-колоночный редизайн (карта · Обход СМИ · Ресурсы во времени) —
-   это осознанное исключение из стандарта .chart-block 800×600: там 3 узких
-   графика в ряд, форсировать 800px ширины каждому сломало бы именно этот
-   недавно сделанный layout. Единственный график ВНЕ 3-колоночного блока
-   ("Новостей проанализировано") переведён на .chart-block. #}
+   страница /admin/analytics/hype (теперь редирект сюда). Карта, "Обход СМИ"
+   и "Ресурсы во времени" явным образом переведены на .chart-block/
+   .chart-block-inner (по прямому запросу пользователя) — раньше это было
+   осознанным исключением с фикс. height:560px на канвасах, но при переезде
+   ВСЕХ .chart-block в единую grid-сетку (initDashboardGrid(), см. base.html)
+   фикс. пиксельная высота заводила вертикальный скролл внутри блока. #}
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -49,45 +49,27 @@
           style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12.5px;cursor:pointer;">90 дней</button>
 </div>
 
-<!-- 3 колонки по трети ширины: карта · Обход СМИ · Ресурсы во времени
-     (нестандартный для проекта 3-way сплит — явный запрос именно для этой
-     страницы; обычная 2-колоночная сетка используется везде остальном). -->
-<div class="hp-thirds">
-  <div class="hp-third">
-    <div id="hype-map" style="height:50vh;min-height:340px;border-radius:12px;border:1px solid var(--border);"></div>
-  </div>
-  <div class="hp-third" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
-    <div style="font-weight:700;margin-bottom:4px;">📰 Обход СМИ</div>
-    <div style="font-size:12.5px;color:#888;margin-bottom:10px;">
-      Сканы новостных источников (<b>Zakon.kz, Kazinform, Liter.kz, inastana.kz, Azattyq Ruhy</b>) — 5 раз/день.
-      Ось X — время скана, ось Y — количество новостей, учтённых в аналитике (сумма по всем СМИ за час).
-    </div>
-    <div style="position:relative;height:560px;">
-      <canvas id="hp-media-chart"></canvas>
-    </div>
-  </div>
-  <div class="hp-third" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
-    <div style="font-weight:700;margin-bottom:4px;">📈 Ресурсы во времени</div>
-    <div style="font-size:12.5px;color:#888;margin-bottom:10px;">
-      Количество используемых ресурсов и собранных объектов по снимкам (2×/день).
-    </div>
-    <div style="position:relative;height:560px;">
-      <canvas id="hp-chart"></canvas>
-    </div>
-  </div>
+<div class="chart-block">
+  <div id="hype-map" class="chart-block-inner" style="border-radius:12px;border:1px solid var(--border);"></div>
 </div>
-
-<style>
-.hp-thirds { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
-.hp-thirds .hp-third { flex:1 1 calc(33.333% - 10px); min-width:320px; box-sizing:border-box; }
-</style>
+<div class="chart-block">
+  <div style="font-weight:700;margin-bottom:4px;">📰 Обход СМИ</div>
+  <div style="font-size:12.5px;color:#888;margin-bottom:10px;">
+    Сканы новостных источников (<b>Zakon.kz, Kazinform, Liter.kz, inastana.kz, Azattyq Ruhy</b>) — 5 раз/день.
+    Ось X — время скана, ось Y — количество новостей, учтённых в аналитике (сумма по всем СМИ за час).
+  </div>
+  <div class="chart-block-inner"><canvas id="hp-media-chart"></canvas></div>
+</div>
+<div class="chart-block">
+  <div style="font-weight:700;margin-bottom:4px;">📈 Ресурсы во времени</div>
+  <div style="font-size:12.5px;color:#888;margin-bottom:10px;">
+    Количество используемых ресурсов и собранных объектов по снимкам (2×/день).
+  </div>
+  <div class="chart-block-inner"><canvas id="hp-chart"></canvas></div>
+</div>
 
 <div id="hp-hex-detail" style="display:none;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;max-height:300px;overflow-y:auto;"></div>
 
-<!-- Эти 2 блока — НЕ часть намеренного hp-thirds исключения выше (та
-     3-колоночная секция карта/СМИ/ресурсы остаётся как есть), просто были
-     не переведены на стандартную сетку заодно с "Новостей проанализировано"
-     ниже — добавляем class="admin-block", подхватится тем же initDashboardGrid(). -->
 <div class="admin-block" style="font-size:12.5px;color:#888;">
     <b style="color:var(--text);">Как считается:</b> хайповость каждого ЖК складывается из рыночных сигналов в базе:
     объёма предложения (<code>listings_count</code>), арендного спроса (<code>rental_listings_count</code>),
@@ -147,6 +129,8 @@
 <script>
 const hpMap = L.map('hype-map').setView([51.128, 71.430], 12);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(hpMap);
+document.getElementById('hype-map').closest('.chart-block')
+  .addEventListener('hatuli:chart-resize', () => hpMap.invalidateSize());
 const hpHexLayer = L.layerGroup().addTo(hpMap);   // рыночный слой (проект)
 const hpNewsLayer = L.layerGroup().addTo(hpMap);  // новостной слой (основной)
 let hpNewsOn = true, hpMarketOn = false, hpNewsLocations = [];

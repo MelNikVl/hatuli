@@ -63,17 +63,19 @@ tr:last-child td { border-bottom: none; }
 
 <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;">
   <div class="chart-block" style="flex:1 1 0;min-width:340px;width:auto;height:auto;">
-    <b style="font-size:1em;">🎯 Уверенность Смарт рейтинга по гексам</b>
-    <span style="font-size:0.85em;color:#888;margin-left:6px;">% факторов, посчитанных на реальных данных (не риск сделки) — см. подсказку "?" у скора в превью</span>
-    <div id="conf-summary-stats" class="stats-bar" style="margin-top:10px;"></div>
-    <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;">
+    <div style="display:flex;align-items:baseline;gap:5px;flex-wrap:wrap;">
+      <b style="font-size:1em;">🎯 Уверенность Смарт рейтинга по гексам</b>
+      <span style="font-size:11px;color:#888;cursor:help;" title="% факторов, посчитанных на реальных данных (не риск сделки) — см. подсказку &quot;?&quot; у скора в превью">ⓘ подробнее</span>
+    </div>
+    <div id="conf-summary-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:6px;"></div>
+    <div style="display:flex;gap:4px;margin:6px 0;flex-wrap:wrap;">
       {% for val, label in [('', 'Все'), ('1', '1-комн'), ('2', '2-комн'), ('3', '3-комн'), ('4', '4+-комн')] %}
       <button type="button" class="conf-rooms-btn" data-rooms="{{ val }}" onclick="loadConfidenceHex('{{ val }}')"
-              style="padding:6px 14px;border:1px solid var(--border);border-radius:8px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:13px;cursor:pointer;">{{ label }}</button>
+              style="padding:3px 9px;border:1px solid var(--border);border-radius:7px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
       {% endfor %}
-      <span id="conf-hex-count" style="font-size:12px;color:#888;margin-left:auto;align-self:center;"></span>
+      <span id="conf-hex-count" style="font-size:11px;color:#888;margin-left:auto;align-self:center;"></span>
     </div>
-    <div id="conf-hex-map" style="height:25vh;min-height:220px;border-radius:8px;"></div>
+    <div id="conf-hex-map" class="chart-block-inner" style="min-height:90px;border-radius:8px;"></div>
   </div>
   <div class="chart-block" style="flex:1 1 0;min-width:340px;width:auto;height:auto;">
     <b style="font-size:1em;">📉 Объявления без фото во времени</b>
@@ -137,16 +139,30 @@ tr:last-child td { border-bottom: none; }
       `<path d="${path}" fill="none" stroke="#ef4444" stroke-width="2"/>${dots}${labels}</svg>` +
       `<div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:2px;"><span>${points[0].at}</span><span>${points[points.length-1].at}</span></div>`;
   }
-  fetch('/admin/api/no-photo-history?days=30').then(r => r.json()).then(d => {
+  let noPhotoData = null;
+  function renderNoPhotoChart() {
     const npEl = document.getElementById('no-photo-chart');
+    if (!noPhotoData) return;
     // Раньше мерили npEl.parentElement.clientWidth (включает padding
     // .chart-block) — ширина SVG получалась на ~28-32px БОЛЬШЕ реального
     // контейнера (.chart-block-inner, width:100% от контента родителя),
     // из-за чего max-width:100% обрезал самые свежие точки справа. Меряем
     // сам контейнер графика, у него уже нет своего padding.
     const npW = Math.max(280, npEl.clientWidth || (npEl.parentElement.clientWidth - 32));
-    unboundStyleLineChart('no-photo-chart', d.points || [], 'no_photo', npW, 480);
+    // Высота — от реальной доступной высоты блока (.chart-block-inner уже
+    // растянут флексом до полного места в карточке), а не фикс. 480px —
+    // иначе при узкой/невысокой карточке SVG высотой 480 не влезал и блок
+    // (overflow:auto) заводил вертикальный скролл. -18 — под подписи дат
+    // под графиком (см. последний <div> в unboundStyleLineChart).
+    const npH = Math.max(110, (npEl.clientHeight || 260) - 18);
+    unboundStyleLineChart('no-photo-chart', noPhotoData.points || [], 'no_photo', npW, npH);
+  }
+  fetch('/admin/api/no-photo-history?days=30').then(r => r.json()).then(d => {
+    noPhotoData = d;
+    renderNoPhotoChart();
   }).catch(() => {});
+  document.getElementById('no-photo-chart').closest('.chart-block')
+    .addEventListener('hatuli:chart-resize', renderNoPhotoChart);
 
   // ── Гекс-карта уверенности Смарт рейтинга ──────────────────────────────
   const confMap = L.map('conf-hex-map', {zoomControl: false}).setView([51.128, 71.430], 11);
@@ -206,7 +222,7 @@ tr:last-child td { border-bottom: none; }
         const byRoom = [1,2,3].map(rc => avg(pts.filter(p => p.rooms === rc).map(p => p.confidence)));
         const statsEl = document.getElementById('conf-summary-stats');
         if (statsEl) {
-          const mk = (val, lbl) => `<div class="stat-card"><div class="val">${val == null ? '—' : val + '%'}</div><div class="lbl">${lbl}</div></div>`;
+          const mk = (val, lbl) => `<div style="background:var(--bg);border:1px solid var(--border);border-radius:7px;padding:5px 6px;text-align:center;"><div style="font-size:15px;font-weight:700;">${val == null ? '—' : val + '%'}</div><div style="font-size:9.5px;color:#888;line-height:1.2;">${lbl}</div></div>`;
           statsEl.innerHTML = mk(overall, 'В среднем по Астане')
             + byRoom.map((v,i) => mk(v, (i+1) + '-комн')).join('');
         }
@@ -242,7 +258,11 @@ tr:last-child td { border-bottom: none; }
     // (см. hatuli:chart-resize) пересчитываем и рисуем заново.
     const containerW = Math.max(200, el.clientWidth || 760);
     const barW = Math.max(14, Math.min(60, Math.floor(containerW / d.days.length) - 3));
-    const H = 480;
+    // Высота — от реальной высоты .chart-block-inner, не фикс. 480px:
+    // при фикс. высоте бары выше доступного места в карточке заставляли
+    // .chart-block (overflow:auto) заводить вертикальный скролл. -20 —
+    // под padding-bottom обёртки с барами (см. ниже).
+    const H = Math.max(110, (el.clientHeight || 260) - 20);
     const bars = d.days.map((label,i)=>{
       const v1=d.series['1'][i], v2=d.series['2'][i], v3=d.series['3'][i];
       const a1=d.amounts['1'][i], a2=d.amounts['2'][i], a3=d.amounts['3'][i];

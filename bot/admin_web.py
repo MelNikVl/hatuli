@@ -1113,6 +1113,59 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             new_complex_name, garbage_name)
         return JSONResponse({"ok": True, "result": result})
 
+    @app.get("/admin/analytics/demolition", response_class=HTMLResponse)
+    async def demolition_page(request: Request):
+        """Снос/реновация домов Астаны 2026-2030: таблица по годам."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+        year = request.query_params.get("year", "")
+        district = request.query_params.get("district", "")
+        conds, params = ["1=1"], []
+        if year.isdigit():
+            conds.append(f"demolish_year = ${len(params)+1}"); params.append(int(year))
+        if district:
+            conds.append(f"district = ${len(params)+1}"); params.append(district)
+        rows = await pg_fetch(f"""
+            SELECT id, address, district, apartments, demolish_year, year_built, wear_pct, lat, lon
+            FROM demolition_houses WHERE {' AND '.join(conds)}
+            ORDER BY demolish_year, address
+        """, *params)
+        stats = await pg_fetch("""
+            SELECT demolish_year AS year, COUNT(*) AS houses, COALESCE(SUM(apartments),0) AS flats
+            FROM demolition_houses GROUP BY 1 ORDER BY 1
+        """)
+        districts = await pg_fetch("SELECT DISTINCT district FROM demolition_houses ORDER BY 1")
+        totals = await pg_fetch("""
+            SELECT COUNT(*) AS houses, COALESCE(SUM(apartments),0) AS flats FROM demolition_houses
+        """)
+        houses = []
+        for r in rows:
+            d = dict(r)
+            if d.get("wear_pct") is not None:
+                d["wear_pct"] = float(d["wear_pct"])
+            houses.append(d)
+        return templates.TemplateResponse("demolition.html", {
+            "request": request,
+            "atab": "demolition",
+            "houses": houses,
+            "stats": [dict(r) for r in stats],
+            "districts": [d["district"] for d in districts],
+            "total_houses": totals[0]["houses"] if totals else 0,
+            "total_flats": totals[0]["flats"] if totals else 0,
+            "f_year": year, "f_district": district,
+        })
+
+    @app.get("/admin/analytics/genplan", response_class=HTMLResponse)
+    async def genplan_page(request: Request):
+        """Генплан Астаны: корректировка до 2030, источники, сигналы."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("genplan.html", {
+            "request": request,
+            "atab": "genplan",
+        })
+
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
     async def analytics_detail(request: Request, listing_id: str):
         # Старая отдельная страница объявления — слита с попапом на главной

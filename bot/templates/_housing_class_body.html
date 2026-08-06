@@ -18,8 +18,7 @@
 {% endif %}
 
 <div style="font-size:13px;color:#888;max-width:1100px;margin:14px 0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
-  Экспериментальный числовой скор (0–100), не связан с колонкой «Класс жилья» (эконом/комфорт/бизнес/премиум) на странице ЖК.
-  Веса: <b>цена/м²</b> — наибольший, <b>потолки</b> и <b>кол-во квартир</b> — средние, <b>этажность</b> (чем выше, тем ниже класс) и <b>лифты</b> (кол-во + грузоподъёмность) — небольшие.
+  Числовой скор (0–100, не связан с колонкой «Класс жилья» на странице ЖК) считается на бэкенде из цены/м², потолков, этажности, лифтов и кол-ва квартир — см. общий рейтинг на <a href="/admin/complexes" style="color:#2563eb;">/admin/complexes</a>. Здесь скор и грузоподъёмность лифтов (кг) скрыты из таблицы — остались только сырые входные ячейки для правки.
   Лифты (кол-во/грузоподъёмность) и кол-во квартир в базе нигде не хранятся — вбей вручную в соответствующих ячейках, они сохранятся и войдут в расчёт.
   Материал стен — справочно, из <code>complex_tech_specs</code> (Homsters/Korter), в скор не входит. Отметь галочками несуществующие ЖК и удали их скопом (только карточку ЖК — объявления не трогает).
 </div>
@@ -46,14 +45,12 @@
       <th style="padding:8px;text-align:right;">Лифты, шт (10%)</th>
       <th style="padding:8px;text-align:right;">пасс</th>
       <th style="padding:8px;text-align:right;">груз</th>
-      <th style="padding:8px;text-align:right;">Лифты, кг (10%)</th>
       <th style="padding:8px;text-align:right;" title="Подъезды — вручную, для оценки населения на тепловой карте плотности">Подъезды</th>
       <th style="padding:8px;text-align:right;">Квартир всего</th>
       <th style="padding:8px;text-align:right;">1к</th>
       <th style="padding:8px;text-align:right;">2к</th>
       <th style="padding:8px;text-align:right;">3к</th>
       <th style="padding:8px;text-align:right;">4к</th>
-      <th style="padding:8px;text-align:right;">Скор</th>
     </tr>
   </thead>
   <tbody>
@@ -122,16 +119,6 @@
       <td style="padding:8px;text-align:right;">
         <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/update" style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end;">
           <input type="hidden" name="elevator_count" value="{{ c.elevator_count or '' }}">
-          <input type="hidden" name="apartment_count" value="{{ c.apartment_count or '' }}">
-          <input type="hidden" name="entrances" value="{{ c.entrances or '' }}">
-          <input type="number" name="elevator_capacity_kg" value="{{ c.elevator_capacity_kg or '' }}" min="0" step="50" placeholder="—" title="Грузоподъёмность, кг"
-                 style="width:56px;padding:3px 5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12.5px;">
-          <button type="submit" style="border:none;background:none;color:#2563eb;cursor:pointer;font-size:12px;">✓</button>
-        </form>
-      </td>
-      <td style="padding:8px;text-align:right;">
-        <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/update" style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end;">
-          <input type="hidden" name="elevator_count" value="{{ c.elevator_count or '' }}">
           <input type="hidden" name="elevator_capacity_kg" value="{{ c.elevator_capacity_kg or '' }}">
           <input type="hidden" name="apartment_count" value="{{ c.apartment_count or '' }}">
           <input type="number" name="entrances" value="{{ c.entrances or '' }}" min="0" placeholder="—" title="Кол-во подъездов — учитывается в оценке населения на карте плотности, если квартир всего не заполнено"
@@ -161,13 +148,6 @@
           {% endfor %}
           <button type="submit" style="border:none;background:none;color:#2563eb;cursor:pointer;font-size:12px;">✓</button>
         </form>
-      </td>
-      <td style="padding:8px;text-align:right;">
-        {% if c.score is not none %}
-        <span style="font-weight:800;font-size:14.5px;padding:3px 10px;border-radius:8px;background:{{ 'rgba(16,185,129,.15);color:#34d399' if c.score >= 66 else ('rgba(245,158,11,.15);color:#f59e0b' if c.score >= 33 else 'rgba(239,68,68,.15);color:#ef4444') }};">{{ c.score }}</span>
-        {% else %}
-        <span style="color:#888;">нет данных</span>
-        {% endif %}
       </td>
     </tr>
     {% endfor %}

@@ -43,15 +43,13 @@
   <span id="v-result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
 </div>
 
-<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
-  <div style="flex:3 1 0;min-width:320px;">
-    <div id="views-map" style="height:50vh;min-height:340px;border-radius:12px;border:1px solid var(--border);"></div>
-    <div id="v-hex-detail" style="display:none;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;max-height:260px;overflow-y:auto;"></div>
-  </div>
-  <div style="flex:1 1 0;min-width:240px;max-width:25%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
-    <div style="font-weight:700;font-size:14px;margin-bottom:8px;">🏆 Топ-50 по просмотрам</div>
-    <div id="v-top50" style="max-height:640px;overflow-y:auto;"></div>
-  </div>
+<div class="chart-block" style="flex:3 1 0;min-width:320px;">
+  <div id="views-map" class="chart-block-inner" style="border-radius:12px;border:1px solid var(--border);"></div>
+  <div id="v-hex-detail" style="display:none;margin-top:10px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 14px;max-height:120px;overflow-y:auto;flex:none;"></div>
+</div>
+<div class="admin-block" style="min-width:240px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;overflow:hidden;">
+  <div style="font-weight:700;font-size:14px;margin-bottom:8px;flex:none;">🏆 Топ-50 по просмотрам</div>
+  <div id="v-top50" style="flex:1 1 auto;min-height:0;overflow-y:auto;"></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -115,13 +113,15 @@
     <span><span style="display:inline-block;width:9px;height:9px;background:#f59e0b;border-radius:2px;"></span> 3-комн</span>
     <span><span style="display:inline-block;width:9px;height:9px;background:#a855f7;border-radius:2px;"></span> 4+-комн</span>
   </div>
-  <div id="views-rooms-chart"></div>
+  <div id="views-rooms-chart" class="chart-block-inner"></div>
 </div>
 
 <script>
 const map = L.map('views-map').setView([51.128, 71.430], 12);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(map);
 const hexLayer = L.layerGroup().addTo(map);
+document.getElementById('views-map').closest('.chart-block')
+  .addEventListener('hatuli:chart-resize', () => map.invalidateSize());
 let currentDays = 7, currentPoints = [];
 
 const LAT0 = 51.128, LON0 = 71.430,
@@ -288,6 +288,22 @@ function roomsHistoryChart(divId, points, w, h) {
   el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="xMidYMid meet" style="display:block;max-width:100%;">${linesHtml}${xLabels}</svg>`;
 }
 
+let roomsHistoryPoints = null;
+function renderRoomsHistoryChart() {
+  if (!roomsHistoryPoints) return;
+  const blockEl = document.getElementById('views-rooms-chart');
+  // Раньше мерили blockEl.parentElement.clientWidth-4 (родитель .chart-block
+  // минус фиксированные 4px, но не его реальный padding 14px/16px) — SVG
+  // получался на ~28px шире реального контейнера и обрезал последнюю точку.
+  // Меряем сам #views-rooms-chart — он уже внутри отступов родителя.
+  const blockW = Math.max(320, blockEl.clientWidth || (blockEl.parentElement.clientWidth - 32));
+  // Высота — от реальной высоты .chart-block-inner (флекс уже растянул её
+  // до места, оставшегося в карточке после заголовка/кнопок/легенды), не
+  // фикс. 480px — иначе на карточке стандартной высоты сетки (300px) блок
+  // (.chart-block, overflow:auto) заводил вертикальный скролл.
+  const blockH = Math.max(120, blockEl.clientHeight || 260);
+  roomsHistoryChart('views-rooms-chart', roomsHistoryPoints, blockW, blockH);
+}
 function loadRoomsHistory(days) {
   document.querySelectorAll('.vrooms-days-btn').forEach(b => {
     const active = parseInt(b.dataset.days) === days;
@@ -295,15 +311,12 @@ function loadRoomsHistory(days) {
     b.style.color = active ? '#fff' : 'var(--text)';
   });
   fetch('/admin/api/views-history?days=' + days).then(r => r.json()).then(d => {
-    const blockEl = document.getElementById('views-rooms-chart');
-    // Раньше мерили blockEl.parentElement.clientWidth-4 (родитель .chart-block
-    // минус фиксированные 4px, но не его реальный padding 14px/16px) — SVG
-    // получался на ~28px шире реального контейнера и обрезал последнюю точку.
-    // Меряем сам #views-rooms-chart — он уже внутри отступов родителя.
-    const blockW = Math.max(320, blockEl.clientWidth || (blockEl.parentElement.clientWidth - 32));
-    roomsHistoryChart('views-rooms-chart', d.points || [], blockW, 480);
+    roomsHistoryPoints = d.points || [];
+    renderRoomsHistoryChart();
   }).catch(() => {});
 }
 loadRoomsHistory(1);
+document.getElementById('views-rooms-chart').closest('.chart-block')
+  .addEventListener('hatuli:chart-resize', renderRoomsHistoryChart);
 </script>
 {% endblock %}
