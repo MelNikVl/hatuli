@@ -112,19 +112,20 @@
   </div>
 </div>
 
-<div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;">
-  <div style="flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
-    <b style="font-size:14px;">📉 Непривязанные объявления во времени</b>
-    <div style="font-size:11.5px;color:#888;margin-top:2px;">точка = снимок после каждого прогона привязки (быстрая — каждые ~20 мин, полная — раз в ~6ч)</div>
-    <div id="unbound-chart" style="margin-top:10px;"></div>
-  </div>
-
-  <div style="flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
-    <div id="unbound-map" style="aspect-ratio:1/1;width:100%;min-height:280px;max-height:50vh;border-radius:8px;"></div>
-  </div>
+<!-- Раньше эти 3 блока сидели в ручном flex-ряду мимо общей 3-в-ряд сетки
+     (.hcb-grid, см. initDashboardGrid() в base.html) — просто добавляем
+     class="chart-block"/"admin-block", JS сам их туда заберёт. -->
+<div class="chart-block" data-chart-id="unbound-chart-block">
+  <b style="font-size:14px;">📉 Непривязанные объявления во времени</b>
+  <div style="font-size:11.5px;color:#888;margin-top:2px;">точка = снимок после каждого прогона привязки (быстрая — каждые ~20 мин, полная — раз в ~6ч)</div>
+  <div id="unbound-chart" class="chart-block-inner" style="margin-top:10px;"></div>
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-top:14px;">
+<div class="admin-block" data-chart-id="unbound-map-block">
+  <div id="unbound-map" style="aspect-ratio:1/1;width:100%;min-height:280px;max-height:50vh;border-radius:8px;"></div>
+</div>
+
+<div class="admin-block" data-chart-id="no-coords-list-block">
   <b style="font-size:14px;">📋 Объявления совсем без координат</b>
   <span style="font-size:12px;color:#888;margin-left:6px;">чтобы проставить локацию вручную — открыть на Крыше, найти адрес/карту, вбить координаты</span>
   <div id="no-coords-list" style="margin-top:10px;max-height:520px;overflow-y:auto;display:flex;flex-direction:column;gap:1px;">
@@ -280,23 +281,34 @@ function unboundChartSVG(points, w, h) {
     `<path d="${path}" fill="none" stroke="#2563eb" stroke-width="2"/>${dots}${labels}</svg>` +
     `<div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:2px;"><span>${firstAt}</span><span>${lastAt}</span></div>`;
 }
+let lastUnboundPoints = null;
 function loadUnboundChart() {
   fetch('/admin/api/unbound-history').then(r => r.json()).then(d => {
-    const el = document.getElementById('unbound-chart');
-    // Раньше мерили box.clientWidth-32 (родитель минус padding) с полом
-    // Math.max(300, ...) — на узких контейнерах (<332px) пол в 300
-    // форсировал SVG шире реального места и обрезал последнюю точку.
-    // Меряем сам #unbound-chart (уже внутри отступов родителя).
-    el.innerHTML = unboundChartSVG(d.points || [], Math.max(200, el.clientWidth), 160);
+    lastUnboundPoints = d.points || [];
+    renderUnboundChart();
   }).catch(() => {});
 }
+function renderUnboundChart() {
+  if (!lastUnboundPoints) return;
+  const el = document.getElementById('unbound-chart');
+  // Меряем сам #unbound-chart (внутри .chart-block-inner — растянут на
+  // всю доступную высоту ячейки сетки), а не фиксированную h=160 — иначе
+  // при ресайзе ячейки (см. hatuli:chart-resize) график либо болтается в
+  // маленьком углу, либо обрезается.
+  const h = Math.max(120, el.clientHeight || 160);
+  el.innerHTML = unboundChartSVG(lastUnboundPoints, Math.max(200, el.clientWidth), h);
+}
 loadUnboundChart();
+document.getElementById('unbound-chart').closest('.chart-block')
+  .addEventListener('hatuli:chart-resize', renderUnboundChart);
 </script>
 
 <script>
 const map = L.map('unbound-map').setView([51.128, 71.43], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
 const layer = L.layerGroup().addTo(map);
+document.querySelector('#unbound-map').closest('.admin-block')
+  .addEventListener('hatuli:chart-resize', () => map.invalidateSize());
 
 function loadPoints() {
   fetch('/admin/api/unbound-points').then(r => r.json()).then(d => {
