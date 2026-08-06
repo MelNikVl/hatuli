@@ -11,5 +11,12 @@
 -- сравнений). EXPLAIN ANALYZE до фикса: 18.2с на полную выдачу (LIMIT
 -- 15000), 447мс на первый батч (LIMIT 300, как реально шлёт фронт). После
 -- добавления этого индекса: 133мс и 31мс соответственно (~137x/14.5x).
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_complexes_name_lower_trim
+--
+-- ВАЖНО: без CONCURRENTLY — этот файл применяется автомиграцией сервиса
+-- внутри транзакции (bot/db/pg.py:_apply_migrations), а CREATE INDEX
+-- CONCURRENTLY внутри транзакции запрещён Postgres и валит сервис в
+-- краш-луп при каждом старте (найдено и исправлено в бою: индекс уже
+-- создан вручную раньше, этот файл теперь просто idempotent-но
+-- фиксирует его в истории миграций).
+CREATE INDEX IF NOT EXISTS idx_complexes_name_lower_trim
 ON complexes (lower(trim(name)));

@@ -901,13 +901,24 @@ def make_extras_router(templates) -> APIRouter:
         for d in daily:
             if d.get("d") is not None:
                 d["d"] = str(d["d"])
+        # БАГ (найден при расследовании "последние планы от 2 августа, хотя
+        # сегодня 6-е"): DISTINCT ON (l.id) обязан начинать ORDER BY с l.id
+        # (требование Postgres) — LIMIT 10 в итоге брал первые 10 строк по
+        # ПОРЯДКУ ID ОБЪЯВЛЕНИЯ, а не по свежести, checked_at вообще не
+        # влиял на то, какие 10 строк попадут в выдачу. Внешний ORDER BY
+        # поверх подзапроса — DISTINCT ON схлопывает дубли (один план на
+        # объявление, лучший по score), сортировка по реальной свежести
+        # применяется уже после.
         recent = await pg_fetch("""
-            SELECT DISTINCT ON (l.id) l.id, fp.photo_url, fp.floorplan_score::float AS score,
-                   l.title, l.address, fp.checked_at
-            FROM listing_floorplans fp
-            JOIN apartment_listings l ON l.id = fp.listing_id
-            WHERE fp.is_floorplan
-            ORDER BY l.id, fp.floorplan_score DESC, fp.id DESC LIMIT 10""")
+            SELECT * FROM (
+                SELECT DISTINCT ON (l.id) l.id, fp.photo_url, fp.floorplan_score::float AS score,
+                       l.title, l.address, fp.checked_at
+                FROM listing_floorplans fp
+                JOIN apartment_listings l ON l.id = fp.listing_id
+                WHERE fp.is_floorplan
+                ORDER BY l.id, fp.floorplan_score DESC, fp.id DESC
+            ) sub
+            ORDER BY checked_at DESC LIMIT 10""")
         recent = [dict(r) for r in recent]
         for r in recent:
             if r.get("checked_at") is not None:
