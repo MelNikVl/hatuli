@@ -519,6 +519,19 @@ async def run_cycle():
         try:
             from bot.score_layers import compute_all_layers, details_to_json
             from bot.db.pg import fetch as pg_fetch2
+            # LIMIT 10 (найдено при расследовании "у объявления в разборе
+            # локации есть только распашонка, остальных слоёв нет"): при
+            # десятках тысяч активных объявлений и цикле раз в 50-80 мин это
+            # ~220/день — реально почти никто не успевает получить шум/школы/
+            # транспорт/поблизости/парки/банки, layer_details застревает с
+            # одной "layout" записью (её пишет отдельный, более быстрый AI-
+            # проход). Клетки сетки Overpass кешируются на 60 дней
+            # (osm_cache, ~110м клетка) — в плотной застройке Астаны большая
+            # часть объявлений внутри уже прогретой клетки не бьёт по
+            # внешнему API вообще, sleep(1.5) ниже — доминирующая стоимость
+            # прохода, а не сам запрос. Подняли лимит вчетверо; в худшем
+            # случае (все клетки холодные) это +60с к циклу — не критично на
+            # фоне 50-80 минут между циклами.
             candidates = await pg_fetch2("""
                 SELECT id, lat, lon FROM apartment_listings
                 WHERE lat IS NOT NULL AND lon IS NOT NULL
@@ -526,7 +539,7 @@ async def run_cycle():
                   AND (layers_computed_at IS NULL
                        OR layers_computed_at < now() - interval '30 days')
                 ORDER BY score_total DESC NULLS LAST
-                LIMIT 10
+                LIMIT 40
             """)
             for c in candidates:
                 adj, details = await compute_all_layers(dict(c))

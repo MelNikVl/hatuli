@@ -797,8 +797,8 @@ const HeatControls = L.Control.extend({
     // правого края кнопки "Линейка" — визуально одна общая панель под ней.
     box.style.cssText = 'display:none;position:absolute;top:60px;left:10px;flex-direction:column;gap:4px;background:#fff;border-radius:10px;padding:8px 10px;box-shadow:0 1px 4px rgba(0,0,0,.25);box-sizing:border-box;';
     box.innerHTML = `
-      <label style="font-size:10.5px;font-weight:700;color:#333;">Сторона гекса (м): <span id="f-heat-edge-val">60</span></label>
-      <input id="f-heat-edge" type="range" min="10" max="80" step="5" value="60" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
+      <label style="font-size:10.5px;font-weight:700;color:#333;">Сторона гекса (м): <span id="f-heat-edge-val">70</span></label>
+      <input id="f-heat-edge" type="range" min="10" max="80" step="5" value="70" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
       <label style="font-size:10.5px;font-weight:700;color:#333;margin-top:4px;">Прозрачность гексов: <span id="f-heat-opacity-val">30</span>%</label>
       <input id="f-heat-opacity" type="range" min="10" max="50" step="5" value="30" oninput="document.getElementById('f-heat-opacity-val').textContent=this.value;setHeatOpacity(this.value)" style="width:100%;">
       <button type="button" onclick="turnOffHeat()" style="margin-top:4px;height:26px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;">Убрать тепловую карту</button>
@@ -1783,7 +1783,14 @@ function sparklineSVG(points, w, h) {
   // наезжают друг на друга — тогда разносим их в два яруса (через одну ниже)
   // и резервируем под это чуть больше места снизу.
   const labelTexts = points.map(p => fmtMln(p.price));
-  const stepX0 = points.length > 1 ? w / (points.length - 1) : w;
+  // Отступ по бокам: раньше первая/последняя точка стояли РОВНО на x=0/x=w
+  // (край SVG), а сам SVG рисуется с overflow:visible — точка/её невидимый
+  // hit-circle (r=8) вылезали за пределы контейнера (видно на скрине —
+  // последняя точка "уезжает" за правый край). PAD резервирует место под
+  // радиус точки с обеих сторон.
+  const PAD = 9;
+  const plotW = Math.max(1, w - PAD * 2);
+  const stepX0 = points.length > 1 ? plotW / (points.length - 1) : plotW;
   const estLabelW = Math.max(...labelTexts.map(t => t.length * 6.2 + 6));
   const crowded = stepX0 < estLabelW;
   const LABEL_H = crowded ? 26 : 16;  // место снизу под подписи точек
@@ -1791,10 +1798,10 @@ function sparklineSVG(points, w, h) {
   const prices = points.map(p => p.price);
   const mn = Math.min(...prices), mx = Math.max(...prices);
   const span = mx - mn || 1;
-  const stepX = points.length > 1 ? w / (points.length - 1) : 0;
-  const coords = points.map((p, i) => [i * stepX, 3 + (chartH - 6) - ((p.price - mn) / span) * (chartH - 6)]);
+  const stepX = points.length > 1 ? plotW / (points.length - 1) : 0;
+  const coords = points.map((p, i) => [PAD + i * stepX, 3 + (chartH - 6) - ((p.price - mn) / span) * (chartH - 6)]);
   const path = coords.map((c, i) => (i ? 'L' : 'M') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
-  const areaPath = path + ` L${coords[coords.length-1][0].toFixed(1)},${chartH} L0,${chartH} Z`;
+  const areaPath = path + ` L${coords[coords.length-1][0].toFixed(1)},${chartH} L${PAD},${chartH} Z`;
   const gid = 'sg' + Math.random().toString(36).slice(2, 9);
   const labels = coords.map((c, i) => {
     const x = Math.min(Math.max(c[0], 14), w - 14);  // не даём подписи вылезти за край
@@ -2080,7 +2087,7 @@ function drawHexGrid() {
   hexLayer.addTo(map);
 }
 // ── Тепловые карты (hexbin): цены продажи/аренды, школы, шум по полосам ───
-let HEAT_EDGE_M = 60;  // синхронизирован с дефолтом ползунка "сторона гекса" (f-heat-edge) ниже
+let HEAT_EDGE_M = 70;  // синхронизирован с дефолтом ползунка "сторона гекса" (f-heat-edge) ниже
 let NOISE_EDGE_M = 60;  // раньше был фиксирован отдельно (30м) — теперь все гексы тепловых карт (цены/аренда/шум, фон и детальный слой) одного размера, из общего ползунка "сторона гекса"
 const heatLayer = L.layerGroup();
 let heatMode = null;
@@ -2158,9 +2165,17 @@ function transportHexCorners(lat, lon, edge) {
   return pts;
 }
 function drawTransportHeat(hexes) {
-  (hexes || []).forEach(h => {
-    L.polygon(transportHexCorners(h.lat, h.lon, 100), {
-      color: 'transparent', weight: 0, fillColor: transportColor(h.score), fillOpacity: 0.4,
+  // Раньше рисовали hex-форму ПРЯМО вокруг каждой сырой точки (transportHexCorners
+  // с её собственными lat/lon) вместо привязки к общей гекс-сетке — соседние
+  // точки ближе ~100м друг к другу давали визуально накладывающиеся
+  // "гексагоны" (это не гексы сетки, а просто фигуры-маркеры). Бакетируем в
+  // настоящую осевую сетку (hexBucket/hexCorners, та же, что у шума/цен) —
+  // несколько точек в одной ячейке схлопываются в одну ячейку без наложений.
+  const buckets = hexBucket(hexes || [], h => [h.lat, h.lon], 100);
+  buckets.forEach(b => {
+    const score = b.items.reduce((s, h) => s + (h.score || 0), 0) / b.items.length;
+    L.polygon(hexCorners(b.q, b.r, 100), {
+      color: 'transparent', weight: 0, fillColor: transportColor(score), fillOpacity: 0.4,
     }).addTo(heatLayer);
   });
 }
@@ -2194,20 +2209,45 @@ function hypeNewsColor(t) {
   return `rgb(${Math.round(a[0] + (b[0]-a[0])*f)},${Math.round(a[1] + (b[1]-a[1])*f)},${Math.round(a[2] + (b[2]-a[2])*f)})`;
 }
 function drawHypeNewsHeat(hexes) {
-  (hexes || []).forEach(h => {
-    const s = Math.max(0.05, Math.min(1, (h.value || 0) / 100));
-    L.polygon(transportHexCorners(h.lat, h.lon, 100), {
+  // Тот же баг, что чинили здесь уже 3 раза: "гексы" рисовались не по
+  // ячейкам общей сетки, а как фигура-маркер вокруг СЫРОЙ точки хайп-локации
+  // (transportHexCorners(h.lat, h.lon, ...)) — у соседних новостных точек
+  // теснее ~100м друг к другу фигуры визуально перекрывались, это выглядело
+  // как "гексы наехали друг на друга". Настоящая причина — здесь никогда не
+  // было привязки к сетке (hexAxial/hexCorners), просто хексагон-декорация
+  // вокруг каждой точки. Бакетируем в реальную осевую сетку (как шум/цены/
+  // транспорт) — несколько хайп-точек в одной клетке схлопываются в одну
+  // ячейку по построению без наложений, берём максимум как значение клетки
+  // и имя самой хайповой точки для тултипа.
+  const buckets = hexBucket(hexes || [], h => [h.lat, h.lon], 100);
+  buckets.forEach(b => {
+    const top = b.items.reduce((a, h) => (h.value || 0) > (a.value || 0) ? h : a, b.items[0]);
+    const s = Math.max(0.05, Math.min(1, (top.value || 0) / 100));
+    const label = b.items.length > 1 ? `${top.name || ''} +${b.items.length - 1}` : (top.name || '');
+    L.polygon(hexCorners(b.q, b.r, 100), {
       color: 'transparent', weight: 0, fillColor: hypeNewsColor(s), fillOpacity: 0.5,
-    }).bindTooltip(`${h.name || ''} · хайп ${Math.round(h.value || 0)}`, {sticky:true})
+    }).bindTooltip(`${label} · хайп ${Math.round(top.value || 0)}`, {sticky:true})
       .addTo(heatLayer);
   });
 }
 
 // Плотность населения (Task 3) — гексы с сервера /admin/api/population-hexes
-// (та же оценка, что и на админ-гео-странице), цвет: серый прозрачный (мало) -> ярко-фиолетовый (много).
-const POP_STOPS = [[229,231,235],[196,181,253],[139,92,246],[91,33,182]];
+// (та же оценка, что и на админ-гео-странице). Раньше палитра была 4 тона
+// серый->фиолетовый с линейной интерполяцией по t — KDE даёт плавную
+// непрерывную поверхность, и с узкой палитрой + линейным t карта выглядела
+// однородно-размытой, пики почти не отличались от среднего фона. Теперь:
+// (1) палитра шире — полноценный "тепловой" градиент от бледно-жёлтого до
+// тёмно-бордового, больше промежуточных тонов; (2) t возводится в степень
+// POP_GAMMA > 1 — сжимает низкие значения в узкую полосу цвета и "растягивает"
+// верхнюю часть диапазона, из-за чего пики визуально выделяются сильнее, а
+// не сливаются с фоном; (3) непрозрачность тоже растёт с t, а не постоянна.
+const POP_STOPS = [
+  [255,255,235], [254,240,138], [253,199,84], [251,146,60],
+  [239,68,68], [185,28,28], [120,20,20],
+];
+const POP_GAMMA = 1.7;
 function popDensityColor(t) {
-  t = Math.max(0, Math.min(1, t));
+  t = Math.max(0, Math.min(1, Math.pow(t, POP_GAMMA)));
   const n = POP_STOPS.length - 1;
   const pos = t * n;
   const i = Math.min(Math.floor(pos), n - 1);
@@ -2222,8 +2262,9 @@ function drawPopulationHeat(hexes) {
   const hi = percentile(vals, 0.92) || Math.max(...vals) || 1;
   (hexes || []).forEach(h => {
     const t = Math.min(1, h.population / hi);
+    const tGamma = Math.pow(t, POP_GAMMA);
     L.polygon(transportHexCorners(h.lat, h.lon, 100), {
-      color: 'transparent', weight: 0, fillColor: popDensityColor(t), fillOpacity: 0.55,
+      color: 'transparent', weight: 0, fillColor: popDensityColor(t), fillOpacity: 0.35 + tGamma * 0.45,
     }).bindTooltip(`${h.name || ''} · население: ~${Math.round(h.population).toLocaleString('ru-RU')} чел. (${h.complexes} ЖК)`, {sticky:true})
       .addTo(heatLayer);
   });
@@ -2267,8 +2308,32 @@ function drawPriceHeat(points, archivedPoints) {
   const medians = [];
   buckets.forEach(b => { b.value = median(b.items.map(i => i.price)); medians.push(b.value); });
   if (!medians.length) return;
-  const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
+  // Дыры на карте: ЖК виден (кружок слоя ЖК), а гекса цены под ним нет —
+  // потому что в этой конкретной ячейке ноль активных (и архивных)
+  // объявлений с ценой. Это реальная нехватка данных, не баг рендера — но
+  // если у пустой ячейки есть хотя бы 2 соседа с данными, по методичке
+  // "тепловая карта доходности" (тот же принцип для доходности,
+  // применяем и тут) заполняем её средним соседей вместо дырки — с честной
+  // пометкой в тултипе и приглушённым стилем, чтобы не путать с реальным
+  // замером.
+  const filledKeys = new Set(buckets.keys());
+  const interpolated = [];
   buckets.forEach(b => {
+    hexNeighborsAxial(b.q, b.r).forEach(([nq, nr]) => {
+      const key = nq + ':' + nr;
+      if (filledKeys.has(key)) return;
+      filledKeys.add(key);  // не пытаемся заполнить одну и ту же дырку дважды
+      const neighborVals = hexNeighborsAxial(nq, nr)
+        .map(([q2, r2]) => buckets.get(q2 + ':' + r2))
+        .filter(Boolean);
+      if (neighborVals.length < 2) return;
+      const avg = neighborVals.reduce((s, nb) => s + nb.value, 0) / neighborVals.length;
+      interpolated.push({q: nq, r: nr, value: avg, items: [], isInterpolated: true, neighborCount: neighborVals.length});
+    });
+  });
+  const allCells = [...buckets.values(), ...interpolated];
+  const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
+  allCells.forEach(b => {
     const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
     const priceTxt = b.value >= 1e6 ? (b.value/1e6).toFixed(1) + ' М' : (b.value/1e3).toFixed(0) + 'K';
     // По комнатности — если есть данные по рукам (rooms), покажем разбивку
@@ -2280,11 +2345,13 @@ function drawPriceHeat(points, archivedPoints) {
       return `${rm}к: ${t2}`;
     }).join(' · ');
     const archNote = b.isArchived ? ' (по последним продажам, архив)' : '';
+    const interpNote = b.isInterpolated ? ` (оценка по ${b.neighborCount} соседним ячейкам, своих объявлений нет)` : '';
     L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
-      color: b.isArchived ? '#8b5cf6' : '#fff', weight: b.isArchived ? 1.2 : 0.5,
-      dashArray: b.isArchived ? '3,3' : null,
-      fillColor: heatColor(t), fillOpacity: 0.3,  // дефолт цены — 30% (было 38.5%)
-    }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatLayer);
+      color: b.isArchived ? '#8b5cf6' : (b.isInterpolated ? '#94a3b8' : '#fff'),
+      weight: (b.isArchived || b.isInterpolated) ? 1.2 : 0.5,
+      dashArray: (b.isArchived || b.isInterpolated) ? '3,3' : null,
+      fillColor: heatColor(t), fillOpacity: b.isInterpolated ? 0.16 : 0.3,  // дефолт цены — 30% (было 38.5%), интерполяция бледнее
+    }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${interpNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatLayer);
   });
 }
 
@@ -2807,7 +2874,7 @@ function openDetailModal(id, ev, scrollToScore) {
       const baseA1 = needleAngle + 90, baseA2 = needleAngle - 90;
       const [bx1, by1] = toXY(5, baseA1), [bx2, by2] = toXY(5, baseA2);
       return `
-<svg viewBox="0 0 200 118" width="200" height="118" style="display:block;margin:0 auto;">
+<svg viewBox="0 0 200 136" width="200" height="136" style="display:block;margin:0 auto;">
   ${segs}
   <polygon points="${tipX},${tipY} ${bx1},${by1} ${bx2},${by2}" fill="#1f2937"/>
   <circle cx="${cx}" cy="${cy}" r="7" fill="#1f2937"/>
@@ -2950,10 +3017,10 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
       if (ai.has_ac) aiPluses.push('❄️ кондиционер');
       if (ai.is_relayout_legal) aiPluses.push('✅ перепланировка узаконена');
     }
-    const aiPlusesHtml = aiPluses.length ? `
-<div style="margin:10px 22px 0;">
-  ${aiPluses.map(p => `<span style="${modalPillStyle}background:#dcfce7;color:#166534;">${p}</span>`).join('')}
-</div>` : '';
+    // Раньше рисовались отдельным блоком ниже (после адреса/ЖК) — просили
+    // поднять в один ряд со всеми остальными плашками (комнатность/площадь/
+    // этаж и т.д.), а не отдельной строкой.
+    const aiPlusesHtml = aiPluses.map(p => `<span style="${modalPillStyle}background:#dcfce7;color:#166534;">${p}</span>`).join('');
 
     const priceHistoryHtml = `
 <div id="modal-price-history-wrap" style="padding:18px 22px 0;display:none;">
@@ -2965,7 +3032,7 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
 ${photoHtml}
 <div style="padding:20px 22px 0;">
   <div style="font-size:34px;font-weight:800;">${priceM} <span style="font-size:21px;">млн ₸</span></div>
-  <div style="margin-top:8px;">${modalPillsHtml}</div>
+  <div style="margin-top:8px;">${modalPillsHtml}${aiPlusesHtml}</div>
   ${d.seller_name ? `<div style="font-size:13px;color:var(--text);margin-top:4px;">${escapeHtml(d.seller_name)}</div>` : ''}
   <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
   ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
@@ -2976,7 +3043,6 @@ ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:v
   <div style="font-size:13px;color:var(--text);font-weight:700;margin-bottom:6px;">📝 Описание</div>
   <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(d.description).slice(0, 600)}${d.description.length > 600 ? '…' : ''}</div>
 </div>` : ''}
-${aiPlusesHtml}
 ${mortgageModalBlockHtml(d.price, d.market, id, d.bargain ? d.bargain.target_price : null)}
 ${scoreSectionHtml}
 ${yieldHtml}
