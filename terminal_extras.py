@@ -3510,7 +3510,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.core.listing_intel import build_negotiation_points, build_seller_questions, compute_similar_listings
         negotiation_points = build_negotiation_points(l, bargain, len(comps))
         seller_questions = build_seller_questions(l)
-        similar_listings = await compute_similar_listings(l, listing_id, limit=5)
+        similar_listings = await compute_similar_listings(l, listing_id, limit=10)
 
         layers = l.get("layer_details")
         if isinstance(layers, str):

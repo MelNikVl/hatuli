@@ -139,32 +139,37 @@ def build_seller_questions(listing: dict) -> list[str]:
 
 
 async def compute_similar_listings(listing: dict, listing_id: str, limit: int = 10) -> list[dict]:
-    """10 (или limit) похожих вариантов — приоритет: тот же ЖК -> тот же/
-    соседний гексагон (~300м) -> просто похожая цена по городу. Общая логика
-    для страницы объявления (/admin/analytics/{id}) и большого попапа на
-    карте (/admin/api/listing/{id}) — раньше жила только в admin_web.py,
-    вынесена сюда, чтобы не дублировать между двумя местами."""
+    """10 (или limit) похожих вариантов — "похожий" означает близкую цену и
+    близкий метраж (±7 м²), НЕ обязательно ту же комнатность (раньше был
+    жёсткий фильтр rooms = X — просили заменить на метраж, комнатность
+    квартир одной площади и так обычно совпадает или отличается на одну).
+    Приоритет: тот же ЖК -> тот же/соседний гексагон (~300м) -> просто
+    похожая цена по городу (если в районе не набралось limit вариантов —
+    без этого фолбэка список мог быть короче 10 при разреженных данных
+    вокруг). Общая логика для страницы объявления и большого попапа на
+    карте (/admin/api/listing/{id})."""
     import json as _json
 
     from bot.db.pg import fetch as pg_fetch
 
     similar_listings: list[dict] = []
-    if not (listing.get("rooms") and listing.get("price")):
+    if not (listing.get("area") and listing.get("price")):
         return similar_listings
 
+    area_lo, area_hi = float(listing["area"]) - 7, float(listing["area"]) + 7
     sim_rows = []
     if listing.get("complex_name"):
         sim_rows = list(await pg_fetch("""
             SELECT id, url, price, area, floor, floors_total, district,
                    complex_name, photos, lat, lon
             FROM apartment_listings
-            WHERE rooms = $1 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-              AND id != $2 AND lower(trim(complex_name)) = lower(trim($3))
-            ORDER BY ABS(price - $4) ASC
-            LIMIT $5
-        """, listing["rooms"], listing_id, listing["complex_name"], listing["price"], limit))
+            WHERE area BETWEEN $1 AND $2 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND id != $3 AND lower(trim(complex_name)) = lower(trim($4))
+            ORDER BY ABS(price - $5) ASC
+            LIMIT $6
+        """, area_lo, area_hi, listing_id, listing["complex_name"], listing["price"], limit))
 
-    if listing.get("lat") and listing.get("lon"):
+    if listing.get("lat") and listing.get("lon") and len(sim_rows) < limit:
         from bot.core.hexgrid import hex_id as _hex_id, neighbors as _hex_nb
         HEX_EDGE = 300.0
         my_hid = _hex_id(float(listing["lat"]), float(listing["lon"]), HEX_EDGE)
@@ -178,16 +183,34 @@ async def compute_similar_listings(listing: dict, listing_id: str, limit: int = 
             SELECT id, url, price, area, floor, floors_total, district,
                    complex_name, photos, lat, lon
             FROM apartment_listings
-            WHERE rooms = $1 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-              AND lat IS NOT NULL AND NOT (id = ANY($2::text[]))
-            ORDER BY ABS(price - $3) ASC
+            WHERE area BETWEEN $1 AND $2 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND lat IS NOT NULL AND NOT (id = ANY($3::text[]))
+            ORDER BY ABS(price - $4) ASC
             LIMIT 1500
-        """, listing["rooms"], exclude_ids, listing["price"])
+        """, area_lo, area_hi, exclude_ids, listing["price"])
         for c in candidates:
             if len(sim_rows) >= limit:
                 break
             if _hex_id(float(c["lat"]), float(c["lon"]), HEX_EDGE) in wanted_hids:
                 sim_rows.append(c)
+
+    # Фолбэк по всему городу — если ЖК/окрестность не набрали limit
+    # вариантов (разреженный район), "10 похожих рядом" не должно
+    # схлопываться в 2-3 просто потому что рядом мало объявлений с этим
+    # метражом. Ближе (гео) — выше приоритетом сортировки не задаём здесь,
+    # но фолбэк применяется только когда более точные тиры уже исчерпаны.
+    if len(sim_rows) < limit:
+        exclude_ids = [listing_id] + [r["id"] for r in sim_rows]
+        rest = await pg_fetch("""
+            SELECT id, url, price, area, floor, floors_total, district,
+                   complex_name, photos, lat, lon
+            FROM apartment_listings
+            WHERE area BETWEEN $1 AND $2 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND NOT (id = ANY($3::text[]))
+            ORDER BY ABS(price - $4) ASC
+            LIMIT $5
+        """, area_lo, area_hi, exclude_ids, listing["price"], limit - len(sim_rows))
+        sim_rows.extend(rest)
 
     for r in sim_rows[:limit]:
         sp = r["photos"]

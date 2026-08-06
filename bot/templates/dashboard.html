@@ -1985,7 +1985,11 @@ function initModalSimilarMap(d, id) {
   const el = document.getElementById('modal-similar-map');
   if (!el || d.lat == null || d.lon == null) return;
   modalMapLat = d.lat; modalMapLon = d.lon;
-  modalSimilarOn = false; modalHexOn = false; modalHexLayer = null;
+  // Раньше похожие варианты были скрыты за кнопкой "🔎 Похожие" — просили
+  // убрать кнопку и показывать сразу. modalSimilarOn остаётся true с самого
+  // начала (используется только переключателем гексагонов ниже, чтобы не
+  // выключать похожие при включении гексов).
+  modalSimilarOn = true; modalHexOn = false; modalHexLayer = null;
   const map = L.map('modal-similar-map').setView([d.lat, d.lon], 15);
   modalSimilarMap = map;
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
@@ -1998,29 +2002,16 @@ function initModalSimilarMap(d, id) {
     const m = L.marker([s.lat, s.lon], {icon: L.divIcon({className: '', html:
       `<div style="display:inline-block;background:#0077FF;color:#fff;border-radius:10px;padding:3px 8px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);transform:translate(-50%,-100%);">${priceTxt}</div>`,
       iconSize: [0, 0], iconAnchor: [0, 0]})});
-    m.bindPopup(`<b>${priceTxt} ₸</b> · ${d.rooms || '?'}-комн${s.area ? ', ' + Math.round(s.area) + ' м²' : ''}` +
+    m.bindPopup(`<b>${priceTxt} ₸</b>${s.area ? ' · ' + Math.round(s.area) + ' м²' : ''}` +
       `${s.complex_name ? '<br>🏢 ' + escapeHtml(s.complex_name) : ''}<br><a href="javascript:void(0)" onclick="openDetailModal('${s.id}', event)">Открыть →</a>`);
     modalSimilarLayer.addLayer(m);
   });
-  const btnSim = document.getElementById('modal-similar-btn');
+  modalSimilarLayer.addTo(map);
+  const bounds = [[modalMapLat, modalMapLon]];
+  modalSimilarLayer.eachLayer(l => bounds.push(l.getLatLng()));
+  if (bounds.length > 1) map.fitBounds(bounds, {padding: [30, 30]});
   const btnHex = document.getElementById('modal-hex-btn');
-  if (btnSim) { btnSim.style.background = '#2563eb'; btnSim.style.color = '#fff'; }
   if (btnHex) { btnHex.style.background = '#fff'; btnHex.style.color = '#333'; }
-}
-function toggleModalSimilar() {
-  if (!modalSimilarMap || !modalSimilarLayer) return;
-  modalSimilarOn = !modalSimilarOn;
-  const btn = document.getElementById('modal-similar-btn');
-  if (modalSimilarOn) {
-    modalSimilarLayer.addTo(modalSimilarMap);
-    const bounds = [[modalMapLat, modalMapLon]];
-    modalSimilarLayer.eachLayer(l => bounds.push(l.getLatLng()));
-    if (bounds.length > 1) modalSimilarMap.fitBounds(bounds, {padding: [30, 30]});
-    if (btn) btn.style.background = '#16a34a';
-  } else {
-    modalSimilarMap.removeLayer(modalSimilarLayer);
-    if (btn) btn.style.background = '#2563eb';
-  }
 }
 function toggleModalHex() {
   if (!modalSimilarMap) return;
@@ -2972,11 +2963,10 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
     // initModalSimilarMap ниже, отрисовывается после вставки innerHTML.
     const similarMapHtml = (d.lat != null && d.lon != null) ? `
 <div style="margin-top:20px;padding:14px 22px 0;border-top:1px solid var(--border);">
-  <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">📍 Карта: похожие варианты и гексагоны</div>
+  <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">📍 Похожие варианты рядом (${(d.similar||[]).length}) — похожая цена и метраж ±7 м²</div>
   <div style="position:relative;">
     <div id="modal-similar-map" style="height:360px;border-radius:10px;"></div>
-    <button onclick="toggleModalSimilar()" id="modal-similar-btn" type="button" style="position:absolute;right:8px;top:8px;z-index:1000;background:#2563eb;color:#fff;font-weight:700;font-size:12px;padding:7px 12px;border-radius:7px;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);">🔎 Похожие (${(d.similar||[]).length})</button>
-    <button onclick="toggleModalHex()" id="modal-hex-btn" type="button" style="position:absolute;right:8px;top:48px;z-index:1000;background:#fff;color:#333;font-weight:700;font-size:12px;padding:7px 12px;border-radius:7px;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);">⬡ Гексагоны</button>
+    <button onclick="toggleModalHex()" id="modal-hex-btn" type="button" style="position:absolute;right:8px;top:8px;z-index:1000;background:#fff;color:#333;font-weight:700;font-size:12px;padding:7px 12px;border-radius:7px;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);">⬡ Гексагоны</button>
   </div>
 </div>` : '';
 
