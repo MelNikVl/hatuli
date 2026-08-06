@@ -2919,10 +2919,16 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
     // потребовал бы postMessage-протокола, которого публичный demo kepler.gl не
     // предоставляет — поэтому переключение "Продажа/Аренда" делает src iframe.
     const keplerPanelHtml = (d.lat && d.lon) ? (() => {
+      // /admin/api/geo-kepler.json — не голый geojson, а полноценный
+      // экспортированный kepler.gl map-файл (данные + config): задаёт
+      // heatmap-слой вместо дефолтных точек и светлый mapStyle вместо
+      // тёмного (раньше kepler.gl/demo игнорировал любые query-параметры
+      // конфига — readOnly/config= — эмпирически подтверждено, что грузить
+      // конфиг он умеет только ВНУТРИ файла, на который указывает mapUrl).
       const saleUrl = 'https://kepler.gl/demo/map?mapUrl=' + encodeURIComponent(
-        `https://hatuli.ai-groundtruth.com/admin/api/geo-sales.geojson?lat=${d.lat}&lon=${d.lon}&radius_km=1.2`);
+        `https://hatuli.ai-groundtruth.com/admin/api/geo-kepler.json?type=sale&lat=${d.lat}&lon=${d.lon}&radius_km=1.2`);
       const rentUrl = 'https://kepler.gl/demo/map?mapUrl=' + encodeURIComponent(
-        `https://hatuli.ai-groundtruth.com/admin/api/geo-rentals.geojson?lat=${d.lat}&lon=${d.lon}&radius_km=1.2`);
+        `https://hatuli.ai-groundtruth.com/admin/api/geo-kepler.json?type=rental&lat=${d.lat}&lon=${d.lon}&radius_km=1.2`);
       window._keplerUrls = {sale: saleUrl, rental: rentUrl};
       return `
 <div style="margin:14px 22px 0;">

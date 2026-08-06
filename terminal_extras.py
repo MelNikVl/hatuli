@@ -737,6 +737,67 @@ def make_extras_router(templates) -> APIRouter:
             content={"type": "FeatureCollection", "features": feats},
             headers={"Access-Control-Allow-Origin": "*"})
 
+    @router.get("/admin/api/geo-kepler.json")
+    async def geo_kepler_map_file(request: Request, type: str = "sale",
+                                   lat: float = None, lon: float = None, radius_km: float = None):
+        # Полноценный экспортированный kepler.gl map-файл (данные + config в
+        # одном JSON) вместо голого geojson — публичный kepler.gl/demo умеет
+        # грузить такой файл через mapUrl= и ПРИМЕНЯЕТ наш config: heatmap-слой
+        # (не точки) + светлый mapStyle + mapState (центр/зум сразу на район
+        # объявления). Схема подобрана и проверена вручную через
+        # kepler.gl/demo?mapUrl=...&: обязательно "allData" (не "rows") в
+        # dataset.data, "datasets"/"config"/"info" — соседние ключи верхнего
+        # уровня (не вложенный "data": {...} как в актуальных доках экспорта).
+        from bot.db.pg import fetch as pg_fetch
+        bbox_sql = ""
+        params = []
+        if lat is not None and lon is not None:
+            r_km = radius_km or 1.5
+            dlat = r_km / 111.0
+            dlon = r_km / (111.0 * max(0.1, __import__("math").cos(__import__("math").radians(lat))))
+            bbox_sql = "AND lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4"
+            params = [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
+        table = "rental_listings" if type == "rental" else "apartment_listings"
+        active_sql = "AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE" if type != "rental" else ""
+        rows_db = await pg_fetch(f"""
+            SELECT lat, lon, price, rooms FROM {table}
+            WHERE lat IS NOT NULL AND lon IS NOT NULL AND price IS NOT NULL
+              {active_sql} {bbox_sql}
+            ORDER BY id""", *params)
+        data_rows = [[float(r["lat"]), float(r["lon"]), r["price"], r.get("rooms")] for r in rows_db]
+        fields = [
+            {"name": "lat", "format": "", "type": "real"},
+            {"name": "lon", "format": "", "type": "real"},
+            {"name": "price", "format": "", "type": "integer"},
+            {"name": "rooms", "format": "", "type": "integer"},
+        ]
+        content = {
+            "datasets": [{
+                "version": "v1",
+                "data": {"id": "listings", "label": "listings", "color": [255, 153, 31],
+                          "allData": data_rows, "fields": fields},
+            }],
+            "config": {"version": "v1", "config": {
+                "visState": {"layers": [{
+                    "id": "hmlayer1", "type": "heatmap",
+                    "config": {
+                        "dataId": "listings", "label": "Цены",
+                        "columns": {"lat": "lat", "lng": "lon"},
+                        "isVisible": True,
+                        "visConfig": {"opacity": 0.75, "radius": 22},
+                    },
+                }]},
+                "mapState": {
+                    "latitude": lat if lat is not None else 51.128,
+                    "longitude": lon if lon is not None else 71.43,
+                    "zoom": 14 if lat is not None else 11,
+                },
+                "mapStyle": {"styleType": "light"},
+            }},
+            "info": {"app": "kepler.gl", "created_at": "2026-08-06T00:00:00.000Z"},
+        }
+        return JSONResponse(content=content, headers={"Access-Control-Allow-Origin": "*"})
+
     @router.get("/admin/api/geo-rentals.geojson")
     async def geo_rentals_geojson(request: Request, lat: float = None, lon: float = None, radius_km: float = None):
         # Аналог geo-sales.geojson, но по rental_listings — для переключателя
