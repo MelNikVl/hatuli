@@ -124,18 +124,42 @@ function loadPrices(rooms, days) {
     b.style.color = active ? '#fff' : 'var(--text)';
   });
   fetch('/admin/api/price-trend-history?days=' + currentDays + '&rooms=' + encodeURIComponent(rooms)).then(r => r.json()).then(d => {
-    const blockW = document.getElementById('price-trend-chart').clientWidth || (document.getElementById('price-trend-chart').parentElement.clientWidth - 4);
-    const w = Math.max(320, Math.round(blockW));
-    twoLineChart('price-trend-chart', d.days || [], d.cnt_up || [], d.cnt_down || [], w, 480,
-      v => v + ' объявл.');
-    twoLineChart('price-amount-chart', d.days || [], (d.avg_up || []).map(v => v / 1e6),
-      (d.avg_down || []).map(v => v / 1e6), w, 480,
-      v => v.toFixed(1) + ' млн ₸');
+    lastPriceTrendData = d;
+    renderPriceTrendCharts();
   }).catch(() => {
     document.getElementById('price-trend-chart').innerHTML = '<div style="padding:14px;color:#888;font-size:12px;">не удалось загрузить</div>';
   });
   loadPriceInfluencers(rooms, currentDays);
 }
+
+let lastPriceTrendData = null;
+function renderPriceTrendCharts() {
+  const d = lastPriceTrendData;
+  if (!d) return;
+  // Раньше h было захардкожено в 480 — viewBox не совпадал по пропорциям с
+  // реальной высотой блока (grid-ячейка hcb-grid — 300px, а title+легенда
+  // над графиком съедают ещё часть), preserveAspectRatio="meet" сжимал весь
+  // SVG до маленького квадрата в углу вместо того, чтобы занимать всю
+  // высоту. Меряем реальную доступную высоту .chart-block-inner (как уже
+  // делали для ширины) и используем её — график растягивается на весь блок.
+  const elTrend = document.getElementById('price-trend-chart');
+  const blockW = elTrend.clientWidth || (elTrend.parentElement.clientWidth - 4);
+  const blockH = elTrend.clientHeight || 260;
+  const w = Math.max(320, Math.round(blockW));
+  const h = Math.max(160, Math.round(blockH));
+  twoLineChart('price-trend-chart', d.days || [], d.cnt_up || [], d.cnt_down || [], w, h,
+    v => v + ' объявл.');
+  const elAmount = document.getElementById('price-amount-chart');
+  const h2 = Math.max(160, Math.round(elAmount.clientHeight || blockH));
+  twoLineChart('price-amount-chart', d.days || [], (d.avg_up || []).map(v => v / 1e6),
+    (d.avg_down || []).map(v => v / 1e6), w, h2,
+    v => v.toFixed(1) + ' млн ₸');
+}
+document.getElementById('price-trend-chart').closest('.chart-block')
+  .addEventListener('hatuli:chart-resize', renderPriceTrendCharts);
+document.getElementById('price-amount-chart').closest('.chart-block')
+  .addEventListener('hatuli:chart-resize', renderPriceTrendCharts);
+window.addEventListener('resize', () => { if (lastPriceTrendData) renderPriceTrendCharts(); });
 
 function loadPriceInfluencers(rooms, days) {
   const el = document.getElementById('price-influencers-list');

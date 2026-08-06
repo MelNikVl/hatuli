@@ -162,7 +162,7 @@ async def run_cycle():
                 await pg_exec("""
                     INSERT INTO apartment_listings
                         (id, url, title, price, area, rooms, address, district, complex_name,
-                         est_rent, yield_pct, payback_years,
+                         est_rent, yield_pct, net_yield_pct, payback_years,
                          score_total, score_yield, score_price_market, score_location,
                          score_apt_type, score_floor, score_complex, score_supply,
                          reasons, description, floor, floors_total,
@@ -171,15 +171,15 @@ async def run_cycle():
                          rent_source, bargain_target, bargain_discount_pct, bargain_rec,
                          details_fetched, ceiling_height, first_seen, last_seen, notified)
                     VALUES
-                        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
-                         $13,$14,$15,$16,$17,$18,$19,$20,
-                         $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
-                         $31,$32,$33,$34,$35,$36,$37,$38,NOW(),NOW(),FALSE)
+                        ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
+                         $14,$15,$16,$17,$18,$19,$20,$21,
+                         $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,
+                         $32,$33,$34,$35,$36,$37,$38,$39,NOW(),NOW(),FALSE)
                     ON CONFLICT (id) DO NOTHING
                 """,
                     r["id"], r.get("url"), r.get("title"), r.get("price"), r.get("area"),
                     r.get("rooms"), r.get("address"), r.get("district"), r.get("complex_name"),
-                    r.get("est_rent", 0), r.get("yield_pct", 0), r.get("payback_years"),
+                    r.get("est_rent", 0), r.get("yield_pct", 0), r.get("net_yield_pct", 0), r.get("payback_years"),
                     sd.get("total_score", 0), bd.get("yield", 0), bd.get("price_market", 0),
                     bd.get("location", 0), bd.get("apt_type", 0), bd.get("floor", 0),
                     bd.get("complex", 0), bd.get("supply", 0),
@@ -244,6 +244,7 @@ async def run_cycle():
                         bargain_discount_pct=$15, bargain_rec=$16,
                         details_fetched=$17, ceiling_height=COALESCE($18, ceiling_height),
                         title=$19, rooms=$20, area=$21, address=$22, district=$23,
+                        net_yield_pct=$24,
                         last_seen=NOW()
                     WHERE id=$1
                 """,
@@ -257,6 +258,7 @@ async def run_cycle():
                     r.get("details_fetched", False), r.get("ceiling_height"),
                     r.get("title"), r.get("rooms"), r.get("area"),
                     r.get("address"), r.get("district"),
+                    r.get("net_yield_pct", 0),
                 )
                 upd_cnt += 1
 
@@ -809,12 +811,21 @@ async def run_cycle():
 async def _run_cycle_timed():
     """run_cycle() обёрнутый таймингом + счётчиком реальных HTTP-запросов
     к Крыше за цикл — снимок в parser_cycle_history для графиков
-    "сколько идёт парсинг" и "нагрузка на Крышу" на /admin/parser."""
+    "сколько идёт парсинг" и "нагрузка на Крышу" на /admin/parser.
+    Плюс (см. задачу "оптимизация работы парсеров" — пропуск detail-fetch
+    для объявлений без изменений) — эффективность этой оптимизации за
+    цикл: total_seen/needs_detail_fetch/skipped_no_change, см.
+    apartment_parser.DETAIL_FETCH_STATS. Показывается на
+    /admin/parsers?tab=recheck, секция "Нагрузка на Крышу"."""
     import time as _time
-    from bot.core.apartment_parser import REQUEST_COUNTS as _search_counts
+    from bot.core.apartment_parser import (
+        REQUEST_COUNTS as _search_counts, DETAIL_FETCH_STATS as _df_stats)
     from bot.core.apartment_details import REQUEST_COUNTS as _detail_counts
     _search_counts["search"] = 0
     _detail_counts["detail"] = 0
+    _df_stats["total_seen"] = 0
+    _df_stats["needs_fetch"] = 0
+    _df_stats["skipped"] = 0
     started = _time.monotonic()
     try:
         await run_cycle()
@@ -823,9 +834,12 @@ async def _run_cycle_timed():
         try:
             from bot.db.pg import execute as _pg_exec_cycle
             await _pg_exec_cycle(
-                "INSERT INTO parser_cycle_history (duration_sec, search_requests, detail_requests) "
-                "VALUES ($1, $2, $3)",
-                round(duration_sec), _search_counts["search"], _detail_counts["detail"])
+                "INSERT INTO parser_cycle_history "
+                "(duration_sec, search_requests, detail_requests, "
+                " total_seen, needs_detail_fetch, skipped_no_change) "
+                "VALUES ($1, $2, $3, $4, $5, $6)",
+                round(duration_sec), _search_counts["search"], _detail_counts["detail"],
+                _df_stats["total_seen"], _df_stats["needs_fetch"], _df_stats["skipped"])
         except Exception as e:
             log.warning("parser_cycle_history snapshot failed: %s", e)
 
@@ -839,9 +853,19 @@ async def main():
             at TIMESTAMPTZ DEFAULT now(),
             duration_sec INT,
             search_requests INT,
-            detail_requests INT
+            detail_requests INT,
+            total_seen INT,
+            needs_detail_fetch INT,
+            skipped_no_change INT
         )
     """)
+    # Бэкфилл колонок для инсталляций, где таблица уже существовала до
+    # оптимизации detail-fetch (см. migrations/034_parser_cycle_detail_fetch.sql).
+    for _col in ("total_seen", "needs_detail_fetch", "skipped_no_change"):
+        try:
+            await _pg_exec_init(f"ALTER TABLE parser_cycle_history ADD COLUMN IF NOT EXISTS {_col} INT")
+        except Exception as e:
+            log.warning("parser_cycle_history ALTER (%s) failed: %s", _col, e)
     log.info("=== Apartment service started ===")
 
     # Первый цикл сразу

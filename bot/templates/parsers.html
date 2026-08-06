@@ -58,10 +58,12 @@
 {% elif tab == 'krisha-homeportal' %}
   {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
   {% include "_parser_homeportal.html" %}
+  {% set activity_chart_type = 'line' %}
   {% include "_parser_activity_chart.html" %}
 {% elif tab == 'krisha-complex-scan' %}
   {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
   {% include "_parser_complexscan.html" %}
+  {% set activity_chart_type = 'line' %}
   {% include "_parser_activity_chart.html" %}
 {% elif tab == 'krisha-korter' or tab == 'krisha-homsters' %}
   {% if active_block %}{{ toggle_card(active_block) }}{% endif %}

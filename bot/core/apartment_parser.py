@@ -19,6 +19,14 @@ LAST_TOTAL_FOUND: int | None = None
 # оценка нагрузки на источник (см. /admin/api/parser-cycle-history).
 # Сбрасывается в service_apartments.run_cycle() перед каждым проходом.
 REQUEST_COUNTS = {'search': 0}
+# Статистика эффективности detail-fetch за текущий цикл (см. оптимизацию
+# ниже в analyze_apartments — пропуск detail-fetch для объявлений без
+# изменений). Накапливается за ВСЕ вызовы analyze_apartments() в одном
+# цикле (свежий парс + глубокий обход), сбрасывается в
+# service_apartments._run_cycle_timed() перед каждым проходом.
+# Снимок пишется в parser_cycle_history (total_seen/needs_detail_fetch/
+# skipped_no_change) — см. /admin/parsers?tab=recheck, секция "Нагрузка на Крышу".
+DETAIL_FETCH_STATS = {'total_seen': 0, 'needs_fetch': 0, 'skipped': 0}
 
 _re_total = _re_mod.compile(r"Найдено[^\d]{0,20}([\d\s\xa0\u2009]{1,12})")
 _re_total_clean = _re_mod.compile(r"\D")
@@ -261,12 +269,26 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
         else:
             rent = rent_data["median_price"] if rent_data else None
         if rent and s["price"] > 0:
-            s["yield_pct"] = round((rent * 12 / s["price"]) * 100, 1)
+            annual_rent = rent * 12
+            s["yield_pct"] = round((annual_rent / s["price"]) * 100, 1)
+            # Net-доходность (см. Notion "Расчет доходности"): gross сам по
+            # себе занижает картину для карты, но переоценивает её для
+            # инвестора — не учитывает простой между жильцами, налог+мелкий
+            # ремонт и расходы на саму покупку. Те же допущения, что в
+            # методичке: 0.95 — вакантность (~2-3 недели простоя/год при
+            # высоком спросе в Астане), 0.10 — налог+косметика (~10% годовой
+            # аренды), 1.02 — расходы на покупку (нотариус/риелтор ~2%).
+            # net ≈ gross * 0.83 — держим формулу явной (не константой),
+            # чтобы менять допущения по отдельности было легко.
+            net_annual = annual_rent * 0.95 - annual_rent * 0.10
+            purchase_cost = s["price"] * 1.02
+            s["net_yield_pct"] = round((net_annual / purchase_cost) * 100, 1) if purchase_cost > 0 else 0
             s["est_rent"] = rent
             s["payback_years"] = round(s["price"] / (rent * 12), 1)
             s["rent_source"] = f"{rent_data.get('level','?')}, n={rent_data.get('sample_count',0)}"
         else:
             s["yield_pct"] = 0
+            s["net_yield_pct"] = 0
             s["est_rent"] = 0
             s["payback_years"] = None
             s["rent_source"] = "нет данных" 
@@ -308,7 +330,59 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
     from bot.db import settings as _app_settings
     detail_batch = _app_settings.get_int("DETAIL_FETCH_BATCH", 15)
 
-    candidates = [r for r in results if not r.get("details_fetched")]
+    # ОПТИМИЗАЦИЯ (см. задачу "оптимизация работы парсеров"): раньше сюда
+    # попадала top_half+random_half выборка из ВСЕХ объявлений на странице
+    # выдачи каждый цикл — включая те, что мы уже детально обошли вчера и
+    # позавчера и у которых с тех пор ничего не изменилось. detail_fetch
+    # (координаты/фото/описание) — самая дорогая и медленная операция
+    # (8-15с пауза на объявление, отдельный HTTP-запрос на страницу деталей).
+    # Цена/ID/адрес мы и так получаем бесплатно одним запросом на страницу
+    # выдачи (20-30 объявлений за раз) — этого достаточно, чтобы понять,
+    # НУЖНО ли вообще лезть в детали. Правило: лезем только если
+    #   1) объявления совсем нет в базе (новое) — нужны координаты/фото, или
+    #   2) цена изменилась с прошлого раза — стоит перепроверить и обновить
+    #      историю цены, или
+    #   3) объявление уже есть, но координат так и не появилось (прошлый
+    #      detail-fetch не удался/не был сделан) — досмотреть его ещё раз.
+    # Иначе (цена та же, координаты уже есть) — пропускаем, объявление и так
+    # видно на карте с прошлого раза. По прикидке из задачи — это должно
+    # сократить число detail-запросов в десятки раз на устоявшемся ядре базы.
+    known_by_id: dict[str, tuple] = {}
+    ids_on_page = [r["id"] for r in results if r.get("id")]
+    if ids_on_page:
+        try:
+            from bot.db.pg import fetch as _pg_fetch
+            known_rows = await _pg_fetch(
+                "SELECT id, price, lat FROM apartment_listings WHERE id = ANY($1::text[])",
+                ids_on_page)
+            known_by_id = {row["id"]: (row["price"], row["lat"]) for row in known_rows}
+        except Exception as e:
+            logger.warning("apt_parser: не удалось прочитать известные цены из БД (%s) — "
+                            "работаем как раньше, без фильтра по изменению цены", e)
+
+    def _needs_detail_fetch(r: dict) -> bool:
+        if r.get("details_fetched"):
+            return False
+        known = known_by_id.get(r["id"])
+        if known is None:
+            return True  # новое объявление — не встречалось в базе вовсе
+        known_price, known_lat = known
+        if known_price != r.get("price"):
+            return True  # цена изменилась с прошлого обхода
+        if known_lat is None:
+            return True  # уже видели, но детали так и не подъехали — досмотрим ещё раз
+        return False  # без изменений, координаты уже есть — пропускаем
+
+    all_candidates = [r for r in results if not r.get("details_fetched")]
+    candidates = [r for r in all_candidates if _needs_detail_fetch(r)]
+    skipped = len(all_candidates) - len(candidates)
+    logger.info("apt_parser: %d объявлений на странице, %d требуют detail-fetch "
+                "(новые/цена изменилась/нет координат), %d пропущено без изменений",
+                len(all_candidates), len(candidates), skipped)
+    DETAIL_FETCH_STATS['total_seen'] += len(all_candidates)
+    DETAIL_FETCH_STATS['needs_fetch'] += len(candidates)
+    DETAIL_FETCH_STATS['skipped'] += skipped
+
     half = max(1, detail_batch // 2)
     top_half = candidates[:half]
     rest = candidates[half:]

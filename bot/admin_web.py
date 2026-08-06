@@ -136,10 +136,11 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         response.delete_cookie("admin_user")
         return response
 
-    @app.get("/admin", response_class=HTMLResponse)
-    async def dashboard(request: Request):
-        # Публичная страница: карта и фильтры без логина; админ-элементы
-        # скрываются в шаблоне через is_admin(request)
+    async def _render_dashboard(request: Request, listing_id: str | None = None, listing_meta: dict | None = None):
+        # Общий рендер главной карты — вынесено в helper, чтобы шарить между
+        # /admin (голая карта) и /admin/listing/{id} (та же карта с открытым
+        # попапом объявления, см. задачу "попап объявления = отдельная
+        # шарабельная страница, старую /admin/analytics/{id} убрать").
         stats = await db.get_dashboard_stats()
         from bot.db import settings as app_settings
         await app_settings.load()
@@ -157,8 +158,50 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "parse_interval_max": _state.parse_interval_max,
                 "popup_width": app_settings.get_int("POPUP_WIDTH_PX", 380),
                 "site_user": site_user,
+                "listing_id": listing_id,
+                "listing_meta": listing_meta,
             }
         )
+
+    @app.get("/admin", response_class=HTMLResponse)
+    async def dashboard(request: Request):
+        # Публичная страница: карта и фильтры без логина; админ-элементы
+        # скрываются в шаблоне через is_admin(request)
+        return await _render_dashboard(request)
+
+    @app.get("/admin/listing/{listing_id}", response_class=HTMLResponse)
+    async def listing_page(request: Request, listing_id: str):
+        # Единственная страница объявления — та же карта, что и /admin, с
+        # автоматически открытым попапом (см. dashboard.html: {% if listing_id %}
+        # openDetailModal(...) на DOMContentLoaded, plus history.pushState при
+        # открытии/закрытии попапа с карты — делает эту ссылку копируемой и
+        # попадаемой сюда напрямую). Раньше было два разных представления
+        # объявления (этот попап и отдельная /admin/analytics/{id}) — теперь
+        # только это, старый роут ниже редиректит сюда.
+        from bot.db.pg import fetchrow as pg_fetchrow
+        row = await pg_fetchrow(
+            "SELECT id, title, price, rooms, area, district, complex_name, photos "
+            "FROM apartment_listings WHERE id = $1", listing_id)
+        listing_meta = None
+        if row:
+            r = dict(row)
+            photos = r.get("photos") or []
+            if isinstance(photos, str):
+                import json as _j
+                try:
+                    photos = _j.loads(photos)
+                except ValueError:
+                    photos = []
+            price_txt = f"{r['price']/1e6:.1f} млн ₸" if r.get("price") else ""
+            title_bits = [f"{r.get('rooms') or '?'}-комн", f"{r.get('area') or '?'} м²"]
+            if r.get("complex_name"):
+                title_bits.append(r["complex_name"])
+            listing_meta = {
+                "title": f"{price_txt} · {' · '.join(title_bits)} — Hatuli".strip(" ·"),
+                "description": f"{' · '.join(title_bits)}{', ' + r['district'] if r.get('district') else ''} — цена {price_txt or 'по запросу'} на Hatuli.",
+                "image": photos[0] if photos else None,
+            }
+        return await _render_dashboard(request, listing_id=listing_id, listing_meta=listing_meta)
 
     @app.get("/admin/users", response_class=HTMLResponse)
     async def users_page(request: Request):
@@ -603,9 +646,43 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # ВАЖНО: выше catch-all /admin/analytics/{listing_id} ниже.
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetchval as pg_fetchval, fetch as pg_fetch
+        batch = await pg_fetchval("SELECT value FROM app_settings WHERE key='FLOORPLAN_BATCH'") or "200"
+        delay = await pg_fetchval("SELECT value FROM app_settings WHERE key='FLOORPLAN_DELAY'") or "1.0"
+        queue = await pg_fetchval("""
+            SELECT count(*) FROM apartment_listings
+            WHERE floorplan_checked_at IS NULL AND photos IS NOT NULL AND photos::text != '[]'
+              AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE""") or 0
+        hourly = await pg_fetch("""
+            SELECT date_trunc('hour', floorplan_checked_at) AS h, count(*) AS cnt
+            FROM apartment_listings WHERE floorplan_checked_at > now() - interval '24 hours'
+            GROUP BY 1 ORDER BY 1""")
         return templates.TemplateResponse("photo_analysis.html", {
             "request": request, "atab": "photo_analysis",
+            "floorplan_batch": int(float(batch)), "floorplan_delay": float(delay),
+            "floorplan_queue": queue,
+            "floorplan_hourly": {"labels": [h["h"].strftime("%d.%m %H:00") for h in hourly],
+                                  "values": [h["cnt"] for h in hourly]},
         })
+
+    @app.post("/admin/analytics/photo-analysis/settings")
+    async def photo_analysis_settings_save(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        data = await request.json()
+        from bot.db.pg import execute as pg_execute
+        try:
+            batch = max(10, min(500, int(float(data.get("batch", 200)))))
+            delay = max(0.2, min(5.0, float(data.get("delay", 1.0))))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "bad value"}, status_code=400)
+        await pg_execute(
+            "INSERT INTO app_settings (key, value) VALUES ('FLOORPLAN_BATCH', $1) "
+            "ON CONFLICT (key) DO UPDATE SET value = $1", str(batch))
+        await pg_execute(
+            "INSERT INTO app_settings (key, value) VALUES ('FLOORPLAN_DELAY', $1) "
+            "ON CONFLICT (key) DO UPDATE SET value = $1", str(delay))
+        return JSONResponse({"ok": True, "batch": batch, "delay": delay})
 
     @app.get("/admin/analytics/news-analysis", response_class=HTMLResponse)
     async def news_analysis_page(request: Request):
@@ -826,6 +903,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                    COALESCE(cts.floors_total, agg.floors_total) AS floors_total,
                    COALESCE(cts.ceiling_height_max, agg.ceiling_height)::float AS ceiling_height,
                    hct.elevator_count, hct.elevator_capacity_kg, hct.elevator_passenger, hct.elevator_freight, hct.apartment_count,
+                   hct.entrances,
                    hct.rooms_1, hct.rooms_2, hct.rooms_3, hct.rooms_4,
                    cts.lifts_type, cts.construction_type,
                    COALESCE(agg.listings_count, 0) AS listings_count,
@@ -862,7 +940,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     async def housing_class_update(request: Request, complex_id: int,
                                     elevator_count: str = Form(""), elevator_capacity_kg: str = Form(""),
                                     elevator_passenger: str = Form(""), elevator_freight: str = Form(""),
-                                    apartment_count: str = Form(""),
+                                    apartment_count: str = Form(""), entrances: str = Form(""),
                                     rooms_1: str = Form(""), rooms_2: str = Form(""),
                                     rooms_3: str = Form(""), rooms_4: str = Form("")):
         # Тестовые поля, которых нет больше нигде в БД (лифты/их грузоподъёмность/
@@ -877,13 +955,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return int(s) if s.isdigit() else None
 
         await pg_execute("""
-            INSERT INTO housing_class_test (complex_id, elevator_count, elevator_capacity_kg, elevator_passenger, elevator_freight, apartment_count, rooms_1, rooms_2, rooms_3, rooms_4, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+            INSERT INTO housing_class_test (complex_id, elevator_count, elevator_capacity_kg, elevator_passenger, elevator_freight, apartment_count, entrances, rooms_1, rooms_2, rooms_3, rooms_4, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
             ON CONFLICT (complex_id) DO UPDATE
             SET elevator_count = $2, elevator_capacity_kg = $3, elevator_passenger = $4, elevator_freight = $5,
-                apartment_count = $6, rooms_1 = $7, rooms_2 = $8, rooms_3 = $9, rooms_4 = $10, updated_at = now()
+                apartment_count = $6, entrances = $7, rooms_1 = $8, rooms_2 = $9, rooms_3 = $10, rooms_4 = $11, updated_at = now()
         """, complex_id, _to_int(elevator_count), _to_int(elevator_capacity_kg), _to_int(elevator_passenger), _to_int(elevator_freight),
-            _to_int(apartment_count), _to_int(rooms_1), _to_int(rooms_2), _to_int(rooms_3), _to_int(rooms_4))
+            _to_int(apartment_count), _to_int(entrances), _to_int(rooms_1), _to_int(rooms_2), _to_int(rooms_3), _to_int(rooms_4))
         return RedirectResponse(url="/admin/analytics/complexes?tab=housing_class", status_code=303)
 
     @app.post("/admin/analytics/housing-class/{complex_id}/delete")
@@ -1007,18 +1085,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)
     async def analytics_detail(request: Request, listing_id: str):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        try:
-            return await _analytics_detail_inner(request, listing_id)
-        except Exception:
-            import traceback
-            tb = traceback.format_exc()
-            return HTMLResponse(
-                f"<h2>Ошибка карточки {listing_id}</h2><pre style='background:#111;color:#f88;"
-                f"padding:16px;border-radius:8px;overflow:auto;'>{tb}</pre>",
-                status_code=500,
-            )
+        # Старая отдельная страница объявления — слита с попапом на главной
+        # карте (см. /admin/listing/{id} и _render_dashboard выше). Раньше
+        # это была самостоятельная (и админ-гейченная) страница с анализом
+        # аналогов/торга — теперь тот же контент есть в самом попапе
+        # (/admin/api/listing/{id} уже отдаёт bargain/comps), так что вторая
+        # версия страницы была чистым дублированием. 301, а не 404 — старые
+        # ссылки/закладки продолжают вести на актуальную карточку.
+        return RedirectResponse(url=f"/admin/listing/{listing_id}", status_code=301)
 
     async def _analytics_detail_inner(request: Request, listing_id: str):
         from bot.db.pg import fetchrow as pg_fetchrow, fetch as pg_fetch

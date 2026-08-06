@@ -84,7 +84,13 @@
        шрифта/паддинги приведены к тому же формату, что и .pub-nav (единый
        ряд верхней навигации после её редизайна), чтобы вся навигация
        админки выглядела как одна система. */
-    .atabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; position: sticky; top: 98px; z-index: 490; background: var(--bg); padding-top: 6px; }
+    /* top у .atabs/.htabs — НЕ хардкод: реальная высота .pub-header после
+       редизайна в один ряд отличается от старого двухрядного (98px), из-за
+       чего между прилипшим хедером и прилипшими вкладками оставался пустой
+       зазор при скролле. Меряем реальные высоты в JS (см. скрипт в конце
+       файла) и пишем в --hdr-h/--atabs-h, .htabs тоже прилипает — под
+       .atabs, третьим уровнем. */
+    .atabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; position: sticky; top: var(--hdr-h, 60px); z-index: 490; background: var(--bg); }
     .atabs a { padding: 11px 10px; font-size: 13px; font-weight: 600; color: #000; text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
     .atabs a:hover { color: #000; }
     .atabs a.active { color: #000; border-bottom-color: var(--accent); }
@@ -160,27 +166,55 @@
     }
     select:focus, input:focus { outline: 1px solid var(--accent); }
 
-    /* Блок графика по всей админке — базовый размер 800×600, но теперь
-       ресайзабельный (нативный CSS resize:both, тянуть за правый нижний
-       угол) и перетаскиваемый (drag handle сверху справа, реордер внутри
-       родительского контейнера). Chart.js сам переотрисовывается при ресайзе
-       контейнера (встроенный ResizeObserver при responsive:true), для
-       инлайн-SVG графиков используем viewBox+width:100% — см. JS ниже и
-       initChartGrid(). Размер/порядок сохраняются per-browser в localStorage,
-       см. задачу "drag+resize chart grid". */
-    .chart-block { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; width:800px; max-width:100%; height:600px; min-width:320px; min-height:260px; resize:both; overflow:hidden; box-sizing:border-box; font-size:1em; position:relative; display:flex; flex-direction:column; }
+    /* ── Snap-to-grid дашборд (заменяет старую систему free-pixel
+       resize:both + линейный drag-reorder) ─────────────────────────────
+       Все .chart-block/.admin-block/.tbl-wrap страницы собираются в ОДНУ
+       CSS Grid-сетку 3 колонки × N строк (grid-auto-rows фиксированной
+       высоты). Минимум 2 строки (6 ячеек) показаны всегда — пустые ячейки
+       рендерятся как видимые пунктирные placeholder'ы, а не просто
+       свободное место. Не хватает 6 ячеек под контент — строки по 3
+       добавляются вниз автоматически. Блок можно перетащить (ручка ⠿) в
+       любую ячейку (своп с тем, что там было) и растянуть на 1/2/3
+       колонки кнопками span в углу. Позиция (индекс ячейки) + span
+       хранятся per-page в localStorage — см. initDashboardGrid() в конце
+       файла. */
+    .hcb-grid { display:grid; grid-template-columns:repeat(3, 1fr); grid-auto-rows:300px; gap:14px; margin-bottom:16px; }
+    .hcb-grid > .chart-block, .hcb-grid > .admin-block, .hcb-grid > .tbl-wrap {
+      width:auto !important; height:auto !important; min-width:0; max-width:none; min-height:0; max-height:none;
+      resize:none; overflow:auto; margin-bottom:0; box-sizing:border-box; flex:none !important;
+    }
+    .chart-block { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; width:800px; max-width:100%; height:600px; min-width:320px; min-height:260px; overflow:hidden; box-sizing:border-box; font-size:1em; position:relative; display:flex; flex-direction:column; }
     .chart-block-inner { position:relative; flex:1 1 auto; min-height:0; width:100%; overflow:hidden; }
     .chart-block-inner canvas { max-width:100%; max-height:100%; }
     .chart-block-inner svg { width:100%; height:100%; }
+
+    /* .admin-block/.tbl-wrap — та же ячейка сетки, но для НЕ-графических
+       блоков (ряды stat-card, инфо-панели, обёртки таблиц) — без forced
+       flex-column у .chart-block, чтобы не сломать родной layout блока
+       (например flex-wrap ряда карточек). */
+    .admin-block { position:relative; overflow:auto; box-sizing:border-box; min-width:220px; min-height:56px; max-width:100%; margin-bottom:16px; }
+    .tbl-wrap { position:relative; overflow:auto; box-sizing:border-box; min-width:260px; min-height:120px; max-width:100%; margin-bottom:16px; }
+
+    /* пустая ячейка сетки — видимый пунктирный placeholder (по скетчу
+       пользователя пустые ячейки должны быть видны, а не просто пустое
+       место) */
+    .hcb-cell-empty { border:2px dashed var(--border); border-radius:12px; background:rgba(120,130,180,.04); min-height:0; }
+
     .chart-drag-handle { position:absolute; top:6px; right:8px; font-size:13px; line-height:1; color:var(--muted); cursor:grab; padding:3px 6px; border-radius:4px; z-index:20; user-select:none; opacity:.5; background:var(--surface); }
     .chart-drag-handle:hover { opacity:1; background:var(--surface2); }
-    .chart-block.hcb-dragging { opacity:.35; }
-    .chart-block.hcb-dragover { outline:2px dashed var(--accent); outline-offset:-2px; }
+    /* span-контрол — маленькие кнопки 1/2/3 в углу блока (растянуть на
+       N колонок сетки) — проще и надёжнее, чем drag-resize со snap. */
+    .hcb-span-ctl { position:absolute; top:6px; right:34px; display:flex; gap:2px; z-index:20; background:var(--surface); border-radius:4px; padding:1px; opacity:.55; }
+    .hcb-span-ctl:hover { opacity:1; }
+    .hcb-span-btn { width:18px; height:18px; line-height:16px; text-align:center; font-size:11px; font-weight:700; border:1px solid var(--border); border-radius:3px; background:var(--surface2); color:var(--muted); cursor:pointer; padding:0; }
+    .hcb-span-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+    .chart-block.hcb-dragging, .admin-block.hcb-dragging, .tbl-wrap.hcb-dragging { opacity:.35; }
+    .chart-block.hcb-dragover, .admin-block.hcb-dragover, .tbl-wrap.hcb-dragover, .hcb-cell-empty.hcb-dragover { outline:2px dashed var(--accent); outline-offset:-2px; }
 
     /* Внутренняя вкладочная полоса hub-страниц (Парсеры / ЖК / AI-анализ /
        Тепловые карты) — НЕ путать с .atabs (верхняя навигация между
        разделами) — это переключатель ВНУТРИ одной hub-страницы. */
-    .htabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .htabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); flex-wrap: wrap; position: sticky; top: calc(var(--hdr-h, 60px) + var(--atabs-h, 46px)); z-index: 480; background: var(--bg); }
     .htabs a { padding: 8px 14px; font-size: 13px; font-weight: 600; color: #000; text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
     .htabs a:hover { color: #000; }
     .htabs a.active { color: #000; border-bottom-color: var(--accent); background: rgba(88,101,242,.08); border-radius: 6px 6px 0 0; }
@@ -250,153 +284,246 @@ function toggleSidebarTheme() {
 _applySidebarTheme(localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark');
 </script>
 <script>
-// ── Grafana-style сетка графиков (.chart-block): ресайз (нативный CSS
-// resize:both) + драг-реордер (HTML5 drag&drop за ручку в углу) + сохранение
-// размера/порядка в localStorage per-browser, per-URL. Один общий скрипт
-// для всех страниц /admin/analytics/* и /admin/parsers — блоки должны быть
-// `.chart-block`, id блока стабильно назначается по позиции в DOM, если не
-// задан вручную через data-chart-id.
+// ── Snap-to-grid дашборд (.chart-block + .admin-block + .tbl-wrap) ─────
+// Заменяет старую систему free-pixel resize:both + линейный drag-reorder.
+// Все блоки страницы собираются в ОДНУ CSS Grid-сетку (3 колонки, строки
+// фиксированной высоты, минимум 2 строки = 6 ячеек, лишние строки по 3
+// добавляются вниз при нехватке места). Каждый блок — grid item с явными
+// grid-row/grid-column (span 1..3), позиция + span хранятся per-page в
+// localStorage (hatuli-grid-layout:<path>). Перетаскивание — ручка ⠿,
+// drop над ячейкой/блоком меняет их местами. Растягивание — кнопки
+// span 1/2/3 в углу (надёжнее, чем drag-resize со snap-к-сетке).
 (function () {
-  function layoutKey() { return 'hatuli-chart-layout:' + location.pathname; }
+  const BLOCK_SEL = '.chart-block, .admin-block, .tbl-wrap';
+  const COLS = 3;
+
+  function layoutKey() { return 'hatuli-grid-layout:' + location.pathname; }
   function loadLayout() {
-    try { return JSON.parse(localStorage.getItem(layoutKey()) || '{}'); } catch (e) { return {}; }
+    try {
+      const l = JSON.parse(localStorage.getItem(layoutKey()) || '{}');
+      l.cells = l.cells || {}; l.spans = l.spans || {};
+      return l;
+    } catch (e) { return { cells: {}, spans: {} }; }
   }
   function saveLayout(layout) {
     try { localStorage.setItem(layoutKey(), JSON.stringify(layout)); } catch (e) {}
   }
 
-  function initChartGrid() {
-    const blocks = Array.from(document.querySelectorAll('.chart-block'));
+  function initDashboardGrid() {
+    const blocks = Array.from(document.querySelectorAll(BLOCK_SEL));
     if (!blocks.length) return;
     blocks.forEach((b, i) => { if (!b.dataset.chartId) b.dataset.chartId = 'auto-' + i; });
+    const docOrder = blocks.slice();
 
-    // Некоторые страницы кладут .chart-block в flex-ряд с flex:1 1 0 (равная
-    // ширина). flex-grow постоянно пересчитывает ширину при каждом рефлоу и
-    // "перетягивает" её обратно, конфликтуя с ручным resize:both — фиксируем
-    // текущую вычисленную ширину как явную и убираем flex-grow/shrink, чтобы
-    // ручной ресайз не боролся с layout'ом на каждом кадре.
+    // Собираем ВСЕ блоки страницы в одну grid-сетку — вставляем контейнер
+    // на месте первого найденного блока и переносим туда остальные.
+    const grid = document.createElement('div');
+    grid.className = 'hcb-grid';
+    blocks[0].parentElement.insertBefore(grid, blocks[0]);
     blocks.forEach(b => {
-      const cs = getComputedStyle(b);
-      if (parseFloat(cs.flexGrow) > 0 || parseFloat(cs.flexShrink) > 0) {
-        const rect = b.getBoundingClientRect();
-        b.style.flex = '0 0 auto';
-        if (!b.style.width || b.style.width === 'auto') b.style.width = Math.round(rect.width) + 'px';
-      }
+      // сбрасываем инлайновые width/height/flex, которые могли прийти со
+      // старой системы или из вёрстки страницы (например flex:1 1 0 в
+      // рядах графиков) — теперь размер задаёт исключительно grid-ячейка.
+      b.style.flex = ''; b.style.width = ''; b.style.height = '';
+      grid.appendChild(b);
     });
 
     const layout = loadLayout();
-    layout.sizes = layout.sizes || {};
-    layout.order = layout.order || {};
 
-    // группируем по родителю — реордер драгом происходит только среди
-    // "соседей" внутри одного контейнера (обычно flex-ряд или просто main)
-    const parents = new Set(blocks.map(b => b.parentElement));
-
-    // применяем сохранённый порядок ДО применения размеров
-    parents.forEach(parent => {
-      const items = Array.from(parent.children).filter(el => el.classList && el.classList.contains('chart-block'));
-      const anyOrdered = items.some(el => layout.order[el.dataset.chartId] !== undefined);
-      if (!anyOrdered) return;
-      items.sort((a, b) => (layout.order[a.dataset.chartId] ?? 999) - (layout.order[b.dataset.chartId] ?? 999));
-      items.forEach(el => parent.appendChild(el));
-    });
-
-    function persistOrder() {
-      const cur = loadLayout();
-      cur.order = cur.order || {};
-      parents.forEach(parent => {
-        Array.from(parent.children)
-          .filter(el => el.classList && el.classList.contains('chart-block'))
-          .forEach((el, i) => { cur.order[el.dataset.chartId] = i; });
-      });
-      saveLayout(cur);
+    function fits(index, span, occ) {
+      if (index < 0) return false;
+      const col = index % COLS;
+      if (col + span > COLS) return false;
+      for (let k = 0; k < span; k++) if (occ.has(index + k)) return false;
+      return true;
     }
 
-    function getDragAfterElement(container, x, y) {
-      const els = [...container.querySelectorAll(':scope > .chart-block:not(.hcb-dragging)')];
-      let closest = { dist: Infinity, element: null };
-      for (const el of els) {
-        const box = el.getBoundingClientRect();
-        const cx = box.left + box.width / 2, cy = box.top + box.height / 2;
-        const dist = Math.hypot(x - cx, y - cy);
-        const before = (y < cy) || (Math.abs(y - cy) < box.height / 2 && x < cx);
-        if (before && dist < closest.dist) closest = { dist, element: el };
-      }
-      return closest.element;
+    // Считает позицию каждого блока (учитывая сохранённые cell/span,
+    // разрешая конфликты) и возвращает { occ:Set, maxIndex:number }.
+    function computePlacement() {
+      const occ = new Set();
+      let maxIndex = -1;
+      const order = docOrder.slice().sort((a, b) => {
+        const ca = layout.cells[a.dataset.chartId]; const cb = layout.cells[b.dataset.chartId];
+        const va = ca === undefined ? Infinity : ca; const vb = cb === undefined ? Infinity : cb;
+        if (va !== vb) return va - vb;
+        return docOrder.indexOf(a) - docOrder.indexOf(b);
+      });
+      order.forEach(b => {
+        const id = b.dataset.chartId;
+        let span = layout.spans[id] || 1; span = Math.max(1, Math.min(COLS, span));
+        let desired = layout.cells[id];
+        if (desired !== undefined && !fits(desired, span, occ)) {
+          const rowStart = Math.floor(desired / COLS) * COLS;
+          desired = fits(rowStart, span, occ) ? rowStart : undefined;
+        }
+        let placedAt = desired;
+        if (placedAt === undefined) {
+          let i = 0;
+          while (!fits(i, span, occ)) i++;
+          placedAt = i;
+        }
+        for (let k = 0; k < span; k++) occ.add(placedAt + k);
+        if (placedAt + span - 1 > maxIndex) maxIndex = placedAt + span - 1;
+        b.dataset.cell = placedAt;
+        b.dataset.span = span;
+        layout.cells[id] = placedAt;
+        layout.spans[id] = span;
+      });
+      return { occ, maxIndex };
     }
 
-    parents.forEach(parent => {
-      parent.addEventListener('dragover', e => {
-        const dragging = parent.querySelector(':scope > .chart-block.hcb-dragging');
-        if (!dragging) return;
-        e.preventDefault();
-        const after = getDragAfterElement(parent, e.clientX, e.clientY);
-        if (after == null) parent.appendChild(dragging);
-        else if (after !== dragging) parent.insertBefore(dragging, after);
+    function ensureSpanCtl(b) {
+      let ctl = b.querySelector(':scope > .hcb-span-ctl');
+      if (ctl) return ctl;
+      ctl = document.createElement('div');
+      ctl.className = 'hcb-span-ctl';
+      ctl.title = 'Ширина блока в колонках сетки';
+      [1, 2, 3].forEach(n => {
+        const btn = document.createElement('button');
+        btn.type = 'button'; btn.className = 'hcb-span-btn'; btn.textContent = String(n);
+        btn.addEventListener('click', () => {
+          layout.spans[b.dataset.chartId] = n;
+          render();
+        });
+        ctl.appendChild(btn);
       });
-      parent.addEventListener('drop', e => e.preventDefault());
-    });
+      b.appendChild(ctl);
+      return ctl;
+    }
 
-    blocks.forEach(b => {
-      const id = b.dataset.chartId;
+    function ensureDragHandle(b) {
+      if (b.querySelector(':scope > .chart-drag-handle')) return;
+      const handle = document.createElement('div');
+      handle.className = 'chart-drag-handle';
+      handle.title = 'Перетащить в другую ячейку';
+      handle.textContent = '⠿';
+      handle.setAttribute('draggable', 'true');
+      b.appendChild(handle);
+      handle.addEventListener('dragstart', e => {
+        b.classList.add('hcb-dragging');
+        grid.dataset.draggingId = b.dataset.chartId;
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', b.dataset.chartId); } catch (er) {}
+      });
+      handle.addEventListener('dragend', () => {
+        b.classList.remove('hcb-dragging');
+        delete grid.dataset.draggingId;
+        grid.querySelectorAll('.hcb-dragover').forEach(el => el.classList.remove('hcb-dragover'));
+      });
+    }
 
-      // сохранённый размер
-      const s = layout.sizes[id];
-      if (s && s.w > 0 && s.h > 0) { b.style.width = s.w + 'px'; b.style.height = s.h + 'px'; }
+    function render() {
+      const { occ, maxIndex } = computePlacement();
+      const rows = Math.max(2, Math.ceil((maxIndex + 1) / COLS));
+      const totalCells = rows * COLS;
 
-      // ручка для драга — весь блок оставляем НЕ draggable, чтобы не мешать
-      // взаимодействию с графиком (hover-тултипы, клик по легенде, resize-хват
-      // в углу), драгается только ручка сверху справа.
-      if (!b.querySelector(':scope > .chart-drag-handle')) {
-        const handle = document.createElement('div');
-        handle.className = 'chart-drag-handle';
-        handle.title = 'Перетащить блок';
-        handle.textContent = '⠿';
-        handle.setAttribute('draggable', 'true');
-        b.appendChild(handle);
-        handle.addEventListener('dragstart', e => {
-          b.classList.add('hcb-dragging');
-          e.dataTransfer.effectAllowed = 'move';
-          try { e.dataTransfer.setData('text/plain', id); } catch (er) {}
+      docOrder.forEach(b => {
+        const idx = +b.dataset.cell, span = +b.dataset.span;
+        const row = Math.floor(idx / COLS), col = idx % COLS;
+        b.style.gridRow = String(row + 1);
+        b.style.gridColumn = (col + 1) + ' / span ' + span;
+        ensureDragHandle(b);
+        const ctl = ensureSpanCtl(b);
+        ctl.querySelectorAll('.hcb-span-btn').forEach((btn, i) => {
+          btn.classList.toggle('active', i + 1 === span);
         });
-        handle.addEventListener('dragend', () => {
-          b.classList.remove('hcb-dragging');
-          persistOrder();
-        });
+      });
+
+      grid.querySelectorAll(':scope > .hcb-cell-empty').forEach(el => el.remove());
+      for (let i = 0; i < totalCells; i++) {
+        if (occ.has(i)) continue;
+        const ph = document.createElement('div');
+        ph.className = 'hcb-cell-empty';
+        ph.dataset.cell = i;
+        const row = Math.floor(i / COLS), col = i % COLS;
+        ph.style.gridRow = String(row + 1);
+        ph.style.gridColumn = String(col + 1);
+        grid.appendChild(ph);
       }
 
-      // ResizeObserver: сохраняем размер + пинаем Chart.js/кастомные SVG
-      // на переотрисовку под новый размер контейнера.
-      let resizeTimer = null;
-      const ro = new ResizeObserver(() => {
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(() => {
-          const cur = loadLayout();
-          cur.sizes = cur.sizes || {};
-          cur.sizes[id] = { w: b.offsetWidth, h: b.offsetHeight };
-          saveLayout(cur);
-          // Chart.js v3+ уже слушает ResizeObserver на канвасе сам при
-          // responsive:true — это на всякий случай подталкивает и
-          // прочие (canvas-инстансы, не подхваченные авто), и уведомляет
-          // страницу, если там свой рендер SVG/DIV-графика зависит от
-          // ширины контейнера (см. 'hatuli:chart-resize').
-          b.querySelectorAll('canvas').forEach(cv => {
-            try {
-              if (window.Chart && typeof Chart.getChart === 'function') {
-                const inst = Chart.getChart(cv);
-                if (inst) inst.resize();
-              }
-            } catch (e) {}
-          });
-          b.dispatchEvent(new CustomEvent('hatuli:chart-resize', { bubbles: true, detail: { id: id, w: b.offsetWidth, h: b.offsetHeight } }));
-        }, 150);
+      saveLayout(layout);
+
+      // Пинаем Chart.js/кастомные SVG на переотрисовку под новый размер ячейки.
+      docOrder.forEach(b => {
+        b.querySelectorAll('canvas').forEach(cv => {
+          try {
+            if (window.Chart && typeof Chart.getChart === 'function') {
+              const inst = Chart.getChart(cv);
+              if (inst) inst.resize();
+            }
+          } catch (e) {}
+        });
+        b.dispatchEvent(new CustomEvent('hatuli:chart-resize', { bubbles: true, detail: { id: b.dataset.chartId, w: b.offsetWidth, h: b.offsetHeight } }));
       });
-      ro.observe(b);
+    }
+
+    // Drop-таргет — любой прямой ребёнок сетки (блок или placeholder) под
+    // курсором, определяем через elementFromPoint по прямоугольникам детей
+    // (устойчиво к span/gap, без ручной геометрии колонок).
+    function cellUnder(x, y) {
+      const kids = Array.from(grid.children);
+      for (const el of kids) {
+        const r = el.getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return el;
+      }
+      return null;
+    }
+
+    grid.addEventListener('dragover', e => {
+      if (!grid.dataset.draggingId) return;
+      e.preventDefault();
+      const target = cellUnder(e.clientX, e.clientY);
+      grid.querySelectorAll('.hcb-dragover').forEach(el => { if (el !== target) el.classList.remove('hcb-dragover'); });
+      if (target) target.classList.add('hcb-dragover');
     });
+    grid.addEventListener('drop', e => {
+      e.preventDefault();
+      const draggingId = grid.dataset.draggingId;
+      if (!draggingId) return;
+      const target = cellUnder(e.clientX, e.clientY);
+      grid.querySelectorAll('.hcb-dragover').forEach(el => el.classList.remove('hcb-dragover'));
+      if (!target) return;
+      const draggedBlock = docOrder.find(b => b.dataset.chartId === draggingId);
+      if (!draggedBlock) return;
+      const targetCell = +target.dataset.cell;
+      const targetId = target.dataset.chartId;
+      if (targetId && targetId !== draggingId) {
+        // поменять местами позиции двух блоков
+        const a = layout.cells[draggingId];
+        layout.cells[draggingId] = layout.cells[targetId];
+        layout.cells[targetId] = a;
+      } else if (!targetId) {
+        // пустая ячейка — просто переместить туда
+        layout.cells[draggingId] = targetCell;
+      }
+      render();
+    });
+
+    render();
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initChartGrid);
-  else initChartGrid();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initDashboardGrid);
+  else initDashboardGrid();
+})();
+</script>
+<script>
+// Реальные высоты .pub-header/.atabs -> CSS-переменные --hdr-h/--atabs-h,
+// которые .atabs/.htabs используют как top для трёхуровневого прилипания
+// (хедер -> вкладки раздела -> вкладки внутри hub-страницы). Хардкод в px
+// был причиной зазора между прилипшим хедером и вкладками при скролле —
+// он не совпадал с реальной высотой хедера после редизайна в один ряд.
+(function() {
+  function measure() {
+    const hdr = document.querySelector('.pub-header');
+    const atabs = document.querySelector('.atabs');
+    if (hdr) document.documentElement.style.setProperty('--hdr-h', hdr.offsetHeight + 'px');
+    if (atabs) document.documentElement.style.setProperty('--atabs-h', atabs.offsetHeight + 'px');
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', measure);
+  else measure();
+  window.addEventListener('resize', measure);
+  window.addEventListener('load', measure);
 })();
 </script>
 </body>

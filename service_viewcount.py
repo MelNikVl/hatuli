@@ -50,6 +50,11 @@ _HEADERS = {
 async def fetch_view_count(browser, url: str) -> int | None:
     page = await browser.new_page(extra_http_headers=_HEADERS)
     try:
+        from playwright_stealth import Stealth
+        await Stealth().apply_stealth_async(page)
+    except Exception as e:
+        log.warning("playwright-stealth недоступен, работаем без него: %s", e)
+    try:
         await page.goto(url, wait_until="networkidle", timeout=25000)
         await page.wait_for_timeout(1500)  # даём время JS-вызову к /ms/views/... отработать
         text = await page.inner_text("body")

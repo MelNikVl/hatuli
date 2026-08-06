@@ -1,12 +1,14 @@
 {# Общий блок "что и когда спарсилось" для вкладок парсеров /admin/parsers
    (Task 1). Ожидает: tab, activity_days, activity_title, chart_activity
-   ({bucket, labels, values}). Один и тот же паттерн 1/3/7/30 дней, что уже
-   был на вкладках Korter/Homsters (_parser_source_changes.html). #}
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:18px;">
+   ({bucket, labels, values}). Один и тот же паттерн 1/3/7/30/90 дней, что
+   уже был на вкладках Korter/Homsters (_parser_source_changes.html).
+   Стандарт по всей админке (см. задачу "line-графики для time-series"):
+   любой временной график — line, не bar — см. _ct ниже. #}
+<div class="{{ 'chart-block' if chart_activity.labels else '' }}" style="{{ '' if chart_activity.labels else 'background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:18px;' }}">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;flex-wrap:wrap;">
     <div style="font-size:14.5px;font-weight:700;">📈 {{ activity_title }}</div>
     <div style="display:flex;gap:6px;">
-      {% for d in [1, 3, 7, 30] %}
+      {% for d in [1, 3, 7, 30, 90] %}
         <a href="?tab={{ tab }}&days={{ d }}"
            style="padding:4px 12px;border-radius:8px;font-size:12.5px;text-decoration:none;
                   {% if activity_days == d %}background:#2563eb;color:#fff;{% else %}background:var(--bg);border:1px solid var(--border);color:var(--text);{% endif %}">
@@ -16,7 +18,7 @@
     </div>
   </div>
   {% if chart_activity.labels %}
-  <div style="position:relative;height:280px;">
+  <div class="chart-block-inner">
     <canvas id="activity-chart"></canvas>
   </div>
   {% else %}
@@ -25,15 +27,20 @@
 </div>
 
 {% if chart_activity.labels %}
+{% set _ct = activity_chart_type or 'line' %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 new Chart(document.getElementById('activity-chart'), {
-  type: 'bar',
+  type: '{{ _ct }}',
   data: {
     labels: {{ chart_activity['labels'] | tojson }},
     datasets: [{
       label: 'спарсено', data: {{ chart_activity['values'] | tojson }},
+      {% if _ct == 'line' %}
+      borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.3, pointRadius: 2, pointBackgroundColor: '#2563eb', borderWidth: 2,
+      {% else %}
       backgroundColor: 'rgba(37, 99, 235, 0.75)', borderRadius: 3,
+      {% endif %}
     }],
   },
   options: {

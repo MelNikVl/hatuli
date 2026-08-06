@@ -15,6 +15,61 @@
   «старше», тем больше шанс, что цена/статус уже изменились, а мы ещё не знаем.
 </div>
 
+{# ── Нагрузка на Крышу: эффект оптимизации detail-fetch ──────────────────
+   Раньше КАЖДЫЙ цикл лез в дорогой detail-fetch (координаты/фото/описание,
+   8-15с пауза + отдельный HTTP-запрос) почти за всеми объявлениями на
+   странице выдачи — включая те, что уже обошли вчера и позавчера без
+   изменений. Теперь лезем только если объявление новое, цена изменилась,
+   или координат так и не появилось (см. apartment_parser.analyze_apartments,
+   поле _needs_detail_fetch). Секция ниже показывает эффект вживую:
+   parser_cycle_history снимок раз в цикл (~50-80 мин), API —
+   /admin/api/parser-cycle-history. #}
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:20px;">
+  <div style="display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:6px;">
+    <b style="font-size:1.05em;">🚀 Нагрузка на Крышу — эффект оптимизации detail-fetch</b>
+    <div id="load-days-btns" style="display:inline-flex;gap:6px;">
+      {% for d in [1, 3, 7, 30, 90] %}
+      <button type="button" class="load-days-btn" data-days="{{ d }}" onclick="setLoadDays({{ d }})"
+              style="padding:5px 12px;border-radius:6px;font-size:12px;background:{{ '#2563eb' if d == 7 else 'var(--bg)' }};color:{{ '#fff' if d == 7 else 'var(--text)' }};border:1px solid var(--border);cursor:pointer;">{{ d }} дн.</button>
+      {% endfor %}
+    </div>
+  </div>
+  <div style="font-size:12.5px;color:#888;max-width:900px;margin-bottom:12px;">
+    Пропускаем detail-fetch для объявлений, которые уже видели с той же ценой и уже имеющимися координатами — экономит
+    самую дорогую операцию цикла (8-15с пауза + отдельный запрос на объявление) на ~90%+ устоявшегося ядра базы.
+  </div>
+
+  <div id="load-stat-cards" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px;"></div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:16px;">
+    <div class="chart-block" style="flex:2 1 520px;min-width:360px;">
+      <b style="font-size:1em;">💰 Detail-fetch за цикл — новые/цена изменилась/нет координат</b>
+      <span style="font-size:0.85em;color:#888;margin-left:6px;">самая дорогая операция цикла — должен быть резкий спад после запуска оптимизации</span>
+      <div id="detail-fetch-chart-wrap" class="chart-block-inner"><canvas id="detail-fetch-chart"></canvas></div>
+    </div>
+
+    <div class="chart-block" style="flex:1 1 320px;min-width:280px;">
+      <b style="font-size:1em;">Skip-rate — доля пропущенных без изменений</b>
+      <span style="font-size:0.85em;color:#888;margin-left:6px;">пропущено / всего увидено на странице, за цикл</span>
+      <div id="skip-rate-chart-wrap" class="chart-block-inner"><canvas id="skip-rate-chart"></canvas></div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:16px;">
+    <div class="chart-block" style="flex:1 1 420px;min-width:340px;">
+      <b style="font-size:1em;">Реальные HTTP-запросы к Крыше за цикл</b>
+      <span style="font-size:0.85em;color:#888;margin-left:6px;">поиск (страницы выдачи) + детальные страницы объявлений — абсолютная нагрузка</span>
+      <div id="load-requests-chart-wrap" class="chart-block-inner"><canvas id="load-requests-chart"></canvas></div>
+    </div>
+
+    <div class="chart-block" style="flex:1 1 420px;min-width:340px;">
+      <b style="font-size:1em;">Сколько времени занимает цикл парсера</b>
+      <span style="font-size:0.85em;color:#888;margin-left:6px;">от старта до конца одного прохода (~раз в 50-80 минут)</span>
+      <div id="load-duration-chart-wrap" class="chart-block-inner"><canvas id="load-duration-chart"></canvas></div>
+    </div>
+  </div>
+</div>
+
 <div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:18px;">
   <div class="chart-block" style="flex:1 1 420px;min-width:340px;">
     <b style="font-size:1em;">Покрытие recheck-обхода — возраст последней проверки</b>
@@ -38,18 +93,6 @@
 </div>
 
 <div style="display:flex;flex-wrap:wrap;gap:16px;">
-  <div class="chart-block">
-    <b style="font-size:1em;">Сколько времени занимает цикл парсера</b>
-    <span style="font-size:0.85em;color:#888;margin-left:6px;">от старта до конца одного прохода (~раз в 50-80 минут)</span>
-    <div class="chart-block-inner"><canvas id="cycle-duration-chart"></canvas></div>
-  </div>
-
-  <div class="chart-block">
-    <b style="font-size:1em;">Примерная нагрузка на Крышу — HTTP-запросов за цикл</b>
-    <span style="font-size:0.85em;color:#888;margin-left:6px;">поиск (страницы выдачи) + детальные страницы объявлений</span>
-    <div class="chart-block-inner"><canvas id="cycle-requests-chart"></canvas></div>
-  </div>
-
   <div class="chart-block">
     <b style="font-size:1em;">Market absorption — уходит в архив по дням</b>
     <span style="font-size:0.85em;color:#888;margin-left:6px;">скорость расчистки рынка (продано/снято), последние 30 дней</span>
@@ -79,50 +122,167 @@ new Chart(document.getElementById('recheck-chart'), {
   },
 });
 
-fetch('/admin/api/parser-cycle-history?days=14').then(r => r.json()).then(d => {
-  const pts = d.points || [];
-  if (pts.length < 2) {
-    document.getElementById('cycle-duration-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 циклов</div>';
-    document.getElementById('cycle-requests-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 циклов</div>';
-    return;
-  }
-  new Chart(document.getElementById('cycle-duration-chart'), {
-    type: 'line',
-    data: {
-      labels: pts.map(p => p.at),
-      datasets: [{
-        label: 'мин.', data: pts.map(p => p.duration_min),
-        borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.25, pointRadius: 2,
-      }],
-    },
-    options: {
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
-        y: { beginAtZero: true, title: { display: true, text: 'минут' }, ticks: { font: { size: 13 } } },
-      },
-    },
+// ── Нагрузка на Крышу: 4 line-графика на общем фильтре 1/3/7/30/90 дней +
+// стат-карточки (последний цикл + накопленная экономия времени). Общий
+// стандарт по сайту (см. другие вкладки аналитики) — line, не bar, с
+// кнопками периода. Источник: /admin/api/parser-cycle-history.
+let loadCharts = {};
+const LOAD_CHART_IDS = ['detail-fetch-chart', 'skip-rate-chart', 'load-requests-chart', 'load-duration-chart'];
+function destroyLoadCharts() {
+  Object.values(loadCharts).forEach(c => { try { c.destroy(); } catch (e) {} });
+  loadCharts = {};
+}
+function resetLoadCanvas(id) {
+  // Пересоздаём <canvas> в обёртке -wrap перед каждым рендером, иначе
+  // переключение периода после "меньше 2 циклов" (canvas заменён на div)
+  // не смогло бы восстановить график при следующем выборе периода.
+  const wrap = document.getElementById(id + '-wrap');
+  if (wrap) wrap.innerHTML = `<canvas id="${id}"></canvas>`;
+}
+function noDataMsg(id) {
+  const wrap = document.getElementById(id + '-wrap');
+  if (wrap) wrap.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 циклов за этот период</div>';
+}
+function fmtSaved(sec) {
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  if (h >= 24) return `${(h / 24).toFixed(1)} сут`;
+  if (h > 0) return `${h} ч ${m} мин`;
+  return `${m} мин`;
+}
+function statCard(value, label, color) {
+  return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 16px;text-align:center;min-width:150px;">
+    <div style="font-size:20px;font-weight:800;${color ? 'color:' + color + ';' : ''}">${value}</div>
+    <div style="font-size:11px;color:#888;margin-top:2px;">${label}</div>
+  </div>`;
+}
+
+function loadLoadSection(days) {
+  fetch('/admin/api/parser-cycle-history?days=' + days).then(r => r.json()).then(d => {
+    const pts = d.points || [];
+    destroyLoadCharts();
+    LOAD_CHART_IDS.forEach(resetLoadCanvas);
+
+    const last = pts.length ? pts[pts.length - 1] : null;
+    const cards = [];
+    if (last) {
+      cards.push(statCard(last.needs_detail_fetch ?? '—', 'detail-fetch последний цикл', '#ea580c'));
+      cards.push(statCard(last.skip_rate_pct != null ? last.skip_rate_pct + '%' : '—', 'skip-rate последний цикл', '#16a34a'));
+      cards.push(statCard((last.total_requests ?? 0).toLocaleString('ru'), 'HTTP-запросов последний цикл', '#2563eb'));
+    }
+    cards.push(statCard(fmtSaved(d.cumulative_time_saved_sec || 0), '⏱ сэкономлено всего (накопительно)', '#7c3aed'));
+    document.getElementById('load-stat-cards').innerHTML = cards.join('');
+
+    if (pts.length < 2) {
+      LOAD_CHART_IDS.forEach(noDataMsg);
+      return;
+    }
+
+    const labels = pts.map(p => p.at);
+    const dfCanvas = document.getElementById('detail-fetch-chart');
+    if (dfCanvas) {
+      loadCharts.df = new Chart(dfCanvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'нужен detail-fetch', data: pts.map(p => p.needs_detail_fetch),
+              borderColor: '#ea580c', backgroundColor: 'rgba(234,88,12,.15)', fill: true, tension: 0.25, pointRadius: 2 },
+            { label: 'пропущено без изменений', data: pts.map(p => p.skipped_no_change),
+              borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.08)', fill: true, tension: 0.25, pointRadius: 2 },
+          ],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: { legend: { display: true, labels: { boxWidth: 10, font: { size: 12 } } } },
+          scales: {
+            x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+            y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
+          },
+        },
+      });
+    }
+
+    const srCanvas = document.getElementById('skip-rate-chart');
+    if (srCanvas) {
+      loadCharts.sr = new Chart(srCanvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'skip-rate, %', data: pts.map(p => p.skip_rate_pct),
+            borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.12)', fill: true, tension: 0.25, pointRadius: 2, spanGaps: true,
+          }],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { maxTicksLimit: 10, font: { size: 13 } }, grid: { display: false } },
+            y: { beginAtZero: true, max: 100, ticks: { font: { size: 13 }, callback: v => v + '%' } },
+          },
+        },
+      });
+    }
+
+    const reqCanvas = document.getElementById('load-requests-chart');
+    if (reqCanvas) {
+      loadCharts.req = new Chart(reqCanvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            { label: 'поиск (страницы выдачи)', data: pts.map(p => p.search_requests),
+              borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.08)', fill: true, tension: 0.25, pointRadius: 2 },
+            { label: 'детальные страницы', data: pts.map(p => p.detail_requests),
+              borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.1)', fill: true, tension: 0.25, pointRadius: 2 },
+            { label: 'всего', data: pts.map(p => p.total_requests),
+              borderColor: '#6b7280', borderDash: [5, 4], fill: false, tension: 0.25, pointRadius: 2 },
+          ],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 10, font: { size: 12 } } } },
+          scales: {
+            x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+            y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
+          },
+        },
+      });
+    }
+
+    const durCanvas = document.getElementById('load-duration-chart');
+    if (durCanvas) {
+      loadCharts.dur = new Chart(durCanvas, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: 'мин.', data: pts.map(p => p.duration_min),
+            borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.25, pointRadius: 2,
+          }],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
+            y: { beginAtZero: true, title: { display: true, text: 'минут' }, ticks: { font: { size: 13 } } },
+          },
+        },
+      });
+    }
+  }).catch(() => {});
+}
+
+function setLoadDays(d) {
+  document.querySelectorAll('.load-days-btn').forEach(b => {
+    const active = parseInt(b.dataset.days) === d;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
   });
-  new Chart(document.getElementById('cycle-requests-chart'), {
-    type: 'bar',
-    data: {
-      labels: pts.map(p => p.at),
-      datasets: [
-        { label: 'поиск (страницы выдачи)', data: pts.map(p => p.search_requests), backgroundColor: 'rgba(37,99,235,.75)', borderRadius: 3 },
-        { label: 'детальные страницы', data: pts.map(p => p.detail_requests), backgroundColor: 'rgba(245,158,11,.75)', borderRadius: 3 },
-      ],
-    },
-    options: {
-      maintainAspectRatio: false,
-      plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 14 } } } },
-      scales: {
-        x: { stacked: true, ticks: { maxTicksLimit: 12, font: { size: 13 } }, grid: { display: false } },
-        y: { stacked: true, beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } },
-      },
-    },
-  });
-}).catch(() => {});
+  loadLoadSection(d);
+}
+loadLoadSection(7);
 
 const absLabels = {{ absorption_labels | tojson }};
 const absValues = {{ absorption_values | tojson }};
@@ -130,8 +290,8 @@ if (absLabels.length < 2) {
   document.getElementById('absorption-chart').outerHTML = '<div style="font-size:12px;color:#888;padding:10px;">пока накопилось меньше 2 дней архивации</div>';
 } else {
   new Chart(document.getElementById('absorption-chart'), {
-    type: 'bar',
-    data: { labels: absLabels, datasets: [{ label: 'ушло в архив', data: absValues, backgroundColor: 'rgba(239,68,68,.7)', borderRadius: 3 }] },
+    type: 'line',
+    data: { labels: absLabels, datasets: [{ label: 'ушло в архив', data: absValues, borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,.15)', fill: true, tension: .3, pointRadius: 2 }] },
     options: {
       maintainAspectRatio: false,
       plugins: { legend: { display: false } },

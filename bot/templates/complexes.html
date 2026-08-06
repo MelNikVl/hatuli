@@ -7,9 +7,6 @@
   <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} всего в базе{% if shown < total %} · показано {{ shown }}{% endif %}</small>
 </div>
 <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-  <button onclick="auditCx(true)" style="padding:8px 14px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">🧹 Отвязать улицы от ЖК</button>
-  <a href="/admin/complexes/data-audit" style="padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;text-decoration:none;">🧾 Аудит данных по ЖК</a>
-  <span id="audit-status" style="font-size:13px;color:#888;"></span>
   <form method="get" action="/admin/complexes" style="display:flex;gap:8px;align-items:center;margin-left:auto;">
     <select name="sort" onchange="this.form.submit()">
       <option value="listings" {% if filters.sort == 'listings' %}selected{% endif %}>По объявлениям</option>
@@ -21,33 +18,24 @@
     <button type="submit" style="padding:6px 14px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">Найти</button>
   </form>
 </div>
-<script>
-async function auditCx(apply) {
-  const st = document.getElementById('audit-status');
-  st.textContent = 'проверяю…';
-  if (!apply) {
-    const d = await (await fetch('/admin/complexes/audit')).json();
-    st.textContent = d.count
-      ? 'Подозрительные: ' + d.suspects.map(s => `${s.name} [${s.reason}]`).join(', ')
-      : 'псевдо-ЖК не найдены ✓';
-  } else {
-    if (!confirm('Пометить псевдо-ЖК улицами и отвязать их объявления?')) { st.textContent=''; return; }
-    const d = await (await fetch('/admin/complexes/audit/apply', {method:'POST'})).json();
-    st.textContent = `помечено улиц: ${d.flagged}, отвязано объявлений: ${d.unbound}, пересчитано координат ЖК: ${d.coords_recomputed || 0}`;
-    setTimeout(() => location.reload(), 1500);
-  }
-}
-</script>
-
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
-<div style="order:1;flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
+<div style="order:1;flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;position:relative;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px;">
     <b style="font-size:14px;">🗺 Карта ЖК Астаны</b>
-    <span style="font-size:12px;color:#888;"><span id="cxmap-count">…</span> ЖК с координатами · размер точки = объявлений в продаже · наведи курсор · клик = карточка ЖК</span>
+    <span style="font-size:12px;color:#888;"><span id="cxmap-count">…</span> ЖК с координатами · метка = кол-во объявлений в ЖК (или ЖК в кластере) · клик = карточка ЖК / превью</span>
   </div>
   <div id="cx-rating-map" style="aspect-ratio:1/1;width:100%;margin:0;border-radius:8px;"></div>
+  <div id="cx-cluster-panel" style="display:none;position:absolute;top:10px;right:10px;bottom:10px;width:280px;max-width:calc(100% - 20px);background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.25);z-index:1000;overflow-y:auto;padding:10px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <b style="font-size:13px;">ЖК в этой точке</b>
+      <button type="button" onclick="cxCloseClusterPanel()" style="border:none;background:none;font-size:16px;cursor:pointer;color:var(--text);line-height:1;">×</button>
+    </div>
+    <div id="cx-cluster-panel-body"></div>
+  </div>
 </div>
 
 <script>
@@ -55,33 +43,46 @@ document.addEventListener('DOMContentLoaded', function() {
   const map = L.map('cx-rating-map').setView([51.128, 71.43], 13);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
 
+  // Раньше подпись = название ЖК на 0x0-иконке — при плотной застройке они
+  // наезжали друг на друга и обрезались (виден только обрывок первой буквы).
+  // Теперь: одиночная метка = число объявлений в ЖК (полностью белым по
+  // синему, влезает всегда — это короткое число, не название), а плотные
+  // скопления ЖК схлопываются в кластер той же стилистики с числом ЖК
+  // внутри — как кластеры объявлений на главной карте. Клик по кластеру —
+  // боковая панель с превью первых 3 ЖК (без бокового скролла по 50 карточкам).
+  const cluster = L.markerClusterGroup({
+    maxClusterRadius: 46,
+    spiderfyOnMaxZoom: true,
+    showCoverageOnHover: false,
+    iconCreateFunction: function(c) {
+      const n = c.getChildCount();
+      const size = n >= 20 ? 44 : (n >= 8 ? 38 : 32);
+      return L.divIcon({
+        html: `<div class="cx-count-badge" style="width:${size}px;height:${size}px;font-size:${n>=100?11:13}px;">${n}</div>`,
+        className: 'cx-count-icon', iconSize: [size, size],
+      });
+    },
+  });
+  cluster.on('clusterclick', function(a) {
+    const items = a.layer.getAllChildMarkers().map(m => m.options.cxData).filter(Boolean);
+    cxOpenClusterPanel(items);
+  });
+  map.addLayer(cluster);
+
   fetch('/admin/api/complexes-map').then(r => r.json()).then(d => {
     document.getElementById('cxmap-count').textContent = d.complexes.length;
-    const labelLayer = L.layerGroup().addTo(map);
-    d.complexes.forEach(c => {
-      // размер = активные объявления (рейтинг), цвет = год (старее -> серее, новее -> синее)
-      const radius = Math.min(14, 5 + Math.sqrt(c.active || 0) * 1.6);
-      const yr = c.year || 2010;
-      const t = Math.max(0, Math.min(1, (yr - 2005) / 21));
-      const from = [148,163,184], to = [37,99,235];
-      const col = from.map((f,i) => Math.round(f + (to[i]-f)*t));
-      const m = L.circleMarker([c.lat, c.lon], {
-        radius: radius,
-        fillColor: `rgb(${col[0]},${col[1]},${col[2]})`,
-        color: '#fff', weight: 1, fillOpacity: 0.85,
-      }).addTo(map);
-      // Постоянная подпись: название на синем фоне + квартир сейчас + класс.
-      // Показывается только при зуме >= 13 (иначе карта превращается в кашу).
-      const cls = c.class ? `<span class="cx-label-cls">${c.class}</span>` : '';
-      const lbl = L.marker([c.lat, c.lon], {
+    const markers = d.complexes.map(c => {
+      const active = c.active || 0;
+      const m = L.marker([c.lat, c.lon], {
+        cxData: c,
         icon: L.divIcon({
-          className: 'cx-label-icon',
-          html: `<div class="cx-label">${c.name}</div><div class="cx-label-sub">${c.active || 0} кв.${cls}</div>`,
-          iconSize: [0, 0],
+          html: `<div class="cx-count-badge">${active}</div>`,
+          className: 'cx-count-icon', iconSize: [28, 28],
         }),
-        interactive: false,
-      }).addTo(labelLayer);
-      // Полный тултип по наведению на точку
+      });
+      // Полный тултип по наведению — название/класс/цена, не обрезается
+      // (тултип, не постоянная подпись — рисуется поверх всего, своего
+      // максимума ширины не имеет).
       m.bindTooltip(
         (c.photo ? `<img src="${c.photo}" style="width:200px;height:110px;object-fit:cover;border-radius:6px;display:block;margin-bottom:4px;" onerror="this.style.display='none'">` : '') +
         `<b>${c.name}</b>${c.class ? ' · ' + c.class : ''}<br>` +
@@ -91,13 +92,30 @@ document.addEventListener('DOMContentLoaded', function() {
         {sticky: true}
       );
       m.on('click', () => location.href = '/admin/complex/' + c.id);
+      return m;
     });
-    function applyLabels() {
-      if (map.getZoom() >= 13) labelLayer.addTo(map); else map.removeLayer(labelLayer);
-    }
-    map.on('zoomend', applyLabels);
-    applyLabels();
+    cluster.addLayers(markers);
   });
+
+  function cxOpenClusterPanel(items) {
+    const panel = document.getElementById('cx-cluster-panel');
+    const body = document.getElementById('cx-cluster-panel-body');
+    const shown = items.slice(0, 3);
+    body.innerHTML = shown.map(c => `
+      <a href="/admin/complex/${c.id}" style="display:flex;gap:8px;text-decoration:none;color:inherit;padding:8px 0;border-bottom:1px solid var(--border);">
+        ${c.photo ? `<img src="${c.photo}" style="width:64px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0;" onerror="this.style.display='none'">` : `<div style="width:64px;height:48px;border-radius:6px;background:var(--bg);flex-shrink:0;"></div>`}
+        <div style="min-width:0;">
+          <div style="font-weight:700;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.name}</div>
+          <div style="font-size:11px;color:#888;">${c.class ? c.class + ' · ' : ''}${c.active || 0} объявл.${c.price_m2 ? ' · ' + Math.round(c.price_m2/1000) + ' тыс ₸/м²' : ''}</div>
+        </div>
+      </a>`).join('') + (items.length > 3
+        ? `<div style="font-size:11.5px;color:#888;padding:8px 0 2px;">+${items.length - 3} ещё в этой точке — увеличьте масштаб карты, чтобы разделить их.</div>`
+        : '');
+    panel.style.display = 'block';
+  }
+  window.cxCloseClusterPanel = function() {
+    document.getElementById('cx-cluster-panel').style.display = 'none';
+  };
 });
 </script>
 <style>
@@ -119,10 +137,8 @@ tr:last-child td{border-bottom:none}
 .dev-badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:11px;background:#dbeafe;color:#1e40af}
 .data-bar{height:4px;background:#e2e8f0;border-radius:2px;margin-top:3px}
 .data-bar-fill{height:100%;border-radius:2px;background:#2196f3}
-.cx-label-icon{background:none;border:none}
-.cx-label{background:#2563eb;color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:6px;white-space:nowrap;line-height:1.3;box-shadow:0 1px 3px rgba(0,0,0,.35);transform:translate(-50%,-130%);text-align:center;max-width:180px;overflow:hidden;text-overflow:ellipsis}
-.cx-label-sub{display:flex;gap:4px;align-items:center;justify-content:center;margin-top:2px;font-size:10.5px;font-weight:700;color:#fff;background:rgba(15,23,42,.75);padding:1px 6px;border-radius:5px;white-space:nowrap}
-.cx-label-cls{background:rgba(255,255,255,.22);border-radius:4px;padding:0 4px;font-weight:600}
+.cx-count-icon{background:none;border:none}
+.cx-count-badge{width:28px;height:28px;border-radius:50%;background:#2563eb;color:#fff;font-weight:800;font-size:12px;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.4);border:2px solid #fff;}
 .edit-btn{padding:3px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);cursor:pointer;font-size:11px}
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center}
 .modal-overlay.open{display:flex}

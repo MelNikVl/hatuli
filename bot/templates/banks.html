@@ -26,7 +26,16 @@
        style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;">
     <a href="/admin/banks/{{ b.slug }}" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;flex:1;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-        <div style="font-weight:700;font-size:15px;">{{ b.name }}</div>
+        <div style="display:flex;align-items:center;gap:9px;min-width:0;">
+          {% if b.logo_url %}
+          <img src="{{ b.logo_url }}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"
+               style="width:30px;height:30px;border-radius:7px;object-fit:contain;background:#fff;flex-shrink:0;border:1px solid var(--border);">
+          <div style="display:none;width:30px;height:30px;border-radius:7px;background:var(--bg);color:var(--text);align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0;">{{ (b.short_name or b.name)[0] }}</div>
+          {% else %}
+          <div style="width:30px;height:30px;border-radius:7px;background:var(--bg);color:var(--text);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0;">{{ (b.short_name or b.name)[0] }}</div>
+          {% endif %}
+          <div style="font-weight:700;font-size:15px;">{{ b.name }}</div>
+        </div>
         {% if mins %}
         <div style="background:rgba(245,158,11,.15);color:#f59e0b;border-radius:8px;padding:3px 8px;font-size:13px;font-weight:700;white-space:nowrap;">от {{ '%.1f'|format(mins|min) }}%</div>
         {% endif %}

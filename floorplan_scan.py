@@ -67,6 +67,26 @@ def is_enabled() -> bool:
         return True
 
 
+def settings_override(limit: int, delay: float) -> tuple[int, float]:
+    """FLOORPLAN_BATCH/FLOORPLAN_DELAY в app_settings, если заданы через
+    /admin/analytics/photo-analysis, — приоритетнее дефолтов CLI (systemd
+    ExecStart зашит статично, а частоту/объём анализа теперь можно
+    крутить прямо из админки без правки юнита)."""
+    try:
+        conn = db()
+        cur = conn.cursor()
+        cur.execute("SELECT key, value FROM app_settings WHERE key IN ('FLOORPLAN_BATCH', 'FLOORPLAN_DELAY')")
+        rows = dict(cur.fetchall())
+        conn.close()
+        if "FLOORPLAN_BATCH" in rows:
+            limit = int(float(rows["FLOORPLAN_BATCH"]))
+        if "FLOORPLAN_DELAY" in rows:
+            delay = float(rows["FLOORPLAN_DELAY"])
+    except Exception as e:
+        print(f"[WARN] не удалось прочитать FLOORPLAN_BATCH/DELAY, использую дефолты: {e}", flush=True)
+    return limit, delay
+
+
 def cache_path(url: str) -> Path:
     return PHOTO_CACHE / (hashlib.sha256(url.encode()).hexdigest() + ".jpg")
 
@@ -206,6 +226,9 @@ def main() -> None:
     if not is_enabled():
         print("AI_FLOORPLAN_SCAN выключен в /admin/analytics/ai-status — выхожу без обработки.", flush=True)
         sys.exit(0)
+
+    a.limit, a.delay = settings_override(a.limit, a.delay)
+    print(f"Батч: {a.limit} шт., задержка между фото: {a.delay}с (см. /admin/analytics/photo-analysis)", flush=True)
 
     PHOTO_CACHE.mkdir(parents=True, exist_ok=True)
     conn = db()

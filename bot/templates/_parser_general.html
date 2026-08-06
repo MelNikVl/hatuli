@@ -6,7 +6,7 @@
    viewcount_last_at, top10_recalc_at. #}
 
 <div style="margin-bottom:14px;">
-  {% for d in [1,3,5] %}
+  {% for d in [1,3,7,30,90] %}
   <a href="?tab=general&days={{ d }}" style="display:inline-block;padding:6px 16px;border-radius:8px;margin-right:6px;text-decoration:none;font-size:13px;font-weight:600;
      {% if days == d %}background:#2563eb;color:#fff;{% else %}background:var(--surface);color:inherit;border:1px solid var(--border);{% endif %}">
     {{ d }} {{ 'день' if d == 1 else 'дня' if d < 5 else 'дней' }}
@@ -49,20 +49,20 @@ const labels = {{ chart_labels | tojson }};
 const saleValues = {{ sale_values | tojson }};
 const rentalValues = {{ rental_values | tojson }};
 new Chart(document.getElementById('chart'), {
-  type: 'bar',
+  type: 'line',
   data: {
     labels: labels,
     datasets: [
-      { label: 'продажа', data: saleValues, backgroundColor: 'rgba(37, 99, 235, 0.75)', borderRadius: 3 },
-      { label: 'аренда', data: rentalValues, backgroundColor: 'rgba(245, 158, 11, 0.75)', borderRadius: 3 },
+      { label: 'продажа', data: saleValues, borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.12)', fill: true, tension: 0.3, pointRadius: 2 },
+      { label: 'аренда', data: rentalValues, borderColor: '#f59e0b', backgroundColor: 'rgba(245, 158, 11, 0.12)', fill: true, tension: 0.3, pointRadius: 2 },
     ]
   },
   options: {
     maintainAspectRatio: false,
     plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 14, font: { size: 14 } } } },
     scales: {
-      x: { stacked: true, ticks: { maxTicksLimit: 24, font: { size: 13 } }, grid: { display: false } },
-      y: { stacked: true, beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } }
+      x: { ticks: { maxTicksLimit: 24, font: { size: 13 } }, grid: { display: false } },
+      y: { beginAtZero: true, ticks: { precision: 0, font: { size: 13 } } }
     }
   }
 });

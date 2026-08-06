@@ -32,6 +32,7 @@
       <th style="padding:8px;text-align:right;">пасс</th>
       <th style="padding:8px;text-align:right;">груз</th>
       <th style="padding:8px;text-align:right;">Лифты, кг (10%)</th>
+      <th style="padding:8px;text-align:right;" title="Подъезды — вручную, для оценки населения на тепловой карте плотности">Подъезды</th>
       <th style="padding:8px;text-align:right;">Квартир всего</th>
       <th style="padding:8px;text-align:right;">1к</th>
       <th style="padding:8px;text-align:right;">2к</th>
@@ -69,6 +70,7 @@
         <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/update" style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end;">
           <input type="hidden" name="elevator_capacity_kg" value="{{ c.elevator_capacity_kg or '' }}">
           <input type="hidden" name="apartment_count" value="{{ c.apartment_count or '' }}">
+          <input type="hidden" name="entrances" value="{{ c.entrances or '' }}">
           <input type="number" name="elevator_count" value="{{ c.elevator_count or '' }}" min="0" placeholder="—" title="{{ c.lifts_type or '' }}"
                  style="width:48px;padding:3px 5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12.5px;">{% if c.lifts_type %}<div style="font-size:10px;color:#888;max-width:90px;text-align:right;">{{ c.lifts_type }}</div>{% endif %}
           <button type="submit" style="border:none;background:none;color:#2563eb;cursor:pointer;font-size:12px;">✓</button>
@@ -79,6 +81,7 @@
           <input type="hidden" name="elevator_count" value="{{ c.elevator_count or '' }}">
           <input type="hidden" name="elevator_capacity_kg" value="{{ c.elevator_capacity_kg or '' }}">
           <input type="hidden" name="apartment_count" value="{{ c.apartment_count or '' }}">
+          <input type="hidden" name="entrances" value="{{ c.entrances or '' }}">
           {% for rk, rv in [('rooms_1', c.rooms_1), ('rooms_2', c.rooms_2), ('rooms_3', c.rooms_3), ('rooms_4', c.rooms_4)] %}
           <input type="hidden" name="{{ rk }}" value="{{ rv or '' }}">
           {% endfor %}
@@ -92,6 +95,7 @@
           <input type="hidden" name="elevator_count" value="{{ c.elevator_count or '' }}">
           <input type="hidden" name="elevator_capacity_kg" value="{{ c.elevator_capacity_kg or '' }}">
           <input type="hidden" name="apartment_count" value="{{ c.apartment_count or '' }}">
+          <input type="hidden" name="entrances" value="{{ c.entrances or '' }}">
           {% for rk, rv in [('rooms_1', c.rooms_1), ('rooms_2', c.rooms_2), ('rooms_3', c.rooms_3), ('rooms_4', c.rooms_4)] %}
           <input type="hidden" name="{{ rk }}" value="{{ rv or '' }}">
           {% endfor %}
@@ -104,6 +108,7 @@
         <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/update" style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end;">
           <input type="hidden" name="elevator_count" value="{{ c.elevator_count or '' }}">
           <input type="hidden" name="apartment_count" value="{{ c.apartment_count or '' }}">
+          <input type="hidden" name="entrances" value="{{ c.entrances or '' }}">
           <input type="number" name="elevator_capacity_kg" value="{{ c.elevator_capacity_kg or '' }}" min="0" step="50" placeholder="—" title="Грузоподъёмность, кг"
                  style="width:56px;padding:3px 5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12.5px;">
           <button type="submit" style="border:none;background:none;color:#2563eb;cursor:pointer;font-size:12px;">✓</button>
@@ -113,6 +118,17 @@
         <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/update" style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end;">
           <input type="hidden" name="elevator_count" value="{{ c.elevator_count or '' }}">
           <input type="hidden" name="elevator_capacity_kg" value="{{ c.elevator_capacity_kg or '' }}">
+          <input type="hidden" name="apartment_count" value="{{ c.apartment_count or '' }}">
+          <input type="number" name="entrances" value="{{ c.entrances or '' }}" min="0" placeholder="—" title="Кол-во подъездов — учитывается в оценке населения на карте плотности, если квартир всего не заполнено"
+                 style="width:48px;padding:3px 5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12.5px;">
+          <button type="submit" style="border:none;background:none;color:#2563eb;cursor:pointer;font-size:12px;">✓</button>
+        </form>
+      </td>
+      <td style="padding:8px;text-align:right;">
+        <form method="post" action="/admin/analytics/housing-class/{{ c.id }}/update" style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end;">
+          <input type="hidden" name="elevator_count" value="{{ c.elevator_count or '' }}">
+          <input type="hidden" name="elevator_capacity_kg" value="{{ c.elevator_capacity_kg or '' }}">
+          <input type="hidden" name="entrances" value="{{ c.entrances or '' }}">
           <input type="number" name="apartment_count" value="{{ c.apartment_count or '' }}" min="0" placeholder="—"
                  style="width:64px;padding:3px 5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12.5px;">
           <button type="submit" style="border:none;background:none;color:#2563eb;cursor:pointer;font-size:12px;">✓</button>
@@ -123,6 +139,7 @@
           <input type="hidden" name="elevator_count" value="{{ c.elevator_count or '' }}">
           <input type="hidden" name="elevator_capacity_kg" value="{{ c.elevator_capacity_kg or '' }}">
           <input type="hidden" name="apartment_count" value="{{ c.apartment_count or '' }}">
+          <input type="hidden" name="entrances" value="{{ c.entrances or '' }}">
           {% for rk, rv in [('rooms_1', c.rooms_1), ('rooms_2', c.rooms_2), ('rooms_3', c.rooms_3), ('rooms_4', c.rooms_4)] %}
           <input type="number" name="{{ rk }}" value="{{ rv or '' }}" min="0" placeholder="—"
                  style="width:52px;padding:3px 5px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:12.5px;">

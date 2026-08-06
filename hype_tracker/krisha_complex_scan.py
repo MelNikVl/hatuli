@@ -37,6 +37,40 @@ def extract_count(html: str):
     return int(re.sub(r"\s", "", m.group(1))) if m else None
 
 
+def extract_build_status(html: str) -> str:
+    """Статус строительства с карточки: «Строящийся» / «Сдан» / «Введен в эксплуатацию»."""
+    m = re.search(r'data-name="home.state"[^>]*>\s*(?:<[^>]+>\s*)*?Статус строительства\s*(?:<[^>]+>\s*)*?([А-Яа-яЁё\s-]{3,40})', html)
+    if m:
+        val = re.sub(r'\s+', ' ', m.group(1)).strip()
+        return val
+    # fallback: ищем «Строящийся|Сдан|Введен в эксплуатацию|Возведение» рядом со «Статус строительства»
+    i = html.find("Статус строительства")
+    if i >= 0:
+        seg = html[i:i + 1200]
+        for w in ("Сдан в эксплуатацию", "Введен в эксплуатацию", "Строящийся", "Сдан", "Возведение"):
+            if w.lower() in seg.lower():
+                return w
+    return None
+
+
+def extract_deadline(html: str) -> str:
+    """Срок сдачи: «Первая очередь - IV квартал 2021 г. Вторая очередь - IV квартал 2024 г.»"""
+    m = re.search(r'data-name="deadline".*?Срок сдачи.*?<p[^>]*>(.*?)</p>', html, re.S)
+    if m:
+        txt = re.sub(r'<[^>]+>', ' ', m.group(1))
+        txt = re.sub(r'\s+', ' ', txt).strip()
+        if txt:
+            return txt[:300]
+    i = html.find("Срок сдачи")
+    if i >= 0:
+        seg = re.sub(r'<[^>]+>', ' ', html[i:i + 1500])
+        seg = re.sub(r'\s+', ' ', seg).strip()
+        seg = seg.replace("Срок сдачи", "", 1).strip()
+        if seg:
+            return seg[:250]
+    return None
+
+
 def extract_krisha_name(html: str):
     """Каноничное название ЖК из встроенного JSON страницы (объект комплекса —
     "name":"Hazar","prefix":"ЖК",... — идёт раньше названий самих объявлений
@@ -127,6 +161,8 @@ def main() -> int:
                 raise e404
         try:
             cnt = extract_count(html)
+            build_status = extract_build_status(html)
+            deadline = extract_deadline(html)
             desc = extract_description(html)
             photos = extract_photos(html)
             krisha_name = extract_krisha_name(html)
@@ -158,6 +194,14 @@ def main() -> int:
                          SET apartment_count = EXCLUDED.apartment_count,
                              apartment_count_source = 'krisha',
                              apartment_count_parsed_at = now(), updated_at = now()""")
+            if build_status or deadline:
+                upd = []
+                if build_status:
+                    upd.append(f"build_status = '{esc(build_status)}'")
+                if deadline:
+                    upd.append(f"deadline = '{esc(deadline)}'")
+                psql(f"UPDATE complexes SET {', '.join(upd)}, updated_at = now() WHERE id = {cid}")
+
             # описание — ТОЛЬКО если пусто
             if desc:
                 psql(f"UPDATE complexes SET description = '{esc(desc)}' WHERE id = {cid} AND (description IS NULL OR description = '')")

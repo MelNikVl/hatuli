@@ -6,7 +6,7 @@
   Парсим <b>открытый API</b> портала АО «Казахстанская жилищная компания»: список ЖК (POST getobjects) → деталки (GET objects-detail/{{'{id}'}}): комнатность 1к/2к/3к/4к, этажность, кадастр, застройщик+БИН, БВУ, даты. Темп: <b>1 ЖК / 90 сек</b> (~15.5 ч на 619).
 </div>
 
-<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
+<div class="admin-block" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding-top:14px;">
   <div class="stat-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:120px;">
     <div style="font-size:22px;font-weight:700;">{{ stats.total }}</div>
     <div style="font-size:12px;color:#888;">ЖК Астаны в API</div>
@@ -75,10 +75,10 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 new Chart(document.getElementById('hpChart'), {
-  type: 'bar',
+  type: 'line',
   data: {
     labels: {{ chart.hours | tojson }},
-    datasets: [{ label: 'спарсено', data: {{ chart.cnt | tojson }}, backgroundColor: '#3b82f6', borderRadius: 4 }],
+    datasets: [{ label: 'спарсено', data: {{ chart.cnt | tojson }}, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,.15)', fill: true, tension: 0.3, pointRadius: 2 }],
   },
   options: {
     maintainAspectRatio: false,

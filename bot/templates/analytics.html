@@ -110,9 +110,17 @@ tr:last-child td { border-bottom: none; }
     const areaPath = path + ` L${coords[coords.length-1][0].toFixed(1)},${h} L0,${h} Z`;
     const gid = 'ph' + Math.random().toString(36).slice(2, 9);
     const labelEvery = Math.max(1, Math.ceil(points.length / Math.floor(w / 60)));
+    // Клэмп x в [20, w-20] сжимает несколько соседних точек у самого края
+    // в одну и ту же координату — их подписи визуально сливались в одну
+    // строку (напр. "2699"+"9388" -> "26999388"). Последняя точка всегда
+    // рисуется и всегда выигрывает клэмп справа — гасим более ранние
+    // подписи, которые оказались бы к ней ближе labelMinGap.
+    const lastX = Math.min(Math.max(coords[coords.length - 1][0], 20), w - 20);
+    const labelMinGap = 26;
     const labels = coords.map((c, i) => {
       if (i !== 0 && i !== points.length - 1 && i % labelEvery !== 0) return '';
       const x = Math.min(Math.max(c[0], 20), w - 20);
+      if (i !== points.length - 1 && Math.abs(x - lastX) < labelMinGap) return '';
       const y = i % 2 === 1 ? LABEL_H - 15 : LABEL_H - 4;
       return `<text x="${x.toFixed(1)}" y="${y}" text-anchor="middle" font-size="10" font-weight="700" fill="#ef4444">${points[i][valueKey]}</text>`;
     }).join('');
@@ -144,6 +152,12 @@ tr:last-child td { border-bottom: none; }
   const confMap = L.map('conf-hex-map', {zoomControl: false}).setView([51.128, 71.430], 11);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(confMap);
   const confHexLayer = L.layerGroup().addTo(confMap);
+  // Leaflet рисует тайлы в фиксированных пикселях при инициализации — при
+  // ручном ресайзе .chart-block (см. base.html initChartGrid) сам Leaflet
+  // об этом не узнаёт, карта остаётся обрезанной/съехавшей. Подписываемся на
+  // общее событие 'hatuli:chart-resize' и дёргаем invalidateSize().
+  document.getElementById('conf-hex-map').closest('.chart-block')
+    .addEventListener('hatuli:chart-resize', () => confMap.invalidateSize());
   const CONF_LAT0 = 51.128, CONF_LON0 = 71.430,
         CONF_MLAT = 110574.0, CONF_MLON = 111320.0 * Math.cos(CONF_LAT0 * Math.PI/180);
   const CONF_EDGE_M = 400;
@@ -313,7 +327,7 @@ tr:last-child td { border-bottom: none; }
   </div>
   {% endif %}
 
-  <div class="stats-bar">
+  <div class="stats-bar admin-block" style="padding-top:14px;">
     {% if coverage %}
     <div class="stat-card"><div class="val">{{ coverage.total }}</div><div class="lbl">активных объявлений</div></div>
     <div class="stat-card"><div class="val">{{ coverage.complexes }}</div><div class="lbl">ЖК в базе</div></div>

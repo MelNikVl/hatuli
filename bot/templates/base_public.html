@@ -6,7 +6,22 @@
   <title>{% block title %}Hatuli — карта квартир Астаны{% endblock %}</title>
   <meta name="description" content="{% block meta_description %}Hatuli — карта квартир Астаны: продажа и аренда, тепловые карты цен, шума и транспортной доступности, рейтинг жилых комплексов Астаны.{% endblock %}"/>
   <link rel="canonical" href="{% block canonical %}https://hatuli.ai-groundtruth.com{{ request.url.path }}{% endblock %}"/>
+  <!-- OpenGraph — генерические дефолты, страницы переопределяют через
+       og_title/og_description/og_image (см. /admin/listing/{id} — карточка
+       объявления должна нормально разворачиваться превью при шаринге ссылки). -->
+  <meta property="og:type" content="website"/>
+  <meta property="og:site_name" content="Hatuli"/>
+  <meta property="og:title" content="{% block og_title %}Hatuli — карта квартир Астаны{% endblock %}"/>
+  <meta property="og:description" content="{% block og_description %}Hatuli — карта квартир Астаны: продажа и аренда, тепловые карты цен, рейтинг жилых комплексов.{% endblock %}"/>
+  <meta property="og:url" content="https://hatuli.ai-groundtruth.com{{ request.url.path }}"/>
+  {% block og_image %}{% endblock %}
   <link rel="icon" type="image/png" href="/static/branding/favicon.png"/>
+  <!-- Kepler.gl попап (ЖК-карточка/попап объявления) грузит внешний
+       kepler.gl/demo в iframe — preconnect срезает DNS/TLS-хэндшейк ещё до
+       того, как пользователь откроет попап, часть заметной задержки
+       первой загрузки была именно в этом. -->
+  <link rel="preconnect" href="https://kepler.gl" crossorigin>
+  <link rel="dns-prefetch" href="https://kepler.gl">
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"WebSite","name":"Hatuli","url":"https://hatuli.ai-groundtruth.com","description":"Карта квартир Астаны: продажа, аренда, тепловые карты, рейтинг жилых комплексов."}
   </script>

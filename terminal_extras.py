@@ -402,7 +402,7 @@ def make_extras_router(templates) -> APIRouter:
         # полезны любому посетителю карты, не только админу.
         from bot.db.pg import fetch as pg_fetch
         banks = [dict(r) for r in await pg_fetch(
-            "SELECT id, slug, name, short_name, description, website, phone, program_type, notes, sort_order FROM banks ORDER BY sort_order, name")]
+            "SELECT id, slug, name, short_name, description, website, phone, program_type, notes, sort_order, logo_url FROM banks ORDER BY sort_order, name")]
         progs = await pg_fetch("SELECT * FROM mortgage_programs ORDER BY id")
         by_bank: dict = {}
         for p in progs:
@@ -449,10 +449,14 @@ def make_extras_router(templates) -> APIRouter:
         return templates.TemplateResponse("news_analysis.html", {"request": request})
 
     @router.get("/admin/api/news-analysis")
-    async def news_analysis_api(request: Request):
+    async def news_analysis_api(request: Request, days: int = 90):
+        days = days if days in (1, 3, 7, 30, 90) else 90
         db = _hype_db_conn()
         cur = db.cursor()
-        cur.execute("SELECT run_date, news_count, sources_count, threads_count, tokens_spent FROM news_analysis_runs ORDER BY run_date DESC LIMIT 90")
+        cur.execute(
+            "SELECT run_date, news_count, sources_count, threads_count, tokens_spent "
+            "FROM news_analysis_runs WHERE run_date > CURRENT_DATE - %s::int "
+            "ORDER BY run_date DESC LIMIT 90", (days,))
         cols = [d[0] for d in cur.description]
         runs = [dict(zip(cols, row)) for row in cur.fetchall()]
         for r in runs:
@@ -528,12 +532,19 @@ def make_extras_router(templates) -> APIRouter:
         # апартаменты/население посчитаются в разы больше реальных.
         rows = await pg_fetch("""
             SELECT c.id, c.name, c.lat, c.lon,
-                   hc.apartment_count, hc.rooms_1, hc.rooms_2, hc.rooms_3, hc.rooms_4,
+                   hc.apartment_count, hc.entrances, hc.rooms_1, hc.rooms_2, hc.rooms_3, hc.rooms_4,
                    ho.apartments_total,
                    ho.rooms_1 AS h_rooms_1, ho.rooms_2 AS h_rooms_2,
-                   ho.rooms_3 AS h_rooms_3, ho.rooms_4 AS h_rooms_4
+                   ho.rooms_3 AS h_rooms_3, ho.rooms_4 AS h_rooms_4,
+                   COALESCE(cts.floors_total, agg.floors_total) AS floors_total
             FROM complexes c
             LEFT JOIN housing_class_test hc ON hc.complex_id = c.id
+            LEFT JOIN complex_tech_specs cts ON cts.complex_id = c.id
+            LEFT JOIN (
+                SELECT lower(trim(complex_name)) AS key, MAX(floors_total) AS floors_total
+                FROM apartment_listings WHERE complex_name IS NOT NULL
+                GROUP BY lower(trim(complex_name))
+            ) agg ON agg.key = lower(trim(c.name))
             LEFT JOIN (
                 SELECT matched_complex_id,
                        SUM(apartments_total) AS apartments_total,
@@ -560,52 +571,196 @@ def make_extras_router(templates) -> APIRouter:
         # оценкой населения, а не отбрасываем ЖК целиком.
         MAX_PLAUSIBLE_APT = 1500
         EDGE_M = 100.0
-        cells: dict[str, dict] = {}
+        # KDE-сглаживание (вместо дискретного суммирования по гексу, где
+        # лежит ЖК): каждая точка ЖК "размазывается" гауссовым ядром по
+        # окрестности, значения соседних ЖК складываются. Убирает дырки
+        # между соседними гексами (пустыри в Нурлы Жер/Есиле были видны как
+        # "пусто" даже вплотную к плотной застройке) и точечные пятна ровно
+        # на месте ЖК. BW_M — стандартное отклонение ядра, подобрано под
+        # масштаб застройки Астаны (500-1000м по рекомендации).
+        import math
+        import numpy as np
+        from bot.core.hexgrid import _to_xy, _LAT0, _LON0, _M_PER_DEG_LAT, _M_PER_DEG_LON
+        BW_M = 700.0
+        pts: list[tuple[float, float, float, str]] = []  # x, y, pop, name
         considered = 0
         for r in rows:
             pop = None
             r1, r2, r3, r4 = r["rooms_1"], r["rooms_2"], r["rooms_3"], r["rooms_4"]
             hr1, hr2, hr3, hr4 = r["h_rooms_1"], r["h_rooms_2"], r["h_rooms_3"], r["h_rooms_4"]
-            if any(v for v in (r1, r2, r3, r4)):
-                pop = (r1 or 0) * OCC[1] + (r2 or 0) * OCC[2] + (r3 or 0) * OCC[3] + (r4 or 0) * OCC[4]
-            elif any(v for v in (hr1, hr2, hr3, hr4)):
-                pop = (hr1 or 0) * OCC[1] + (hr2 or 0) * OCC[2] + (hr3 or 0) * OCC[3] + (hr4 or 0) * OCC[4]
-            elif r["apartment_count"]:
-                pop = min(r["apartment_count"], MAX_PLAUSIBLE_APT) * BLENDED_OCC
+            # Общее известное число квартир в ЖК (из krisha-парсинга или
+            # homeportal) — используется и как самостоятельная оценка (с
+            # усреднённой занятостью), и как "потолок доверия" разбивке по
+            # комнатам ниже.
+            apt_total = None
+            if r["apartment_count"]:
+                apt_total = min(r["apartment_count"], MAX_PLAUSIBLE_APT)
             elif r["apartments_total"]:
-                pop = min(r["apartments_total"], MAX_PLAUSIBLE_APT) * BLENDED_OCC
+                apt_total = min(r["apartments_total"], MAX_PLAUSIBLE_APT)
+            rooms_sum = rooms_pop = None
+            if any(v for v in (r1, r2, r3, r4)):
+                rooms_sum = (r1 or 0) + (r2 or 0) + (r3 or 0) + (r4 or 0)
+                rooms_pop = (r1 or 0) * OCC[1] + (r2 or 0) * OCC[2] + (r3 or 0) * OCC[3] + (r4 or 0) * OCC[4]
+            elif any(v for v in (hr1, hr2, hr3, hr4)):
+                rooms_sum = (hr1 or 0) + (hr2 or 0) + (hr3 or 0) + (hr4 or 0)
+                rooms_pop = (hr1 or 0) * OCC[1] + (hr2 or 0) * OCC[2] + (hr3 or 0) * OCC[3] + (hr4 or 0) * OCC[4]
+            if rooms_sum and apt_total and rooms_sum < 0.6 * apt_total:
+                # Разбивка по комнатам покрывает МЕНЬШЕ 60% от известного
+                # общего числа квартир в ЖК (напр. Europe City: apartment_
+                # count=520 из krisha, но rooms_1..4 в housing_class_test
+                # описывают только 37 из них) — явно неполные данные по
+                # комнатности. Раньше такая неполная разбивка молча брала
+                # приоритет над apartment_count и население ЖК занижалось
+                # в разы. Экстраполируем известное распределение комнат на
+                # весь apt_total, а не отбрасываем его.
+                pop = rooms_pop * (apt_total / rooms_sum)
+            elif rooms_pop:
+                pop = rooms_pop
+            elif apt_total:
+                pop = apt_total * BLENDED_OCC
+            elif r["entrances"] and r["floors_total"]:
+                # Ни разбивки по комнатам, ни apartment_count — но есть
+                # подъезды (вводятся вручную на вкладке "Класс жилья") и
+                # этажность из объявлений/тех.паспорта. Оцениваем квартиры
+                # как подъезды × этажи × ~4.5 кв./этаж (середина диапазона
+                # 4-5, который пользователь называл как типичный для
+                # Астаны) — грубее, чем прямой apartment_count, но заметно
+                # точнее, чем считать такой ЖК пустым местом на карте.
+                apt_est = min(r["entrances"] * r["floors_total"] * 4.5, MAX_PLAUSIBLE_APT)
+                pop = apt_est * BLENDED_OCC
             if not pop:
                 continue
             considered += 1
-            hid = hex_id(float(r["lat"]), float(r["lon"]), EDGE_M)
-            cell = cells.setdefault(hid, {"pop": 0.0, "complexes": 0, "names": []})
-            cell["pop"] += pop
-            cell["complexes"] += 1
-            cell["names"].append(r["name"])
+            x, y = _to_xy(float(r["lat"]), float(r["lon"]))
+            pts.append((x, y, float(pop), r["name"]))
+        if not pts:
+            return JSONResponse({"hexes": [], "complexes_considered": 0})
+        xs = np.array([p[0] for p in pts])
+        ys = np.array([p[1] for p in pts])
+        pops = np.array([p[2] for p in pts])
+        names = [p[3] for p in pts]
+
+        # Гекс-сетка (осевые q,r), покрывающая bbox точек + запас в 3*BW_M
+        # (радиус, за которым вклад гауссианы уже пренебрежимо мал).
+        pad = 3 * BW_M
+        xmin, xmax = xs.min() - pad, xs.max() + pad
+        ymin, ymax = ys.min() - pad, ys.max() + pad
+        sqrt3 = math.sqrt(3)
+        qs_corner, rs_corner = [], []
+        for cx in (xmin, xmax):
+            for cy in (ymin, ymax):
+                qs_corner.append((sqrt3 / 3 * cx - 1 / 3 * cy) / EDGE_M)
+                rs_corner.append((2 / 3 * cy) / EDGE_M)
+        qmin, qmax = int(math.floor(min(qs_corner))) - 2, int(math.ceil(max(qs_corner))) + 2
+        rmin, rmax = int(math.floor(min(rs_corner))) - 2, int(math.ceil(max(rs_corner))) + 2
+        qq, rr = np.meshgrid(np.arange(qmin, qmax + 1), np.arange(rmin, rmax + 1))
+        qq = qq.ravel().astype(np.float64)
+        rr = rr.ravel().astype(np.float64)
+        cx_all = EDGE_M * sqrt3 * (qq + rr / 2)
+        cy_all = EDGE_M * 1.5 * rr
+
+        hex_area = (3 * sqrt3 / 2) * EDGE_M ** 2  # м² правильного гексагона
+        norm = 1.0 / (2 * math.pi * BW_M ** 2)
+        two_bw2 = 2 * BW_M ** 2
+        cutoff2 = pad ** 2  # точки дальше 3*BW_M вклада почти не дают
+
+        CHUNK = 4000
+        pop_out = np.zeros(cx_all.shape[0])
+        nearest_idx = np.full(cx_all.shape[0], -1, dtype=np.int64)
+        nearest_d2 = np.full(cx_all.shape[0], np.inf)
+        nearby_cnt = np.zeros(cx_all.shape[0], dtype=np.int64)
+        for i0 in range(0, cx_all.shape[0], CHUNK):
+            i1 = min(i0 + CHUNK, cx_all.shape[0])
+            dx = cx_all[i0:i1, None] - xs[None, :]
+            dy = cy_all[i0:i1, None] - ys[None, :]
+            d2 = dx * dx + dy * dy
+            within = d2 <= cutoff2
+            contrib = np.where(within, pops[None, :] * norm * np.exp(-d2 / two_bw2), 0.0)
+            pop_out[i0:i1] = contrib.sum(axis=1) * hex_area
+            nearby_cnt[i0:i1] = (d2 <= (1.5 * EDGE_M) ** 2).sum(axis=1)
+            nearest_idx[i0:i1] = np.argmin(d2, axis=1)
+            nearest_d2[i0:i1] = np.min(d2, axis=1)
+
+        MIN_POP = 3.0
+        keep = pop_out >= MIN_POP
+        idx = np.nonzero(keep)[0]
         hexes = []
-        for hid, c in cells.items():
-            clat, clon = hex_center(hid, EDGE_M)
-            label = c["names"][0] + (f" +{len(c['names'])-1}" if len(c["names"]) > 1 else "")
-            hexes.append({"name": label, "lat": clat, "lon": clon,
-                          "population": round(c["pop"]), "complexes": c["complexes"]})
+        for i in idx:
+            lat = _LAT0 + cy_all[i] / _M_PER_DEG_LAT
+            lon = _LON0 + cx_all[i] / _M_PER_DEG_LON
+            ni = nearest_idx[i]
+            label = names[ni] if ni >= 0 else ""
+            hexes.append({"name": label, "lat": float(lat), "lon": float(lon),
+                          "population": round(float(pop_out[i])), "complexes": int(nearby_cnt[i])})
         hexes.sort(key=lambda h: h["population"], reverse=True)
+        # KDE даёт плавную непрерывную поверхность -> гексов заметно больше,
+        # чем ЖК в базе; ограничиваем ответ разумным потолком (карта рисует
+        # верхние по значению — низкие плотности всё равно почти не видны).
+        MAX_HEXES = 12000
+        hexes = hexes[:MAX_HEXES]
         return JSONResponse({"hexes": hexes, "complexes_considered": considered})
 
 
     @router.get("/admin/api/geo-sales.geojson")
-    async def geo_sales_geojson(request: Request):
+    async def geo_sales_geojson(request: Request, lat: float = None, lon: float = None, radius_km: float = None):
+        # lat/lon/radius_km (опц.) — для мини-панели Kepler.gl в попапе объявления
+        # (Task 5 в дашборде): датасет, обрезанный вокруг конкретного ЖК, а не весь
+        # город, чтобы Kepler автоматически центрировался/зумился на нужный район.
         from bot.db.pg import fetch as pg_fetch
-        rows = await pg_fetch("""
+        bbox_sql = ""
+        params = []
+        if lat is not None and lon is not None:
+            r_km = radius_km or 1.5
+            dlat = r_km / 111.0
+            dlon = r_km / (111.0 * max(0.1, __import__("math").cos(__import__("math").radians(lat))))
+            bbox_sql = "AND lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4"
+            params = [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
+        rows = await pg_fetch(f"""
             SELECT id, lat, lon, price, area, rooms, district, complex_name
             FROM apartment_listings
             WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
               AND lat IS NOT NULL AND lon IS NOT NULL AND price IS NOT NULL
-            ORDER BY id""")
+              {bbox_sql}
+            ORDER BY id""", *params)
         feats = []
         for r in rows:
             props = {
                 "id": str(r["id"]), "price": r["price"], "rooms": r.get("rooms"),
                 "district": r.get("district"), "complex": r.get("complex_name"),
+            }
+            if r.get("area"):
+                props["price_m2"] = round(r["price"] / r["area"], 0)
+            feats.append({"type": "Feature",
+                          "geometry": {"type": "Point", "coordinates": [r["lon"], r["lat"]]},
+                          "properties": props})
+        return JSONResponse(
+            content={"type": "FeatureCollection", "features": feats},
+            headers={"Access-Control-Allow-Origin": "*"})
+
+    @router.get("/admin/api/geo-rentals.geojson")
+    async def geo_rentals_geojson(request: Request, lat: float = None, lon: float = None, radius_km: float = None):
+        # Аналог geo-sales.geojson, но по rental_listings — для переключателя
+        # "Продажа"/"Аренда" в Kepler-панели попапа (Task 5).
+        from bot.db.pg import fetch as pg_fetch
+        bbox_sql = ""
+        params = []
+        if lat is not None and lon is not None:
+            r_km = radius_km or 1.5
+            dlat = r_km / 111.0
+            dlon = r_km / (111.0 * max(0.1, __import__("math").cos(__import__("math").radians(lat))))
+            bbox_sql = "AND lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4"
+            params = [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
+        rows = await pg_fetch(f"""
+            SELECT id, lat, lon, price, area, rooms, district
+            FROM rental_listings
+            WHERE lat IS NOT NULL AND lon IS NOT NULL AND price IS NOT NULL
+              {bbox_sql}
+            ORDER BY id""", *params)
+        feats = []
+        for r in rows:
+            props = {
+                "id": str(r["id"]), "price": r["price"], "rooms": r.get("rooms"),
+                "district": r.get("district"),
             }
             if r.get("area"):
                 props["price_m2"] = round(r["price"] / r["area"], 0)
@@ -660,13 +815,22 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({"points": points, "count": len(points)})
 
     @router.get("/admin/api/photo-analysis")
-    async def photo_analysis_api(request: Request):
+    async def photo_analysis_api(request: Request, days: int = 3):
+        days = days if days in (1, 3, 7, 30, 90) else 3
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fv
         processed = await pg_fv("SELECT count(*) FROM apartment_listings WHERE floorplan_checked_at IS NOT NULL") or 0
         photos = await pg_fv("SELECT count(*) FROM listing_floorplans") or 0
         floorplans = await pg_fv("SELECT count(*) FROM listing_floorplans WHERE is_floorplan") or 0
         queue = await pg_fv("SELECT count(*) FROM apartment_listings WHERE floorplan_checked_at IS NULL AND photos IS NOT NULL AND photos::text != '[]' AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
-        hourly = await pg_fetch("SELECT date_trunc('hour', checked_at) AS ts, count(*) AS photos, count(*) FILTER (WHERE is_floorplan) AS fps FROM listing_floorplans GROUP BY 1 ORDER BY 1")
+        # При days>7 часовая гранулярность даёт слишком много точек для
+        # линейного графика — переключаемся на дневную (тот же паттерн, что
+        # у остальных time-series графиков в проекте).
+        bucket = "hour" if days <= 7 else "day"
+        hourly = await pg_fetch(f"""
+            SELECT date_trunc('{bucket}', checked_at) AS ts, count(*) AS photos, count(*) FILTER (WHERE is_floorplan) AS fps
+            FROM listing_floorplans
+            WHERE checked_at > now() - ($1 || ' days')::interval
+            GROUP BY 1 ORDER BY 1""", str(days))
         hourly = [dict(r) for r in hourly]
         for h in hourly:
             if h.get("ts") is not None:
@@ -1687,8 +1851,10 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/info", response_class=HTMLResponse)
     async def info_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
+        # Публичная страница ("Инфо" в верхнем паб-нав) — объяснения метрик
+        # для любого посетителя, не только админа. Раньше редиректила на
+        # логин, хотя ссылка на неё есть в публичном меню — anonymous-визит
+        # по клику из шапки сайта вёл на страницу входа вместо контента.
         await app_settings.load()
         # «Путь объявления» — живые цифры из БД (блок в info.html)
         from bot.db.pg import fetchval as pg_fval
@@ -1916,7 +2082,8 @@ def make_extras_router(templates) -> APIRouter:
             ) g ON TRUE
             WHERE COALESCE(c.lat, g.lat) IS NOT NULL
               AND COALESCE(c.is_street, FALSE) = FALSE
-            LIMIT 2500
+            ORDER BY c.id
+            LIMIT 5000
         """)
         return JSONResponse({"complexes": [{
             "id": r["id"], "name": r["name"], "year": r["year_built"],
@@ -1989,9 +2156,10 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/complexes-map")
     async def complexes_map(request: Request):
-        """Все ЖК с координатами (центроид объявлений) для карты рейтинга."""
-        if not is_authed(request):
-            return JSONResponse({"error": "auth"}, status_code=401)
+        """Все ЖК с координатами (центроид объявлений) для карты рейтинга.
+        /admin/complexes сама по себе публичная (см. complexes_page) — эта
+        ручка кормит карту на ней, раньше 401'ила анонимам, из-за чего карта
+        оставалась пустой для любого незалогиненного посетителя."""
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT c.id, c.name, c.year_built, c.housing_class,
@@ -2021,7 +2189,8 @@ def make_extras_router(templates) -> APIRouter:
             ) g ON TRUE
             WHERE COALESCE(c.lat, g.lat) IS NOT NULL
               AND COALESCE(c.is_street, FALSE) = FALSE
-            LIMIT 2500
+            ORDER BY c.id
+            LIMIT 5000
         """)
         return JSONResponse({"complexes": [{
             "id": r["id"], "name": r["name"],
@@ -2489,6 +2658,47 @@ def make_extras_router(templates) -> APIRouter:
 
     # ── Админ панель: единая точка входа для Настроек/Пользователей/Зон/
     # Аналитики — вынесено из главного меню в один пункт справа (см. base.html).
+    @router.get("/admin/backup", response_class=HTMLResponse)
+    async def backup_page(request: Request):
+        """История бэкапов (backup_history) + график размеров по времени."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT id, ts, kind, krisha_mb, hype_mb, project_mb, status, note
+            FROM backup_history
+            ORDER BY ts DESC
+            LIMIT 60
+        """)
+        stats = await pg_fetch("""
+            SELECT COUNT(*) AS total,
+                   COUNT(*) FILTER (WHERE status='ok') AS ok,
+                   MAX(ts) AS last_ts
+            FROM backup_history
+        """)
+        total = stats[0]["total"] if stats else 0
+        ok_n = stats[0]["ok"] if stats else 0
+        last_ts = stats[0]["last_ts"] if stats else None
+        backups = []
+        for r in rows:
+            d = dict(r)
+            for k in ("krisha_mb", "hype_mb", "project_mb"):
+                if d.get(k) is not None:
+                    d[k] = float(d[k])
+            if d.get("ts") is not None:
+                d["ts_iso"] = d["ts"].isoformat()
+                d["ts_str"] = d["ts"].strftime("%d.%m %H:%M")
+            d.pop("ts", None)
+            backups.append(d)
+        return templates.TemplateResponse("backup.html", {
+            "request": request,
+            "atab": "backup",
+            "backups": backups,
+            "total": total,
+            "ok_count": ok_n,
+            "last_ts": last_ts,
+        })
+
     @router.get("/admin/panel", response_class=HTMLResponse)
     async def admin_panel_page(request: Request):
         if not is_authed(request):
@@ -2728,15 +2938,10 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY found_at DESC LIMIT 30
         """, cname)
 
-        # Сравнение цены/м² по гексагону ЖК и 6 соседним (микролокация),
-        # отдельно для продажи и аренды — общая логика вынесена в hex_price_cells()
-        # (переиспользуется и мини-картой в попапе объявления на дашборде).
-        hex_cells_sale, hex_cells_rental = [], []
-        if geo and geo["lat"]:
-            hex_cells_sale, hex_cells_rental = await hex_price_cells(
-                float(geo["lat"]), float(geo["lon"]))
-
-        hex_cells = hex_cells_sale  # обратная совместимость, если где-то ещё используется
+        # Блок «6 соседних гексагонов» убран со страницы ЖК (см. задачу
+        # "убрать hex-блок") — hex_price_cells() больше НЕ вызывается здесь.
+        # Функция осталась в модуле нетронутой: её всё ещё использует другой
+        # роут (мини-карта в попапе объявления, см. вызов ниже по файлу).
 
         # Сводка по комнатности: медиана цены продажи, скорость архивации
         stats = await fetch("""
@@ -2807,28 +3012,10 @@ def make_extras_router(templates) -> APIRouter:
             WHERE lower(trim(complex_name)) = lower(trim($1))
         """, cname)
 
-        # Цена по комнатности В ДИНАМИКЕ (для графика на странице ЖК) —
-        # медиана цены объявлений этого ЖК по месяцам first_seen, отдельно
-        # для каждой комнатности. Берём и архивные тоже (is_active любое) —
-        # иначе на графике исчезали бы месяцы, где всё уже распродано.
-        price_trend_rows = await fetch("""
-            SELECT date_trunc('month', first_seen)::date AS month, rooms,
-                   percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_price,
-                   COUNT(*) AS n
-            FROM apartment_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1))
-              AND rooms IS NOT NULL AND price > 0 AND first_seen IS NOT NULL
-            GROUP BY 1, 2
-            ORDER BY 1, 2
-        """, cname)
-        price_trend_by_rooms: dict[str, list] = {}
-        for r in price_trend_rows:
-            key = str(r["rooms"])
-            price_trend_by_rooms.setdefault(key, []).append({
-                "month": r["month"].strftime("%Y-%m"),
-                "median_price": float(r["median_price"]),
-                "n": r["n"],
-            })
+        # Динамика цены по комнатности (продажа/аренда) теперь грузится с
+        # клиента через /admin/api/complex/{id}/price-dynamics (фильтры по
+        # комнатности + периоду 3/7/30/90 дней) — см. complex_price_dynamics()
+        # ниже. Серверный precompute месячных рядов больше не нужен.
 
         # Технические характеристики (конструктив/окна/двери/лифты/документы) —
         # почти всегда пусто пока (источника данных ещё нет), но карточка и
@@ -2874,10 +3061,41 @@ def make_extras_router(templates) -> APIRouter:
         hp = None
         if hp_rows:
             hp = {"count": len(hp_rows)}
+            hp_images: list = []
+            hp_apts_total, hp_apts_sold = 0, 0
+            hp_rooms_sum = {"1": 0, "2": 0, "3": 0, "4": 0}
             for r in hp_rows:
-                for k, v in dict(r).items():
+                rd = dict(r)
+                for k, v in rd.items():
                     if v is not None and v != '' and k not in hp:
                         hp[k] = v
+                # apartments_total/sold и rooms_1..4 суммируем по всем
+                # очередям ЖК (а не берём только первую непустую очередь) —
+                # так «продано %» и разбивка по комнатности отражают весь ЖК.
+                hp_apts_total += rd.get("apartments_total") or 0
+                hp_apts_sold += rd.get("apartments_sold") or 0
+                for rk in ("rooms_1", "rooms_2", "rooms_3", "rooms_4"):
+                    hp_rooms_sum[rk[-1]] += rd.get(rk) or 0
+                imgs = rd.get("images")
+                if isinstance(imgs, str):
+                    import json as _j5
+                    try:
+                        imgs = _j5.loads(imgs)
+                    except ValueError:
+                        imgs = None
+                if isinstance(imgs, list):
+                    for im in imgs:
+                        link = (im or {}).get("image_link") or (im or {}).get("preview_link")
+                        if link and link not in hp_images:
+                            hp_images.append(link)
+            hp["apartments_total_sum"] = hp_apts_total
+            hp["apartments_sold_sum"] = hp_apts_sold
+            hp["apartments_sold_pct"] = (round(hp_apts_sold / hp_apts_total * 100)
+                                          if hp_apts_total else None)
+            hp["rooms_mix"] = hp_rooms_sum if sum(hp_rooms_sum.values()) else None
+            hp["images"] = hp_images[:8] if hp_images else None
+            # is_orda_plus в БД хранится как text '0'/'1'
+            hp["is_orda_plus_bool"] = str(hp.get("is_orda_plus") or "0").strip() == "1"
 
         return templates.TemplateResponse("complex_detail.html", {
             "request": request,
@@ -2895,13 +3113,56 @@ def make_extras_router(templates) -> APIRouter:
             "map_points": [dict(r) for r in cx_map_points],
             "live_cnt": (cx_total["live"] or 0) if cx_total else 0,
             "live_no_coords": (cx_total["live_no_coords"] or 0) if cx_total else 0,
-            "hex_cells": hex_cells,
-            "hex_cells_sale": hex_cells_sale,
-            "hex_cells_rental": hex_cells_rental,
-            "price_trend_by_rooms": price_trend_by_rooms,
             "tech_specs": tech_specs,
             "hp": hp,
         })
+
+    @router.get("/admin/api/complex/{complex_id}/price-dynamics")
+    async def complex_price_dynamics(request: Request, complex_id: int,
+                                      kind: str = "sale", days: int = 90, rooms: str = ""):
+        """Данные для графика «Динамика цены по комнатности» на странице ЖК
+        (продажа и её аренд-эквивалент) — медиана цены по дням, отдельно на
+        каждую комнатность, с фильтром периода (3/7/30/90 дней) и опциональным
+        фильтром одной комнатности. Публичный роут (страница ЖК не требует
+        логина), как и сам /admin/complex/{id}."""
+        from bot.db.pg import fetchrow, fetch as pg_fetch
+        cx = await fetchrow("SELECT name FROM complexes WHERE id = $1", complex_id)
+        if not cx:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        cname = cx["name"]
+        if kind == "rental":
+            table, time_col = "rental_listings", "found_at"
+        else:
+            table, time_col = "apartment_listings", "first_seen"
+        days = max(1, min(int(days), 365))
+        room_cond = ""
+        params: list = [cname, str(days)]
+        if rooms == "4":
+            room_cond = "AND rooms >= 4"
+        elif rooms in ("1", "2", "3"):
+            room_cond = "AND rooms = $3"
+            params.append(int(rooms))
+        rows = await pg_fetch(f"""
+            SELECT date_trunc('day', {time_col})::date AS d, rooms,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_price,
+                   COUNT(*) AS n
+            FROM {table}
+            WHERE lower(trim(complex_name)) = lower(trim($1))
+              AND rooms IS NOT NULL AND price > 0 AND {time_col} IS NOT NULL
+              AND {time_col} >= now() - ($2 || ' days')::interval
+              {room_cond}
+            GROUP BY 1, 2
+            ORDER BY 1, 2
+        """, *params)
+        by_rooms: dict = {}
+        for r in rows:
+            key = str(r["rooms"])
+            by_rooms.setdefault(key, []).append({
+                "d": r["d"].strftime("%Y-%m-%d"),
+                "median_price": float(r["median_price"]),
+                "n": r["n"],
+            })
+        return JSONResponse({"data": by_rooms})
 
     @router.post("/admin/complex/{complex_id}/photos")
     async def complex_photos_save(request: Request, complex_id: int):
@@ -3289,6 +3550,10 @@ def make_extras_router(templates) -> APIRouter:
             # на карте, чтобы не заставлять переходить на отдельную страницу.
             "est_rent": l.get("est_rent"),
             "yield_pct": l.get("yield_pct"),
+            # net_yield_pct — доходность с поправкой на вакантность/налог/
+            # расходы на покупку (см. Notion "Расчет доходности"), gross
+            # выше остаётся для обратной совместимости со старым скорингом.
+            "net_yield_pct": l.get("net_yield_pct"),
             "payback_years": l.get("payback_years"),
             "rent_source": l.get("rent_source") or "",
             "zone_name": l.get("zone_name") or "",
@@ -3806,24 +4071,51 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/api/parser-cycle-history")
     async def parser_cycle_history(request: Request, days: int = 14):
         """Снимки parser_cycle_history — сколько времени занимает цикл
-        парсера и сколько реальных HTTP-запросов к Крыше он делает
-        (search+detail) — для графиков на /admin/parser."""
+        парсера, сколько реальных HTTP-запросов к Крыше он делает
+        (search+detail), и (см. задачу "оптимизация работы парсеров" —
+        пропуск detail-fetch для объявлений без изменений цены/координат)
+        эффективность этой оптимизации за цикл: total_seen/needs_detail_fetch/
+        skipped_no_change + skip_rate_pct. Для графиков на
+        /admin/parsers?tab=recheck (секция "Нагрузка на Крышу").
+        cumulative_time_saved_sec — оценка суммарного сэкономленного времени
+        за ВСЮ историю (не ограничена days): каждый пропущенный
+        detail-fetch экономит ~11.5с (середина паузы 8-15с между запросами
+        деталей, см. apartment_parser.analyze_apartments)."""
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
-        from bot.db.pg import fetch as pg_fetch
+        from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval
         rows = await pg_fetch("""
-            SELECT at, duration_sec, search_requests, detail_requests
+            SELECT at, duration_sec, search_requests, detail_requests,
+                   total_seen, needs_detail_fetch, skipped_no_change
             FROM parser_cycle_history
             WHERE at > now() - ($1 || ' days')::interval
             ORDER BY at ASC
         """, str(days))
-        return JSONResponse({"points": [{
-            "at": r["at"].strftime("%d.%m %H:%M"),
-            "duration_min": round((r["duration_sec"] or 0) / 60, 1),
-            "search_requests": r["search_requests"] or 0,
-            "detail_requests": r["detail_requests"] or 0,
-            "total_requests": (r["search_requests"] or 0) + (r["detail_requests"] or 0),
-        } for r in rows]})
+        AVG_DETAIL_DELAY_SEC = 11.5
+        cum_skipped = await pg_fetchval(
+            "SELECT COALESCE(SUM(skipped_no_change), 0) FROM parser_cycle_history") or 0
+        points = []
+        for r in rows:
+            total_seen = r["total_seen"]
+            skipped = r["skipped_no_change"]
+            needs = r["needs_detail_fetch"]
+            skip_rate = round(100.0 * skipped / total_seen, 1) if total_seen else None
+            points.append({
+                "at": r["at"].strftime("%d.%m %H:%M"),
+                "duration_min": round((r["duration_sec"] or 0) / 60, 1),
+                "search_requests": r["search_requests"] or 0,
+                "detail_requests": r["detail_requests"] or 0,
+                "total_requests": (r["search_requests"] or 0) + (r["detail_requests"] or 0),
+                "total_seen": total_seen,
+                "needs_detail_fetch": needs,
+                "skipped_no_change": skipped,
+                "skip_rate_pct": skip_rate,
+            })
+        return JSONResponse({
+            "points": points,
+            "cumulative_time_saved_sec": round(cum_skipped * AVG_DETAIL_DELAY_SEC),
+            "avg_detail_delay_sec": AVG_DETAIL_DELAY_SEC,
+        })
 
     @router.get("/admin/api/score-confidence-points")
     async def score_confidence_points(request: Request, rooms: str = ""):

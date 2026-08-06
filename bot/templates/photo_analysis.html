@@ -24,10 +24,17 @@
   </div>
 </div>
 
+<div style="display:flex;gap:4px;margin-bottom:10px;">
+  <button type="button" class="pa-days-btn" data-days="1" onclick="paSetDays(1)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">1д</button>
+  <button type="button" class="pa-days-btn" data-days="3" onclick="paSetDays(3)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:#2563eb;color:#fff;font-size:11.5px;cursor:pointer;">3д</button>
+  <button type="button" class="pa-days-btn" data-days="7" onclick="paSetDays(7)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">7д</button>
+  <button type="button" class="pa-days-btn" data-days="30" onclick="paSetDays(30)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">30д</button>
+  <button type="button" class="pa-days-btn" data-days="90" onclick="paSetDays(90)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">90д</button>
+</div>
 <div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;">
   <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
     <div style="font-weight:700;margin-bottom:4px;">🖼 Фото классифицировано</div>
-    <div style="font-size:12.5px;color:#888;margin-bottom:10px;">По часам (SigLIP, CPU, ~1 фото/сек).</div>
+    <div style="font-size:12.5px;color:#888;margin-bottom:10px;">По часам/дням (SigLIP, CPU, ~1 фото/сек) — зависит от выбранного периода.</div>
     {# 2 узкие колонки side-by-side под сводкой — ширину оставляем гибкой
        (fixed 800px сломал бы этот парный layout), высоту canvas-области
        берём из общего стандарта .chart-block-inner (520px). #}
@@ -37,6 +44,27 @@
     <div style="font-weight:700;margin-bottom:4px;">📐 Планов найдено</div>
     <div style="font-size:12.5px;color:#888;margin-bottom:10px;">Накопленным итогом.</div>
     <div class="chart-block-inner"><canvas id="pa-fp-chart"></canvas></div>
+  </div>
+</div>
+
+<div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:1100px;">
+  <div style="font-weight:700;margin-bottom:4px;">⚙️ Частота анализа</div>
+  <div style="font-size:12.5px;color:#888;margin-bottom:12px;">
+    Работает по таймеру (krisha-floorplan.timer, каждые ~20-30 мин). За раз обрабатывает <b>N объявлений</b> ниже,
+    с паузой между скачиванием фото — крутить можно прямо здесь, без правки systemd-юнита.
+    Сейчас в очереди: <b>{{ floorplan_queue }}</b> объявл.
+  </div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-end;">
+    <div style="min-width:220px;">
+      <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px;">Объявлений за один прогон: <b id="pa-batch-val">{{ floorplan_batch }}</b></label>
+      <input type="range" id="pa-batch" min="10" max="500" step="10" value="{{ floorplan_batch }}" style="width:220px;">
+    </div>
+    <div style="min-width:220px;">
+      <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px;">Пауза между фото, сек: <b id="pa-delay-val">{{ floorplan_delay }}</b></label>
+      <input type="range" id="pa-delay" min="0.2" max="5" step="0.1" value="{{ floorplan_delay }}" style="width:220px;">
+    </div>
+    <button onclick="paSaveSettings()" style="padding:7px 16px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:13px;cursor:pointer;">Сохранить</button>
+    <span id="pa-settings-status" style="font-size:12px;"></span>
   </div>
 </div>
 
@@ -55,8 +83,18 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 let paCharts = {};
+let paDays = 3;
+function paSetDays(days) {
+  paDays = days;
+  document.querySelectorAll('.pa-days-btn').forEach(b => {
+    const active = +b.dataset.days === days;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  paLoad();
+}
 function paLoad() {
-  fetch('/admin/api/photo-analysis').then(r => r.json()).then(d => {
+  fetch('/admin/api/photo-analysis?days=' + paDays).then(r => r.json()).then(d => {
     document.getElementById('pa-processed').textContent = d.stats.processed.toLocaleString('ru-RU');
     document.getElementById('pa-photos').textContent = d.stats.photos.toLocaleString('ru-RU');
     document.getElementById('pa-floorplans').textContent = d.stats.floorplans.toLocaleString('ru-RU');
@@ -91,8 +129,8 @@ function paLoad() {
 
     if (paCharts.photos) paCharts.photos.destroy();
     paCharts.photos = new Chart(document.getElementById('pa-photos-chart'), {
-      type: 'bar',
-      data: { labels, datasets: [{ label: 'Фото', data: photos, backgroundColor: 'rgba(37,99,235,.7)', borderRadius: 4 }] },
+      type: 'line',
+      data: { labels, datasets: [{ label: 'Фото', data: photos, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.15)', fill: true, tension: .3 }] },
       options: { responsive: true, maintainAspectRatio: false,
         plugins: { legend: { display: false } },
         scales: { x: { ticks: { color: '#888', font: { size: 9 }, maxRotation: 45 } }, y: { beginAtZero: true, ticks: { color: '#888', precision: 0 } } } }
@@ -110,5 +148,20 @@ function paLoad() {
 }
 paLoad();
 setInterval(paLoad, 60000);  // автообновление раз в минуту
+
+document.getElementById('pa-batch').addEventListener('input', e => document.getElementById('pa-batch-val').textContent = e.target.value);
+document.getElementById('pa-delay').addEventListener('input', e => document.getElementById('pa-delay-val').textContent = e.target.value);
+function paSaveSettings() {
+  const batch = document.getElementById('pa-batch').value;
+  const delay = document.getElementById('pa-delay').value;
+  const statusEl = document.getElementById('pa-settings-status');
+  statusEl.textContent = '...';
+  fetch('/admin/analytics/photo-analysis/settings', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({batch, delay}),
+  }).then(r => r.ok ? r.json() : Promise.reject())
+    .then(() => { statusEl.textContent = '✅ сохранено, применится со следующего прогона'; statusEl.style.color = '#16a34a'; })
+    .catch(() => { statusEl.textContent = '❌ ошибка'; statusEl.style.color = '#ef4444'; });
+}
 </script>
 {% endblock %}

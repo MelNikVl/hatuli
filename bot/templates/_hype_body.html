@@ -122,6 +122,13 @@
     Каждый день в 21:00 LLM читает полные тексты новостей за сутки (не выжимки) и обновляет тепловую карту хайпа —
     по дням, включая Threads. (Перенесено со страницы «Анализ новостей» — график токенов убран за ненадобностью.)
   </div>
+  <div style="display:flex;gap:4px;margin-bottom:8px;">
+    <button type="button" class="hp-days-btn na-days-btn" data-days="1" onclick="setNaDays(1)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">1д</button>
+    <button type="button" class="hp-days-btn na-days-btn" data-days="3" onclick="setNaDays(3)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">3д</button>
+    <button type="button" class="hp-days-btn na-days-btn" data-days="7" onclick="setNaDays(7)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">7д</button>
+    <button type="button" class="hp-days-btn na-days-btn" data-days="30" onclick="setNaDays(30)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">30д</button>
+    <button type="button" class="hp-days-btn na-days-btn" data-days="90" onclick="setNaDays(90)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:#2563eb;color:#fff;font-size:11.5px;cursor:pointer;">90д</button>
+  </div>
   <div class="chart-block-inner"><canvas id="na-news-chart"></canvas></div>
 </div>
 
@@ -395,21 +402,32 @@ function renderMediaChart(mediaRuns) {
 }
 
 // --- "Новостей проанализировано" (перенесено со страницы /admin/analytics/news-analysis) ---
+let naNewsChart = null, naDays = 90;
+function setNaDays(days) {
+  naDays = days;
+  document.querySelectorAll('.na-days-btn').forEach(b => {
+    const active = +b.dataset.days === days;
+    b.style.background = active ? '#2563eb' : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  renderNewsAnalysisChart();
+}
 function renderNewsAnalysisChart() {
   const chartEl = document.getElementById('na-news-chart');
   if (!chartEl) return;
-  fetch('/admin/api/news-analysis').then(r => r.json()).then(d => {
+  fetch('/admin/api/news-analysis?days=' + naDays).then(r => r.json()).then(d => {
     const runs = (d.runs || []).slice().reverse();
     const labels = runs.map(r => r.run_date ? String(r.run_date).slice(5) : '');
     const news = runs.map(r => r.news_count || 0);
     const threads = runs.map(r => r.threads_count || 0);
-    new Chart(chartEl, {
-      type: 'bar',
+    if (naNewsChart) { naNewsChart.destroy(); naNewsChart = null; }
+    naNewsChart = new Chart(chartEl, {
+      type: 'line',
       data: {
         labels,
         datasets: [
-          { label: 'Новостей', data: news, backgroundColor: 'rgba(37,99,235,.75)', borderRadius: 4 },
-          { label: 'Threads', data: threads, backgroundColor: 'rgba(52,211,153,.75)', borderRadius: 4 },
+          { label: 'Новостей', data: news, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: .3 },
+          { label: 'Threads', data: threads, borderColor: '#34d399', backgroundColor: 'rgba(52,211,153,.12)', fill: true, tension: .3 },
         ]
       },
       options: {

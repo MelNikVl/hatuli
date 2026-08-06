@@ -1,4 +1,11 @@
 {% extends "base_public.html" %}
+{% if listing_meta %}
+{% block title %}{{ listing_meta.title }}{% endblock %}
+{% block meta_description %}{{ listing_meta.description }}{% endblock %}
+{% block og_title %}{{ listing_meta.title }}{% endblock %}
+{% block og_description %}{{ listing_meta.description }}{% endblock %}
+{% if listing_meta.image %}{% block og_image %}<meta property="og:image" content="{{ listing_meta.image }}"/>{% endblock %}{% endif %}
+{% endif %}
 {% block content %}
 {% set admin = is_admin(request) %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -146,19 +153,21 @@ html, body { overflow: hidden !important; }
     <option value="">Готовность: любая</option><option value="secondary">вторичка</option><option value="primary">первичка (в стройке)</option>
   </select></div>
   <div id="f-seller-wrap"><select id="f-seller" onchange="applyFilters()">
-    <option value="">Продавец: все</option><option value="owner">от собственника</option><option value="agent">от агента</option>
+    <option value="">Продавец (любой)</option><option value="owner">от собственника</option><option value="agent">от агента</option>
   </select></div>
 
   <div id="f-heat-wrap" class="rooms-dd">
     <button type="button" class="rooms-dd-btn" id="heat-dd-btn" onclick="toggleFbarDropdown(event,'heat-dd-btn')">🌡 Тепловые карты</button>
     <div class="rooms-dd-panel" id="heat-dd-panel">
       <span class="fb-group-label" style="font-size:10px;color:#888;display:block;margin-bottom:4px;">Тепловые карты</span>
-      <div style="display:flex;flex-wrap:nowrap;gap:6px;">
-        <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены продажи</button>
-        <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Цены аренды</button>
-        <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
-        <button type="button" class="heat-btn" data-mode="transport" onclick="toggleHeat('transport')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">Транспортная доступность</button>
-        <button type="button" class="heat-btn" data-mode="hype" onclick="toggleHeat('hype')" style="padding:8.4px 14.4px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14.4px;cursor:pointer;white-space:nowrap;">🔥 Хайп (новости)</button>
+      <div class="heat-btn-grid" style="display:grid;grid-template-rows:repeat(2,auto);grid-auto-flow:column;gap:5px;width:fit-content;">
+        <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Цены продажи</button>
+        <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Цены аренды</button>
+        <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
+        <button type="button" class="heat-btn" data-mode="transport" onclick="toggleHeat('transport')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Транспортная доступность</button>
+        <button type="button" class="heat-btn" data-mode="hype" onclick="toggleHeat('hype')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔥 Хайп (новости)</button>
+        <button type="button" class="heat-btn" data-mode="population" onclick="toggleHeat('population')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">👥 Плотность нас.</button>
+        <button type="button" class="heat-btn" data-mode="count" onclick="toggleHeat('count')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔢 Кол-во объявлений</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
         <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
@@ -458,7 +467,7 @@ function mortgageModalBlockHtml(price, market, id, bankEstimate) {
 <div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:14px;font-weight:800;margin-bottom:10px;">Ипотека: какие программы подходят под это объявление</div>
   ${bankEstimateHtml}
-  <div id="mortgage-block-${id}" style="display:flex;gap:10px;flex-wrap:wrap;max-height:500px;overflow:hidden;">${top2Html}${restHtml}</div>
+  <div id="mortgage-block-${id}" style="display:flex;gap:10px;flex-wrap:wrap;max-height:250px;overflow:hidden;">${top2Html}${restHtml}</div>
   <div id="mortgage-block-toggle-${id}" style="display:none;text-align:center;margin-top:10px;">
     <span onclick="toggleMortgageBlock('${id}', this)" style="color:#2563eb;cursor:pointer;font-weight:600;font-size:12.5px;">показать все ▾</span>
   </div>
@@ -474,7 +483,7 @@ function toggleMortgageBlock(id, span) {
   const el = document.getElementById('mortgage-block-' + id);
   if (!el) return;
   const collapsed = el.dataset.expanded !== '1';
-  el.style.maxHeight = collapsed ? 'none' : '500px';
+  el.style.maxHeight = collapsed ? 'none' : '250px';
   el.dataset.expanded = collapsed ? '1' : '0';
   span.textContent = collapsed ? 'свернуть ▴' : 'показать все ▾';
 }
@@ -543,7 +552,7 @@ function openSidePanel(ids) {
   anyPopupOpen = true;
   const body = document.getElementById('side-panel-body');
   body.innerHTML = ids.map(id => CARD_HTML[id] || '').join(
-    '<div style="border-top:1px solid var(--border);margin:16px 0;"></div>');
+    '<div style="height:5px;background:var(--bg);margin:11px -2px;"></div>');
   document.getElementById('side-panel-count').textContent = ids.length > 1 ? ids.length + ' объявлений' : '';
   document.getElementById('side-panel-head').classList.toggle('has-count', ids.length > 1);
   document.getElementById('side-panel').classList.add('open');
@@ -1093,17 +1102,17 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
     trendHtml = `<span class="price-trend-arrow" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:4px;font-size:11px;color:${color};background:#fff;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">${down ? '▼' : '▲'}</span>`;
   }
   const svoyDomBadge = SVOY_DOM_DEV_IDS.has(pt.developer_id) ? `<span title="Застройщик: Свой Дом" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:8px;font-weight:800;color:#fff;background:#16a34a;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">SD</span>` : '';
-  // Топ-10 по умному рейтингу: раньше вся плашка цены красилась в малиновый
-  // (pinBg = #E91E8C) — теперь плашка ВСЕГДА обычная (переданный pinBg,
-  // обычно синий), а топ-10 отмечается отдельным маленьким красным
-  // кружком-бейджем со звездой СЛЕВА от плашки, той же высоты, что и сама
-  // плашка цены (~22px: padding 4px*2 + line-height шрифта 12px).
-  const topBadgeHtml = isTop ? `<span title="Топ-10 по умному рейтингу" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:22px;height:22px;margin-right:5px;font-size:12px;line-height:1;color:#fff;background:#E91E8C;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.4);">⭐</span>` : '';
+  // Топ-10 по умному рейтингу: единая овальная плашка с градиентом
+  // красный→тёмно-синий, звезда и цена внутри одного пилла (раньше были
+  // раздельные звезда-бейдж + обычная синяя плашка — просили слить в одно).
+  const pillStyle = isTop
+    ? 'background:linear-gradient(to right, #E91E8C, #1e3a8a);'
+    : `background:${pinBg};`;
+  const starHtml = isTop ? `<span title="Топ-10 по умному рейтингу" style="font-size:12px;line-height:1;">⭐</span>` : '';
   return `
 <div id="pin-${pt.id}" style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;transition:filter .15s ease;">
   <div style="display:flex;align-items:center;">
-    ${topBadgeHtml}
-    <div style="background:${pinBg};color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;gap:5px;"><span>${roomsTxt}</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${priceTxt}</span></div>
+    <div style="${pillStyle}color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;gap:5px;">${starHtml}<span>${roomsTxt}</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${priceTxt}</span></div>
     ${trendHtml}${svoyDomBadge}
   </div>
   ${sellerTxt ? `<div style="font-size:9px;color:#fff;background:rgba(0,0,0,.55);border-radius:5px;padding:0 5px;margin-top:1px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sellerTxt}</div>` : ''}
@@ -1415,8 +1424,8 @@ function applyFilters() {
   document.getElementById('f-rooms-wrap').style.display = type === 'complex' ? 'none' : '';
   document.getElementById('f-seller-wrap').style.display = type === 'complex' ? 'none' : '';
   if (type === 'complex') {
-    map.removeLayer(pointsLayer); map.removeLayer(topLayer); map.removeLayer(saleCluster);
-    pointsLayer.clearLayers(); topLayer.clearLayers(); saleCluster.clearLayers();
+    map.removeLayer(pointsLayer); map.removeLayer(topLayer); map.removeLayer(saleCluster); map.removeLayer(liteCluster);
+    pointsLayer.clearLayers(); topLayer.clearLayers(); saleCluster.clearLayers(); liteCluster.clearLayers();
     drawComplexLayer();
     return;
   } else {
@@ -1476,11 +1485,16 @@ function applyFilters() {
   document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
   if (type === 'rental') {
+  const rentalSeq = applyFiltersSeq;  // уже увеличен в начале applyFilters()
+  map.removeLayer(liteCluster); liteCluster.clearLayers();
   cachedFetchJson('/admin/api/map-points?' + p.toString(), newMapFetchSignal()).then(d => {
+      if (rentalSeq !== applyFiltersSeq) return;  // фильтры сменились ещё раз, пока запрос летел
       map.removeLayer(pointsLayer);
       map.removeLayer(topLayer);
+      map.removeLayer(liteCluster);
       pointsLayer.clearLayers();
       topLayer.clearLayers();
+      liteCluster.clearLayers();
       if (!map.hasLayer(saleCluster)) saleCluster.addTo(map);
       saleCluster.clearLayers();
       Object.keys(MINI_PIN_MARKERS).forEach(k => delete MINI_PIN_MARKERS[k]);
@@ -1678,7 +1692,7 @@ function renderSaleBatch(d) {
       const bankLine = mortgageLineHtml(pt.price, pt.market, pt.id, 2);
       const descId = 'desc-' + pt.id;
       const descHtml = pt.description ? `
-<div style="font-size:12.5px;color:#555;margin-top:6px;">
+<div style="font-size:12.5px;color:var(--text);margin-top:6px;background:var(--bg);border-radius:8px;padding:7px 9px;">
   <div id="${descId}" style="max-height:2.8em;overflow:hidden;line-height:1.4;white-space:pre-wrap;">${escapeHtml(pt.description)}</div>
   <span onclick="event.stopPropagation();toggleDesc('${descId}', this)" style="color:#2563eb;cursor:pointer;font-weight:600;font-size:11.5px;">развернуть ▾</span>
 </div>` : '';
@@ -1886,7 +1900,7 @@ function loadListingExtras(id) {
       // короче), поэтому объяснение теперь только на странице объявления.
       el.innerHTML = `<div>
         <span style="color:#16a34a;font-weight:800;white-space:nowrap;">реальная цена ${targetM} млн ₸</span>
-        <a href="/admin/analytics/${id}" onclick="event.stopPropagation()" style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#555;font-size:11.5px;font-weight:700;text-decoration:none;">почему?</a>
+        <a href="javascript:void(0)" onclick="event.stopPropagation();openDetailModal('${id}', event, true)" style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#555;font-size:11.5px;font-weight:700;text-decoration:none;">почему?</a>
       </div>`;
     } else {
       el.innerHTML = '';
@@ -2070,7 +2084,7 @@ let HEAT_EDGE_M = 60;  // синхронизирован с дефолтом п�
 let NOISE_EDGE_M = 60;  // раньше был фиксирован отдельно (30м) — теперь все гексы тепловых карт (цены/аренда/шум, фон и детальный слой) одного размера, из общего ползунка "сторона гекса"
 const heatLayer = L.layerGroup();
 let heatMode = null;
-let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null};
+let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, count: null};
 let noiseDefaultsApplied = false;  // гекс 40м / прозрачность 50% при первом включении шума за сессию
 // Детальный слой шума (30м, по фактическим точкам дорог) при ~39к точек по
 // городу даёт под 100к+ отдельных гексов, если рисовать их все разом — это
@@ -2186,6 +2200,58 @@ function drawHypeNewsHeat(hexes) {
       color: 'transparent', weight: 0, fillColor: hypeNewsColor(s), fillOpacity: 0.5,
     }).bindTooltip(`${h.name || ''} · хайп ${Math.round(h.value || 0)}`, {sticky:true})
       .addTo(heatLayer);
+  });
+}
+
+// Плотность населения (Task 3) — гексы с сервера /admin/api/population-hexes
+// (та же оценка, что и на админ-гео-странице), цвет: серый прозрачный (мало) -> ярко-фиолетовый (много).
+const POP_STOPS = [[229,231,235],[196,181,253],[139,92,246],[91,33,182]];
+function popDensityColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = POP_STOPS.length - 1;
+  const pos = t * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const frac = pos - i;
+  const from = POP_STOPS[i], to = POP_STOPS[i + 1];
+  const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function drawPopulationHeat(hexes) {
+  const vals = (hexes || []).map(h => h.population).filter(v => v > 0);
+  if (!vals.length) return;
+  const hi = percentile(vals, 0.92) || Math.max(...vals) || 1;
+  (hexes || []).forEach(h => {
+    const t = Math.min(1, h.population / hi);
+    L.polygon(transportHexCorners(h.lat, h.lon, 100), {
+      color: 'transparent', weight: 0, fillColor: popDensityColor(t), fillOpacity: 0.55,
+    }).bindTooltip(`${h.name || ''} · население: ~${Math.round(h.population).toLocaleString('ru-RU')} чел. (${h.complexes} ЖК)`, {sticky:true})
+      .addTo(heatLayer);
+  });
+}
+
+// Количество объявлений на гекс (Task 4) — свой рендеринг (не deck.gl), та же сетка, что и цены/аренда (HEAT_EDGE_M, hexBucket).
+const COUNT_STOPS = [[224,242,254],[125,211,252],[37,99,235],[30,58,138]];
+function listingCountColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = COUNT_STOPS.length - 1;
+  const pos = t * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const frac = pos - i;
+  const from = COUNT_STOPS[i], to = COUNT_STOPS[i + 1];
+  const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function drawListingCountHeat(points) {
+  const buckets = hexBucket(points || [], p => [p.lat, p.lon]);
+  const counts = [];
+  buckets.forEach(b => counts.push(b.items.length));
+  if (!counts.length) return;
+  const hi = percentile(counts, 0.9) || Math.max(...counts) || 1;
+  buckets.forEach(b => {
+    const t = Math.min(1, b.items.length / hi);
+    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
+      color: 'transparent', weight: 0, fillColor: listingCountColor(t), fillOpacity: 0.5,
+    }).bindTooltip(`объявлений: ${b.items.length}`, {sticky:true}).addTo(heatLayer);
   });
 }
 function drawPriceHeat(points, archivedPoints) {
@@ -2495,6 +2561,15 @@ async function loadHeatData(mode) {
   } else if (mode === 'hype') {
     const d = await fetch('/admin/api/hype-locations').then(r => r.json());
     heatCache.hype = (d.locations || []).map(l => ({lat: l.lat, lon: l.lon, value: l.rating || 0, name: l.name, reason: l.reason}));
+  } else if (mode === 'population') {
+    const d = await fetch('/admin/api/population-hexes').then(r => r.json());
+    heatCache.population = d.hexes || [];
+  } else if (mode === 'count') {
+    const [s, r] = await Promise.all([
+      fetch('/admin/api/heat-points').then(r => r.json()),
+      cachedFetchJson('/admin/api/map-points?type=rental'),
+    ]);
+    heatCache.count = [...(s.points || []), ...(r.points || [])].filter(p => p.lat != null && p.lon != null);
   }
   return heatCache[mode];
 }
@@ -2574,6 +2649,10 @@ async function toggleHeat(mode) {
     drawTransportHeat(data);
   } else if (mode === 'hype') {
     drawHypeNewsHeat(data);
+  } else if (mode === 'population') {
+    drawPopulationHeat(data);
+  } else if (mode === 'count') {
+    drawListingCountHeat(data);
   }
 }
 
@@ -2626,12 +2705,32 @@ function modalGoTo(idx, ev) {
   if (n) n.textContent = (modalPhotoIdx + 1) + '/' + modalPhotos.length;
 }
 
-function openDetailModal(id, ev) {
+function switchKeplerPanel(kind) {
+  const frame = document.getElementById('kepler-modal-frame');
+  if (!frame || !window._keplerUrls) return;
+  frame.src = kind === 'rental' ? window._keplerUrls.rental : window._keplerUrls.sale;
+  const bSale = document.getElementById('kepler-btn-sale'), bRent = document.getElementById('kepler-btn-rental');
+  if (bSale && bRent) {
+    bSale.style.background = kind === 'sale' ? '#2563eb' : 'var(--bg)';
+    bSale.style.color = kind === 'sale' ? '#fff' : 'var(--text)';
+    bRent.style.background = kind === 'rental' ? '#2563eb' : 'var(--bg)';
+    bRent.style.color = kind === 'rental' ? '#fff' : 'var(--text)';
+  }
+}
+
+function openDetailModal(id, ev, scrollToScore) {
   if (ev) ev.stopPropagation();
   modalListingId = id;
   modalPhotoIdx = 0;
   const root = ensureModalRoot();
   root.style.display = 'flex';
+  // Попап = единственная страница объявления (см. /admin/listing/{id}) —
+  // открытие меняет URL на копируемую/шарабельную ссылку, не только
+  // визуально открывает оверлей. history.state.hatuliModal различает наши
+  // же pushState-переходы от обычной навигации в обработчике popstate ниже.
+  if (String(id) !== String(modalIdFromPath())) {
+    history.pushState({hatuliModal: id}, '', '/admin/listing/' + encodeURIComponent(id));
+  }
   const content = document.getElementById('detail-modal-content');
   content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Загрузка…</div>';
 
@@ -2680,10 +2779,41 @@ function openDetailModal(id, ev) {
     const yieldHtml = (d.yield_pct || d.est_rent) ? `
 <div style="margin:14px 22px 0;padding:12px 14px;background:var(--bg);border-radius:10px;display:flex;gap:22px;flex-wrap:wrap;">
   <div><div style="font-size:11px;color:var(--text);">Аренда (оценка)</div><div style="font-weight:800;font-size:15px;color:#16a34a;">${d.est_rent ? Math.round(d.est_rent).toLocaleString('ru') + ' ₸/мес' : '—'}</div></div>
-  <div><div style="font-size:11px;color:var(--text);">Yield <a href="/admin/info#general" target="_blank" title="Что такое Yield и как считается — открыть объяснение" style="display:inline-block;width:14px;height:14px;line-height:14px;border-radius:50%;background:var(--border);color:var(--text);font-size:10px;text-align:center;text-decoration:none;font-weight:700;vertical-align:2px;">?</a></div><div style="font-weight:800;font-size:15px;color:#16a34a;">${(d.yield_pct || 0).toFixed(1)}%</div></div>
+  <div><div style="font-size:11px;color:var(--text);">Yield, gross <a href="/admin/info#general" target="_blank" title="Что такое Yield и как считается — открыть объяснение" style="display:inline-block;width:14px;height:14px;line-height:14px;border-radius:50%;background:var(--border);color:var(--text);font-size:10px;text-align:center;text-decoration:none;font-weight:700;vertical-align:2px;">?</a></div><div style="font-weight:800;font-size:15px;color:#16a34a;">${(d.yield_pct || 0).toFixed(1)}%</div></div>
+  <div><div style="font-size:11px;color:var(--text);">Yield, net</div><div style="font-weight:800;font-size:15px;color:#0d9488;" title="Аренда с поправкой на простой между жильцами (~5%), налог+мелкий ремонт (~10%) и расходы на покупку (~2%)">${d.net_yield_pct != null ? d.net_yield_pct.toFixed(1) + '%' : '—'}</div></div>
   <div><div style="font-size:11px;color:var(--text);">Окупаемость</div><div style="font-weight:800;font-size:15px;">${d.payback_years ? d.payback_years.toFixed(1) : '—'} лет</div></div>
   ${d.zone_name ? `<div><div style="font-size:11px;color:var(--text);">Зона</div><div style="font-weight:800;font-size:15px;color:${(d.zone_bonus||0) < 0 ? '#ef4444' : '#16a34a'};">${escapeHtml(d.zone_name)} (${d.zone_bonus > 0 ? '+' : ''}${d.zone_bonus || 0})</div></div>` : ''}
 </div>` : '';
+
+    // Полукруглый спидометр Deal Score: 5 цветных секторов (красный..зелёный)
+    // + стрелка, повёрнутая на угол пропорционально score (0..100).
+    function dealScoreGaugeSvg(score) {
+      score = Math.max(0, Math.min(100, score));
+      const cx = 100, cy = 95, r = 78, rInner = 52;
+      const toXY = (rad, ang) => {
+        const a = ang * Math.PI / 180;
+        return [cx + rad * Math.cos(a), cy - rad * Math.sin(a)];
+      };
+      const bounds = [180, 144, 108, 72, 36, 0];
+      const colors = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#22c55e'];
+      const segs = colors.map((color, i) => {
+        const a1 = bounds[i], a2 = bounds[i + 1];
+        const [x1, y1] = toXY(r, a1), [x2, y2] = toXY(r, a2);
+        const [x3, y3] = toXY(rInner, a2), [x4, y4] = toXY(rInner, a1);
+        return `<path d="M ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2} L ${x3} ${y3} A ${rInner} ${rInner} 0 0 0 ${x4} ${y4} Z" fill="${color}"/>`;
+      }).join('');
+      const needleAngle = 180 - (score / 100) * 180;
+      const [tipX, tipY] = toXY(r - 10, needleAngle);
+      const baseA1 = needleAngle + 90, baseA2 = needleAngle - 90;
+      const [bx1, by1] = toXY(5, baseA1), [bx2, by2] = toXY(5, baseA2);
+      return `
+<svg viewBox="0 0 200 118" width="200" height="118" style="display:block;margin:0 auto;">
+  ${segs}
+  <polygon points="${tipX},${tipY} ${bx1},${by1} ${bx2},${by2}" fill="#1f2937"/>
+  <circle cx="${cx}" cy="${cy}" r="7" fill="#1f2937"/>
+  <text x="${cx}" y="${cy + 26}" text-anchor="middle" font-size="24" font-weight="800" fill="var(--text)">${score}<tspan font-size="12" font-weight="700">/100</tspan></text>
+</svg>`;
+    }
 
     const scoreBarsHtml = (d.score_breakdown) ? (() => {
       const bd = d.score_breakdown;
@@ -2704,16 +2834,53 @@ function openDetailModal(id, ev) {
     })() : '';
 
     const dealScoreHtml = (d.deal_score && d.deal_score.deal != null) ? `
-<div style="font-size:12px;color:var(--text);font-weight:700;margin-bottom:8px;">Deal Score</div>
-<div style="font-size:32px;font-weight:800;line-height:1;">${d.deal_score.deal}<span style="font-size:15px;color:var(--text);font-weight:700;">/100</span></div>
-<div style="font-size:13px;color:var(--text);margin-top:8px;">Уверенность: <b>${d.deal_score.confidence}%</b></div>
+<div style="font-size:12px;color:var(--text);font-weight:700;margin-bottom:2px;">Deal Score</div>
+${dealScoreGaugeSvg(d.deal_score.deal)}
+<div style="font-size:13px;color:var(--text);margin-top:2px;text-align:center;">Уверенность: <b>${d.deal_score.confidence}%</b></div>
 <div style="font-size:11.5px;color:var(--text);margin-top:10px;line-height:1.4;">
   Взвешенная сумма 5 факторов: цена vs локальный рынок (40%), локация (20%), качество ЖК (20%), доходность (15%), риск (5%).
   Уверенность — доля факторов, посчитанных на реальных данных, а не риск сделки.
 </div>` : '';
 
+    // Task 5: мини-панель Kepler.gl — тепловая карта цен по району вокруг
+    // текущего ЖК (Продажа/Аренда). Тот же приём, что и "песочница Kepler"
+    // на /admin/analytics/heatmaps (_geo_body.html, GEO_KEpler_URL) — iframe
+    // на публичный kepler.gl/demo с mapUrl на наш geojson-эндпоинт, но здесь
+    // geojson уже обрезан bbox'ом вокруг lat/lon объявления (radius_km=1.2),
+    // так что Kepler сам зумится на нужный район без доп. конфига.
+    // Полноценный live-swap слоя внутри одного открытого iframe (без перезагрузки)
+    // потребовал бы postMessage-протокола, которого публичный demo kepler.gl не
+    // предоставляет — поэтому переключение "Продажа/Аренда" делает src iframe.
+    const keplerPanelHtml = (d.lat && d.lon) ? (() => {
+      const saleUrl = 'https://kepler.gl/demo/map?mapUrl=' + encodeURIComponent(
+        `https://hatuli.ai-groundtruth.com/admin/api/geo-sales.geojson?lat=${d.lat}&lon=${d.lon}&radius_km=1.2`);
+      const rentUrl = 'https://kepler.gl/demo/map?mapUrl=' + encodeURIComponent(
+        `https://hatuli.ai-groundtruth.com/admin/api/geo-rentals.geojson?lat=${d.lat}&lon=${d.lon}&radius_km=1.2`);
+      window._keplerUrls = {sale: saleUrl, rental: rentUrl};
+      return `
+<div style="margin:14px 22px 0;">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+    <div style="font-size:12px;color:var(--text);font-weight:700;">🗺 Тепловая карта цен по району (Kepler.gl)</div>
+    <div style="display:flex;gap:6px;">
+      <button type="button" id="kepler-btn-sale" onclick="switchKeplerPanel('sale')" style="padding:4px 12px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;">Продажа</button>
+      <button type="button" id="kepler-btn-rental" onclick="switchKeplerPanel('rental')" style="padding:4px 12px;border:none;border-radius:6px;background:var(--bg);color:var(--text);font-weight:700;font-size:11.5px;cursor:pointer;">Аренда</button>
+    </div>
+  </div>
+  <div style="position:relative;width:100%;height:320px;border-radius:10px;overflow:hidden;border:1px solid var(--border);">
+    <!-- kepler.gl/demo — публичный внешний сайт, у него нет рабочего URL-параметра,
+         чтобы спрятать его собственную левую панель (проверено: readOnly=true и
+         config= в query игнорируются приложением). Кадрируем iframe по ширине
+         панели (~330px, side-panel--container в их DOM) — визуально прячем меню,
+         сама панель по-прежнему существует внутри iframe, просто вне видимой области. -->
+    <iframe id="kepler-modal-frame" src="${saleUrl}"
+            style="position:absolute;top:0;left:-330px;width:calc(100% + 330px);height:100%;border:none;"
+            allowfullscreen loading="lazy"></iframe>
+  </div>
+</div>`;
+    })() : '';
+
     const scoreSectionHtml = (scoreBarsHtml || dealScoreHtml) ? `
-<div style="margin:14px 22px 0;display:flex;gap:20px;flex-wrap:wrap;">
+<div id="modal-score-section" style="margin:14px 22px 0;display:flex;gap:20px;flex-wrap:wrap;">
   ${scoreBarsHtml ? `<div style="flex:1;min-width:260px;">${scoreBarsHtml}</div>` : ''}
   ${dealScoreHtml ? `<div style="flex:1;min-width:200px;">${dealScoreHtml}</div>` : ''}
 </div>` : '';
@@ -2813,6 +2980,7 @@ ${aiPlusesHtml}
 ${mortgageModalBlockHtml(d.price, d.market, id, d.bargain ? d.bargain.target_price : null)}
 ${scoreSectionHtml}
 ${yieldHtml}
+${keplerPanelHtml}
 ${complexPhotosHtml}
 <div style="margin:20px 22px 0;padding:14px 16px;border:1px dashed var(--border);border-radius:10px;">
   <div style="font-size:15px;color:var(--text);font-weight:700;margin-bottom:5px;">🏗 Инфраструктура</div>
@@ -2833,7 +3001,7 @@ ${similarMapHtml}
 <details style="margin:18px 22px 0;">
   <summary style="cursor:pointer;font-size:14px;color:var(--text);font-weight:700;">🚦 Карта района — проверить пробки</summary>
   <div style="margin-top:8px;">
-    <iframe src="https://yandex.ru/map-widget/v1/?um=constructor%3A1c828d0b5d4e475c9ee30454f42ffdfc8f61b8a002e61d9c807c9ee379a3d9ae&amp;source=constructor" width="100%" height="420" frameborder="0" style="border-radius:10px;display:block;"></iframe>
+    <iframe src="https://yandex.ru/map-widget/v1/?um=constructor%3A1c828d0b5d4e475c9ee30454f42ffdfc8f61b8a002e61d9c807c9ee379a3d9ae&amp;source=constructor&amp;l=trf" width="100%" height="420" frameborder="0" style="border-radius:10px;display:block;"></iframe>
   </div>
 </details>
 <div style="padding:20px 22px;display:flex;gap:10px;flex-wrap:wrap;">
@@ -2849,6 +3017,16 @@ ${similarMapHtml}
 
     if (d.lat != null && d.lon != null) initModalSimilarMap(d, id);
     initMortgageBlockToggle(id);
+
+    if (scrollToScore) {
+      // "почему?" в превью-карточке открывает эту же модалку и сразу
+      // прокручивает к разбивке скора — небольшая задержка, чтобы модалка
+      // успела отрендериться и посчитать layout (offsetTop) перед скроллом.
+      setTimeout(() => {
+        const scoreEl = document.getElementById('modal-score-section');
+        if (scoreEl) scoreEl.scrollIntoView({behavior: 'smooth', block: 'start'});
+      }, 80);
+    }
 
     fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(dh => {
       const wrap = document.getElementById('modal-price-history-wrap');
@@ -2869,10 +3047,31 @@ function closeDetailModal() {
   const root = document.getElementById('detail-modal-overlay');
   if (root) root.style.display = 'none';
   modalListingId = null;
+  if (modalIdFromPath()) history.pushState({}, '', '/admin');
 }
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && modalListingId) closeDetailModal();
 });
+
+// URL <-> попап объявления (см. /admin/listing/{id} на бэкенде и
+// history.pushState в openDetailModal/closeDetailModal выше) — делает
+// попап единственной, полноценно адресуемой "страницей" объявления вместо
+// прежней отдельной /admin/analytics/{id}: ссылку можно скопировать,
+// кнопки назад/вперёд браузера открывают/закрывают попап как обычную
+// навигацию, а прямой заход на /admin/listing/{id} открывает карту с уже
+// раскрытым попапом (см. блок автооткрытия по listing_id ниже).
+function modalIdFromPath() {
+  const m = location.pathname.match(/^\/admin\/listing\/([^/]+)\/?$/);
+  return m ? m[1] : null;
+}
+window.addEventListener('popstate', () => {
+  const id = modalIdFromPath();
+  if (id) openDetailModal(id);
+  else closeDetailModal();
+});
+{% if listing_id %}
+document.addEventListener('DOMContentLoaded', () => openDetailModal({{ listing_id | tojson }}));
+{% endif %}
 
 applyFilters();
 

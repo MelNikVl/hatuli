@@ -60,6 +60,7 @@ DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 ARTICLE_WINDOW_DAYS = 10
 MAX_ARTICLES_PER_RUN = 40
 LRT_RADIUS_M = 500
+PARK_RADIUS_M = 700  # парк больше станции ЛРТ — радиус щедрее
 
 SYSTEM_PROMPT = """Ты аналитик рынка недвижимости Астаны (Казахстан). Тебе дают заголовок
 и краткое содержание новости. Определи, упоминается ли в ней КОНКРЕТНЫЙ жилой
@@ -72,6 +73,7 @@ SYSTEM_PROMPT = """Ты аналитик рынка недвижимости А�
  "name": "название ЖК/локации как упомянуто в новости, или null",
  "district": "район, если можно определить, или null",
  "lrt_station": "название станции ЛРТ без слова ЛРТ (например 'Есиль'), если упомянута, иначе null",
+ "park": "название парка/сквера/зелёной зоны, если он упомянут В ПОЛОЖИТЕЛЬНОМ КОНТЕКСТЕ (открытие, благоустройство, реконструкция, новая зона отдыха, озеленение) и это не ТРЦ/торговый центр; иначе null",
  "rating": 0-100,
  "reason": "одно предложение — почему это важно, с опорой на факт из новости"
 }
@@ -230,6 +232,21 @@ def find_lrt_station(mcur, station_name: str):
     return mcur.fetchone()
 
 
+def find_park(mcur, park_name: str):
+    """Парк/сквер в city_poi по названию. Исключаем ТРЦ (Азия Парк, MEGA Park и т.п.)."""
+    mcur.execute(
+        "SELECT name, lat, lon FROM city_poi "
+        "WHERE kind='landmark' AND lat IS NOT NULL AND lon IS NOT NULL "
+        "  AND (name ILIKE %s OR %s ILIKE ('%%' || name || '%%')) "
+        "  AND name NOT ILIKE '%%трц%%' AND name NOT ILIKE '%%торговый%%' "
+        "  AND name NOT ILIKE '%%тц %%' AND name NOT ILIKE '%%тц%%центр%%' "
+        "  AND (name ILIKE '%%парк%%' OR name ILIKE '%%сквер%%' OR name ILIKE '%%бульвар%%' "
+        "       OR name ILIKE '%%сад%%' OR name ILIKE '%%зелен%%') "
+        "ORDER BY length(name) DESC LIMIT 1",
+        (f"%{park_name}%", park_name))
+    return mcur.fetchone()
+
+
 def find_complex_match(mcur, name: str):
     mcur.execute(
         """SELECT name, district, lat, lon FROM complexes
@@ -316,9 +333,25 @@ def main() -> None:
         reason = (result.get("reason") or "").strip()
         district = result.get("district") or None
         lrt_station = (result.get("lrt_station") or "").strip()
+        park_name = (result.get("park") or "").strip()
         sources = [f"{art.get('title', '')[:120]} ({art.get('url', '')})"]
 
         targets: list[dict] = []
+
+        if park_name:
+            park = find_park(mcur, park_name)
+            if park:
+                for row, dist in nearby_complexes(mcur, park["lat"], park["lon"], PARK_RADIUS_M):
+                    scaled = rating * (1 - 0.4 * (dist / PARK_RADIUS_M))
+                    targets.append({
+                        "name": row["name"],
+                        "district": row["district"] or district,
+                        "lat": row["lat"],
+                        "lon": row["lon"],
+                        "rating": round(scaled, 1),
+                        "reason": f"рядом парк «{park['name']}» ({reason})",
+                        "sources": sources,
+                    })
 
         if lrt_station:
             station = find_lrt_station(mcur, lrt_station)
@@ -350,7 +383,7 @@ def main() -> None:
 
         if not targets:
             n_skipped_no_geo += 1
-            print(f"[SKIP-GEO] нет геопривязки для '{name or lrt_station}' -- {art['title'][:90]}", flush=True)
+            print(f"[SKIP-GEO] нет геопривязки для '{name or lrt_station or park_name}' -- {art['title'][:90]}", flush=True)
             time.sleep(1)
             continue
 

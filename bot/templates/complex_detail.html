@@ -46,11 +46,7 @@ async function toggleFavComplex() {
 .cx-hero { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; align-items:stretch; }
 .cx-hero .cx-col-card { height:600px; overflow-y:auto; }
 @media (max-width:1150px) { .cx-hero { grid-template-columns:1fr; } .cx-hero .cx-col-card { height:auto; max-height:600px; } }
-.cx-top { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; align-items:start; }
-@media (max-width:1150px) { .cx-top { grid-template-columns:1fr; } }
 .cx-col-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
-.cx-listing-mini { display:flex; gap:10px; align-items:center; padding:7px 0; border-bottom:1px solid var(--border); text-decoration:none; color:inherit; }
-.cx-listing-mini:last-child { border-bottom:none; }
 .chart-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; }
 .bar-row { display:flex; align-items:flex-end; gap:6px; flex:1; min-height:170px; margin-top:8px; }
 .bar-col { flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; height:100%; }
@@ -176,32 +172,78 @@ async function toggleFavComplex() {
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Цена от (Korter)</td><td><b>{{ '{:,.0f}'.format(cx_sources.korter.price_from).replace(',', ' ') }} ₸</b></td></tr>
       {% endif %}
     </table>
+
+    {% if hp %}
+    <!-- Официальные данные homeportal.kz — объединены в блок "Описание"
+         (раньше была отдельная карточка "🏛 Официальные данные (homeportal.kz)"
+         дальше по странице; описание и офиц. данные — по сути один и тот же
+         тип информации о ЖК, разносить их по разным блокам было избыточно). -->
+    <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <b style="font-size:13.5px;">🏛 Официальные данные (homeportal.kz)</b>
+        <span style="font-size:11px;color:#888;">реестр КЖК{% if hp.count > 1 %} · {{ hp.count }} очередей объединено{% endif %}</span>
+      </div>
+      {% if hp.images %}
+      <div style="display:flex;gap:6px;overflow-x:auto;margin:8px 0;padding-bottom:2px;">
+        {% for img in hp.images %}
+        <img src="{{ img }}" loading="lazy" onclick="cxOpenLightboxByUrl('{{ img }}')" onerror="this.style.display='none';"
+             style="width:110px;height:82px;object-fit:cover;border-radius:7px;cursor:zoom-in;flex-shrink:0;">
+        {% endfor %}
+      </div>
+      <script>
+      if (typeof CX_PHOTOS !== 'undefined') { {{ hp.images | tojson }}.forEach(u => { if (!CX_PHOTOS.includes(u)) CX_PHOTOS.push(u); }); }
+      function cxOpenLightboxByUrl(url) {
+        const idx = (typeof CX_PHOTOS !== 'undefined') ? CX_PHOTOS.indexOf(url) : -1;
+        cxOpenLightbox(idx >= 0 ? idx : 0);
+      }
+      </script>
+      {% endif %}
+      {% if hp.is_orda_plus_bool %}
+      <div style="display:inline-block;background:rgba(34,197,94,.12);color:#16a34a;border-radius:8px;padding:3px 10px;font-size:12px;font-weight:700;margin:6px 0;">✅ Orda Plus{% if hp.orda_plus_percent %} · {{ hp.orda_plus_percent }}%{% endif %}</div>
+      {% endif %}
+      <table style="font-size:13.5px;border-collapse:collapse;width:100%;margin-top:6px;">
+        {% if hp.apartments_total_sum %}<tr><td style="padding:4px 12px 4px 0;color:#888;width:180px;">Квартир всего / продано</td><td>{{ hp.apartments_total_sum }}{% if hp.apartments_sold_sum %} / {{ hp.apartments_sold_sum }}{% if hp.apartments_sold_pct %} <span style="color:#888;">({{ hp.apartments_sold_pct }}%)</span>{% endif %}{% endif %}</td></tr>{% endif %}
+        {% if hp.rooms_mix %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Квартир по комнатности (план)</td><td style="font-size:12.5px;">{% if hp.rooms_mix['1'] %}1к: {{ hp.rooms_mix['1'] }} {% endif %}{% if hp.rooms_mix['2'] %}· 2к: {{ hp.rooms_mix['2'] }} {% endif %}{% if hp.rooms_mix['3'] %}· 3к: {{ hp.rooms_mix['3'] }} {% endif %}{% if hp.rooms_mix['4'] %}· 4+к: {{ hp.rooms_mix['4'] }}{% endif %}</td></tr>{% endif %}
+        {% if hp.no_of_floors %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Этажность</td><td>{{ hp.no_of_floors }}</td></tr>{% endif %}
+        {% if hp.no_of_houses %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Кол-во домов</td><td>{{ hp.no_of_houses }}</td></tr>{% endif %}
+        {% if hp.no_of_entrances %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Подъездов</td><td>{{ hp.no_of_entrances }}</td></tr>{% endif %}
+        {% if hp.passenger_elevators or hp.freight_elevators %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Лифты (пасс. / груз.)</td><td>{{ hp.passenger_elevators or 0 }} / {{ hp.freight_elevators or 0 }}</td></tr>{% endif %}
+        {% if hp.ceiling_height %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Высота потолков</td><td>{{ hp.ceiling_height }} м</td></tr>{% endif %}
+        {% if hp.building_type %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Тип строения</td><td>{{ hp.building_type }}</td></tr>{% endif %}
+        {% if hp.wall_filling %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Материал стен</td><td>{{ hp.wall_filling }}</td></tr>{% endif %}
+        {% if hp.facade_finishing %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Отделка фасада</td><td>{{ hp.facade_finishing }}</td></tr>{% endif %}
+        {% if hp.comfort_class %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Класс комфортности</td><td>{{ hp.comfort_class }}</td></tr>{% endif %}
+        {% if hp.parking_places %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Парковочных мест</td><td>{{ hp.parking_places }}</td></tr>{% endif %}
+        {% if hp.playgrounds or hp.sports_fields %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Детские / спортплощадки</td><td>{{ hp.playgrounds or 0 }} / {{ hp.sports_fields or 0 }}</td></tr>{% endif %}
+        {% if hp.program %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Госпрограмма</td><td>{{ hp.program }}{% if hp.program_link %} · <a href="{{ hp.program_link }}" target="_blank">подробнее ↗</a>{% endif %}</td></tr>{% endif %}
+        {% if hp.warranty_number %}<tr><td style="padding:4px 12px 4px 0;color:#888;">№ гарантийного обязательства</td><td>{{ hp.warranty_number }}</td></tr>{% endif %}
+        {% if hp.issue_date or hp.start_date %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Выдано / начало строительства</td><td>{{ hp.issue_date or '—' }}{% if hp.start_date %} / {{ hp.start_date }}{% endif %}</td></tr>{% endif %}
+        {% if hp.commissioning_date %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Срок сдачи (по КЖК)</td><td>{{ hp.commissioning_date }}</td></tr>{% endif %}
+        {% if hp.cadastral_number %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Кадастровый номер</td><td style="font-size:12px;">{{ hp.cadastral_number }}</td></tr>{% endif %}
+        {% if hp.authority %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Уполномоченный орган</td><td>{{ hp.authority }}</td></tr>{% endif %}
+        {% if hp.authorized_name %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Авторизованное лицо</td><td>{{ hp.authorized_name }}</td></tr>{% endif %}
+        {% if hp.supervising_name %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Стройнадзор</td><td>{{ hp.supervising_name }}</td></tr>{% endif %}
+        {% if hp.tech_name %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Технадзор</td><td>{{ hp.tech_name }}</td></tr>{% endif %}
+        {% if hp.developer_phone or hp.developer_email %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Контакты застройщика (КЖК)</td><td>{{ hp.developer_phone or '' }}{% if hp.developer_phone and hp.developer_email %} · {% endif %}{{ hp.developer_email or '' }}</td></tr>{% endif %}
+      </table>
+    </div>
+    {% endif %}
   </div>
 </div>
 
-{% if stats %}
-<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
-  {% for s in stats %}
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:8px 14px;">
-    <div style="font-size:11px;color:#888;">{{ s.rooms or '?' }}-комн, медиана</div>
-    <div style="font-size:16px;font-weight:800;">{{ '%.1f'|format((s.median_price or 0)/1e6) }} млн ₸</div>
-    {% if s.median_m2 %}<div style="font-size:11px;color:#2563eb;font-weight:600;">{{ (s.median_m2/1000)|round|int }} тыс ₸/м²</div>{% endif %}
-  </div>
-  {% endfor %}
-</div>
-{% endif %}
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13.5px;color:var(--text);">
   <b>Проверить документы застройщика</b> — Управление архитектуры и градостроительства Астаны: по телефону горячей линии или личному обращению можно уточнить наличие полного пакета документов и иногда получить информацию по проекту (конструктивная схема, этажность, материалы).
   Контакты: <b>+7 (7172) 55-04-28</b>, <b>+7 (7172) 55-67-03</b>.
 </div>
 
-<div class="cx-top">
-  <div id="cx-card-map" class="cx-col-card">
+  <div id="cx-card-map" class="cx-col-card chart-block" data-chart-id="cx-map-block" style="width:100%;height:560px;">
     {% if geo %}
-    <div id="cx-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
+    <div class="chart-block-inner" style="display:flex;flex-direction:column;">
+    <div id="cx-map" style="flex:1;min-height:0;width:100%;border-radius:8px;"></div>
     <div style="font-size:11px;color:#888;margin-top:6px;">
       живых объявлений: <b>{{ live_cnt }}</b> · на карте: <b>{{ map_points | selectattr('lat') | list | length }}</b>
       {% if live_no_coords %} · <span style="color:#f59e0b;">{{ live_no_coords }} ждут докачки координат</span>{% endif %}
+    </div>
     </div>
     <script>
     // Пины и попап — как на главном дашборде (цена/комнатность на синем
@@ -216,8 +258,10 @@ async function toggleFavComplex() {
       d.textContent = s == null ? '' : String(s);
       return d.innerHTML;
     }
+    let cxMap = null;
     document.addEventListener('DOMContentLoaded', function() {
       const map = L.map('cx-map').setView([{{ geo.lat }}, {{ geo.lon }}], 15);
+      cxMap = map;
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
       const pts = {{ map_points | tojson }};
       const bounds = [];
@@ -241,6 +285,13 @@ async function toggleFavComplex() {
       });
       if (bounds.length > 1) map.fitBounds(bounds, {padding: [24, 24]});
       setTimeout(() => map.invalidateSize(), 200);
+    });
+    // Блок карты — .chart-block (тот же drag-resize/persist движок, что и
+    // у графиков, см. initChartGrid() в base.html). Leaflet требует явный
+    // invalidateSize() после программного/CSS-ресайза контейнера — сам
+    // размер не подхватывает.
+    document.addEventListener('hatuli:chart-resize', function(e) {
+      if (e.detail && e.detail.id === 'cx-map-block' && cxMap) cxMap.invalidateSize();
     });
     const cxPopLoaded = {};
     function cxLoadPopup(id) {
@@ -280,137 +331,139 @@ async function toggleFavComplex() {
     }
     </script>
     {% else %}
-    <div style="aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;color:#888;font-size:13px;text-align:center;padding:20px;">🗺 Карта появится после докачки координат объявлений этого ЖК</div>
+    <div class="chart-block-inner" style="display:flex;align-items:center;justify-content:center;color:#888;font-size:13px;text-align:center;padding:20px;">🗺 Карта появится после докачки координат объявлений этого ЖК</div>
     {% endif %}
   </div>
 
-  <div id="cx-card-listings" class="cx-col-card" style="max-height:520px;overflow-y:auto;">
-    <b style="font-size:15px;">🏠 Объявления в продаже ({{ sales | selectattr('is_active', 'ne', false) | list | length }})</b>
-    <div style="margin-top:8px;">
-      {% for l in sales if l.is_active != false %}
-      <a href="/admin/analytics/{{ l.id }}" class="cx-listing-mini">
-        <div style="flex:1;min-width:0;">
-          <div style="font-weight:700;font-size:13.5px;">{{ '{:,.0f}'.format(l.price or 0).replace(',', ' ') }} ₸</div>
-          <div style="font-size:11.5px;color:#888;">{{ l.rooms or '?' }}к · {{ l.area or '?' }}м² · {{ l.floor or '?' }}/{{ l.floors_total or '?' }}эт</div>
-        </div>
-        {% if l.score_total %}<span style="flex-shrink:0;background:#2563eb;color:#fff;border-radius:7px;padding:2px 7px;font-weight:800;font-size:12px;">{{ l.score_total }}</span>{% endif %}
-      </a>
-      {% else %}
-      <p style="font-size:12.5px;color:#888;">Нет активных объявлений в базе.</p>
+<!-- Динамика цены по комнатности: продажа + аренд-эквивалент, с фильтрами
+     по комнатности и периоду (3/7/30/90 дней) — данные грузятся с клиента
+     из /admin/api/complex/{id}/price-dynamics, см. скрипт ниже. Остальные
+     графики страницы (статичный бар по комнатности, гистограмма текущих
+     цен, бар аренды по комнатности, гекс-блок 6 соседей) убраны по задаче
+     "упростить графики ЖК" — эта пара покрывает то же самое динамикой. -->
+<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px;">
+  <div class="chart-block" data-chart-id="cx-sale-dynamics" style="flex:1 1 0;min-width:380px;width:auto;">
+    <b style="font-size:1em;">📈 Динамика цены по комнатности (продажа)</b>
+    <div style="font-size:0.8em;color:#888;margin:2px 0 8px;">медиана цены объявлений по дням — своя линия на каждую комнатность</div>
+    <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
+      {% for val, label in [('', 'Все'), ('1', '1к'), ('2', '2к'), ('3', '3к'), ('4', '4+к')] %}
+      <button type="button" class="cxd-rooms-btn" data-block="sale" data-rooms="{{ val }}" onclick="cxdSetRooms('sale','{{ val }}')"
+              style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
+      {% endfor %}
+      <span style="width:1px;align-self:stretch;background:var(--border);margin:0 4px;"></span>
+      {% for val, label in [(3,'3д'),(7,'7д'),(30,'30д'),(90,'90д')] %}
+      <button type="button" class="cxd-days-btn" data-block="sale" data-days="{{ val }}" onclick="cxdSetDays('sale',{{ val }})"
+              style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#2563eb' if val == 90 else 'var(--bg)' }};color:{{ '#fff' if val == 90 else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
       {% endfor %}
     </div>
+    <div id="cxd-chart-sale" class="chart-block-inner"></div>
+  </div>
+
+  <div class="chart-block" data-chart-id="cx-rental-dynamics" style="flex:1 1 0;min-width:380px;width:auto;">
+    <b style="font-size:1em;">🔑 Динамика цены по комнатности (аренда)</b>
+    <div style="font-size:0.8em;color:#888;margin:2px 0 8px;">медиана арендной ставки по дням — своя линия на каждую комнатность</div>
+    <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
+      {% for val, label in [('', 'Все'), ('1', '1к'), ('2', '2к'), ('3', '3к'), ('4', '4+к')] %}
+      <button type="button" class="cxd-rooms-btn" data-block="rental" data-rooms="{{ val }}" onclick="cxdSetRooms('rental','{{ val }}')"
+              style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#16a34a' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
+      {% endfor %}
+      <span style="width:1px;align-self:stretch;background:var(--border);margin:0 4px;"></span>
+      {% for val, label in [(3,'3д'),(7,'7д'),(30,'30д'),(90,'90д')] %}
+      <button type="button" class="cxd-days-btn" data-block="rental" data-days="{{ val }}" onclick="cxdSetDays('rental',{{ val }})"
+              style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#16a34a' if val == 90 else 'var(--bg)' }};color:{{ '#fff' if val == 90 else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
+      {% endfor %}
+    </div>
+    <div id="cxd-chart-rental" class="chart-block-inner"></div>
   </div>
 </div>
 
-<!-- Графики: цена продажи по комнатности, цена текущих объявлений, аренда по комнатности -->
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:16px;">
-  <div class="chart-card" style="min-height:280px;">
-    <b style="font-size:17.5px;">📈 Цена продажи по комнатности</b>
-    <div style="font-size:13.5px;color:#888;">медиана, млн ₸</div>
-    {% if stats %}
-    {% set max_p = stats | map(attribute='median_price') | select | max %}
-    <div class="bar-row">
-      {% for s in stats %}
-      <div class="bar-col">
-        <div style="font-size:13.5px;font-weight:700;">{{ '%.1f'|format((s.median_price or 0)/1e6) }}</div>
-        <div style="width:70%;background:#2563eb;border-radius:4px 4px 0 0;height:{{ ((s.median_price or 0)/max_p*120)|round(0,'floor')|int }}px;"></div>
-        <div style="font-size:13.5px;color:#888;margin-top:3px;">{{ s.rooms or '?' }}к</div>
-        <div style="font-size:11.5px;color:#2563eb;font-weight:600;margin-top:1px;">{{ (s.median_m2/1000)|round|int if s.median_m2 else '—' }} тыс ₸/м²</div>
-      </div>
-      {% endfor %}
-    </div>
-    {% else %}<p style="font-size:15px;color:#888;">Недостаточно данных.</p>{% endif %}
-  </div>
-
-  <div class="chart-card" style="min-height:280px;">
-    <b style="font-size:17.5px;">📊 Цена активных объявлений сейчас</b>
-    <div style="font-size:13.5px;color:#888;">распределение по бакетам (текущие цены)</div>
-    <div id="cx-price-hist" class="bar-row"></div>
-  </div>
-
-  <div class="chart-card" style="min-height:280px;grid-column:1/-1;">
-    <b style="font-size:17.5px;">📉 Динамика цены по комнатности</b>
-    <div style="font-size:13.5px;color:#888;">медиана цены объявлений по месяцам (first_seen), млн ₸ — своя линия на каждую комнатность</div>
-    <div id="cx-price-trend" style="margin-top:8px;"></div>
-  </div>
-
-  <div class="chart-card" style="min-height:280px;">
-    <b style="font-size:17.5px;">🔑 Аренда по комнатности</b>
-    <div style="font-size:13.5px;color:#888;">медиана, тыс ₸/мес</div>
-    {% if rental_stats %}
-    {% set max_r = rental_stats | map(attribute='median_rent') | select | max %}
-    <div class="bar-row">
-      {% for r in rental_stats %}
-      <div class="bar-col">
-        <div style="font-size:13.5px;font-weight:700;">{{ (r.median_rent/1000)|round|int if r.median_rent else '—' }}</div>
-        <div style="width:70%;background:#16a34a;border-radius:4px 4px 0 0;height:{{ ((r.median_rent or 0)/max_r*120)|round(0,'floor')|int }}px;"></div>
-        <div style="font-size:13.5px;color:#888;margin-top:3px;">{{ r.rooms or '?' }}к</div>
-      </div>
-      {% endfor %}
-    </div>
-    {% else %}<p style="font-size:15px;color:#888;">Нет данных аренды.</p>{% endif %}
-  </div>
-</div>
-
-<!-- Микролокация: свой гексагон vs 6 соседних (цена/м²) — продажа и аренда -->
-{% if hex_cells_sale or hex_cells_rental %}
-<div class="chart-card" style="margin-bottom:16px;">
-  <b style="font-size:14px;">🔷 Цена/м² по микрорайону: этот ЖК и 6 соседних гексагонов</b>
-  <div style="font-size:11px;color:#888;margin-bottom:8px;">гекс ~300м</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-    <div>
-      <div style="font-size:12px;font-weight:700;color:#888;margin-bottom:4px;">💰 Продажа</div>
-      <div id="hex-map-sale" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
-    </div>
-    <div>
-      <div style="font-size:12px;font-weight:700;color:#888;margin-bottom:4px;">🔑 Аренда</div>
-      <div id="hex-map-rental" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
-    </div>
-  </div>
-</div>
 <script>
-function drawHexPriceMap(divId, cells, field, fmt) {
-  field = field || 'avg_m2';
-  fmt = fmt || (v => Math.round(v/1000) + ' тыс ₸/м²');
-  if (!cells || !cells.length || !cells.some(c => c[field])) {
-    document.getElementById(divId).innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#888;font-size:12px;">нет данных</div>';
+const CXD_STATE = {
+  sale: {rooms: '', days: 90, color: '#2563eb'},
+  rental: {rooms: '', days: 90, color: '#16a34a'},
+};
+function cxdSetRooms(kind, val) {
+  CXD_STATE[kind].rooms = val;
+  document.querySelectorAll(`.cxd-rooms-btn[data-block="${kind}"]`).forEach(b => {
+    const active = b.dataset.rooms === val;
+    b.style.background = active ? CXD_STATE[kind].color : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  cxdLoad(kind);
+}
+function cxdSetDays(kind, val) {
+  CXD_STATE[kind].days = val;
+  document.querySelectorAll(`.cxd-days-btn[data-block="${kind}"]`).forEach(b => {
+    const active = Number(b.dataset.days) === val;
+    b.style.background = active ? CXD_STATE[kind].color : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  cxdLoad(kind);
+}
+async function cxdLoad(kind) {
+  const st = CXD_STATE[kind];
+  const el = document.getElementById('cxd-chart-' + kind);
+  el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">загрузка…</div>';
+  try {
+    const r = await fetch(`/admin/api/complex/{{ cx.id }}/price-dynamics?kind=${kind}&days=${st.days}&rooms=${st.rooms}`);
+    const d = await r.json();
+    cxdRender(el, d.data || {}, st.color, kind === 'rental');
+  } catch (e) {
+    el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">ошибка загрузки</div>';
+  }
+}
+function cxdRender(el, data, baseColor, isRental) {
+  const roomKeys = Object.keys(data).sort((a, b) => a - b);
+  if (!roomKeys.length) { el.innerHTML = '<p style="font-size:12px;color:#888;padding:10px;">Недостаточно данных за выбранный период.</p>'; return; }
+  const days = [...new Set(roomKeys.flatMap(k => data[k].map(p => p.d)))].sort();
+  if (days.length < 2) {
+    const only = roomKeys.map(k => `${k}к: ${(data[k][data[k].length-1].median_price/(isRental?1e3:1e6)).toFixed(isRental?0:1)}${isRental?' тыс':' млн'} ₸`).join(' · ');
+    el.innerHTML = `<p style="font-size:13px;padding:10px;">${only} <span style="color:#888;">(мало точек во времени для линии)</span></p>`;
     return;
   }
-  const self_ = cells.find(c => c.is_self);
-  const map = L.map(divId, {zoomControl:false, attributionControl:false, dragging:false, scrollWheelZoom:false, doubleClickZoom:false, boxZoom:false}).setView([self_.corners[0][0], self_.corners[0][1]], 14);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {opacity:0.5}).addTo(map);
-  const vals = cells.filter(c => c[field]).map(c => c[field]);
-  const lo = Math.min(...vals), hi = Math.max(...vals);
-  const bounds = [];
-  cells.forEach(c => {
-    const v = c[field];
-    const t = (hi > lo && v) ? (v - lo) / (hi - lo) : 0.5;
-    const color = v ? `rgb(${Math.round(34+(239-34)*t)},${Math.round(197+(68-197)*t)},${Math.round(94+(68-94)*t)})` : '#e5e7eb';
-    const poly = L.polygon(c.corners, {
-      color: c.is_self ? '#1e3a8a' : '#fff', weight: c.is_self ? 2.5 : 1,
-      fillColor: color, fillOpacity: v ? 0.75 : 0.25,
-    }).addTo(map);
-    poly.bindTooltip(`${c.label}: ${v ? fmt(v) : 'нет данных'} (${c.count})`, {sticky:true});
-    if (v) {
-      const cLat = c.corners.reduce((s,p)=>s+p[0],0)/c.corners.length;
-      const cLon = c.corners.reduce((s,p)=>s+p[1],0)/c.corners.length;
-      L.marker([cLat, cLon], {
-        icon: L.divIcon({className:'', html:`<div style="font-size:11px;font-weight:800;color:#111;text-shadow:0 1px 2px rgba(255,255,255,.6);white-space:nowrap;transform:translate(-50%,-50%);">${fmt(v)}</div>`, iconSize:[0,0]}),
-        interactive: false,
-      }).addTo(map);
-    }
-    c.corners.forEach(p => bounds.push(p));
+  const colors = ['#2563eb', '#16a34a', '#f59e0b', '#ef4444', '#9333ea', '#0891b2'];
+  const W = Math.max(400, (el.clientWidth || 460) - 20), H = Math.max(180, (el.clientHeight || 220) - 30), padL = 46, padB = 22, padT = 10, padR = 10;
+  const allPrices = roomKeys.flatMap(k => data[k].map(p => p.median_price));
+  const minP = Math.min(...allPrices) * 0.95, maxP = Math.max(...allPrices) * 1.05;
+  const x = i => padL + (days.length > 1 ? i / (days.length - 1) : 0) * (W - padL - padR);
+  const y = v => padT + (1 - (v - minP) / (maxP - minP || 1)) * (H - padT - padB);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:100%;overflow:visible;">`;
+  for (let g = 0; g <= 4; g++) {
+    const v = minP + (maxP - minP) * g / 4;
+    const yy = y(v);
+    svg += `<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="var(--border)" stroke-width="1"/>`;
+    svg += `<text x="${padL-6}" y="${yy+4}" font-size="10" fill="var(--text)" text-anchor="end">${(v/(isRental?1e3:1e6)).toFixed(isRental?0:1)}</text>`;
+  }
+  const xStep = Math.max(1, Math.ceil(days.length / 8));
+  days.forEach((dd, i) => {
+    if (i % xStep !== 0 && i !== days.length - 1) return;
+    svg += `<text x="${x(i)}" y="${H-4}" font-size="10" fill="var(--text)" text-anchor="middle">${dd.slice(5)}</text>`;
   });
-  map.fitBounds(bounds, {padding:[4,4]});
+  roomKeys.forEach((k, ki) => {
+    const color = colors[ki % colors.length];
+    const byDay = Object.fromEntries(data[k].map(p => [p.d, p]));
+    const pts = days.map((dd, i) => byDay[dd] ? [x(i), y(byDay[dd].median_price)] : null).filter(Boolean);
+    if (pts.length < 2) return;
+    const path = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    svg += `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
+    pts.forEach(p => { svg += `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="${color}"/>`; });
+  });
+  svg += '</svg>';
+  const legend = roomKeys.map((k, ki) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11.5px;">
+    <span style="width:9px;height:9px;border-radius:50%;background:${colors[ki % colors.length]};display:inline-block;"></span>${k}-комн
+  </span>`).join('');
+  el.innerHTML = `<div style="margin-bottom:4px;">${legend}</div><div style="flex:1;min-height:0;">${svg}</div>`;
+  el.style.display = 'flex'; el.style.flexDirection = 'column';
 }
-drawHexPriceMap('hex-map-sale', {{ hex_cells_sale | tojson }}, 'avg_m2', v => Math.round(v/1000) + 'к/м²');
-// Аренда — средняя ИТОГОВАЯ аренда в месяц (не ₸/м², который путали с итоговой ценой)
-drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }}, 'avg_price', v => Math.round(v/1000) + 'к/мес');
+document.addEventListener('DOMContentLoaded', () => { cxdLoad('sale'); cxdLoad('rental'); });
+document.addEventListener('hatuli:chart-resize', (e) => {
+  const id = e.detail && e.detail.id;
+  if (id === 'cx-sale-dynamics') cxdLoad('sale');
+  if (id === 'cx-rental-dynamics') cxdLoad('rental');
+});
 </script>
-{% endif %}
 
 <style>
-.cx-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
 .cx-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
 .cx-card h3 { margin-top: 0; font-size: 15px; }
 .cx-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -425,10 +478,11 @@ drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }}, 'avg_price', 
 .btn-save-c { padding: 10px 18px; border: none; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 700; cursor: pointer; }
 </style>
 
-<div class="cx-grid">
-<div>
-
-  <div class="cx-card">
+  <!-- Всё ниже — блоки в общей 3-колоночной сетке (.hcb-grid, тот же
+       drag/resize/span движок, что и в админке — см. initDashboardGrid() в
+       base.html), а не в старой 2fr/1fr раскладке. Достаточно навесить
+       class="admin-block"/"chart-block" — JS сам соберёт их в сетку. -->
+  <div class="cx-card admin-block" data-chart-id="cx-rental-turnover">
     <h3>🔑 Аренда: скорость ухода</h3>
     <table class="cx-table">
       <tr><th>Комнат</th><th>Объявл.</th><th>Медиана ₸/мес</th><th>Ушло</th><th>Ср. дней в экспозиции</th></tr>
@@ -445,24 +499,7 @@ drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }}, 'avg_price', 
     <p style="font-size:12px;color:#888;">«Ушло» = объявление не появлялось в выдаче парсера больше 3 дней (сдано или снято). Малое «дней в экспозиции» = высокий арендный спрос в этом ЖК. Метрика начнёт наполняться с 12.07.2026.</p>
   </div>
 
-  <div class="cx-card">
-    <h3>🔑 Аренда рядом ({{ rentals|length }})</h3>
-    <table class="cx-table">
-      <tr><th>Комнат</th><th>Цена/мес</th><th>Площадь</th></tr>
-      {% for r in rentals[:15] %}
-      <tr>
-        <td>{{ r.rooms or '?' }}к</td>
-        <td><b>{{ '{:,.0f}'.format(r.price or 0).replace(',', ' ') }} ₸</b></td>
-        <td>{{ r.area or '—' }} м²</td>
-      </tr>
-      {% endfor %}
-    </table>
-  </div>
-
-</div>
-<div>
-
-  <div class="cx-card contact-form">
+  <div class="cx-card contact-form admin-block" data-chart-id="cx-contacts">
     <h3>👥 Люди, контакты и источники инфы</h3>
     <label>ОСИ (контакты)</label>
     <textarea id="c-osi" placeholder="Председатель ОСИ, телефон, как связаться...">{{ cx.osi_contacts or '' }}</textarea>
@@ -487,38 +524,7 @@ drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }}, 'avg_price', 
     </div>
   </div>
 
-  {% if hp %}
-  <div class="cx-card">
-    <div style="display:flex;justify-content:space-between;align-items:center;">
-      <h3 style="margin:0;">🏛 Официальные данные (homeportal.kz)</h3>
-      <span style="font-size:11px;color:#888;">реестр КЖК{% if hp.count > 1 %} · {{ hp.count }} очередей объединено{% endif %}</span>
-    </div>
-    <p style="font-size:12px;color:#888;margin:6px 0 10px;">Данные housing-savings-bank реестра долевого строительства (Homeportal.kz), автоматически сопоставленные с этим ЖК.</p>
-    <table style="font-size:13.5px;border-collapse:collapse;width:100%;">
-      {% if hp.apartments_total %}<tr><td style="padding:4px 12px 4px 0;color:#888;width:220px;">Квартир всего / продано</td><td>{{ hp.apartments_total }}{% if hp.apartments_sold %} / {{ hp.apartments_sold }}{% endif %}</td></tr>{% endif %}
-      {% if hp.no_of_floors %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Этажность</td><td>{{ hp.no_of_floors }}</td></tr>{% endif %}
-      {% if hp.no_of_houses %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Кол-во домов</td><td>{{ hp.no_of_houses }}</td></tr>{% endif %}
-      {% if hp.no_of_entrances %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Подъездов</td><td>{{ hp.no_of_entrances }}</td></tr>{% endif %}
-      {% if hp.passenger_elevators or hp.freight_elevators %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Лифты (пасс. / груз.)</td><td>{{ hp.passenger_elevators or 0 }} / {{ hp.freight_elevators or 0 }}</td></tr>{% endif %}
-      {% if hp.ceiling_height %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Высота потолков</td><td>{{ hp.ceiling_height }} м</td></tr>{% endif %}
-      {% if hp.building_type %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Тип строения</td><td>{{ hp.building_type }}</td></tr>{% endif %}
-      {% if hp.wall_filling %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Материал стен</td><td>{{ hp.wall_filling }}</td></tr>{% endif %}
-      {% if hp.facade_finishing %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Отделка фасада</td><td>{{ hp.facade_finishing }}</td></tr>{% endif %}
-      {% if hp.comfort_class %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Класс комфортности</td><td>{{ hp.comfort_class }}</td></tr>{% endif %}
-      {% if hp.parking_places %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Парковочных мест</td><td>{{ hp.parking_places }}</td></tr>{% endif %}
-      {% if hp.playgrounds or hp.sports_fields %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Детские / спортплощадки</td><td>{{ hp.playgrounds or 0 }} / {{ hp.sports_fields or 0 }}</td></tr>{% endif %}
-      {% if hp.program %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Госпрограмма</td><td>{{ hp.program }}{% if hp.program_link %} · <a href="{{ hp.program_link }}" target="_blank">подробнее ↗</a>{% endif %}</td></tr>{% endif %}
-      {% if hp.warranty_number %}<tr><td style="padding:4px 12px 4px 0;color:#888;">№ гарантийного обязательства</td><td>{{ hp.warranty_number }}</td></tr>{% endif %}
-      {% if hp.commissioning_date %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Срок сдачи (по КЖК)</td><td>{{ hp.commissioning_date }}</td></tr>{% endif %}
-      {% if hp.authorized_name %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Авторизованное лицо</td><td>{{ hp.authorized_name }}</td></tr>{% endif %}
-      {% if hp.supervising_name %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Стройнадзор</td><td>{{ hp.supervising_name }}</td></tr>{% endif %}
-      {% if hp.tech_name %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Технадзор</td><td>{{ hp.tech_name }}</td></tr>{% endif %}
-      {% if hp.developer_phone or hp.developer_email %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Контакты застройщика (КЖК)</td><td>{{ hp.developer_phone or '' }}{% if hp.developer_phone and hp.developer_email %} · {% endif %}{{ hp.developer_email or '' }}</td></tr>{% endif %}
-    </table>
-  </div>
-  {% endif %}
-
-  <div class="cx-card">
+  <div class="cx-card admin-block" data-chart-id="cx-tech-specs">
     <div style="display:flex;justify-content:space-between;align-items:center;">
       <h3 style="margin:0;">🏗 Технические характеристики</h3>
       <button type="button" onclick="toggleTechEdit()" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);cursor:pointer;">✏️ редактировать</button>
@@ -568,9 +574,6 @@ drawHexPriceMap('hex-map-rental', {{ hex_cells_rental | tojson }}, 'avg_price', 
       <span id="t-status" style="font-size:12px;color:#22c55e;margin-left:8px;"></span>
     </div>
   </div>
-
-</div>
-</div>
 
 <script>
 async function toggleTechEdit() {
@@ -643,75 +646,5 @@ async function uploadPhotos() {
   if (r.ok) setTimeout(() => location.reload(), 900);
 }
 
-// Гистограмма цен активных объявлений (текущий снимок, не история)
-(function() {
-  const prices = {{ sales | selectattr('is_active', 'ne', false) | map(attribute='price') | select | list | tojson }};
-  const el = document.getElementById('cx-price-hist');
-  if (!prices.length) { el.innerHTML = '<p style="font-size:12px;color:#888;">Нет активных объявлений.</p>'; return; }
-  const mn = Math.min(...prices), mx = Math.max(...prices);
-  const bins = 5;
-  const span = (mx - mn) / bins || 1;
-  const counts = new Array(bins).fill(0);
-  prices.forEach(p => {
-    let idx = Math.floor((p - mn) / span);
-    if (idx >= bins) idx = bins - 1;
-    counts[idx]++;
-  });
-  const maxCnt = Math.max(...counts);
-  el.innerHTML = counts.map((c, i) => {
-    const from = ((mn + i * span) / 1e6).toFixed(0);
-    const to = ((mn + (i + 1) * span) / 1e6).toFixed(0);
-    return `<div class="bar-col" title="${from}-${to} млн ₸: ${c}">
-      <div style="font-size:13.5px;font-weight:700;">${c}</div>
-      <div style="width:70%;background:#f59e0b;border-radius:4px 4px 0 0;height:${maxCnt ? Math.round(c/maxCnt*120) : 0}px;"></div>
-      <div style="font-size:12px;color:#888;margin-top:3px;">${from}М</div>
-    </div>`;
-  }).join('');
-})();
-
-// Динамика цены по комнатности — своя линия на каждую комнатность
-// (см. price_trend_by_rooms в terminal_extras.py: медиана по месяцам first_seen).
-(function() {
-  const data = {{ price_trend_by_rooms | tojson }};
-  const el = document.getElementById('cx-price-trend');
-  const roomKeys = Object.keys(data).sort((a, b) => a - b);
-  if (!roomKeys.length) { el.innerHTML = '<p style="font-size:12px;color:#888;">Недостаточно данных для графика.</p>'; return; }
-  const months = [...new Set(roomKeys.flatMap(k => data[k].map(p => p.month)))].sort();
-  if (months.length < 2) { el.innerHTML = '<p style="font-size:12px;color:#888;">Недостаточно точек во времени (нужно 2+ месяца).</p>'; return; }
-  const colors = ['#2563eb', '#16a34a', '#f59e0b', '#ef4444', '#9333ea', '#0891b2'];
-  const W = Math.max(500, el.parentElement.clientWidth - 20), H = 220, padL = 46, padB = 22, padT = 10, padR = 10;
-  const allPrices = roomKeys.flatMap(k => data[k].map(p => p.median_price));
-  const minP = Math.min(...allPrices) * 0.95, maxP = Math.max(...allPrices) * 1.05;
-  const x = i => padL + (months.length > 1 ? i / (months.length - 1) : 0) * (W - padL - padR);
-  const y = v => padT + (1 - (v - minP) / (maxP - minP || 1)) * (H - padT - padB);
-  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;overflow:visible;">`;
-  // сетка/подписи по оси Y (млн ₸)
-  for (let g = 0; g <= 4; g++) {
-    const v = minP + (maxP - minP) * g / 4;
-    const yy = y(v);
-    svg += `<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="var(--border)" stroke-width="1"/>`;
-    svg += `<text x="${padL-6}" y="${yy+4}" font-size="10" fill="var(--text)" text-anchor="end">${(v/1e6).toFixed(1)}</text>`;
-  }
-  // подписи по оси X (месяцы, прорежаем если их много)
-  const xStep = Math.max(1, Math.ceil(months.length / 8));
-  months.forEach((m, i) => {
-    if (i % xStep !== 0 && i !== months.length - 1) return;
-    svg += `<text x="${x(i)}" y="${H-4}" font-size="10" fill="var(--text)" text-anchor="middle">${m.slice(2)}</text>`;
-  });
-  roomKeys.forEach((k, ki) => {
-    const color = colors[ki % colors.length];
-    const byMonth = Object.fromEntries(data[k].map(p => [p.month, p]));
-    const pts = months.map((m, i) => byMonth[m] ? [x(i), y(byMonth[m].median_price)] : null).filter(Boolean);
-    if (pts.length < 2) return;
-    const path = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
-    svg += `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
-    pts.forEach(p => { svg += `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="${color}"/>`; });
-  });
-  svg += '</svg>';
-  const legend = roomKeys.map((k, ki) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:12.5px;">
-    <span style="width:10px;height:10px;border-radius:50%;background:${colors[ki % colors.length]};display:inline-block;"></span>${k}-комн
-  </span>`).join('');
-  el.innerHTML = `<div style="margin-bottom:6px;">${legend}</div>${svg}`;
-})();
 </script>
 {% endblock %}
