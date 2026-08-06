@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<div class="page-title">🗄 Бекапы</div>
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px;">
+  <div style="flex:1 1 200px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Всего бэкапов</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;">{{ total }}</div>
+  </div>
+  <div style="flex:1 1 200px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Успешных</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;color:#16a34a;">{{ ok_count }}</div>
+  </div>
+  <div style="flex:1 1 200px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Последний</div>
+    <div style="font-size:15px;font-weight:700;margin-top:6px;">{{ last_ts.strftime('%d.%m %H:%M') if last_ts else '—' }}</div>
+  </div>
+</div>
+
+<div class="chart-block" style="width:100%;">
+  <div style="font-size:13px;font-weight:700;margin-bottom:8px;">📈 Размер бэкапов по времени</div>
+  <canvas id="backup-chart" style="width:100%;height:320px;"></canvas>
+</div>
+
+<div style="overflow-x:auto;background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-top:16px;">
+<table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+  <thead>
+    <tr style="border-bottom:2px solid var(--border);text-align:left;">
+      <th style="padding:9px 12px;">Время</th>
+      <th style="padding:9px 12px;">Тип</th>
+      <th style="padding:9px 12px;text-align:right;">krisha_bot</th>
+      <th style="padding:9px 12px;text-align:right;">hype</th>
+      <th style="padding:9px 12px;text-align:right;">проект</th>
+      <th style="padding:9px 12px;">Статус</th>
+      <th style="padding:9px 12px;">Примечание</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in backups %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px 12px;">{{ b.ts_str }}</td>
+      <td style="padding:8px 12px;color:#888;">{{ b.kind }}</td>
+      <td style="padding:8px 12px;text-align:right;">{{ '%.1f'|format(b.krisha_mb) if b.krisha_mb is not none else '—' }}</td>
+      <td style="padding:8px 12px;text-align:right;">{{ '%.2f'|format(b.hype_mb) if b.hype_mb is not none else '—' }}</td>
+      <td style="padding:8px 12px;text-align:right;">{{ '%.1f'|format(b.project_mb) if b.project_mb is not none else '—' }}</td>
+      <td style="padding:8px 12px;">
+        {% if b.status == 'ok' %}<span style="color:#16a34a;font-weight:700;">✅ ok</span>
+        {% else %}<span style="color:#ef4444;font-weight:700;">❌ {{ b.status }}</span>{% endif %}
+      </td>
+      <td style="padding:8px 12px;color:#888;font-size:12px;">{{ b.note or '' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" style="padding:16px;color:#888;text-align:center;">Бэкапов пока нет — первый появится после ближайшего запуска</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<script>
+(function(){
+  const b = {{ backups | tojson }};
+  if (!b.length) return;
+  const ts = b.map(x => x.ts_iso);
+  const labels = ts.map(t => {
+    const d = new Date(t);
+    return d.getDate() + '.' + String(d.getMonth()+1).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  });
+  const kr = b.map(x => x.krisha_mb ?? null);
+  const hp = b.map(x => x.hype_mb ?? null);
+  const pr = b.map(x => x.project_mb ?? null);
+  const ctx = document.getElementById('backup-chart').getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'krisha_bot, МБ', data: kr, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.08)', fill: true, tension: .25, spanGaps: true },
+        { label: 'hype_tracker, МБ', data: hp, borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.08)', fill: true, tension: .25, spanGaps: true },
+        { label: 'проект, МБ', data: pr, borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,.08)', fill: true, tension: .25, spanGaps: true },
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: getComputedStyle(document.body).getPropertyValue('--text').trim() || '#ccc', boxWidth: 14 } } },
+      scales: {
+        x: { ticks: { color: '#8892b0', maxRotation: 45 }, grid: { color: 'rgba(136,146,176,.12)' } },
+        y: { beginAtZero: true, ticks: { color: '#8892b0' }, grid: { color: 'rgba(136,146,176,.12)' } }
+      }
+    }
+  });
+})();
+</script>
+{% endblock %}

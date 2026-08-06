@@ -6,3 +6,4 @@ bot.db
 *.log
 google_creds.json
 static/cache/photos/
+backups/
