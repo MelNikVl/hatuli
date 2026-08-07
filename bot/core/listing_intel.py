@@ -139,78 +139,59 @@ def build_seller_questions(listing: dict) -> list[str]:
 
 
 async def compute_similar_listings(listing: dict, listing_id: str, limit: int = 10) -> list[dict]:
-    """10 (или limit) похожих вариантов — "похожий" означает близкую цену и
-    близкий метраж (±7 м²), НЕ обязательно ту же комнатность (раньше был
-    жёсткий фильтр rooms = X — просили заменить на метраж, комнатность
-    квартир одной площади и так обычно совпадает или отличается на одну).
-    Приоритет: тот же ЖК -> тот же/соседний гексагон (~300м) -> просто
-    похожая цена по городу (если в районе не набралось limit вариантов —
-    без этого фолбэка список мог быть короче 10 при разреженных данных
-    вокруг). Общая логика для страницы объявления и большого попапа на
-    карте (/admin/api/listing/{id})."""
+    """До limit похожих вариантов — "похожий" означает близкую цену и
+    близкий метраж (±7 м²) СТРОГО в радиусе 500м (по факту, не по
+    гексагону/ЖК) — не обязательно та же комнатность (комнатность квартир
+    одной площади и так обычно совпадает или отличается на одну).
+
+    Раньше было 3 уровня фолбэка: тот же ЖК (без всякой проверки
+    расстояния — совпадение complex_name могло притянуть дом в другом
+    конце города при кривой привязке), потом гексагон+2 кольца (~900м,
+    не 500), и наконец фолбэк ПО ВСЕМУ ГОРОДУ без гео-проверки вовсе —
+    именно он давал вылезающие на другой конец города "похожие" (жалоба
+    "это вообще разные районы города!"). Теперь единственный критерий —
+    точное расстояние по haversine ≤500м; если рядом не набралось limit
+    вариантов, список просто короче — не растягиваем его далёкими.
+    Общая логика для страницы объявления и большого попапа на карте
+    (/admin/api/listing/{id})."""
     import json as _json
+    import math
 
     from bot.db.pg import fetch as pg_fetch
+    from bot.core.geo import haversine_km
+
+    RADIUS_KM = 0.5
 
     similar_listings: list[dict] = []
-    if not (listing.get("area") and listing.get("price")):
+    if not (listing.get("area") and listing.get("price")
+            and listing.get("lat") and listing.get("lon")):
         return similar_listings
 
     area_lo, area_hi = float(listing["area"]) - 7, float(listing["area"]) + 7
+    my_lat, my_lon = float(listing["lat"]), float(listing["lon"])
+    # Дешёвый bounding-box перед точным haversine (сузить кандидатов до
+    # SQL-запроса) — 500м в градусах широты ~0.0045, по долготе поправка
+    # на cos(широты), т.к. на широте Астаны (~51°) градус долготы короче.
+    dlat = RADIUS_KM / 111.0
+    dlon = RADIUS_KM / (111.0 * max(0.1, math.cos(math.radians(my_lat))))
+    candidates = await pg_fetch("""
+        SELECT id, url, price, area, floor, floors_total, district,
+               complex_name, photos, lat, lon
+        FROM apartment_listings
+        WHERE area BETWEEN $1 AND $2 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+          AND id != $3 AND lat IS NOT NULL AND lon IS NOT NULL
+          AND lat BETWEEN $4 AND $5 AND lon BETWEEN $6 AND $7
+        ORDER BY ABS(price - $8) ASC
+        LIMIT 500
+    """, area_lo, area_hi, listing_id,
+        my_lat - dlat, my_lat + dlat, my_lon - dlon, my_lon + dlon, listing["price"])
+
     sim_rows = []
-    if listing.get("complex_name"):
-        sim_rows = list(await pg_fetch("""
-            SELECT id, url, price, area, floor, floors_total, district,
-                   complex_name, photos, lat, lon
-            FROM apartment_listings
-            WHERE area BETWEEN $1 AND $2 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-              AND id != $3 AND lower(trim(complex_name)) = lower(trim($4))
-            ORDER BY ABS(price - $5) ASC
-            LIMIT $6
-        """, area_lo, area_hi, listing_id, listing["complex_name"], listing["price"], limit))
-
-    if listing.get("lat") and listing.get("lon") and len(sim_rows) < limit:
-        from bot.core.hexgrid import hex_id as _hex_id, neighbors as _hex_nb
-        HEX_EDGE = 300.0
-        my_hid = _hex_id(float(listing["lat"]), float(listing["lon"]), HEX_EDGE)
-        ring1 = set(_hex_nb(my_hid))
-        ring2 = set()
-        for h in ring1:
-            ring2.update(_hex_nb(h))
-        wanted_hids = {my_hid} | ring1 | ring2
-        exclude_ids = [listing_id] + [r["id"] for r in sim_rows]
-        candidates = await pg_fetch("""
-            SELECT id, url, price, area, floor, floors_total, district,
-                   complex_name, photos, lat, lon
-            FROM apartment_listings
-            WHERE area BETWEEN $1 AND $2 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-              AND lat IS NOT NULL AND NOT (id = ANY($3::text[]))
-            ORDER BY ABS(price - $4) ASC
-            LIMIT 1500
-        """, area_lo, area_hi, exclude_ids, listing["price"])
-        for c in candidates:
-            if len(sim_rows) >= limit:
-                break
-            if _hex_id(float(c["lat"]), float(c["lon"]), HEX_EDGE) in wanted_hids:
-                sim_rows.append(c)
-
-    # Фолбэк по всему городу — если ЖК/окрестность не набрали limit
-    # вариантов (разреженный район), "10 похожих рядом" не должно
-    # схлопываться в 2-3 просто потому что рядом мало объявлений с этим
-    # метражом. Ближе (гео) — выше приоритетом сортировки не задаём здесь,
-    # но фолбэк применяется только когда более точные тиры уже исчерпаны.
-    if len(sim_rows) < limit:
-        exclude_ids = [listing_id] + [r["id"] for r in sim_rows]
-        rest = await pg_fetch("""
-            SELECT id, url, price, area, floor, floors_total, district,
-                   complex_name, photos, lat, lon
-            FROM apartment_listings
-            WHERE area BETWEEN $1 AND $2 AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-              AND NOT (id = ANY($3::text[]))
-            ORDER BY ABS(price - $4) ASC
-            LIMIT $5
-        """, area_lo, area_hi, exclude_ids, listing["price"], limit - len(sim_rows))
-        sim_rows.extend(rest)
+    for c in candidates:
+        if len(sim_rows) >= limit:
+            break
+        if haversine_km(my_lat, my_lon, float(c["lat"]), float(c["lon"])) <= RADIUS_KM:
+            sim_rows.append(c)
 
     for r in sim_rows[:limit]:
         sp = r["photos"]

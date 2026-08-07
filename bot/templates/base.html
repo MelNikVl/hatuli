@@ -97,6 +97,12 @@
 
     /* main */
     .main { padding: 32px 36px; }
+    /* Публичные (не-админские) страницы — контент сужен и отцентрован,
+       как у homsters.kz (скрин "главная страница/большой попап") — вместо
+       во весь экран. Админ-страницы (panel_family) и главная карта
+       (base_public.html, сюда не попадает) остаются как есть. */
+    .main.narrow { max-width: 1100px; margin: 0 auto; }
+    .pub-row1.narrow { max-width: 1100px; margin: 0 auto; }
     .page-title { font-size: 22px; font-weight: 700; color: var(--text); margin-bottom: 24px; }
     .page-title small { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 10px; }
 
@@ -237,11 +243,14 @@
 {% set panel_family = ('analytics' in request.url.path or 'parser' in request.url.path
     or 'duplicates' in request.url.path or 'archived' in request.url.path or 'unbound' in request.url.path
     or 'zones' in request.url.path or 'settings' in request.url.path or 'logs' in request.url.path
-    or 'issues' in request.url.path or request.url.path == '/admin/site-users' or request.url.path == '/admin/panel') %}
+    or 'issues' in request.url.path or 'users' in request.url.path or 'subscriptions' in request.url.path
+    or 'scoring' in request.url.path or 'backup' in request.url.path or 'top10' in request.url.path
+    or 'monitoring' in request.url.path or 'complex_scores' in request.url.path
+    or request.url.path == '/admin/site-users' or request.url.path == '/admin/panel') %}
 {% set embed = request.query_params.get('embed') %}
 {% if not embed %}
 <header class="pub-header">
-  <div class="pub-row1">
+  <div class="pub-row1{% if not panel_family %} narrow{% endif %}">
     <a href="/admin" class="pub-logo"><img src="/static/branding/logo-icon.png" alt=""> Hatuli</a>
     <nav class="pub-nav">
       <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Карта</a>
@@ -265,7 +274,7 @@
 </header>
 {% endif %}
 
-<main class="main">
+<main class="main{% if not panel_family %} narrow{% endif %}">
 {% block content %}{% endblock %}
 </main>
 <script>

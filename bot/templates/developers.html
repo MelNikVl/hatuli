@@ -9,15 +9,22 @@
   ✅ — данные есть, ✕ — нет.
 </p>
 
-<form method="get" action="/admin/developers" style="margin-bottom:14px;display:flex;gap:8px;align-items:center;">
-  <label style="font-size:13px;color:#888;">Мин. активных объявлений:
-    <input type="number" name="min_active" value="{{ min_active }}" min="0" step="1"
-           style="width:80px;padding:6px 10px;margin-left:6px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;">
-  </label>
-  <button type="submit" style="padding:6px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">Показать</button>
-</form>
-
 <style>
+.dev-cards { display: flex; flex-wrap: wrap; gap: 1em; margin-bottom: 20px; }
+.dev-card {
+  flex: 1 1 calc(50% - 0.5em); min-width: 300px; max-width: calc(50% - 0.5em);
+  background: rgba(37, 99, 235, 0.07); border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden; text-decoration: none; color: inherit;
+  display: flex; flex-direction: column;
+}
+.dev-card:hover { border-color: #2563eb; }
+.dev-card .dev-card-photo { width: 100%; height: 160px; object-fit: cover; background: var(--bg); display: block; }
+.dev-card .dev-card-photo-empty { width: 100%; height: 160px; background: var(--bg); display: flex; align-items: center; justify-content: center; color: #888; font-size: 12px; }
+.dev-card .dev-card-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.dev-card .dev-card-head { display: flex; align-items: center; gap: 8px; }
+.dev-card .dev-card-head img { height: 26px; max-width: 80px; object-fit: contain; background: #fff; border-radius: 4px; padding: 2px 4px; border: 1px solid var(--border); }
+.dev-card .dev-card-name { font-weight: 700; font-size: 14.5px; }
+.dev-card .dev-card-count { font-size: 12.5px; color: #888; }
 .aud-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .aud-table th { text-align: left; color: #888; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 11.5px; text-transform: uppercase; position: sticky; top: 0; background: var(--surface); }
 .aud-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -27,15 +34,39 @@
 .aud-wrap { max-height: 80vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
 </style>
 
+{% if card_devs %}
+<div class="dev-cards">
+  {% for d in card_devs %}
+  <a class="dev-card" href="/admin/developer/{{ d.id }}">
+    {% if d.photo_url %}
+    <img class="dev-card-photo" src="{{ d.photo_url }}" alt="{{ d.name }}" loading="lazy">
+    {% else %}
+    <div class="dev-card-photo-empty">нет фото</div>
+    {% endif %}
+    <div class="dev-card-body">
+      <div class="dev-card-head">
+        {% if d.logo %}<img src="{{ d.logo }}" alt="">{% endif %}
+        <div class="dev-card-name">{{ d.name }}</div>
+      </div>
+      <div class="dev-card-count">🏢 {{ d.cx_cnt }} ЖК</div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
 <div class="aud-wrap">
 <table class="aud-table">
   <tr>
     <th>Застройщик</th><th>Активных объявл.</th><th>ЖК</th><th>Год основания</th>
     <th>Сайт</th><th>Описание</th><th>Рейтинг</th><th>Просрочки</th><th>Суд. дела</th><th>Homsters</th><th>Homeportal (КЖК)</th>
   </tr>
-  {% for d in developers %}
+  {% for d in table_devs %}
   <tr>
-    <td><a href="/admin/developer/{{ d.id }}" style="color:inherit;font-weight:600;">{{ d.name }}</a></td>
+    <td style="display:flex;align-items:center;gap:8px;">
+      {% if d.logo %}<img src="{{ d.logo }}" alt="" style="height:22px;max-width:70px;object-fit:contain;background:#fff;border-radius:4px;padding:2px 4px;border:1px solid var(--border);">{% endif %}
+      <a href="/admin/developer/{{ d.id }}" style="color:inherit;font-weight:600;">{{ d.name }}</a>
+    </td>
     <td>{{ d.active_cnt }}</td>
     <td>{{ d.cx_cnt }}</td>
     <td class="{{ 'aud-ok' if d.has_founded else 'aud-no' }}">{{ d.founded_year if d.has_founded else '✕' }}</td>
@@ -50,7 +81,7 @@
   {% endfor %}
 </table>
 </div>
-{% if not developers %}
-<p style="padding:30px;text-align:center;color:#888;">Застройщики не найдены{% if min_active %} с {{ min_active }}+ активными объявлениями{% endif %}.</p>
+{% if not card_devs and not table_devs %}
+<p style="padding:30px;text-align:center;color:#888;">Застройщики не найдены.</p>
 {% endif %}
 {% endblock %}

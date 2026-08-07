@@ -283,6 +283,27 @@ def make_extras_router(templates) -> APIRouter:
     # Доступно во всех шаблонах: {{ is_admin(request) }} — для скрытия
     # админ-элементов на публичных страницах
     templates.env.globals["is_admin"] = is_authed
+
+    # 3 уровня доступа (задача "надо разделить доступ к сайту на 3 уровня",
+    # 2026-08-07): admin — admin_auth cookie (как раньше, без изменений).
+    # subscriber — залогинен через Telegram (bot/core/site_auth.py,
+    # site_session cookie) — все объявления открыты, недоступна только
+    # админка. public — аноним: на карте только тепловые карты (полные
+    # данные) + топ-10 по каждой комнатности по скору + новостройки 5
+    # застройщиков (Свой дом/Sensata/BI/ORDA/Bazis, market_type=primary);
+    # в попапе объявления скрыт блок "похожие рядом".
+    PUBLIC_TIER_DEVELOPER_IDS = [72, 16, 1, 22, 9, 65, 71]  # Svoy Dom, Sensata, BI*, ORDA, Bazis
+
+    async def get_user_tier(request: Request) -> str:
+        if is_authed(request):
+            return "admin"
+        session = request.cookies.get("site_session")
+        if session:
+            from bot.core.site_auth import get_user_by_session
+            user = await get_user_by_session(session)
+            if user:
+                return "subscriber"
+        return "public"
     @router.get("/admin/analytics/hype", response_class=HTMLResponse)
     async def hype_page(request: Request):
         if not is_authed(request):
@@ -2464,6 +2485,14 @@ def make_extras_router(templates) -> APIRouter:
         # публичный (карта на главной без логина); coverage — только админу
         from bot.db.pg import fetch as pg_fetch, fetchval as pg_fetchval2
 
+        tier = await get_user_tier(request)
+        if tier == "public" and type == "rental":
+            # Публичному тиру аренда на карте не показываем вовсе (только
+            # тепловые карты, топ-10 по комнатности и новостройки — всё это
+            # про продажу; у аренды нет своего "топ-10 по скору", в таблице
+            # нет score-колонки вовсе).
+            return JSONResponse({"points": [], "mode": "rental", "count": 0, "no_geo": 0})
+
         if type == "rental":
             # У аренды нет своих координат — привязываем к центроиду ЖК
             # (по объявлениям продажи того же ЖК). Позиция приблизительная.
@@ -2573,6 +2602,38 @@ def make_extras_router(templates) -> APIRouter:
                 "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
                 "AND COALESCE(is_duplicate, FALSE) = FALSE AND lat IS NOT NULL") or 0
         conds, params, i = [], [], 1
+        if tier == "public":
+            # Публичный тир: игнорируем присланные фильтры по составу
+            # выдачи (комнатность/цена/метраж клиент передать может, но
+            # набор объявлений всё равно жёстко ограничен) — топ-10 по
+            # скору на каждую комнатность (по всему городу) + новостройки
+            # 5 застройщиков (Свой дом/Sensata/BI*/ORDA/Bazis,
+            # market_type='primary'). Считаем ОДИН раз тут же, не заводя
+            # отдельную копию форматирования ответа ниже — просто сужаем
+            # WHERE до этого набора id, остальной код endpoint'а не трогаем.
+            top10_rows = await pg_fetch("""
+                SELECT id FROM (
+                    SELECT id, ROW_NUMBER() OVER (
+                        PARTITION BY LEAST(COALESCE(rooms, 1), 4)
+                        ORDER BY (CASE WHEN market_type = 'primary' AND primary_score_total IS NOT NULL
+                                       THEN primary_score_total ELSE COALESCE(score_total, 0) END
+                                  + COALESCE(zone_bonus, 0) + COALESCE(layer_bonus, 0)
+                                  + COALESCE(price_drop_bonus, 0)) DESC) AS rn
+                    FROM apartment_listings
+                    WHERE lat IS NOT NULL AND is_active IS NOT FALSE
+                      AND COALESCE(is_duplicate, FALSE) = FALSE
+                      AND last_seen > now() - interval '14 days'
+                ) x WHERE rn <= 10
+            """)
+            newbuild_rows = await pg_fetch("""
+                SELECT a.id FROM apartment_listings a
+                JOIN complexes cx ON lower(trim(cx.name)) = lower(trim(a.complex_name))
+                WHERE cx.developer_id = ANY($1) AND a.market_type = 'primary'
+                  AND a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
+                  AND a.lat IS NOT NULL
+            """, PUBLIC_TIER_DEVELOPER_IDS)
+            allowed_ids = list({r["id"] for r in top10_rows} | {r["id"] for r in newbuild_rows})
+            conds.append(f"AND a.id = ANY(${i})"); params.append(allowed_ids or ["__none__"]); i += 1
         if rooms:
             room_list = [int(x) for x in rooms.split(',') if x.strip().isdigit()]
             if room_list:
@@ -3568,10 +3629,12 @@ def make_extras_router(templates) -> APIRouter:
     # ── Застройщики: список и карточка ────────────────────────────────────
 
     @router.get("/admin/developers", response_class=HTMLResponse)
-    async def developers_page(request: Request, min_active: int = 0):
-        """Таблица по всем застройщикам: сколько объектов и какие данные о
-        них известны (тот же формат, что и Аудит данных по ЖК) — фильтр по
-        числу активных объявлений, название ссылкой на карточку."""
+    async def developers_page(request: Request):
+        """Список застройщиков: крупные (>6 ЖК) — карточками с фото сверху,
+        остальные — таблицей снизу (тот же формат, что и Аудит данных по
+        ЖК). Фильтр "мин. активных объявлений" убран по запросу — страница
+        должна просто показывать всех, а не требовать сначала покрутить
+        фильтр."""
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT d.id, d.name, d.logo, d.founded_year, d.website, d.description,
@@ -3580,20 +3643,24 @@ def make_extras_router(templates) -> APIRouter:
                    d.court_cases_count, d.score_total, d.homsters_slug,
                    COUNT(c.id) AS cx_cnt,
                    COALESCE(SUM(c.listings_count), 0) AS active_cnt,
-                   COALESCE(SUM(c.sold_count), 0) AS sold_cnt
+                   COALESCE(SUM(c.sold_count), 0) AS sold_cnt,
+                   photo.photo_url
             FROM developers d
             LEFT JOIN complexes c ON c.developer_id = d.id
                                  AND COALESCE(c.is_street, FALSE) = FALSE
-            GROUP BY d.id
+            LEFT JOIN LATERAL (
+                SELECT c2.photo_url FROM complexes c2
+                WHERE c2.developer_id = d.id AND c2.photo_url IS NOT NULL
+                  AND COALESCE(c2.is_street, FALSE) = FALSE
+                ORDER BY COALESCE(c2.listings_count, 0) DESC LIMIT 1
+            ) photo ON TRUE
+            GROUP BY d.id, photo.photo_url
             ORDER BY active_cnt DESC, cx_cnt DESC, d.name
         """)
-        out = []
+        card_devs, table_devs = [], []
         for r in rows:
             d = dict(r)
-            if d["active_cnt"] < min_active:
-                continue
-            out.append({
-                **d,
+            d.update({
                 "has_founded": d["founded_year"] is not None,
                 "has_website": bool(d["website"]),
                 "has_description": bool(d["description"]),
@@ -3601,11 +3668,12 @@ def make_extras_router(templates) -> APIRouter:
                 "has_homsters": bool(d["homsters_slug"]),
                 "has_delay_data": d["avg_delay_months"] is not None,
             })
+            (card_devs if d["cx_cnt"] > 6 else table_devs).append(d)
         return templates.TemplateResponse("developers.html", {
             "request": request,
-            "developers": out,
-            "total": len(out),
-            "min_active": min_active,
+            "card_devs": card_devs,
+            "table_devs": table_devs,
+            "total": len(rows),
         })
 
     @router.get("/admin/developer/{dev_id}", response_class=HTMLResponse)
@@ -3721,7 +3789,13 @@ def make_extras_router(templates) -> APIRouter:
         from bot.core.listing_intel import build_negotiation_points, build_seller_questions, compute_similar_listings
         negotiation_points = build_negotiation_points(l, bargain, len(comps))
         seller_questions = build_seller_questions(l)
-        similar_listings = await compute_similar_listings(l, listing_id, limit=10)
+        tier = await get_user_tier(request)
+        # Публичному тиру не показываем "похожие рядом" (карта+список) —
+        # ни в попапе с карты, ни в попапе, открытом через "вставить ссылку
+        # с Крыши" (задача "3 уровня доступа", 2026-08-07). Не считаем
+        # вовсе, а не просто прячем в шаблоне — не тратим время на compute
+        # для тира, которому это всё равно не покажется.
+        similar_listings = [] if tier == "public" else await compute_similar_listings(l, listing_id, limit=10)
 
         layers = l.get("layer_details")
         if isinstance(layers, str):
@@ -3804,6 +3878,7 @@ def make_extras_router(templates) -> APIRouter:
             "kitchen_area": float(l["kitchen_area"]) if l.get("kitchen_area") is not None else None,
             "ai_analysis": ai_analysis,
             "similar": similar_listings,
+            "tier": tier,
             "layers": layers,
             "description": l.get("description") or "",
             "first_seen": l["first_seen"].strftime("%d.%m.%Y") if l.get("first_seen") else None,

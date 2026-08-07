@@ -5,7 +5,12 @@
   {% if cx.live_url %}<a href="{{ cx.live_url }}" target="_blank" style="display:inline-block;font-size:13px;font-weight:800;padding:6px 14px;border-radius:8px;background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;text-decoration:none;margin-left:8px;box-shadow:0 2px 6px rgba(220,38,38,.35);">🔴 Прямая трансляция</a>{% endif %}
   {% if developer %}<small style="font-size:14px;font-weight:800;">· 🏗 Застройщик {% if developer_logo %}<img src="{{ developer_logo }}" alt="" style="height:20px;max-width:80px;object-fit:contain;background:#fff;border-radius:4px;padding:1px 4px;vertical-align:middle;margin-right:4px;">{% endif %}{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer }}</span>{% endif %}</small>{% endif %}
   <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% elif cx.housing_class_estimate %} · {{ cx.housing_class_estimate }}{% endif %}</small>
+  {% if cx.description %}
+  <div style="margin-top:10px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-left:3px solid #eab308;border-radius:8px;font-size:13px;line-height:1.55;color:var(--text);">
+    <span style="font-weight:700;color:#eab308;">📝 Описание ЖК</span>
+    <div style="margin-top:4px;">{{ cx.description }}</div>
   </div>
+  {% endif %}</div>
 <script>
 (async function() {
   const star = document.getElementById('cx-fav-star');
@@ -90,7 +95,7 @@ async function toggleFavComplex() {
 <!-- Верх страницы: фото слева / описание справа, по 600px — это ВСЁ, что
      выше сгиба. Карта, объявления, графики и остальное — отдельным блоком ниже. -->
 <style>
-.cx-hero { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; align-items:stretch; }
+.cx-hero { display:grid; grid-template-columns:3fr 1fr; gap:16px; margin-bottom:16px; align-items:stretch; }
 .cx-hero .cx-col-card { height:600px; overflow-y:auto; }
 @media (max-width:1150px) { .cx-hero { grid-template-columns:1fr; } .cx-hero .cx-col-card { height:auto; max-height:600px; } }
 .cx-col-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
@@ -181,12 +186,9 @@ async function toggleFavComplex() {
 
   <div id="cx-card-desc" class="cx-col-card">
     <b style="font-size:15px;">📝 Описание</b>
-    {% if cx.description %}
-    <div style="font-size:13.5px;line-height:1.6;margin-top:8px;">{{ cx.description }}</div>
-    {% endif %}
     {% if cx.notes or cx.residents_notes %}
     <div style="font-size:13.5px;line-height:1.6;margin-top:8px;white-space:pre-wrap;">{{ cx.notes or cx.residents_notes }}</div>
-    {% elif not cx.description %}
+    {% else %}
     <div style="font-size:12.5px;color:#888;margin-top:4px;">Отдельного маркетингового описания у нас пока нет (Korter/Homster не отдают текст со страниц списка) — ниже сводка по характеристикам, которые уже удалось собрать.</div>
     {% endif %}
     <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">

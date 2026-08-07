@@ -185,6 +185,19 @@ html, body { overflow: hidden !important; }
     <div class="bar-track"><div id="load-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:3px;transition:width .2s ease;"></div></div>
     <span id="load-progress-pct"></span>
   </div>
+
+  <!-- Быстрый просмотр по ссылке с Крыши — доступен во всех режимах
+       (админ/подписчик/публичный), крайним справа в строке фильтров.
+       Открывает наш попап объявления (лукап по id, вырезанному regex'ом
+       из ссылки) — для публичного тира тот же попап без "похожих рядом"
+       (см. isPublicTier в openDetailModal). -->
+  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+    <input type="text" id="krisha-url-input" placeholder="Вставьте ссылку с Крыши"
+           style="padding:6.7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text);font-size:12px;width:190px;"
+           onkeydown="if(event.key==='Enter') lookupKrishaUrl();">
+    <button type="button" onclick="lookupKrishaUrl()"
+            style="padding:6.7px 14px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Показать</button>
+  </div>
 </div>
 
 <!-- Попап "Ещё фильтры" — те же поля и id, что были в сайдбаре раньше, JS ниже не менялся -->
@@ -289,6 +302,18 @@ function onRoomsCheckboxChange() {
   applyFilters();
 }
 function openMoreFilters() { document.getElementById('more-filters-overlay').style.display = 'flex'; }
+
+// "Вставить ссылку с Крыши -> Показать" — крайний правый блок в строке
+// фильтров, работает во всех тирах доступа (задача "3 уровня доступа",
+// 2026-08-07). Принимает и полный URL (krisha.kz/a/show/12345678), и
+// голый id — вырезаем первую цифровую последовательность из 5+ цифр.
+function lookupKrishaUrl() {
+  const input = document.getElementById('krisha-url-input');
+  if (!input) return;
+  const m = (input.value || '').match(/(\d{5,})/);
+  if (!m) { alert('Не нашёл номер объявления в ссылке — вставьте ссылку вида krisha.kz/a/show/123456789'); return; }
+  openDetailModal(m[1]);
+}
 function closeMoreFilters() { document.getElementById('more-filters-overlay').style.display = 'none'; }
 </script>
 
@@ -2838,10 +2863,32 @@ function modalGoTo(idx, ev) {
   if (n) n.textContent = (modalPhotoIdx + 1) + '/' + modalPhotos.length;
 }
 
-function switchKeplerPanel(kind) {
-  const frame = document.getElementById('kepler-modal-frame');
-  if (!frame || !window._keplerUrls) return;
-  frame.src = kind === 'rental' ? window._keplerUrls.rental : window._keplerUrls.sale;
+// Мини тепловая карта цен в попапе объявления — раньше был iframe на
+// внешний kepler.gl/demo (медленно грузился, чужой стиль, левую панель
+// приходилось кадрировать CSS-обрезкой). Теперь свой Leaflet + те же
+// hexBucket/priceHeatColor/hexCorners, что и на главной карте (задача
+// "переливающаяся от зелёной до красной" тепловая карта цен) — тот же
+// визуальный язык, без внешней зависимости. Данные — /admin/api/geo-sales
+// .geojson и /admin/api/geo-rentals.geojson, уже обрезанные bbox'ом
+// вокруг lat/lon объявления (radius_km=1.2), как раньше для kepler.
+let modalHeatMap = null, modalHeatLayer = null, modalHeatCenter = null;
+function initModalPriceHeat(d) {
+  // Попап каждого объявления пересобирает свой innerHTML заново (см.
+  // modalSimilarMap рядом) — старый Leaflet-инстанс, если был, привязан
+  // к уже удалённому <div>, поэтому всегда пересоздаём, а не переиспользуем.
+  if (modalHeatMap) { modalHeatMap.remove(); modalHeatMap = null; modalHeatLayer = null; }
+  if (!(d.lat && d.lon)) return;
+  modalHeatCenter = {lat: d.lat, lon: d.lon};
+  const el = document.getElementById('modal-price-heat-map');
+  if (!el) return;
+  modalHeatMap = L.map('modal-price-heat-map', {zoomControl: false})
+    .setView([modalHeatCenter.lat, modalHeatCenter.lon], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(modalHeatMap);
+  L.marker([modalHeatCenter.lat, modalHeatCenter.lon]).addTo(modalHeatMap);
+  loadModalPriceHeat('sale');
+}
+async function loadModalPriceHeat(kind) {
+  if (!modalHeatCenter || !modalHeatMap) return;
   const bSale = document.getElementById('kepler-btn-sale'), bRent = document.getElementById('kepler-btn-rental');
   if (bSale && bRent) {
     bSale.style.background = kind === 'sale' ? '#2563eb' : 'var(--bg)';
@@ -2849,6 +2896,30 @@ function switchKeplerPanel(kind) {
     bRent.style.background = kind === 'rental' ? '#2563eb' : 'var(--bg)';
     bRent.style.color = kind === 'rental' ? '#fff' : 'var(--text)';
   }
+  if (modalHeatLayer) { modalHeatMap.removeLayer(modalHeatLayer); modalHeatLayer = null; }
+  const url = (kind === 'rental' ? '/admin/api/geo-rentals.geojson' : '/admin/api/geo-sales.geojson')
+    + `?lat=${modalHeatCenter.lat}&lon=${modalHeatCenter.lon}&radius_km=1.2`;
+  let geo;
+  try { geo = await fetch(url).then(r => r.json()); } catch (e) { return; }
+  const points = (geo.features || [])
+    .map(f => ({lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], price: f.properties.price}))
+    .filter(p => p.price > 0);
+  modalHeatLayer = L.layerGroup();
+  const buckets = hexBucket(points, p => [p.lat, p.lon], 100);
+  const medians = [];
+  buckets.forEach(b => { b.value = median(b.items.map(i => i.price)); medians.push(b.value); });
+  if (medians.length) {
+    const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
+    buckets.forEach(b => {
+      const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
+      const priceTxt = b.value >= 1e6 ? (b.value/1e6).toFixed(1) + ' М' : (b.value/1e3).toFixed(0) + 'K';
+      L.polygon(hexCorners(b.q, b.r, 100), {
+        color: '#fff', weight: 0.5, fillColor: priceHeatColor(t), fillOpacity: 0.62,
+      }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.`, {sticky: true}).addTo(modalHeatLayer);
+    });
+  }
+  modalHeatLayer.addTo(modalHeatMap);
+  setTimeout(() => modalHeatMap && modalHeatMap.invalidateSize(), 60);
 }
 
 function openDetailModal(id, ev, scrollToScore) {
@@ -2976,47 +3047,21 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
 </div>` : '';
 
     // Task 5: мини-панель Kepler.gl — тепловая карта цен по району вокруг
-    // текущего ЖК (Продажа/Аренда). Тот же приём, что и "песочница Kepler"
-    // на /admin/analytics/heatmaps (_geo_body.html, GEO_KEpler_URL) — iframe
-    // на публичный kepler.gl/demo с mapUrl на наш geojson-эндпоинт, но здесь
-    // geojson уже обрезан bbox'ом вокруг lat/lon объявления (radius_km=1.2),
-    // так что Kepler сам зумится на нужный район без доп. конфига.
-    // Полноценный live-swap слоя внутри одного открытого iframe (без перезагрузки)
-    // потребовал бы postMessage-протокола, которого публичный demo kepler.gl не
-    // предоставляет — поэтому переключение "Продажа/Аренда" делает src iframe.
-    const keplerPanelHtml = (d.lat && d.lon) ? (() => {
-      // /admin/api/geo-kepler.json — не голый geojson, а полноценный
-      // экспортированный kepler.gl map-файл (данные + config): задаёт
-      // heatmap-слой вместо дефолтных точек и светлый mapStyle вместо
-      // тёмного (раньше kepler.gl/demo игнорировал любые query-параметры
-      // конфига — readOnly/config= — эмпирически подтверждено, что грузить
-      // конфиг он умеет только ВНУТРИ файла, на который указывает mapUrl).
-      const saleUrl = 'https://kepler.gl/demo/map?mapUrl=' + encodeURIComponent(
-        `https://hatuli.ai-groundtruth.com/admin/api/geo-kepler.json?type=sale&lat=${d.lat}&lon=${d.lon}&radius_km=1.2`);
-      const rentUrl = 'https://kepler.gl/demo/map?mapUrl=' + encodeURIComponent(
-        `https://hatuli.ai-groundtruth.com/admin/api/geo-kepler.json?type=rental&lat=${d.lat}&lon=${d.lon}&radius_km=1.2`);
-      window._keplerUrls = {sale: saleUrl, rental: rentUrl};
-      return `
+    // текущего ЖК (Продажа/Аренда). Раньше был iframe на внешний kepler.gl/
+    // demo (см. git history) — теперь свой Leaflet + приёмы главной карты
+    // (initModalPriceHeat/loadModalPriceHeat выше), без внешней зависимости
+    // и без CSS-кадрирования чужой левой панели.
+    const keplerPanelHtml = (d.lat && d.lon) ? `
 <div style="margin:14px 22px 0;">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-    <div style="font-size:12px;color:var(--text);font-weight:700;">🗺 Тепловая карта цен по району (Kepler.gl)</div>
+    <div style="font-size:12px;color:var(--text);font-weight:700;">🗺 Тепловая карта цен по району</div>
     <div style="display:flex;gap:6px;">
-      <button type="button" id="kepler-btn-sale" onclick="switchKeplerPanel('sale')" style="padding:4px 12px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;">Продажа</button>
-      <button type="button" id="kepler-btn-rental" onclick="switchKeplerPanel('rental')" style="padding:4px 12px;border:none;border-radius:6px;background:var(--bg);color:var(--text);font-weight:700;font-size:11.5px;cursor:pointer;">Аренда</button>
+      <button type="button" id="kepler-btn-sale" onclick="loadModalPriceHeat('sale')" style="padding:4px 12px;border:none;border-radius:6px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;">Продажа</button>
+      <button type="button" id="kepler-btn-rental" onclick="loadModalPriceHeat('rental')" style="padding:4px 12px;border:none;border-radius:6px;background:var(--bg);color:var(--text);font-weight:700;font-size:11.5px;cursor:pointer;">Аренда</button>
     </div>
   </div>
-  <div style="position:relative;width:100%;height:320px;border-radius:10px;overflow:hidden;border:1px solid var(--border);">
-    <!-- kepler.gl/demo — публичный внешний сайт, у него нет рабочего URL-параметра,
-         чтобы спрятать его собственную левую панель (проверено: readOnly=true и
-         config= в query игнорируются приложением). Кадрируем iframe по ширине
-         панели (~330px, side-panel--container в их DOM) — визуально прячем меню,
-         сама панель по-прежнему существует внутри iframe, просто вне видимой области. -->
-    <iframe id="kepler-modal-frame" src="${saleUrl}"
-            style="position:absolute;top:0;left:-330px;width:calc(100% + 330px);height:100%;border:none;"
-            allowfullscreen loading="lazy"></iframe>
-  </div>
-</div>`;
-    })() : '';
+  <div id="modal-price-heat-map" style="width:100%;height:320px;border-radius:10px;overflow:hidden;border:1px solid var(--border);"></div>
+</div>` : '';
 
     const scoreSectionHtml = (scoreBarsHtml || dealScoreHtml) ? `
 <div id="modal-score-section" style="margin:14px 22px 0;display:flex;gap:20px;flex-wrap:wrap;">
@@ -3036,13 +3081,20 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
     // Карта "похожие + гексагоны" (как на странице объявления) вместо
     // старой горизонтальной ленты по прямому расстоянию — см.
     // initModalSimilarMap ниже, отрисовывается после вставки innerHTML.
-    const similarMapHtml = (d.lat != null && d.lon != null) ? `
+    // Публичному тиру (d.tier из /admin/api/listing/{id}) блок не
+    // показываем вовсе — ни карту, ни список (задача "3 уровня доступа").
+    const isPublicTier = d.tier === 'public';
+    const similarMapHtml = (!isPublicTier && d.lat != null && d.lon != null) ? `
 <div style="margin-top:20px;padding:14px 22px 0;border-top:1px solid var(--border);">
   <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">📍 Похожие варианты рядом (${(d.similar||[]).length}) — похожая цена и метраж ±7 м²</div>
   <div style="position:relative;">
     <div id="modal-similar-map" style="height:360px;border-radius:10px;"></div>
     <button onclick="toggleModalHex()" id="modal-hex-btn" type="button" style="position:absolute;right:8px;top:8px;z-index:1000;background:#fff;color:#333;font-weight:700;font-size:12px;padding:7px 12px;border-radius:7px;border:none;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.4);">⬡ Гексагоны</button>
   </div>
+</div>` : '';
+    const krishaSourceFooterHtml = isPublicTier ? `
+<div style="margin:18px 22px 0;padding:10px 14px;background:var(--bg);border-radius:8px;font-size:11.5px;color:#888;text-align:center;">
+  Данные взяты с <a href="${d.url || 'https://krisha.kz'}" target="_blank" rel="noopener" style="color:#2563eb;">Крыша.kz</a>
 </div>` : '';
 
     const layerIcons = {noise:'🔊', schools:'🏫', transit:'🚌', amenities:'🛒', parks:'🌳', banks:'🏦', layout:'🏠'};
@@ -3136,6 +3188,7 @@ ${(d.seller_questions && d.seller_questions.length) ? `
 </div>` : ''}
 ${locationLayersHtml}
 ${similarMapHtml}
+${krishaSourceFooterHtml}
 <details style="margin:18px 22px 0;">
   <summary style="cursor:pointer;font-size:14px;color:var(--text);font-weight:700;">🚦 Карта района — проверить пробки</summary>
   <div style="margin-top:8px;">
@@ -3155,7 +3208,8 @@ ${similarMapHtml}
       if (mainImg) mainImg.onclick = () => { carIdx[id] = modalPhotoIdx; openLightbox(id, event); };
     }
 
-    if (d.lat != null && d.lon != null) initModalSimilarMap(d, id);
+    if (!isPublicTier && d.lat != null && d.lon != null) initModalSimilarMap(d, id);
+    initModalPriceHeat(d);
     initMortgageBlockToggle(id);
 
     if (scrollToScore) {
