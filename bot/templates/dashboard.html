@@ -169,6 +169,7 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="population" onclick="toggleHeat('population')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">👥 Плотность нас.</button>
         <button type="button" class="heat-btn" data-mode="count" onclick="toggleHeat('count')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔢 Кол-во объявлений</button>
         <button type="button" class="heat-btn" data-mode="demolition" onclick="toggleHeat('demolition')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🏚 Снос домов</button>
+        <button type="button" class="heat-btn" data-mode="crime" onclick="toggleHeat('crime')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🚨 Преступность</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
         <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
@@ -2283,6 +2284,38 @@ function drawPopulationHeat(hexes) {
   });
 }
 
+// Преступность (см. задачу "тепловая карта преступности", krisha.kz/ms/geodata/crime
+// -> crime_incidents -> /admin/api/crime-hexes) — тот же визуальный подход,
+// что у плотности населения (плавная градиентная шкала + гамма-коррекция,
+// не сырые точки) по просьбе "все тепловые карты сделай по примеру карт
+// плотности населения и транспортной доступности — они красивые, аккуратные".
+const CRIME_STOPS = [
+  [255,255,235], [254,215,170], [252,165,116], [239,68,68], [153,27,27],
+];
+const CRIME_GAMMA = 1.6;
+function crimeColor(t) {
+  t = Math.max(0, Math.min(1, Math.pow(t, CRIME_GAMMA)));
+  const n = CRIME_STOPS.length - 1;
+  const pos = t * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const frac = pos - i;
+  const from = CRIME_STOPS[i], to = CRIME_STOPS[i + 1];
+  const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function drawCrimeHeat(hexes) {
+  const vals = (hexes || []).map(h => h.score).filter(v => v > 0);
+  if (!vals.length) return;
+  (hexes || []).forEach(h => {
+    const t = Math.max(0, Math.min(1, h.score));
+    const tGamma = Math.pow(t, CRIME_GAMMA);
+    L.polygon(transportHexCorners(h.lat, h.lon, 150), {
+      color: 'transparent', weight: 0, fillColor: crimeColor(t), fillOpacity: 0.3 + tGamma * 0.5,
+    }).bindTooltip(`🚨 происшествий: ${h.count}`, {sticky:true})
+      .addTo(heatLayer);
+  });
+}
+
 // Количество объявлений на гекс (Task 4) — свой рендеринг (не deck.gl), та же сетка, что и цены/аренда (HEAT_EDGE_M, hexBucket).
 const COUNT_STOPS = [[224,242,254],[125,211,252],[37,99,235],[30,58,138]];
 function listingCountColor(t) {
@@ -2321,29 +2354,43 @@ function drawPriceHeat(points, archivedPoints) {
   const medians = [];
   buckets.forEach(b => { b.value = median(b.items.map(i => i.price)); medians.push(b.value); });
   if (!medians.length) return;
-  // Дыры на карте: ЖК виден (кружок слоя ЖК), а гекса цены под ним нет —
-  // потому что в этой конкретной ячейке ноль активных (и архивных)
-  // объявлений с ценой. Это реальная нехватка данных, не баг рендера — но
-  // если у пустой ячейки есть хотя бы 2 соседа с данными, по методичке
-  // "тепловая карта доходности" (тот же принцип для доходности,
-  // применяем и тут) заполняем её средним соседей вместо дырки — с честной
-  // пометкой в тултипе и приглушённым стилем, чтобы не путать с реальным
-  // замером.
+  // Дыры на карте ("проплешины" — просили сделать карты цен такими же
+  // гладкими, как карта плотности населения/транспорта): раньше дырка
+  // заполнялась только если у неё было ≥2 ЗАПОЛНЕННЫХ соседа за один
+  // проход — рядом с краем застройки или в редкой зоне дыры в 2-3 гекса
+  // подряд оставались пустыми (соседей с данными недостаточно). Теперь —
+  // несколько раундов подряд (BFS от реальных данных наружу, макс. 4
+  // кольца ~240-360м): каждый раунд использует как реальные, так и уже
+  // интерполированные на ПРЕДЫДУЩЕМ раунде ячейки как источник, значение
+  // — среднее соседей, взвешенное 1/(1+кольцо) (дальше от реальных данных
+  // — меньше веса, значение размывается к среднему по больше расстоянию).
+  // Население/транспорт гладкие по той же причине — их значение считается
+  // как непрерывная функция расстояния, а не только от соседей вплотную.
   const filledKeys = new Set(buckets.keys());
   const interpolated = [];
-  buckets.forEach(b => {
-    hexNeighborsAxial(b.q, b.r).forEach(([nq, nr]) => {
-      const key = nq + ':' + nr;
-      if (filledKeys.has(key)) return;
-      filledKeys.add(key);  // не пытаемся заполнить одну и ту же дырку дважды
-      const neighborVals = hexNeighborsAxial(nq, nr)
-        .map(([q2, r2]) => buckets.get(q2 + ':' + r2))
-        .filter(Boolean);
-      if (neighborVals.length < 2) return;
-      const avg = neighborVals.reduce((s, nb) => s + nb.value, 0) / neighborVals.length;
-      interpolated.push({q: nq, r: nr, value: avg, items: [], isInterpolated: true, neighborCount: neighborVals.length});
+  let frontier = new Map(buckets);  // ячейки, добавленные на предыдущем раунде
+  const MAX_RINGS = 4;
+  for (let ring = 1; ring <= MAX_RINGS && frontier.size; ring++) {
+    const nextFrontier = new Map();
+    frontier.forEach(b => {
+      hexNeighborsAxial(b.q, b.r).forEach(([nq, nr]) => {
+        const key = nq + ':' + nr;
+        if (filledKeys.has(key)) return;
+        const neighborVals = hexNeighborsAxial(nq, nr)
+          .map(([q2, r2]) => buckets.get(q2 + ':' + r2) || nextFrontier.get(q2 + ':' + r2)
+                              || interpolated.find(x => x.q === q2 && x.r === r2))
+          .filter(Boolean);
+        if (!neighborVals.length) return;
+        const w = 1 / (1 + ring);
+        const avg = neighborVals.reduce((s, nb) => s + nb.value, 0) / neighborVals.length;
+        const cell = {q: nq, r: nr, value: avg, items: [], isInterpolated: true, neighborCount: neighborVals.length, ring, opacity: w};
+        nextFrontier.set(key, cell);
+        filledKeys.add(key);
+      });
     });
-  });
+    nextFrontier.forEach(c => interpolated.push(c));
+    frontier = nextFrontier;
+  }
   const allCells = [...buckets.values(), ...interpolated];
   const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
   allCells.forEach(b => {
@@ -2358,12 +2405,16 @@ function drawPriceHeat(points, archivedPoints) {
       return `${rm}к: ${t2}`;
     }).join(' · ');
     const archNote = b.isArchived ? ' (по последним продажам, архив)' : '';
-    const interpNote = b.isInterpolated ? ` (оценка по ${b.neighborCount} соседним ячейкам, своих объявлений нет)` : '';
+    const interpNote = b.isInterpolated ? ` (оценка по соседним ячейкам${b.ring > 1 ? ', ' + b.ring + '-е кольцо от реальных данных' : ''}, своих объявлений нет)` : '';
+    // Интерполированные ячейки бледнеют с кольцом (b.opacity, 1/(1+ring)) —
+    // ближе к реальным данным виднее, дальше растворяются в фон, а не
+    // резко обрываются на границе одного кольца (раньше interpolated было
+    // всегда 0.16 независимо от удалённости).
     L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
       color: b.isArchived ? '#8b5cf6' : (b.isInterpolated ? '#94a3b8' : '#fff'),
       weight: (b.isArchived || b.isInterpolated) ? 1.2 : 0.5,
       dashArray: (b.isArchived || b.isInterpolated) ? '3,3' : null,
-      fillColor: heatColor(t), fillOpacity: b.isInterpolated ? 0.16 : 0.3,  // дефолт цены — 30% (было 38.5%), интерполяция бледнее
+      fillColor: heatColor(t), fillOpacity: b.isInterpolated ? Math.max(0.08, 0.22 * (b.opacity ?? 1)) : 0.3,
     }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${interpNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatLayer);
   });
 }
@@ -2653,6 +2704,9 @@ async function loadHeatData(mode) {
   } else if (mode === 'demolition') {
     const d = await fetch('/admin/api/demolition-points').then(r => r.json());
     heatCache.demolition = d.points || [];
+  } else if (mode === 'crime') {
+    const d = await fetch('/admin/api/crime-hexes').then(r => r.json());
+    heatCache.crime = d.hexes || [];
   }
   return heatCache[mode];
 }
@@ -2738,6 +2792,8 @@ async function toggleHeat(mode) {
     drawListingCountHeat(data);
   } else if (mode === 'demolition') {
     drawDemolitionHeat(data);
+  } else if (mode === 'crime') {
+    drawCrimeHeat(data);
   }
 }
 

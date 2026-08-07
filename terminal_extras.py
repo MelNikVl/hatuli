@@ -540,6 +540,45 @@ def make_extras_router(templates) -> APIRouter:
             })
         return JSONResponse({"points": points})
 
+    @router.get("/admin/api/crime-hexes")
+    async def crime_hexes_api(request: Request, days: int | None = None):
+        """Тепловая карта преступности (см. задачу) — krisha.kz/ms/geodata/crime,
+        собрано в crime_incidents (crime_collect.py). Гексы 150м (та же
+        сетка-подход, что и population/transport-hexes) — сырых точек за
+        2+ года набирается тысячи, гексы читаемее и легче для карты.
+        days — опциональное окно (последние N дней), по умолчанию вся история."""
+        from bot.db.pg import fetch as pg_fetch
+        from bot.core.hexgrid import hex_id, hex_center
+        where = "1=1"
+        params: list = []
+        if days:
+            where = "date_excitation >= (now() - ($1 || ' days')::interval)::date"
+            params.append(str(days))
+        rows = await pg_fetch(f"""
+            SELECT lat, lon, hard_code FROM crime_incidents WHERE {where}
+        """, *params)
+        if not rows:
+            return JSONResponse({"hexes": []})
+        EDGE_M = 150.0
+        cells: dict[str, dict] = {}
+        # hard_code — категория 0-4 (похоже, тяжесть) — используем как вес,
+        # тяжкие происшествия весят больше в скоре гекса, чем мелкие.
+        for r in rows:
+            hid = hex_id(float(r["lat"]), float(r["lon"]), EDGE_M)
+            cell = cells.setdefault(hid, {"count": 0, "weight": 0.0})
+            cell["count"] += 1
+            cell["weight"] += 1.0 + 0.5 * (r["hard_code"] or 0)
+        max_w = max(c["weight"] for c in cells.values()) or 1.0
+        hexes = []
+        for hid, cell in cells.items():
+            clat, clon = hex_center(hid, EDGE_M)
+            hexes.append({
+                "lat": clat, "lon": clon, "count": cell["count"],
+                "score": round(cell["weight"] / max_w, 4),
+            })
+        hexes.sort(key=lambda h: h["score"], reverse=True)
+        return JSONResponse({"hexes": hexes})
+
     @router.get("/admin/api/population-hexes")
     async def population_hexes_api(request: Request):
         # Оценка плотности населения по гексам (100м, та же сетка, что и
