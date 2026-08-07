@@ -1,10 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="page-title" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-  <span>🏗 Застройщик {{ dev.name }}
-  <small style="font-size:13px;color:#888;font-weight:400;">
-    {% if dev.founded_year %}основан {{ dev.founded_year }} · {% endif %}{{ complexes|length }} ЖК в базе
-  </small></span>
+  <span style="display:flex;align-items:center;gap:12px;">
+    {% if dev.logo %}<img src="{{ dev.logo }}" alt="{{ dev.name }}" style="height:36px;max-width:140px;object-fit:contain;background:#fff;border-radius:8px;padding:4px 8px;border:1px solid var(--border);">{% endif %}
+    <span>🏗 Застройщик {{ dev.name }}
+    <small style="font-size:13px;color:#888;font-weight:400;">
+      {% if dev.founded_year %}основан {{ dev.founded_year }} · {% endif %}{{ complexes|length }} ЖК в базе
+    </small></span>
+  </span>
   {% if dev.website %}<a href="{{ dev.website }}" target="_blank" style="font-size:14px;font-weight:700;padding:8px 16px;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;">🌐 Сайт застройщика ↗</a>{% endif %}
 </div>
 <style>
@@ -20,9 +23,26 @@ tr:last-child td{border-bottom:none}
   <table style="font-size:14px;border-collapse:collapse;box-shadow:none;background:none;">
     {% if dev.founded_year %}<tr><td style="padding:5px 14px 5px 0;color:#888;width:200px;border:none;">Год основания</td><td style="border:none;"><b>{{ dev.founded_year }}</b></td></tr>{% endif %}
     {% if dev.projects_active %}<tr><td style="padding:5px 14px 5px 0;color:#888;border:none;">Доступных объектов</td><td style="border:none;"><b>{{ dev.projects_active }}</b>{% if dev.projects_total %}<span style="color:#888;font-size:12px;"> · {{ dev.projects_total }} ЖК в продаже по Казахстану</span>{% endif %}</td></tr>{% endif %}
-    {% if dev.website %}<tr><td style="padding:5px 14px 5px 0;color:#888;border:none;">Сайт</td><td style="border:none;"><a href="{{ dev.website }}" target="_blank">{{ dev.website }}</a></td></tr>{% endif %}
   </table>
   {% if dev.description %}<p style="font-size:13px;color:#888;margin:10px 0 0;line-height:1.55;">{{ dev.description }}</p>{% endif %}
+
+  {% if dev.score_total is not none or dev.has_court_cases or dev.notes %}
+  <div style="margin-top:14px;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface);">
+    {% if dev.score_total is not none %}
+    <div style="font-size:13px;margin-bottom:6px;">
+      <span style="color:#888;">Рейтинг надёжности:</span>
+      <b style="color:{% if dev.score_total >= 5 %}#22c55e{% elif dev.score_total >= 4 %}#eab308{% elif dev.score_total >= 3 %}#f97316{% else %}#ef4444{% endif %};">{{ '★' * dev.score_total }}{{ '☆' * (5 - dev.score_total) }}</b>
+      <span style="color:#888;font-size:11.5px;"> ({{ dev.score_total }}/5, на основе отзывов, сроков сдачи и судебной истории)</span>
+    </div>
+    {% endif %}
+    {% if dev.has_court_cases %}
+    <div style="font-size:13px;margin-bottom:6px;color:#ef4444;font-weight:700;">⚠️ Зафиксированы судебные споры ({{ dev.court_cases_count or '?' }})</div>
+    {% endif %}
+    {% if dev.notes %}
+    <div style="font-size:12.5px;line-height:1.55;color:var(--text);">{{ dev.notes }}</div>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 
 {% if hp_contact %}
@@ -37,7 +57,7 @@ tr:last-child td{border-bottom:none}
 {% endif %}
 
 {% if hp_projects %}
-<div class="page-title" style="font-size:16px;">Проекты застройщика по данным homeportal.kz ({{ hp_projects|length }})</div>
+<div class="page-title" style="font-size:16px;">Проекты ({{ hp_projects|length }})</div>
 <div class="dev-card">
   <table style="font-size:13px;">
     <tr><th>Название (homeportal)</th><th>ЖК на Hatuli</th><th>Этажность</th><th>Квартир</th><th>Срок сдачи</th></tr>
@@ -58,33 +78,33 @@ tr:last-child td{border-bottom:none}
 {% if complexes %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
-  <div style="order:1;flex:1 1 420px;min-width:300px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;">
-    <div id="dev-map" style="aspect-ratio:1/1;width:100%;border-radius:8px;"></div>
-  </div>
-  <div style="order:2;flex:1 1 380px;min-width:300px;max-height:calc(100vh - 240px);overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;align-content:start;">
-    {% for c in complexes %}
-    <a href="/admin/complex/{{ c.id }}" style="display:block;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;color:inherit;text-decoration:none;">
-      {% if c.photo_url %}
-      <img src="{{ c.photo_url }}" loading="lazy" style="width:100%;height:140px;object-fit:cover;display:block;">
-      {% else %}
-      <div style="width:100%;height:140px;background:var(--bg);display:flex;align-items:center;justify-content:center;color:#555;font-size:28px;">🏢</div>
-      {% endif %}
-      <div style="padding:10px 12px;">
-        <div style="font-weight:700;font-size:14px;margin-bottom:2px;">{{ c.name }}</div>
-        <div style="font-size:12px;color:#888;margin-bottom:6px;">📍 {{ c.address or c.district or '—' }}</div>
-        <div style="font-size:12px;display:flex;flex-wrap:wrap;gap:6px;color:#aaa;">
-          {% if c.year_built %}<span>{{ c.year_built }} г.</span>{% endif %}
-          {% if c.housing_class %}<span>· {{ c.housing_class }}</span>{% endif %}
-          <span>· в продаже {{ c.active_cnt }}</span>
-          <span>· продано {{ c.sold_cnt }}</span>
-        </div>
-        {% if c.avg_price_m2 %}<div style="font-size:12.5px;margin-top:4px;">{{ '{:,.0f}'.format(c.avg_price_m2).replace(',', ' ') }} ₸/м²</div>{% endif %}
-        {% if c.avg_days_to_sell %}<div style="font-size:11px;color:#888;">~{{ '%.0f'|format(c.avg_days_to_sell) }} дней до продажи</div>{% endif %}
+<!-- Карта на всю ширину сверху, карточки ЖК ниже в 2 колонки — было
+     бок-о-бок (карта|список), карта сжималась. -->
+<div style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;margin-bottom:14px;box-sizing:border-box;">
+  <div id="dev-map" style="aspect-ratio:16/7;width:100%;border-radius:8px;"></div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+  {% for c in complexes %}
+  <a href="/admin/complex/{{ c.id }}" style="display:block;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;color:inherit;text-decoration:none;">
+    {% if c.photo_url %}
+    <img src="{{ c.photo_url }}" loading="lazy" style="width:100%;height:180px;object-fit:cover;display:block;">
+    {% else %}
+    <div style="width:100%;height:180px;background:var(--bg);display:flex;align-items:center;justify-content:center;color:#555;font-size:28px;">🏢</div>
+    {% endif %}
+    <div style="padding:10px 12px;">
+      <div style="font-weight:700;font-size:14px;margin-bottom:2px;">{{ c.name }}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:6px;">📍 {{ c.address or c.district or '—' }}</div>
+      <div style="font-size:12px;display:flex;flex-wrap:wrap;gap:6px;color:#aaa;">
+        {% if c.year_built %}<span>{{ c.year_built }} г.</span>{% endif %}
+        {% if c.housing_class %}<span>· {{ c.housing_class }}</span>{% endif %}
+        <span>· в продаже {{ c.active_cnt }}</span>
+        <span>· продано {{ c.sold_cnt }}</span>
       </div>
-    </a>
-    {% endfor %}
-  </div>
+      {% if c.avg_price_m2 %}<div style="font-size:12.5px;margin-top:4px;">{{ '{:,.0f}'.format(c.avg_price_m2).replace(',', ' ') }} ₸/м²</div>{% endif %}
+      {% if c.avg_days_to_sell %}<div style="font-size:11px;color:#888;">~{{ '%.0f'|format(c.avg_days_to_sell) }} дней до продажи</div>{% endif %}
+    </div>
+  </a>
+  {% endfor %}
 </div>
 <p style="font-size:12px;color:#888;margin-top:10px;">«Дней до продажи» — от первого появления объявления в базе до ухода в архив (проверка архива работает с 12.07.2026): чем меньше, тем быстрее продаются квартиры.</p>
 <script>

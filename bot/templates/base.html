@@ -253,7 +253,7 @@
 {% if not embed %}
 <header class="pub-header">
   <div class="pub-row1{% if not panel_family %} narrow{% endif %}">
-    <a href="/admin" class="pub-logo"><img src="/static/branding/logo-icon.png" alt=""> Hatuli</a>
+    <a href="/admin" class="pub-logo">Hatuli</a>
     <nav class="pub-nav">
       <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Карта</a>
       <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
@@ -306,7 +306,13 @@ _applySidebarTheme(localStorage.getItem('hatuli-theme') === 'dark' ? 'dark' : 'l
 // span 1/2/3 в углу (надёжнее, чем drag-resize со snap-к-сетке).
 (function () {
   const BLOCK_SEL = '.chart-block, .admin-block, .tbl-wrap';
-  const COLS = 3;
+  // 3 колонки — дефолт для широких (админских, не суженных) страниц.
+  // На узких страницах (.main.narrow, ~1100px, см. задачу "3 места в ряд
+  // на ЖК-странице — сделай 2") 3 узких графика в ряд выглядят зажато —
+  // считаем реальное количество колонок по ширине контейнера сетки, а не
+  // хардкодим глобально (грид общий на все страницы, задача только для
+  // ЖК, но остальным admin-block-страницам это тоже не повредит).
+  let COLS = 3;
 
   function layoutKey() { return 'hatuli-grid-layout:' + location.pathname; }
   function loadLayout() {
@@ -331,6 +337,12 @@ _applySidebarTheme(localStorage.getItem('hatuli-theme') === 'dark' ? 'dark' : 'l
     const grid = document.createElement('div');
     grid.className = 'hcb-grid';
     blocks[0].parentElement.insertBefore(grid, blocks[0]);
+    // Пустой div под display:grid по умолчанию тянется на всю ширину
+    // родителя — clientWidth тут уже реальная доступная ширина сетки,
+    // измерять после появления детей не нужно.
+    const gridW = grid.clientWidth || document.documentElement.clientWidth;
+    COLS = gridW < 760 ? 1 : (gridW < 1060 ? 2 : 3);
+    grid.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
     blocks.forEach(b => {
       // сбрасываем инлайновые width/height/flex, которые могли прийти со
       // старой системы или из вёрстки страницы (например flex:1 1 0 в
