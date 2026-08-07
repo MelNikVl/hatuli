@@ -329,6 +329,73 @@ async function toggleFavComplex() {
 </div>
 {% endif %}
 
+<!-- Отзывы о ЖК — смотреть могут все, оставлять только залогиненные через
+     Telegram (задача "блок отзывов", 2026-08-07). -->
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:14px;">
+  <b style="font-size:14.5px;">💬 Отзывы</b>
+  <div id="cx-reviews-list" style="margin-top:10px;font-size:13px;color:#888;">загрузка…</div>
+  <div id="cx-review-form-wrap" style="margin-top:12px;display:none;">
+    <div id="cx-review-stars" style="font-size:20px;letter-spacing:2px;cursor:pointer;margin-bottom:6px;color:#ccc;"></div>
+    <textarea id="cx-review-text" placeholder="Расскажите, каково жить в этом ЖК…" style="width:100%;min-height:70px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+    <button type="button" onclick="cxSubmitReview({{ cx.id }})" style="margin-top:6px;padding:7px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">Отправить</button>
+    <span id="cx-review-status" style="font-size:12px;color:#888;margin-left:8px;"></span>
+  </div>
+  <div id="cx-review-login-prompt" style="margin-top:12px;font-size:13px;color:#888;display:none;">
+    <a href="/cabinet" style="color:#2563eb;">Войдите через Telegram</a>, чтобы оставить отзыв.
+  </div>
+</div>
+<script>
+(function() {
+  const cid = {{ cx.id }};
+  let myRating = 0;
+  const starsEl = document.getElementById('cx-review-stars');
+  function renderStars() {
+    starsEl.innerHTML = [1,2,3,4,5].map(n =>
+      `<span onclick="cxSetStar(${n})" style="color:${n <= myRating ? '#f59e0b' : '#ccc'};">★</span>`).join('');
+  }
+  window.cxSetStar = function(n) { myRating = n; renderStars(); };
+  renderStars();
+
+  window.cxSubmitReview = function(complexId) {
+    const text = document.getElementById('cx-review-text').value.trim();
+    const status = document.getElementById('cx-review-status');
+    if (!text) { status.textContent = 'Напишите текст отзыва.'; return; }
+    status.textContent = 'Отправка…';
+    fetch('/admin/api/complex/' + complexId + '/reviews', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: text, rating: myRating || null}),
+    }).then(r => r.json()).then(d => {
+      if (d.error) { status.textContent = 'Не удалось отправить.'; return; }
+      status.textContent = 'Спасибо за отзыв!';
+      loadReviews();
+    }).catch(() => { status.textContent = 'Не удалось отправить.'; });
+  };
+
+  function escapeHtml(s) {
+    const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+  }
+  function loadReviews() {
+    fetch('/admin/api/complex/' + cid + '/reviews').then(r => r.json()).then(d => {
+      const list = document.getElementById('cx-reviews-list');
+      const reviews = d.reviews || [];
+      list.innerHTML = reviews.length ? reviews.map(r => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border);">
+          <div style="display:flex;justify-content:space-between;gap:8px;">
+            <b style="font-size:13px;">${escapeHtml(r.author)}</b>
+            <span style="font-size:11.5px;color:#888;">${r.created_at}</span>
+          </div>
+          ${r.rating ? `<div style="color:#f59e0b;font-size:13px;">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
+          <div style="font-size:13px;color:var(--text);margin-top:2px;">${escapeHtml(r.text)}</div>
+        </div>`).join('') : '<div style="color:#888;font-size:13px;">Пока нет отзывов — будьте первым.</div>';
+      document.getElementById(d.can_post ? 'cx-review-form-wrap' : 'cx-review-login-prompt').style.display = 'block';
+    }).catch(() => {
+      document.getElementById('cx-reviews-list').textContent = 'Не удалось загрузить отзывы.';
+    });
+  }
+  loadReviews();
+})();
+</script>
+
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13.5px;color:var(--text);">
   <b>Проверить документы застройщика</b> — Управление архитектуры и градостроительства Астаны: по телефону горячей линии или личному обращению можно уточнить наличие полного пакета документов и иногда получить информацию по проекту (конструктивная схема, этажность, материалы).
   Контакты: <b>+7 (7172) 55-04-28</b>, <b>+7 (7172) 55-67-03</b>.

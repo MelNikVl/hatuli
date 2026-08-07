@@ -8,12 +8,6 @@
 </div>
 <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
   <form method="get" action="/admin/complexes" style="display:flex;gap:8px;align-items:center;margin-left:auto;">
-    <select name="sort" onchange="this.form.submit()">
-      <option value="listings" {% if filters.sort == 'listings' %}selected{% endif %}>По объявлениям</option>
-      <option value="yield" {% if filters.sort == 'yield' %}selected{% endif %}>По yield</option>
-      <option value="price" {% if filters.sort == 'price' %}selected{% endif %}>По цене/м²</option>
-      <option value="year" {% if filters.sort == 'year' %}selected{% endif %}>По году</option>
-    </select>
     <input type="text" name="search" value="{{ filters.search }}" placeholder="Поиск по названию..." style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;">
     <button type="submit" style="padding:6px 14px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">Найти</button>
   </form>
@@ -22,13 +16,15 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
-<div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;">
-<div style="order:1;flex:1 1 0;min-width:320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;position:relative;">
+<!-- Карта — на всю ширину страницы сверху (в рамках полей .main.narrow),
+     список ЖК ниже простой таблицей, от большего к меньшему по кол-ву
+     объявлений (см. sort_map в admin_web.py — default 'listings'). -->
+<div style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px;position:relative;margin-bottom:16px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px;">
     <b style="font-size:14px;">🗺 Карта ЖК Астаны</b>
     <span style="font-size:12px;color:#888;"><span id="cxmap-count">…</span> ЖК с координатами · метка = кол-во объявлений в ЖК (или ЖК в кластере) · клик = карточка ЖК / превью</span>
   </div>
-  <div id="cx-rating-map" style="aspect-ratio:1/1;width:100%;margin:0;border-radius:8px;"></div>
+  <div id="cx-rating-map" style="height:520px;width:100%;margin:0;border-radius:8px;"></div>
   <div id="cx-cluster-panel" style="display:none;position:absolute;top:10px;right:10px;bottom:10px;width:280px;max-width:calc(100% - 20px);background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.25);z-index:1000;overflow-y:auto;padding:10px;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
       <b style="font-size:13px;">ЖК в этой точке</b>
@@ -152,77 +148,34 @@ tr:last-child td{border-bottom:none}
 .cancel-btn{padding:8px 16px;background:transparent;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text)}
 </style>
 
-<div style="order:2;flex:1 1 0;min-width:300px;max-height:calc(864px + 46px);display:flex;flex-direction:column;gap:12px;">
-  {% macro complex_card(c) %}
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
-      <a href="/admin/complex/{{ c.id }}" style="display:block;">
-        {% if c.photo_url %}
-        <img src="{{ c.photo_url }}" style="width:100%;height:130px;object-fit:cover;display:block;" onerror="this.style.display='none'">
-        {% else %}
-        <div style="width:100%;height:130px;background:var(--bg);"></div>
-        {% endif %}
-      </a>
-      <div style="padding:10px 12px;flex:1;display:flex;flex-direction:column;gap:4px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
-          <a href="/admin/complex/{{ c.id }}" style="font-weight:700;font-size:13.5px;line-height:1.25;color:var(--text);text-decoration:none;">{{ c.name }}</a>
-          {% if c.avg_score %}<span style="flex-shrink:0;background:#2563eb;color:#fff;border-radius:8px;padding:2px 7px;font-weight:800;font-size:13px;">{{ c.avg_score|round|int }}</span>{% endif %}
-        </div>
-        <div style="font-size:11.5px;color:#888;">{% if c.developer_name %}🏗 {% if c.developer_id %}<a href="/admin/developer/{{ c.developer_id }}" style="color:inherit;">{{ c.developer_name }}</a>{% else %}{{ c.developer_name }}{% endif %}{% else %}застройщик не определён{% endif %}</div>
-        <div style="font-size:11px;color:#888;display:flex;gap:6px;flex-wrap:wrap;margin-top:2px;">
-          <span>{{ c.district or '—' }}</span>
-          {% if c.year_built %}<span>· {{ c.year_built }} г.</span>{% endif %}
-          <span>· {{ c.listings_count or 0 }} объявл.</span>
-        </div>
-        {% if c.avg_yield %}
-          {% set y = c.avg_yield %}
-          <span class="yield-tag {% if y >= 12 %}yield-hi{% elif y >= 8 %}yield-md{% else %}yield-lo{% endif %}" style="align-self:flex-start;">{{ y|round(1) }}% yield</span>
-        {% endif %}
-        {% if c.hp_apartments_total or c.hp_passenger_elevators or c.hp_freight_elevators %}
-        <div style="font-size:11px;color:#166534;background:#f0fdf4;border-radius:6px;padding:3px 7px;display:flex;gap:6px;flex-wrap:wrap;">
-          {% if c.hp_apartments_total %}<span>🏠 {{ c.hp_apartments_total }}{% if c.hp_apartments_sold %} ({{ c.hp_apartments_sold }} продано){% endif %}</span>{% endif %}
-          {% if c.hp_passenger_elevators or c.hp_freight_elevators %}<span>🛗 {{ (c.hp_passenger_elevators or 0) + (c.hp_freight_elevators or 0) }}</span>{% endif %}
-        </div>
-        {% endif %}
-        <button class="edit-btn" style="margin-top:auto;align-self:flex-start;" onclick='openEdit({{ c | tojson }})'>✏️ править</button>
-      </div>
-    </div>
-  {% endmacro %}
-
-  {% if complexes %}
-  <div>
-    <div style="font-size:12px;color:#888;font-weight:700;margin-bottom:6px;">🏆 Топ-10 по числу объявлений</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(286px,1fr));gap:13px;">
-      {% for c in complexes[:10] %}{{ complex_card(c) }}{% endfor %}
-    </div>
-  </div>
-  {% if complexes|length > 10 %}
-  <div id="cx-more-wrap" style="overflow-y:auto;display:flex;flex-direction:column;gap:8px;flex:1 1 0;min-height:0;padding-right:2px;">
-    <div id="cx-more-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(286px,1fr));grid-auto-rows:min-content;align-content:start;gap:13px;">
-      {% for c in complexes[10:] %}<div class="cx-more-card" data-idx="{{ loop.index0 }}" style="display:none;">{{ complex_card(c) }}</div>{% endfor %}
-    </div>
-    <button id="cx-load-more-btn" onclick="loadMoreComplexes()" style="padding:9px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;cursor:pointer;">Показать ещё ↓</button>
-  </div>
-  <script>
-  (function() {
-    const BATCH = 30;
-    let shown = 0;
-    const cards = document.querySelectorAll('#cx-more-grid .cx-more-card');
-    const btn = document.getElementById('cx-load-more-btn');
-    window.loadMoreComplexes = function() {
-      const next = Math.min(cards.length, shown + BATCH);
-      for (let i = shown; i < next; i++) cards[i].style.display = '';
-      shown = next;
-      if (shown >= cards.length) btn.style.display = 'none';
-    };
-    loadMoreComplexes();
-  })();
-  </script>
-  {% endif %}
-  {% else %}
-  <p style="padding:20px;text-align:center;color:#888;">Ничего не найдено — попробуйте сбросить фильтры.</p>
-  {% endif %}
+<!-- Список ЖК — простая таблица (от большего к меньшему по кол-ву
+     объявлений, ORDER BY листингов задан в бэкенде, sort='listings' —
+     единственный порядок, отдельный селект сортировки убрали). -->
+{% set is_admin_page = is_admin(request) %}
+{% if complexes %}
+<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+<table>
+  <tr>
+    <th>ЖК</th><th>Застройщик</th><th>Район</th><th>Год</th>
+    <th>Объявл.</th><th>Скор</th><th>Yield</th>{% if is_admin_page %}<th></th>{% endif %}
+  </tr>
+  {% for c in complexes %}
+  <tr>
+    <td><a href="/admin/complex/{{ c.id }}" style="color:var(--text);font-weight:700;text-decoration:none;">{{ c.name }}</a></td>
+    <td>{% if c.developer_name %}{% if c.developer_id %}<a href="/admin/developer/{{ c.developer_id }}" style="color:inherit;">{{ c.developer_name }}</a>{% else %}{{ c.developer_name }}{% endif %}{% else %}<span style="color:#888;">—</span>{% endif %}</td>
+    <td>{{ c.district or '—' }}</td>
+    <td>{{ c.year_built or '—' }}</td>
+    <td>{{ c.listings_count or 0 }}</td>
+    <td>{% if c.avg_score %}{{ c.avg_score|round|int }}{% else %}—{% endif %}</td>
+    <td>{% if c.avg_yield %}{{ c.avg_yield|round(1) }}%{% else %}—{% endif %}</td>
+    {% if is_admin_page %}<td><button class="edit-btn" onclick='openEdit({{ c | tojson }})'>✏️</button></td>{% endif %}
+  </tr>
+  {% endfor %}
+</table>
 </div>
-</div><!-- /flex -->
+{% else %}
+<p style="padding:20px;text-align:center;color:#888;">Ничего не найдено — попробуйте сбросить фильтры.</p>
+{% endif %}
 
 
 <div class="modal-overlay" id="modal">

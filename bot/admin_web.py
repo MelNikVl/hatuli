@@ -1580,7 +1580,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             LEFT JOIN developers d ON d.id = c.developer_id
             {where}
             ORDER BY {order}
-            LIMIT 200
+            LIMIT 3000
             """,
             *params,
         )

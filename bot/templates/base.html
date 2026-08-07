@@ -8,9 +8,11 @@
   <script>
   // Применяем сохранённую тему ДО отрисовки — иначе была бы вспышка тёмной
   // темы на белом фоне при каждой загрузке страницы в светлом режиме.
+  // По умолчанию (ничего не сохранено) — светлая тема, тёмная только если
+  // пользователь явно её выбрал переключателем.
   (function() {
     const saved = localStorage.getItem('hatuli-theme');
-    if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    if (saved !== 'dark') document.documentElement.setAttribute('data-theme', 'light');
   })();
   </script>
   <style>
@@ -261,11 +263,11 @@
       <a href="/admin/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
       {% if admin %}<a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path %}active{% endif %}">Инфо</a>{% endif %}
       {% if admin %}
-      <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">🛠 Админ панель</a>
+      <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Апанель</a>
       {% endif %}
     </nav>
     <div class="pub-row1-right">
-      <button class="pub-theme-btn" id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button">🌓 <span id="sidebar-theme-label">тёмная</span></button>
+      <button class="pub-theme-btn" id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button" title="Переключить тему">🌓</button>
       <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;text-decoration:none;color:var(--text);background:rgba(37,99,235,.1);border-radius:8px;padding:4px 10px;"><span style="font-size:16px;line-height:1;">♡</span>Избранное</a>
       {% if admin %}<a href="/admin/logout" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Выйти</a>
       {% else %}<a href="/cabinet" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Войти</a>{% endif %}
@@ -285,12 +287,12 @@ function _applySidebarTheme(theme) {
   if (lbl) lbl.textContent = theme === 'light' ? 'светлая' : 'тёмная';
 }
 function toggleSidebarTheme() {
-  const current = localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark';
+  const current = localStorage.getItem('hatuli-theme') === 'dark' ? 'dark' : 'light';
   const next = current === 'light' ? 'dark' : 'light';
   localStorage.setItem('hatuli-theme', next);
   _applySidebarTheme(next);
 }
-_applySidebarTheme(localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark');
+_applySidebarTheme(localStorage.getItem('hatuli-theme') === 'dark' ? 'dark' : 'light');
 </script>
 <script>
 // ── Snap-to-grid дашборд (.chart-block + .admin-block + .tbl-wrap) ─────

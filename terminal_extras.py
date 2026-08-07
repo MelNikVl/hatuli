@@ -621,7 +621,21 @@ def make_extras_router(templates) -> APIRouter:
             cell = cells.setdefault(hid, {"count": 0, "weight": 0.0})
             cell["count"] += 1
             cell["weight"] += 1.0 + 0.5 * (r["hard_code"] or 0)
-        max_w = max(c["weight"] for c in cells.values()) or 1.0
+        # Нормировка score = weight/max(weight) визуально "гасила" почти
+        # всё: распределение резко скошено (median count по гексу — 2,
+        # 78% гексов <=0.05 после нормировки на один гекс-outlier с 139
+        # инцидентами) — при гамма-коррекции 1.6 эти гексы получались
+        # практически белыми/невидимыми, глазами были видны только
+        # единицы самых "горячих" гексов ("на карте только 4 гекса, у
+        # Крыши сотни точек" — 2026-08-07, данные-то были все 1494 гекса,
+        # просто визуально неотличимы от фона). Нормируем на 90-й
+        # перцентиль веса, а не на максимум — топовые outlier-гексы
+        # клэмпятся в score=1, зато остальная масса растягивается в
+        # видимый диапазон (тот же приём, что у ценовой тепловой карты,
+        # percentile(medians, 0.90) вместо голого max).
+        weights = sorted(c["weight"] for c in cells.values())
+        p90_idx = min(len(weights) - 1, int(len(weights) * 0.90))
+        max_w = weights[p90_idx] or 1.0
         hexes = []
         for hid, cell in cells.items():
             clat, clon = hex_center(hid, EDGE_M)
@@ -3417,6 +3431,72 @@ def make_extras_router(templates) -> APIRouter:
             "materials": materials,
             "loc_score": loc_score,
         })
+
+    # ── Отзывы о ЖК (задача "блок отзывов", 2026-08-07) — смотреть могут
+    # все, оставлять — только залогиненные через Telegram (site_session,
+    # тот же механизм, что избранное/кабинет). Один отзыв на пользователя
+    # на ЖК — повторная отправка обновляет текст/оценку, а не плодит дубли.
+    async def _ensure_reviews_table():
+        from bot.db.pg import execute as pg_exec
+        await pg_exec("""
+            CREATE TABLE IF NOT EXISTS complex_reviews (
+                id SERIAL PRIMARY KEY,
+                complex_id INT NOT NULL REFERENCES complexes(id) ON DELETE CASCADE,
+                user_id BIGINT NOT NULL REFERENCES users(user_id),
+                rating INT,
+                text TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now(),
+                UNIQUE (complex_id, user_id)
+            )
+        """)
+
+    @router.get("/admin/api/complex/{complex_id}/reviews")
+    async def complex_reviews_get(request: Request, complex_id: int):
+        await _ensure_reviews_table()
+        from bot.db.pg import fetch as pg_fetch
+        from bot.core.site_auth import get_user_by_session
+        rows = await pg_fetch("""
+            SELECT r.rating, r.text, r.created_at,
+                   COALESCE(u.full_name, u.username, 'Пользователь') AS author
+            FROM complex_reviews r JOIN users u ON u.user_id = r.user_id
+            WHERE r.complex_id = $1
+            ORDER BY r.created_at DESC
+        """, complex_id)
+        me = await get_user_by_session(request.cookies.get("site_session"))
+        return JSONResponse({
+            "reviews": [{
+                "author": r["author"], "rating": r["rating"], "text": r["text"],
+                "created_at": r["created_at"].strftime("%d.%m.%Y"),
+            } for r in rows],
+            "can_post": me is not None,
+        })
+
+    @router.post("/admin/api/complex/{complex_id}/reviews")
+    async def complex_reviews_post(request: Request, complex_id: int):
+        from bot.core.site_auth import get_user_by_session
+        me = await get_user_by_session(request.cookies.get("site_session"))
+        if not me:
+            return JSONResponse({"error": "auth"}, status_code=401)
+        body = await request.json()
+        text = (body.get("text") or "").strip()
+        if not text:
+            return JSONResponse({"error": "empty"}, status_code=400)
+        text = text[:2000]
+        rating = body.get("rating")
+        try:
+            rating = max(1, min(5, int(rating))) if rating else None
+        except (TypeError, ValueError):
+            rating = None
+        await _ensure_reviews_table()
+        from bot.db.pg import execute as pg_exec
+        await pg_exec("""
+            INSERT INTO complex_reviews (complex_id, user_id, rating, text)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (complex_id, user_id)
+            DO UPDATE SET rating = EXCLUDED.rating, text = EXCLUDED.text, updated_at = now()
+        """, complex_id, me["user_id"], rating, text)
+        return JSONResponse({"ok": True})
 
     @router.get("/admin/api/complex/{complex_id}/location-score")
     async def complex_location_score_api(request: Request, complex_id: int):

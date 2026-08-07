@@ -27,8 +27,9 @@
   </script>
   <script>
   (function() {
+    // По умолчанию — светлая тема (см. base.html, тот же дефолт).
     const saved = localStorage.getItem('hatuli-theme');
-    if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    if (saved !== 'dark') document.documentElement.setAttribute('data-theme', 'light');
   })();
   </script>
   <style>
@@ -147,11 +148,11 @@
       <a href="/admin/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
       {% if admin %}
       <a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path %}active{% endif %}">Инфо</a>
-            <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">🛠 Админ панель</a>
+            <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Апанель</a>
       {% endif %}
     </nav>
     <div class="pub-row1-right">
-      <button class="pub-theme-btn" id="pub-theme-toggle" onclick="togglePubTheme()" type="button">🌓 <span id="pub-theme-label">тёмная</span></button>
+      <button class="pub-theme-btn" id="pub-theme-toggle" onclick="togglePubTheme()" type="button" title="Переключить тему">🌓</button>
       <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;background:rgba(37,99,235,.1);border-radius:8px;padding:4px 10px;"><span style="font-size:16px;line-height:1;">♡</span>Избранное</a>
       {% if site_user %}
       <a href="/cabinet" class="pub-user-chip">{{ site_user.full_name or ('@' + (site_user.username or site_user.user_id|string)) }}</a>
@@ -174,12 +175,12 @@ function _applyPubTheme(theme) {
   if (lbl) lbl.textContent = theme === 'light' ? 'светлая' : 'тёмная';
 }
 function togglePubTheme() {
-  const current = localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark';
+  const current = localStorage.getItem('hatuli-theme') === 'dark' ? 'dark' : 'light';
   const next = current === 'light' ? 'dark' : 'light';
   localStorage.setItem('hatuli-theme', next);
   _applyPubTheme(next);
 }
-_applyPubTheme(localStorage.getItem('hatuli-theme') === 'light' ? 'light' : 'dark');
+_applyPubTheme(localStorage.getItem('hatuli-theme') === 'dark' ? 'dark' : 'light');
 </script>
 </body>
 </html>
