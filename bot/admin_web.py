@@ -261,9 +261,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin/logs", response_class=HTMLResponse)
     async def logs_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("logs.html", {"request": request})
+        # Page removed from product per user request — redirect to dashboard.
+        return RedirectResponse(url="/admin", status_code=302)
 
     @app.get("/admin/stats/data")
     async def stats_data(request: Request):
@@ -306,10 +305,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/admin/issues", response_class=HTMLResponse)
     async def issues_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        errors = await db.get_parse_errors(50)
-        return templates.TemplateResponse("issues.html", {"request": request, "errors": errors})
+        # Page removed from product per user request — redirect to dashboard.
+        return RedirectResponse(url="/admin", status_code=302)
 
     @app.post("/admin/issues/clear")
     async def issues_clear(request: Request):
@@ -923,9 +920,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
             LEFT JOIN (
                 SELECT lower(trim(complex_name)) AS key,
-                       MAX(floors_total) AS floors_total,
-                       AVG(ceiling_height) AS ceiling_height,
-                       COUNT(*) AS listings_count
+                       MAX(floors_total) FILTER (WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE) AS floors_total,
+                       AVG(ceiling_height) FILTER (WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE) AS ceiling_height,
+                       COUNT(*) FILTER (WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE) AS listings_count
                 FROM apartment_listings
                 WHERE complex_name IS NOT NULL
                 GROUP BY lower(trim(complex_name))

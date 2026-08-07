@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-.container { padding: 20px 20px 20px 0; max-width: 1400px; margin: 0; }
+.container { padding: 20px 20px 20px 0; max-width: 100%; margin: 0; }
 </style>
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">💹 Цены</div>
@@ -37,7 +37,7 @@
       <div id="price-amount-chart" class="chart-block-inner"></div>
     </div>
 
-    <div class="chart-block" style="flex:1 1 0;min-width:300px;max-width:360px;width:auto;display:flex;flex-direction:column;">
+    <div class="chart-block" style="flex:1 1 0;min-width:300px;width:auto;display:flex;flex-direction:column;">
       <b style="font-size:1em;">Какие объекты повлияли на график</b>
       <div style="font-size:0.85em;color:#888;margin:4px 0 10px;">от самых больших изменений цены к самым маленьким</div>
       <div id="price-influencers-list" style="flex:1;overflow-y:auto;"></div>

@@ -2,14 +2,10 @@
 {% block content %}
 <div class="page-title">🏢 Жилой Комплекс {{ cx.name }}
   <span id="cx-fav-star" onclick="toggleFavComplex()" title="В избранное — уведомления в Telegram об изменениях в ЖК" style="cursor:pointer;font-size:22px;vertical-align:middle;color:#ccc;user-select:none;">☆</span>
-  {% if developer %}<small style="font-size:14px;font-weight:800;">· 🏗 Застройщик {% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer }}</span>{% endif %}</small>{% endif %}
+  {% if cx.live_url %}<a href="{{ cx.live_url }}" target="_blank" style="display:inline-block;font-size:13px;font-weight:800;padding:6px 14px;border-radius:8px;background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;text-decoration:none;margin-left:8px;box-shadow:0 2px 6px rgba(220,38,38,.35);">🔴 Прямая трансляция</a>{% endif %}
+  {% if developer %}<small style="font-size:14px;font-weight:800;">· 🏗 Застройщик {% if developer_logo %}<img src="{{ developer_logo }}" alt="" style="height:20px;max-width:80px;object-fit:contain;background:#fff;border-radius:4px;padding:1px 4px;vertical-align:middle;margin-right:4px;">{% endif %}{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer }}</span>{% endif %}</small>{% endif %}
   <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% elif cx.housing_class_estimate %} · {{ cx.housing_class_estimate }}{% endif %}</small>
-  {% if cx.description %}
-  <div style="margin-top:10px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-left:3px solid #eab308;border-radius:8px;font-size:13px;line-height:1.55;color:var(--text);">
-    <span style="font-weight:700;color:#eab308;">📝 Описание ЖК</span>
-    <div style="margin-top:4px;">{{ cx.description }}</div>
   </div>
-  {% endif %}</div>
 <script>
 (async function() {
   const star = document.getElementById('cx-fav-star');
@@ -37,6 +33,57 @@ async function toggleFavComplex() {
   ⚠️ <b>Это улица, а не ЖК.</b> Аудит определил, что под этим названием Крыша группирует дома по улице. Объявления отвязаны, из карт и подборок запись исключена.
 </div>
 {% endif %}
+
+<!-- Шапка-сводка: сколько чего продаётся по комнатности + скорость
+     поглощения рынком, и кнопки на внешние ресурсы (серые, если для
+     этого ЖК нет сопоставления с источником). -->
+<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;margin-bottom:14px;">
+  <div style="flex:2 1 420px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;display:flex;gap:22px;flex-wrap:wrap;align-items:center;">
+    <div>
+      <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.4px;">🏠 В продаже сейчас</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:5px;">
+        {% set ns = namespace(total=0) %}
+        {% for s in stats %}
+        {% set active = (s.cnt or 0) - (s.sold_cnt or 0) %}
+        {% set ns.total = ns.total + active %}
+        <span style="font-size:13.5px;white-space:nowrap;"><b>{{ active }}</b> <span style="color:#888;">· {{ s.rooms }}-комн</span></span>
+        {% endfor %}
+        {% if not stats %}<span style="font-size:13px;color:#888;">нет данных</span>{% endif %}
+      </div>
+    </div>
+    <div style="border-left:1px solid var(--border);padding-left:20px;">
+      <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.4px;">⏱ Поглощение рынком</div>
+      <div style="margin-top:5px;font-size:13.5px;">
+        {% if pace.avg_days_to_sell %}
+        <b>{{ '%.0f'|format(pace.avg_days_to_sell) }} дн.</b> <span style="color:#888;">в среднем до архива</span>
+        {% else %}
+        <span style="color:#888;">недостаточно данных</span>
+        {% endif %}
+        {% if pace.archived_30d %}<div style="font-size:11.5px;color:#888;margin-top:2px;">{{ pace.archived_30d }} ушло в архив за 30 дн.</div>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div style="flex:1 1 320px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    {% for key, label, color in [
+      ('krisha', '🏠 Крыша', '#e53935'),
+      ('homsters', '🏘 Homsters', '#00a878'),
+      ('korter', '🏗 Korter', '#2f6fed'),
+      ('homeportal', '🏛 Homeportal', '#475569'),
+    ] %}
+      {% set href = ext_links.get(key) if ext_links else None %}
+      {% if href %}
+      <a href="{{ href }}" target="_blank" rel="noopener" style="font-size:12.5px;font-weight:700;padding:7px 12px;border-radius:8px;background:{{ color }};color:#fff;text-decoration:none;white-space:nowrap;">{{ label }}</a>
+      {% else %}
+      <span title="Этот ЖК не сопоставлен с {{ label }}" style="font-size:12.5px;font-weight:700;padding:7px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--border);color:#aaa;white-space:nowrap;cursor:not-allowed;">{{ label }}</span>
+      {% endif %}
+    {% endfor %}
+    {% if developer_website %}
+      <a href="{{ developer_website }}" target="_blank" rel="noopener" style="font-size:12.5px;font-weight:700;padding:7px 12px;border-radius:8px;background:#eab308;color:#1a1a1a;text-decoration:none;white-space:nowrap;">🏗 Сайт застройщика</a>
+    {% endif %}
+  </div>
+</div>
+
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
@@ -134,14 +181,17 @@ async function toggleFavComplex() {
 
   <div id="cx-card-desc" class="cx-col-card">
     <b style="font-size:15px;">📝 Описание</b>
+    {% if cx.description %}
+    <div style="font-size:13.5px;line-height:1.6;margin-top:8px;">{{ cx.description }}</div>
+    {% endif %}
     {% if cx.notes or cx.residents_notes %}
     <div style="font-size:13.5px;line-height:1.6;margin-top:8px;white-space:pre-wrap;">{{ cx.notes or cx.residents_notes }}</div>
-    {% else %}
+    {% elif not cx.description %}
     <div style="font-size:12.5px;color:#888;margin-top:4px;">Отдельного маркетингового описания у нас пока нет (Korter/Homster не отдают текст со страниц списка) — ниже сводка по характеристикам, которые уже удалось собрать.</div>
     {% endif %}
     <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">
       <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx.address or cx_address or 'не определён' }}</b></td></tr>
-      <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer or '—' }}</span>{% endif %}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{% if developer_logo %}<img src="{{ developer_logo }}" alt="" style="height:22px;max-width:90px;object-fit:contain;background:#fff;border-radius:4px;padding:1px 4px;vertical-align:middle;margin-right:4px;">{% endif %}{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer or '—' }}</span>{% endif %}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b>{% if not cx.housing_class and cx.housing_class_estimate %} <span style="color:#888;font-weight:400;font-size:12.5px;" title="Автоматическая оценка по медианной высоте потолков и цене/м² объявлений в ЖК относительно города — не официальная классификация, см. критерии в Инфо">{{ cx.housing_class_estimate }} ⓘ</span>{% endif %}</td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Год постройки/сдачи</td><td><b>{{ cx.year_built or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Район</td><td><b>{{ cx.district or '—' }}</b></td></tr>

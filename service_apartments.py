@@ -65,7 +65,12 @@ async def run_cycle():
     if _ap.LAST_TOTAL_FOUND:
         await app_settings.set("KRISHA_TOTAL_FOUND", str(_ap.LAST_TOTAL_FOUND))
     krisha_total = app_settings.get_int("KRISHA_TOTAL_FOUND", 0)
-    max_deep_page = (krisha_total // 20 + 2) if krisha_total else 0
+    # Крыша отдаёт 40 объявлений/страницу (проверено вживую 2026-08-07 —
+    # было захардкожено 20, из-за чего круг глубокого обхода "заканчивался"
+    # вдвое позже реального конца выдачи и лишние ~krisha_total/40 запросов
+    # уходили на страницы за пределами реальных данных, где Крыша просто
+    # повторяет последнюю страницу).
+    max_deep_page = (krisha_total // 40 + 2) if krisha_total else 0
 
     deep_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
     if deep_batch > 0:
@@ -169,12 +174,13 @@ async def run_cycle():
                          year_built, building_type, renovation, furniture,
                          is_new_build, developer_name, seller_type, is_owner,
                          rent_source, bargain_target, bargain_discount_pct, bargain_rec,
-                         details_fetched, ceiling_height, kitchen_area, first_seen, last_seen, notified)
+                         details_fetched, ceiling_height, kitchen_area, photo_url,
+                         first_seen, last_seen, notified)
                     VALUES
                         ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                          $14,$15,$16,$17,$18,$19,$20,$21,
                          $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,
-                         $32,$33,$34,$35,$36,$37,$38,$39,$40,NOW(),NOW(),FALSE)
+                         $32,$33,$34,$35,$36,$37,$38,$39,$40,$41,NOW(),NOW(),FALSE)
                     ON CONFLICT (id) DO NOTHING
                 """,
                     r["id"], r.get("url"), r.get("title"), r.get("price"), r.get("area"),
@@ -192,7 +198,7 @@ async def run_cycle():
                     r.get("rent_source"), bargain.get("target_price"),
                     bargain.get("discount_pct"), bargain.get("recommendation"),
                     r.get("details_fetched", False), r.get("ceiling_height"),
-                    r.get("kitchen_area"),
+                    r.get("kitchen_area"), r.get("photo_url"),
                 )
                 new_cnt += 1
             else:
@@ -246,6 +252,7 @@ async def run_cycle():
                         details_fetched=$17, ceiling_height=COALESCE($18, ceiling_height),
                         title=$19, rooms=$20, area=$21, address=$22, district=$23,
                         net_yield_pct=$24, kitchen_area=COALESCE($25, kitchen_area),
+                        photo_url=COALESCE(photo_url, $26),
                         last_seen=NOW()
                     WHERE id=$1
                 """,
@@ -259,7 +266,7 @@ async def run_cycle():
                     r.get("details_fetched", False), r.get("ceiling_height"),
                     r.get("title"), r.get("rooms"), r.get("area"),
                     r.get("address"), r.get("district"),
-                    r.get("net_yield_pct", 0), r.get("kitchen_area"),
+                    r.get("net_yield_pct", 0), r.get("kitchen_area"), r.get("photo_url"),
                 )
                 upd_cnt += 1
 

@@ -85,7 +85,15 @@ tr:last-child td { border-bottom: none; }
 </div>
 <div>
   <div class="chart-block">
-    <b style="font-size:1em;">💸 Снижения цены по дням, по комнатности</b>
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <b style="font-size:1em;">💸 Снижения цены по дням, по комнатности</b>
+      <div id="price-drops-days" style="display:flex;gap:6px;">
+        {% for val, label in [(3, '3 дня'), (7, 'Неделя'), (30, 'Месяц')] %}
+        <button type="button" class="pd-days-btn" data-days="{{ val }}" onclick="loadPriceDrops({{ val }})"
+                style="padding:4px 11px;border:1px solid var(--border);border-radius:20px;background:{{ 'var(--bg)' if val != 30 else '#2563eb' }};color:{{ 'var(--text)' if val != 30 else '#fff' }};font-size:12px;cursor:pointer;">{{ label }}</button>
+        {% endfor %}
+      </div>
+    </div>
     <div style="display:flex;gap:14px;font-size:11px;color:#888;margin:6px 0;">
       <span><span style="display:inline-block;width:9px;height:9px;background:#3b82f6;border-radius:2px;"></span> 1-комн</span>
       <span><span style="display:inline-block;width:9px;height:9px;background:#22c55e;border-radius:2px;"></span> 2-комн</span>
@@ -157,7 +165,9 @@ tr:last-child td { border-bottom: none; }
     const npH = Math.max(110, (npEl.clientHeight || 260) - 18);
     unboundStyleLineChart('no-photo-chart', noPhotoData.points || [], 'no_photo', npW, npH);
   }
-  fetch('/admin/api/no-photo-history?days=30').then(r => r.json()).then(d => {
+  // По запросу — только последняя неделя (раньше было 30 дней, график
+  // без выбора периода, поэтому фиксируем 7, а не добавляем селектор).
+  fetch('/admin/api/no-photo-history?days=7').then(r => r.json()).then(d => {
     noPhotoData = d;
     renderNoPhotoChart();
   }).catch(() => {});
@@ -282,10 +292,18 @@ tr:last-child td { border-bottom: none; }
     }).join('');
     el.innerHTML = `<div style="display:flex;align-items:flex-end;justify-content:center;gap:3px;height:${H}px;padding-bottom:20px;width:100%;">${bars}</div>`;
   }
-  fetch('/admin/api/price-drops-history?days=30').then(r => r.json()).then(d => {
-    priceDropsData = d;
-    renderPriceDropsChart();
-  }).catch(() => {});
+  function loadPriceDrops(days) {
+    document.querySelectorAll('.pd-days-btn').forEach(b => {
+      const active = Number(b.dataset.days) === days;
+      b.style.background = active ? '#2563eb' : 'var(--bg)';
+      b.style.color = active ? '#fff' : 'var(--text)';
+    });
+    fetch('/admin/api/price-drops-history?days=' + days).then(r => r.json()).then(d => {
+      priceDropsData = d;
+      renderPriceDropsChart();
+    }).catch(() => {});
+  }
+  loadPriceDrops(30);
   document.getElementById('price-drops-chart').closest('.chart-block')
     .addEventListener('hatuli:chart-resize', renderPriceDropsChart);
   </script>

@@ -2275,6 +2275,11 @@ def make_extras_router(templates) -> APIRouter:
         if not cx:
             return JSONResponse({"error": "not_found"}, status_code=404)
         developer = cx["developer_name"]
+        developer_logo = None
+        if cx.get("developer_id"):
+            _dl = await fetchrow("SELECT logo FROM developers WHERE id = $1", cx["developer_id"])
+            if _dl:
+                developer_logo = _dl["logo"]
         if not developer and cx["source_info"]:
             si = cx["source_info"]
             if isinstance(si, str):
@@ -3078,6 +3083,13 @@ def make_extras_router(templates) -> APIRouter:
 
         # Застройщик: справочник developers -> Korter -> Homsters
         developer = cx["developer_name"]
+        developer_logo = None
+        developer_website = None
+        if cx.get("developer_id"):
+            _dl = await fetchrow("SELECT logo, website FROM developers WHERE id = $1", cx["developer_id"])
+            if _dl:
+                developer_logo = _dl["logo"]
+                developer_website = _dl["website"]
         if not developer and cx["source_info"]:
             si = cx["source_info"]
             if isinstance(si, str):
@@ -3266,6 +3278,20 @@ def make_extras_router(templates) -> APIRouter:
             # is_orda_plus в БД хранится как text '0'/'1'
             hp["is_orda_plus_bool"] = str(hp.get("is_orda_plus") or "0").strip() == "1"
 
+        # Кнопки-ссылки на внешние ресурсы (шапка страницы ЖК): Крыша,
+        # homsters, korter, homeportal.kz + сайт застройщика. Серые (нет
+        # href), если для этого ЖК нет сопоставления с источником —
+        # см. терминал 2026-08-07 фидбек "проверь эти связи".
+        # URL-паттерн homeportal.kz/ru/projects/{object_id} подтверждён
+        # вручную (открыт живьём, совпадает с нужным ЖК).
+        ext_links = {
+            "krisha": cx.get("krisha_url") or None,
+            "korter": cx.get("korter_url") or (cx_sources.get("korter") or {}).get("url"),
+            "homsters": (cx_sources.get("homsters") or {}).get("url"),
+            "homeportal": (f"https://homeportal.kz/ru/projects/{hp['object_id']}"
+                           if hp and hp.get("object_id") else None),
+        }
+
         # Материалы ЖК: 1) complex_materials (открытые источники), 2) fallback — complex_tech_specs
         materials = None
         try:
@@ -3313,6 +3339,9 @@ def make_extras_router(templates) -> APIRouter:
             "geo": {"lat": float(geo["lat"]), "lon": float(geo["lon"])} if geo and geo["lat"] else None,
             "cx_address": addr_row["address"] if addr_row else None,
             "developer": developer,
+            "developer_logo": developer_logo,
+            "developer_website": developer_website,
+            "ext_links": ext_links,
             "sales": [dict(r) for r in sale_listings],
             "rentals": [dict(r) for r in rentals],
             "stats": [dict(r) for r in stats],
@@ -3545,7 +3574,7 @@ def make_extras_router(templates) -> APIRouter:
         числу активных объявлений, название ссылкой на карточку."""
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
-            SELECT d.id, d.name, d.founded_year, d.website, d.description,
+            SELECT d.id, d.name, d.logo, d.founded_year, d.website, d.description,
                    d.projects_active, d.projects_total, d.projects_delivered,
                    d.projects_delayed, d.avg_delay_months, d.has_court_cases,
                    d.court_cases_count, d.score_total, d.homsters_slug,

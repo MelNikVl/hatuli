@@ -177,12 +177,25 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
                 time_tag = card.select_one(".a-card__text-date")
                 published = time_tag.get_text(strip=True) if time_tag else ""
 
+                # Превью-фото карточки — уже лежит в уже скачанной странице
+                # выдачи (das[_sys.hasphoto]=1 гарантирует, что оно есть),
+                # берём бесплатно вместо ожидания дорогого запроса детальной
+                # страницы (см. coord_backfill.py) отдельно по расписанию.
+                # img.a-image__img отдаёт готовый src (не лениво подгружаемый
+                # data-src — loading="lazy" тут чисто нативный HTML-атрибут).
+                photo_tag = card.select_one("img.a-image__img")
+                photo_src = (photo_tag.get("src") or photo_tag.get("data-src")
+                             if photo_tag else None)
+                photo_url = None
+                if photo_src:
+                    photo_url = photo_src if photo_src.startswith("http") else f"{BASE_URL}{photo_src}"
+
                 listings.append({
                     "id": lid, "url": listing_url, "title": title,
                     "price": price, "address": address, "district": district,
                     "is_owner": is_owner,
                     "rooms": rooms, "area": area, "published_at": published,
-                    "description": "",
+                    "description": "", "photo_url": photo_url,
                 })
             except Exception:
                 continue

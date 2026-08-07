@@ -2135,6 +2135,33 @@ function heatColor(t) {
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
+// Отдельная палитра для карты цен продажи (задача "почему тепловая карта
+// плотности населения выглядит красиво, а карта продаж нет — сделай её
+// подобной, переливающейся от зелёной до красной ТОЛЬКО"). Общая HEAT_STOPS
+// используется ещё шумом/инфраструктурой — трогать её нельзя, поэтому
+// отдельная палитра + та же техника, что и у плотности населения: широкий
+// градиент из немногих чистых опорных точек (без мутных оливковых полутонов
+// старой HEAT_STOPS) + гамма-коррекция, растягивающая верх шкалы.
+const PRICE_STOPS = [
+  [22, 163, 74],   // #16a34a зелёный (дёшево)
+  [163, 230, 53],  // #a3e635 салатовый
+  [250, 204, 21],  // #facc15 жёлтый
+  [249, 115, 22],  // #f97316 оранжевый
+  [239, 68, 68],   // #ef4444 красный
+  [153, 27, 27],   // #991b1b тёмно-красный (дорого)
+];
+const PRICE_GAMMA = 1.3;
+function priceHeatColor(t) {
+  t = Math.max(0, Math.min(1, Math.pow(Math.max(0, Math.min(1, t)), PRICE_GAMMA)));
+  const n = PRICE_STOPS.length - 1;
+  const pos = t * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const frac = pos - i;
+  const from = PRICE_STOPS[i], to = PRICE_STOPS[i + 1];
+  const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
 // Транспортная доступность — отдельная шкала от цены/шума: плохо (t~0) —
 // нейтральный серый, хорошо (t~1) — синий (см. /admin/analytics/transport,
 // та же палитра). Гексы приходят уже готовые с сервера (100м, transport_hexes),
@@ -2354,47 +2381,17 @@ function drawPriceHeat(points, archivedPoints) {
   const medians = [];
   buckets.forEach(b => { b.value = median(b.items.map(i => i.price)); medians.push(b.value); });
   if (!medians.length) return;
-  // Дыры на карте ("проплешины" — просили сделать карты цен такими же
-  // гладкими, как карта плотности населения/транспорта): раньше дырка
-  // заполнялась только если у неё было ≥2 ЗАПОЛНЕННЫХ соседа за один
-  // проход — рядом с краем застройки или в редкой зоне дыры в 2-3 гекса
-  // подряд оставались пустыми (соседей с данными недостаточно). Теперь —
-  // несколько раундов подряд (BFS от реальных данных наружу, макс. 4
-  // кольца ~240-360м): каждый раунд использует как реальные, так и уже
-  // интерполированные на ПРЕДЫДУЩЕМ раунде ячейки как источник, значение
-  // — среднее соседей, взвешенное 1/(1+кольцо) (дальше от реальных данных
-  // — меньше веса, значение размывается к среднему по больше расстоянию).
-  // Население/транспорт гладкие по той же причине — их значение считается
-  // как непрерывная функция расстояния, а не только от соседей вплотную.
-  const filledKeys = new Set(buckets.keys());
-  const interpolated = [];
-  let frontier = new Map(buckets);  // ячейки, добавленные на предыдущем раунде
-  const MAX_RINGS = 4;
-  for (let ring = 1; ring <= MAX_RINGS && frontier.size; ring++) {
-    const nextFrontier = new Map();
-    frontier.forEach(b => {
-      hexNeighborsAxial(b.q, b.r).forEach(([nq, nr]) => {
-        const key = nq + ':' + nr;
-        if (filledKeys.has(key)) return;
-        const neighborVals = hexNeighborsAxial(nq, nr)
-          .map(([q2, r2]) => buckets.get(q2 + ':' + r2) || nextFrontier.get(q2 + ':' + r2)
-                              || interpolated.find(x => x.q === q2 && x.r === r2))
-          .filter(Boolean);
-        if (!neighborVals.length) return;
-        const w = 1 / (1 + ring);
-        const avg = neighborVals.reduce((s, nb) => s + nb.value, 0) / neighborVals.length;
-        const cell = {q: nq, r: nr, value: avg, items: [], isInterpolated: true, neighborCount: neighborVals.length, ring, opacity: w};
-        nextFrontier.set(key, cell);
-        filledKeys.add(key);
-      });
-    });
-    nextFrontier.forEach(c => interpolated.push(c));
-    frontier = nextFrontier;
-  }
-  const allCells = [...buckets.values(), ...interpolated];
+  // Раньше пустые гексы ("проплешины" без объявлений) заливались BFS-
+  // интерполяцией от соседей до 4 колец (~240-360м) вглубь, чтобы карта
+  // выглядела сплошной, как у населения/транспорта. По новой просьбе —
+  // НЕ показывать гексы там, где нет ЖК/объявлений: населению и транспорту
+  // интерполяция уместна (это непрерывные физические поля), а цене продажи
+  // нет — пустой гекс означает "здесь нечего продавать", а не "забыли
+  // измерить". Рисуем только реальные ячейки (+ архивный фолбэк выше).
   const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
-  allCells.forEach(b => {
+  buckets.forEach(b => {
     const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
+    const tGamma = Math.pow(Math.max(0, Math.min(1, t)), PRICE_GAMMA);
     const priceTxt = b.value >= 1e6 ? (b.value/1e6).toFixed(1) + ' М' : (b.value/1e3).toFixed(0) + 'K';
     // По комнатности — если есть данные по рукам (rooms), покажем разбивку
     const byRooms = {};
@@ -2405,17 +2402,12 @@ function drawPriceHeat(points, archivedPoints) {
       return `${rm}к: ${t2}`;
     }).join(' · ');
     const archNote = b.isArchived ? ' (по последним продажам, архив)' : '';
-    const interpNote = b.isInterpolated ? ` (оценка по соседним ячейкам${b.ring > 1 ? ', ' + b.ring + '-е кольцо от реальных данных' : ''}, своих объявлений нет)` : '';
-    // Интерполированные ячейки бледнеют с кольцом (b.opacity, 1/(1+ring)) —
-    // ближе к реальным данным виднее, дальше растворяются в фон, а не
-    // резко обрываются на границе одного кольца (раньше interpolated было
-    // всегда 0.16 независимо от удалённости).
     L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
-      color: b.isArchived ? '#8b5cf6' : (b.isInterpolated ? '#94a3b8' : '#fff'),
-      weight: (b.isArchived || b.isInterpolated) ? 1.2 : 0.5,
-      dashArray: (b.isArchived || b.isInterpolated) ? '3,3' : null,
-      fillColor: heatColor(t), fillOpacity: b.isInterpolated ? Math.max(0.08, 0.22 * (b.opacity ?? 1)) : 0.3,
-    }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${interpNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatLayer);
+      color: b.isArchived ? '#8b5cf6' : '#fff',
+      weight: b.isArchived ? 1.2 : 0.5,
+      dashArray: b.isArchived ? '3,3' : null,
+      fillColor: priceHeatColor(t), fillOpacity: 0.4 + tGamma * 0.4,
+    }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatLayer);
   });
 }
 
