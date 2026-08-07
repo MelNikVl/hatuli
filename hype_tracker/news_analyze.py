@@ -154,17 +154,36 @@ def ensure_processed_table(hcur) -> None:
 
 
 def fetch_new_articles() -> int:
-    """Тянем RSS теми же запросами/парсером, что news_collect.py, льём
-    в news (krisha_bot). Без картинок/Playwright — нам нужен только текст
-    для LLM-анализа, а не витрина для UI (это уже отдельная забота
-    news_collect.py, если/когда его тоже поставят на крон)."""
+    """Тянем RSS + Krisha.kz editorial-раздел, льём в news (krisha_bot).
+    Без картинок/Playwright — нам нужен только текст для LLM-анализа, а не
+    витрина для UI (это уже отдельная забота news_collect.py, если/когда
+    его тоже поставят на крон).
+
+    ВАЖНО (было раньше): использовался news_collect.QUERIES — статичный
+    список БЕЗ поимённых ЖК-запросов и без Krisha content (они добавлены
+    в news_collect.load_queries()/fetch_krisha_content() отдельно, но
+    news_analyze.py их не подхватывал — единственный реально работающий по
+    крону путь (krisha-hype-news.timer, 06:30 ежедневно) продолжал бы
+    получать только 4 общих запроса). Переключено на load_queries() +
+    добавлен вызов fetch_krisha_content() — то же самое, что теперь тянет
+    news_collect.py при ручном запуске."""
     conn = main_conn()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT url FROM news WHERE ts > now() - interval '30 days'")
     seen = {r["url"] for r in cur.fetchall()}
 
     new_items = []
-    for q in news_collect.QUERIES:
+    for path in news_collect.KRISHA_CONTENT_PATHS:
+        try:
+            for it in news_collect.fetch_krisha_content(path):
+                if it["url"] in seen or it["url"] in [x["url"] for x in new_items]:
+                    continue
+                new_items.append(it)
+            time.sleep(2)
+        except Exception as e:
+            print(f"[WARN] krisha content error {path}: {e}", flush=True)
+
+    for q in news_collect.load_queries():
         try:
             for it in news_collect.parse_rss(news_collect.get_rss(q)):
                 if it["url"] in seen or it["url"] in [x["url"] for x in new_items]:
@@ -176,9 +195,14 @@ def fetch_new_articles() -> int:
 
     for it in new_items:
         try:
+            # summary — Krisha content отдаёт готовый анонс прямо со
+            # страницы листинга (см. fetch_krisha_content), RSS-статьи —
+            # без него (там summary дозаполняется отдельным Playwright-шагом
+            # в news_collect.py, который сюда не портирован, не наша забота
+            # здесь: LLM работает и по title+summary=None).
             cur.execute(
-                "INSERT INTO news (title, source, url) VALUES (%s,%s,%s) ON CONFLICT (url) DO NOTHING",
-                (it["title"][:500], it["source"][:100], it["url"]))
+                "INSERT INTO news (title, source, url, summary) VALUES (%s,%s,%s,%s) ON CONFLICT (url) DO NOTHING",
+                (it["title"][:500], it["source"][:100], it["url"], (it.get("summary") or None)))
         except Exception as e:
             print(f"[WARN] insert error: {e}", flush=True)
 
@@ -293,6 +317,19 @@ def main() -> None:
         fetch_new_articles()
     except Exception as e:
         print(f"[WARN] fetch_new_articles упал: {e}", flush=True)
+
+    # YouTube (см. hype_tracker/youtube_collect.py, задача "тепловая карта
+    # хайпа" п.4) — те же 5 (пока 2 подтверждённых) каналов о недвижимости,
+    # видео льются в ту же news, дальше обрабатываются тем же LLM-циклом
+    # ниже наравне со статьями. Отдельный процесс (yt-dlp тяжелее urllib),
+    # падение не должно рушить остальной анализ.
+    try:
+        import subprocess
+        subprocess.run(
+            [sys.executable, str(BASE / "hype_tracker" / "youtube_collect.py")],
+            timeout=600, check=False)
+    except Exception as e:
+        print(f"[WARN] youtube_collect упал: {e}", flush=True)
 
     mconn = main_conn()
     hconn = hype_conn()

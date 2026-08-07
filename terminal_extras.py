@@ -484,16 +484,31 @@ def make_extras_router(templates) -> APIRouter:
         # периоду"): агрегируем по локации максимальный рейтинг за окно и
         # число упоминаний (строк истории) в этом окне — это и "как оно
         # выглядело тогда", и метрика "сколько раз упоминали".
+        # Velocity/decay (см. п.5 спеки "тепловая карта хайпа" — формула
+        # HypeScore): velocity = упоминаний за 24ч / (среднее/день за
+        # предыдущие 7д + 1) — рост в 3-5х от базового уровня = "вспыхнуло".
+        # decay — экспоненциальное затухание рейтинга по возрасту последнего
+        # упоминания (τ=48ч, середина диапазона 36-72ч из спеки) — старый
+        # хайп без новых упоминаний "остывает" на карте вместо вечного
+        # горения. Оба считаются здесь и отдаются отдельными полями —
+        # фронт красит по decayed_rating, а не по сырому rating.
+        import math
+        from datetime import datetime, timezone
         db = _hype_db_conn()
         cur = db.cursor()
         if days:
             cur.execute("""
-                SELECT l.name, l.district, l.lat, l.lon,
+                SELECT l.id, l.name, l.district, l.lat, l.lon,
                        MAX(h.rating) AS rating,
                        COUNT(h.id) AS mentions,
                        (array_agg(h.note ORDER BY h.ts DESC))[1] AS reason,
                        MAX(h.ts) AS last_seen,
-                       AVG(h.sentiment) AS sentiment
+                       AVG(h.sentiment) AS sentiment,
+                       (SELECT COUNT(*) FROM hype_location_history h24
+                        WHERE h24.location_id = l.id AND h24.ts >= now() - interval '24 hours') AS n_24h,
+                       (SELECT COUNT(*) FROM hype_location_history h7
+                        WHERE h7.location_id = l.id AND h7.ts >= now() - interval '7 days'
+                          AND h7.ts < now() - interval '24 hours') / 6.0 AS avg_per_day_7d
                 FROM hype_locations l
                 JOIN hype_location_history h ON h.location_id = l.id
                 WHERE l.lat IS NOT NULL AND l.lon IS NOT NULL
@@ -503,18 +518,35 @@ def make_extras_router(templates) -> APIRouter:
                 ORDER BY rating DESC LIMIT 300""", (days,))
         else:
             cur.execute("""
-                SELECT l.name, l.district, l.lat, l.lon, l.rating,
+                SELECT l.id, l.name, l.district, l.lat, l.lon, l.rating,
                        COALESCE((SELECT COUNT(*) FROM hype_location_history h
                                  WHERE h.location_id = l.id), 0) AS mentions,
-                       l.reason, l.last_seen, l.sentiment
+                       l.reason, l.last_seen, l.sentiment,
+                       (SELECT COUNT(*) FROM hype_location_history h24
+                        WHERE h24.location_id = l.id AND h24.ts >= now() - interval '24 hours') AS n_24h,
+                       (SELECT COUNT(*) FROM hype_location_history h7
+                        WHERE h7.location_id = l.id AND h7.ts >= now() - interval '7 days'
+                          AND h7.ts < now() - interval '24 hours') / 6.0 AS avg_per_day_7d
                 FROM hype_locations l
                 WHERE l.lat IS NOT NULL AND l.lon IS NOT NULL AND l.rating > 0
                 ORDER BY l.rating DESC LIMIT 300""")
         cols = [d[0] for d in cur.description]
         locs = [dict(zip(cols, row)) for row in cur.fetchall()]
+        DECAY_TAU_HOURS = 48.0
+        now_ts = datetime.now(timezone.utc)
         for l in locs:
-            if l.get("last_seen") is not None:
-                l["last_seen"] = str(l["last_seen"])
+            last_seen = l.get("last_seen")
+            if last_seen is not None:
+                age_hours = max(0.0, (now_ts - last_seen).total_seconds() / 3600.0)
+                l["decayed_rating"] = round((l.get("rating") or 0) * math.exp(-age_hours / DECAY_TAU_HOURS), 1)
+                l["age_hours"] = round(age_hours, 1)
+                l["last_seen"] = str(last_seen)
+            else:
+                l["decayed_rating"] = l.get("rating") or 0
+                l["age_hours"] = None
+            avg_7d = float(l.get("avg_per_day_7d") or 0)
+            l["velocity"] = round((l.get("n_24h") or 0) / (avg_7d + 1), 2)
+            l.pop("avg_per_day_7d", None)
         cur.close(); db.close()
         return JSONResponse({"locations": locs})
 

@@ -247,44 +247,94 @@ function setHypeMin(v) {
   if (hpMarketOn) drawHypeHex();
 }
 
-// --- Слой «Хайп по новостям» (основной): локации из анализа новостей ---
-// Снэпим каждую локацию на общую гекс-сетку (см. hpHexAxial/hpHexCenter
-// выше) и агрегируем несколько локаций одной ячейки в один гекс — иначе
-// близкие ЖК рисуют перекрывающиеся полигоны (задача "перекрывающиеся гексы").
-// Яркость/насыщенность жёлтого дополнительно растёт с числом упоминаний
-// (mentions — строки hype_location_history в выбранном периоде), не только
-// с рейтингом — см. hpHexColor(t, boost).
+// --- Слой «Хайп по новостям» (основной): KDE (kernel density) ---
+// Раньше — просто бакетинг сырых локаций в гекс-сетку (значение ячейки =
+// максимум рейтинга ПОПАВШИХ в неё точек) — соседние, но не совпадающие
+// по гексу упоминания рисовались отдельными несвязанными пятнами, карта
+// была "дырявой" (мало оранжевых точек, см. задачу "почему оранжевых точек
+// мало"). Теперь — настоящий KDE: у каждого упоминания гауссиана радиусом
+// SIGMA_M ~500м, вклад в ЛЮБУЮ ячейку в пределах ~2σ = сумма
+// intensity_i * exp(-dist²/(2σ²)) по всем точкам в радиусе — соседние
+// упоминания сливаются в одно читаемое пятно, а не остаются отдельными
+// гексами (см. п.6 спеки "тепловая карта хайпа": "Перейди на KDE").
+const HP_KDE_SIGMA_M = 500;
+const HP_KDE_CUTOFF_RINGS = Math.ceil(2 * HP_KDE_SIGMA_M / HP_EDGE);  // ~10 колец = обрезка на 2σ
+function hpHaversineM(lat1, lon1, lat2, lon2) {
+  const dlat = (lat2 - lat1) * HP_MLAT, dlon = (lon2 - lon1) * HP_MLON;
+  return Math.sqrt(dlat * dlat + dlon * dlon);
+}
 function drawNewsHexes() {
   hpNewsLayer.clearLayers();
-  const cells = new Map();
-  hpNewsLocations.forEach(l => {
-    if (hpMin > 0 && (l.rating || 0) < hpMin) return;
-    if (l.lat == null || l.lon == null) return;
-    const [q, r] = hpHexAxial(l.lat, l.lon, HP_EDGE);
-    const key = q + ':' + r;
-    let cell = cells.get(key);
-    if (!cell) { cell = {q, r, rating: 0, mentions: 0, names: [], reasons: [], sentSum: 0, sentN: 0}; cells.set(key, cell); }
-    cell.rating = Math.max(cell.rating, l.rating || 0);
-    cell.mentions += (l.mentions || 1);
-    cell.names.push(l.name);
-    if (l.reason) cell.reasons.push(l.reason);
-    if (l.sentiment != null) { cell.sentSum += l.sentiment; cell.sentN++; }
+  const points = hpNewsLocations.filter(l =>
+    l.lat != null && l.lon != null && !(hpMin > 0 && (l.rating || 0) < hpMin));
+  if (!points.length) { updateHpCount(); return; }
+
+  // Каждая точка "разбрасывает" гауссиану по своему hex-диску радиусом
+  // HP_KDE_CUTOFF_RINGS (в осевых координатах — простой перебор по
+  // кубическому расстоянию, без построения кольца за кольцом).
+  const acc = new Map();  // key -> {sumW, sumWRating, sumWSent, sentN, names:Set, reasons:[], mentions, maxVelocity}
+  points.forEach(l => {
+    const [q0, r0] = hpHexAxial(l.lat, l.lon, HP_EDGE);
+    // Затухание (decayed_rating, см. /admin/api/hype-locations — τ=48ч) —
+    // используем ВМЕСТО сырого rating, чтобы старый хайп без новых
+    // упоминаний остывал на карте, а не горел вечно (п.5 спеки).
+    const effRating = (l.decayed_rating != null ? l.decayed_rating : l.rating) || 1;
+    const intensity = Math.max(1, effRating) * (1 + Math.min(2, Math.log1p(l.mentions || 1)));
+    const R = HP_KDE_CUTOFF_RINGS;
+    for (let dq = -R; dq <= R; dq++) {
+      const rMin = Math.max(-R, -dq - R), rMax = Math.min(R, -dq + R);
+      for (let dr = rMin; dr <= rMax; dr++) {
+        const q = q0 + dq, r = r0 + dr;
+        const [clat, clon] = hpHexCenter(q, r, HP_EDGE);
+        const dist = hpHaversineM(l.lat, l.lon, clat, clon);
+        const w = intensity * Math.exp(-(dist * dist) / (2 * HP_KDE_SIGMA_M * HP_KDE_SIGMA_M));
+        if (w < 0.01) continue;
+        const key = q + ':' + r;
+        let cell = acc.get(key);
+        if (!cell) { cell = {q, r, sumW: 0, sumWRating: 0, sumWSent: 0, sentN: 0, names: new Set(), reasons: [], mentions: 0, maxVelocity: 0}; acc.set(key, cell); }
+        cell.sumW += w;
+        cell.sumWRating += w * effRating;
+        if (l.sentiment != null) { cell.sumWSent += w * l.sentiment; cell.sentN += w; }
+        cell.mentions += (l.mentions || 1);
+        cell.names.add(l.name);
+        if (l.reason) cell.reasons.push(l.reason);
+        if ((l.velocity || 0) > cell.maxVelocity) cell.maxVelocity = l.velocity;
+      }
+    }
   });
-  const maxMentions = Math.max(1, ...[...cells.values()].map(c => c.mentions));
+
+  const cells = [...acc.values()];
+  if (!cells.length) { updateHpCount(); return; }
+  const maxW = Math.max(...cells.map(c => c.sumW));
+  const maxMentions = Math.max(1, ...cells.map(c => c.mentions));
   let shown = 0;
   cells.forEach(cell => {
+    // Порог отсечения фонового шума — ячейки с почти нулевым весом
+    // (далёкий хвост гауссианы) не рисуем, иначе вся карта покрыта еле
+    // заметной дымкой вместо читаемых пятен.
+    if (cell.sumW / maxW < 0.04) return;
     shown++;
-    const s = Math.max(0.05, Math.min(1, cell.rating / 100));
+    const avgRating = cell.sumWRating / cell.sumW;
+    const s = Math.max(0.05, Math.min(1, avgRating / 100));
     const boost = Math.min(1, cell.mentions / maxMentions);
-    const avgSentiment = cell.sentN ? cell.sentSum / cell.sentN : null;
+    const avgSentiment = cell.sentN ? cell.sumWSent / cell.sentN : null;
     const isNegative = hpSentimentIsNegative(avgSentiment);
+    // "Вспыхнуло за 24ч" (velocity >= 3 — рост втрое от базового уровня,
+    // см. п.5 спеки) — отдельная подсветка контуром, даже если абсолютный
+    // объём в ячейке маленький (иначе такой всплеск потерялся бы среди
+    // клеток с более высоким объёмом, но давно остывших).
+    const isSpiking = cell.maxVelocity >= 3;
     const [clat, clon] = hpHexCenter(cell.q, cell.r, HP_EDGE);
-    const label = cell.names[0] + (cell.names.length > 1 ? ` +${cell.names.length - 1}` : '');
+    const namesArr = [...cell.names];
+    const label = namesArr[0] + (namesArr.length > 1 ? ` +${namesArr.length - 1}` : '');
     const sentTxt = isNegative ? ` · ⚠️ скандальный хайп (тональность ${avgSentiment.toFixed(2)})` : '';
+    const spikeTxt = isSpiking ? ` · 🚀 вспыхнуло за 24ч (velocity ${cell.maxVelocity.toFixed(1)}x)` : '';
     L.polygon(hexCorners(clat, clon, HP_EDGE), {
-      color: 'transparent', weight: 0,
-      fillColor: isNegative ? hpHexColorNegative(s, boost) : hpHexColor(s, boost), fillOpacity: 0.6,
-    }).bindTooltip(`${escapeHtml(label)} · хайп ${Math.round(cell.rating)} · упоминаний: ${cell.mentions}${sentTxt}${cell.reasons[0] ? ' · ' + escapeHtml(cell.reasons[0].slice(0, 90)) : ''}`, {sticky:true})
+      color: isSpiking ? '#facc15' : 'transparent', weight: isSpiking ? 2 : 0,
+      dashArray: isSpiking ? '4,3' : null,
+      fillColor: isNegative ? hpHexColorNegative(s, boost) : hpHexColor(s, boost),
+      fillOpacity: Math.max(0.12, 0.6 * Math.min(1, cell.sumW / maxW * 1.6)),
+    }).bindTooltip(`${escapeHtml(label)} · хайп ${Math.round(avgRating)} · упоминаний: ${cell.mentions}${sentTxt}${spikeTxt}${cell.reasons[0] ? ' · ' + escapeHtml(cell.reasons[0].slice(0, 90)) : ''}`, {sticky:true})
       .addTo(hpNewsLayer);
   });
   updateHpCount();

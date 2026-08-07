@@ -114,6 +114,46 @@ def load_queries() -> list[str]:
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
 MAX_IMAGE_FETCH = 10  # сколько страниц статей открываем за прогон ради фото
 
+# ── Krisha.kz как источник (не только Google News RSS) ─────────────────────
+# У Крыши свой полноценный редакционный раздел: /content/news (новости
+# рынка) и /content/articles (аналитика/гайды) — см. задачу "тепловая карта
+# хайпа", п.3 "Krysha.kz — да, новости есть и ведутся". Обе страницы —
+# серверный рендер (не SPA), заголовок/анонс/картинка уже есть в HTML
+# листинга — можно вытащить одним запросом на раздел, без захода на каждую
+# статью отдельно (в отличие от Google News, где нужен отдельный og:image
+# запрос на каждую ссылку).
+KRISHA_CONTENT_PATHS = ["/content/news", "/content/articles"]
+_KRISHA_ARTICLE_RE = re.compile(
+    r'href="(/content/(?:news|articles)/\d{4}/[a-z0-9\-]+)"[^>]*>.*?'
+    r'src="([^"]+)"[^>]*alt="[^"]*"[^>]*>.*?'
+    r'<h4 class="article-row__title"[^>]*>(.*?)</h4>'
+    r'(?:<div class="article-row__desc"[^>]*>(.*?)</div>)?',
+    re.S)
+
+
+def fetch_krisha_content(path: str) -> list[dict]:
+    """Список [{title,url,source,image,summary}] с одной страницы раздела
+    Крыши (/content/news или /content/articles). Заголовок/анонс/картинка
+    уже в HTML листинга — доп. запросов на сами статьи не нужно."""
+    url = "https://krisha.kz" + path
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        body = r.read().decode("utf-8", errors="replace")
+    out, seen_local = [], set()
+    for m in _KRISHA_ARTICLE_RE.finditer(body):
+        rel_url, img, title, desc = m.groups()
+        if rel_url in seen_local:
+            continue
+        seen_local.add(rel_url)
+        out.append({
+            "title": html.unescape(strip_tags(title)),
+            "url": "https://krisha.kz" + rel_url,
+            "source": "Krisha.kz",
+            "image": img,
+            "summary": html.unescape(strip_tags(desc)) if desc else None,
+        })
+    return out
+
 
 def get_rss(q: str) -> str:
     url = "https://news.google.com/rss/search?" + urllib.parse.urlencode(
@@ -249,6 +289,21 @@ def main() -> None:
 
     items: list[dict] = []
     seen_this_run: set[str] = set()
+
+    # Krisha.kz editorial-раздел — первым, до общего RSS-обхода: это
+    # проверенно релевантный источник (не поиск по ключевым словам), и он
+    # должен пережить обрезку items[:100] ниже (2 запроса на весь список).
+    for path in KRISHA_CONTENT_PATHS:
+        try:
+            for it in fetch_krisha_content(path):
+                if it["url"] in seen_urls or it["url"] in seen_this_run:
+                    continue
+                items.append(it)
+                seen_this_run.add(it["url"])
+            time.sleep(2)
+        except Exception as e:
+            print(f"# krisha content error {path}: {e}", file=sys.stderr)
+
     for q in load_queries():
         try:
             for it in parse_rss(get_rss(q)):
