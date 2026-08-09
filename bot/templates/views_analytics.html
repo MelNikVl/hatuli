@@ -238,7 +238,14 @@ function setDays(d) {
 }
 
 function load() {
-  fetch('/admin/api/views-points?days=' + currentDays).then(r => r.json()).then(d => {
+  fetch('/admin/api/views-points?days=' + currentDays).then(r => {
+    // Раньше ошибка/протухшая сессия молча превращалась в "0 объявлений"
+    // без объяснения (fetch().then(r=>r.json()) не проверял r.ok) — карта
+    // и топ-50 просто оставались пустыми, будто вообще нет данных, хотя
+    // причиной могла быть, например, разлогиненная сессия (401).
+    if (!r.ok) throw new Error('http ' + r.status);
+    return r.json();
+  }).then(d => {
     currentPoints = d.points || [];
     // Счётчик просмотров качает отдельный медленный Playwright-микросервис
     // (krisha-viewcount, см. подсказку сверху) — реально идёт по несколько
@@ -248,6 +255,13 @@ function load() {
     renderHexes(currentPoints, parseFloat(document.getElementById('v-hex-edge').value) || 100);
     renderTop50(currentPoints);
     document.getElementById('v-hex-detail').style.display = 'none';
+    // Подстраховка: если .hcb-grid переставил блок карты в другую ячейку
+    // ДО того, как сюда долетел hatuli:chart-resize (гонка на медленных
+    // соединениях), Leaflet мог отрисовать тайлы под неверный размер
+    // контейнера и остаться пустым/обрезанным до следующего ресайза.
+    setTimeout(() => map.invalidateSize(), 300);
+  }).catch(err => {
+    document.getElementById('v-result-count').textContent = 'Не удалось загрузить данные (' + err.message + ') — обнови страницу; если не помогает, возможно разлогинило.';
   });
 }
 document.getElementById('v-hex-edge').addEventListener('input', () => {

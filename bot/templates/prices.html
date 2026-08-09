@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 .container { padding: 20px 20px 20px 0; max-width: 100%; margin: 0; }
 </style>
@@ -42,6 +43,15 @@
       <div style="font-size:0.85em;color:#888;margin:4px 0 10px;">от самых больших изменений цены к самым маленьким</div>
       <div id="price-influencers-list" style="flex:1;overflow-y:auto;"></div>
     </div>
+  </div>
+
+  <div class="chart-block" style="flex:1 1 0;min-width:500px;width:auto;">
+    <b style="font-size:1em;">Средняя цена за м² по комнатности и району</b>
+    <div style="font-size:0.85em;color:#888;margin:4px 0 10px;">
+      Медиана ₸/м² по активным объявлениям. Районы — официальные 6 районов Астаны (неформальных зон вроде
+      "Туран"/"Мангилик" с готовыми границами в базе нет — это проспекты/микрорайоны внутри Есильского района).
+    </div>
+    <div class="chart-block-inner"><canvas id="price-district-chart"></canvas></div>
   </div>
 
 </div>
@@ -190,5 +200,48 @@ function loadPriceInfluencers(rooms, days) {
   });
 }
 loadPrices('', 30);
+
+// ── Средняя цена за м² по комнатности и району ──────────────────────────
+const DISTRICT_COLORS = {
+  'Есильский р-н': '#2563eb', 'Алматы р-н': '#16a34a', 'Сарыарка р-н': '#f59e0b',
+  'Сарайшык р-н': '#a855f7', 'р-н Байконур': '#ef4444', 'Нура р-н': '#0891b2',
+};
+const DISTRICT_SHORT = {
+  'Есильский р-н': 'Есильский', 'Алматы р-н': 'Алматы', 'Сарыарка р-н': 'Сарыарка',
+  'Сарайшык р-н': 'Сарайшык', 'р-н Байконур': 'Байконур', 'Нура р-н': 'Нура',
+};
+fetch('/admin/api/price-by-district').then(r => r.json()).then(d => {
+  const rows = d.rows || [];
+  const rooms = [1, 2, 3, 4];
+  const districts = Object.keys(DISTRICT_COLORS).filter(dn => rows.some(r => r.district === dn));
+  const byKey = {};
+  rows.forEach(r => { byKey[r.district + ':' + r.rooms] = r; });
+  const datasets = districts.map(dn => ({
+    label: DISTRICT_SHORT[dn] || dn,
+    backgroundColor: DISTRICT_COLORS[dn],
+    data: rooms.map(rm => {
+      const r = byKey[dn + ':' + rm];
+      return r ? Math.round(r.median_m2 / 1000) : null;
+    }),
+  }));
+  new Chart(document.getElementById('price-district-chart'), {
+    type: 'bar',
+    data: { labels: rooms.map(rm => rm === 4 ? '4+-комн' : rm + '-комн'), datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { boxWidth: 10, font: { size: 11.5 } } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y} тыс ₸/м²` } },
+      },
+      scales: {
+        x: { ticks: { font: { size: 12 } }, grid: { display: false } },
+        y: { beginAtZero: true, title: { display: true, text: 'тыс ₸/м²' }, ticks: { precision: 0 } },
+      },
+    },
+  });
+}).catch(() => {
+  document.getElementById('price-district-chart').closest('.chart-block').innerHTML =
+    '<div style="padding:14px;color:#888;font-size:12px;">не удалось загрузить</div>';
+});
 </script>
 {% endblock %}

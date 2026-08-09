@@ -4,9 +4,15 @@
 Используется и веб-кнопкой /admin/rebind (мгновенный отклик + прогресс),
 и фоновым сервисом service_geobind.py (периодический автозапуск).
 
-Стадии (см. run_rebind):
+Стадии (см. run_rebind), в порядке приоритета:
   A0. Адрес из заголовка, если address пуст.
-  A.  Привязка по ссылке на карточку ЖК (complex_url == complexes.krisha_url).
+  A.  Привязка по ссылке на карточку ЖК (complex_url == complexes.krisha_url) —
+      это структурные данные от самой Крыши, самый надёжный сигнал.
+  A1. Привязка по АДРЕСУ: если нормализованный адрес объявления совпадает
+      с адресом, на котором УЖЕ надёжно (стадии A/B прошлых прогонов) сидит
+      один-единственный ЖК — привязываем и его. Если по этому адресу ЖК не
+      числится вовсе — не гадаем, оставляем как есть (скорее всего старый
+      дом без ЖК, см. bind_by_address).
   B.  Название ЖК, найденное в заголовке (не в адресе — там улицы).
   D.  Geocode fallback: адрес есть, координат нет — Nominatim (bot.core.geo).
       Ограничено батчем за прогон (Nominatim: 1 запрос/сек, ToS).
@@ -17,7 +23,11 @@
 фантомными объявлениями (объявление в 300м от чужого ЖК подписывалось им).
 Без надёжного способа подтвердить принадлежность — лучше оставить объявление
 непривязанным (виден на /admin/unbound) и обработать вручную/другим методом,
-чем привязать неверно.
+чем привязать неверно. Стадия A1 (по адресу) — НЕ то же самое: это точное
+совпадение НОРМАЛИЗОВАННОЙ СТРОКИ адреса с адресом уже подтверждённых
+объявлений того же ЖК, а не близость по прямой — гораздо надёжнее и не
+страдает той же проблемой (два соседних, но РАЗНЫХ ЖК с разными адресами
+не перепутаются).
 """
 from __future__ import annotations
 
@@ -59,6 +69,64 @@ async def record_unbound_snapshot() -> None:
         "VALUES ($1, $2, $3)", total_active, unbound, unbound_coords)
 
 
+async def bind_by_address(target_table: str) -> int:
+    """Привязка по точному совпадению НОРМАЛИЗОВАННОГО адреса — общая для
+    apartment_listings (стадия A1 в run_rebind) и rental_listings (см.
+    service_rental.py). Правило "адрес -> ЖК" строится ВСЕГДА из
+    apartment_listings (это основной, ревизируемый набор данных с
+    is_garbage/is_street аудитом complexes) и применяется к unbound-строкам
+    целевой таблицы (той же apartment_listings либо rental_listings —
+    у обеих одинаковые колонки id/address/complex_name).
+
+    Оставляем только адреса, которые указывают ровно на ОДИН ЖК (если один
+    и тот же нормализованный адрес встречается у двух разных ЖК — это,
+    скорее всего, коллизия улицы/двора, а не факт, — такие пропускаем, не
+    угадываем). Адрес без номера дома тоже пропускаем — слишком общий текст
+    ("улица Кенесары" без номера подошёл бы половине квартала).
+
+    В отличие от убранной геопривязки "ближайший ЖК ≤350м" (см. докстринг
+    модуля) — это точное совпадение строки адреса с адресом уже
+    подтверждённых объявлений того же ЖК, а не близость по прямой: два
+    соседних, но РАЗНЫХ ЖК с разными адресами не перепутаются."""
+    if target_table not in ("apartment_listings", "rental_listings"):
+        raise ValueError(target_table)
+    from bot.db.pg import fetch as pg_fetch, execute as pg_exec
+
+    addr_rules_rows = await pg_fetch(r"""
+        SELECT naddr, (array_agg(complex_name))[1] AS complex_name
+        FROM (
+            SELECT DISTINCT lower(trim(regexp_replace(al.address, '\s*—.*$', ''))) AS naddr,
+                   c.name AS complex_name
+            FROM apartment_listings al
+            JOIN complexes c ON lower(trim(c.name)) = lower(trim(al.complex_name))
+            WHERE al.address IS NOT NULL AND btrim(al.address) != ''
+              AND al.address ~ '[0-9]'
+              AND al.complex_name IS NOT NULL AND btrim(al.complex_name) != ''
+              AND COALESCE(c.is_garbage, FALSE) = FALSE
+              AND COALESCE(c.is_street, FALSE) = FALSE
+        ) t
+        GROUP BY naddr
+        HAVING COUNT(*) = 1
+    """)
+    addr_rules = {r["naddr"]: r["complex_name"] for r in addr_rules_rows}
+    if not addr_rules:
+        return 0
+
+    unbound_addr_rows = await pg_fetch(rf"""
+        SELECT id, lower(trim(regexp_replace(address, '\s*—.*$', ''))) AS naddr
+        FROM {target_table}
+        WHERE (complex_name IS NULL OR btrim(complex_name) = '')
+          AND address IS NOT NULL AND btrim(address) != ''
+    """)
+    by_addr_updates = [(r["id"], addr_rules[r["naddr"]])
+                        for r in unbound_addr_rows if r["naddr"] in addr_rules]
+    for lid, canon in by_addr_updates:
+        await pg_exec(
+            f"UPDATE {target_table} SET complex_name = $2 WHERE id = $1",
+            lid, canon)
+    return len(by_addr_updates)
+
+
 async def run_rebind(progress_cb: ProgressCB | None = None) -> dict:
     """Стадии A0/A/B/C. Идемпотентно, можно запускать повторно."""
     from bot.db.pg import fetch as pg_fetch, execute as pg_exec, fetchval as pg_fv
@@ -97,6 +165,10 @@ async def run_rebind(progress_cb: ProgressCB | None = None) -> dict:
           AND al.complex_url IS NOT NULL AND c.krisha_url IS NOT NULL
           AND al.complex_url = c.krisha_url
     """) or "").split()[-1]
+
+    # ── A1: привязка по точному совпадению адреса ──────────────────────
+    await _report(progress_cb, "по адресу подтверждённых ЖК…")
+    by_addr = await bind_by_address("apartment_listings")
 
     # ── B: название ЖК в заголовке (НЕ в адресе — там улицы) ───────────
     await _report(progress_cb, "по названию из заголовков…")
@@ -178,12 +250,12 @@ async def run_rebind(progress_cb: ProgressCB | None = None) -> dict:
         WHERE is_active IS NOT FALSE
           AND (complex_name IS NULL OR btrim(complex_name) = '')
     """) or 0
-    logger.info("rebind: by_url=%s by_text=%d by_geo=%s geo_fixed=%s, осталось без ЖК %d",
-                by_url, by_text, by_geo, geo_fixed, left)
+    logger.info("rebind: by_url=%s by_addr=%d by_text=%d by_geo=%s geo_fixed=%s, осталось без ЖК %d",
+                by_url, by_addr, by_text, by_geo, geo_fixed, left)
     return {
         "ok": True,
-        "bound": int(by_url or 0) + by_text + int(by_geo or 0),
-        "by_url": int(by_url or 0), "by_text": by_text,
+        "bound": int(by_url or 0) + by_addr + by_text + int(by_geo or 0),
+        "by_url": int(by_url or 0), "by_addr": by_addr, "by_text": by_text,
         "by_geo": int(by_geo or 0), "geo_fixed": int(geo_fixed or 0), "left": left,
         "addr_filled": addr_filled,
     }

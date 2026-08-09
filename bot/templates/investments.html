@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<div class="page-title">💰 Инвестиции</div>
+<div style="display:flex;gap:4px;margin-bottom:16px;">
+  <a href="/admin/info" style="padding:7px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;text-decoration:none;">Общее</a>
+  <a href="/admin/investments" style="padding:7px 16px;border-radius:8px;background:#2563eb;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">💰 Инвестиции</a>
+</div>
+
+<p style="font-size:13px;color:#888;max-width:900px;">
+  Тепловая карта доходности аренды (gross yield — годовая аренда / цена продажи) по гексагонам: где на карте зеленее —
+  там в среднем выгоднее сдавать квартиру относительно её цены, где краснее — доходность ниже среднего.
+  Не путать с картой цен: дорогой район необязательно менее выгодный, если аренда там тоже дорогая.
+</p>
+
+<div class="admin-block" style="display:flex;gap:14px;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+  <div>
+    <div style="font-size:22px;font-weight:800;">{{ n }}</div>
+    <div style="font-size:11.5px;color:#888;">активных объявлений с расчётной доходностью</div>
+  </div>
+  <div>
+    <div style="font-size:22px;font-weight:800;color:#16a34a;">{{ avg_yield if avg_yield is not none else '—' }}%</div>
+    <div style="font-size:11.5px;color:#888;">средняя доходность по городу</div>
+  </div>
+  <div>
+    <div style="font-size:22px;font-weight:800;">{{ median_yield if median_yield is not none else '—' }}%</div>
+    <div style="font-size:11.5px;color:#888;">медианная доходность по городу</div>
+  </div>
+  <a id="kepler-link" href="#" target="_blank" style="display:flex;align-items:center;gap:8px;padding:10px 18px;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;font-size:13px;text-decoration:none;margin-left:auto;align-self:center;">
+    🗺 Открыть в Kepler.gl →
+  </a>
+</div>
+<script>
+document.getElementById('kepler-link').href =
+  'https://kepler.gl/demo?mapUrl=' + encodeURIComponent(location.origin + '/admin/api/geo-kepler.json?type=yield');
+</script>
+
+<div class="chart-block" style="flex:1 1 0;min-width:340px;">
+  <b style="font-size:14px;">Доходность по гексагонам</b>
+  <div style="font-size:11.5px;color:#888;margin-bottom:8px;">зелёный — выше среднего, красный — ниже среднего (10-90 перцентиль)</div>
+  <div class="chart-block-inner" id="inv-map"></div>
+</div>
+
+<script>
+const invMap = L.map('inv-map', {preferCanvas: true}).setView([51.128, 71.43], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(invMap);
+const invHexLayer = L.layerGroup().addTo(invMap);
+const ILAT0 = 51.128, ILON0 = 71.430,
+      IMLAT = 110574.0, IMLON = 111320.0 * Math.cos(ILAT0 * Math.PI/180);
+const INV_EDGE_M = 150;
+function invHexAxial(lat, lon, edge) {
+  const x = (lon - ILON0) * IMLON, y = (lat - ILAT0) * IMLAT;
+  let q = (Math.sqrt(3)/3 * x - y/3) / edge, r = (2/3 * y) / edge;
+  const s = -q - r;
+  let rq = Math.round(q), rr = Math.round(r), rs = Math.round(s);
+  const dq = Math.abs(rq-q), dr = Math.abs(rr-r), ds = Math.abs(rs-s);
+  if (dq > dr && dq > ds) rq = -rr - rs; else if (dr > ds) rr = -rq - rs;
+  return [rq, rr];
+}
+function invHexCorners(q, r, edge) {
+  const cx = edge * Math.sqrt(3) * (q + r/2), cy = edge * 1.5 * r;
+  const clat = ILAT0 + cy/IMLAT, clon = ILON0 + cx/IMLON;
+  const out = [];
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI/180 * (60*i - 30);
+    out.push([clat + (edge*Math.sin(a))/IMLAT, clon + (edge*Math.cos(a))/IMLON]);
+  }
+  return out;
+}
+function invMedian(arr) {
+  const s = [...arr].sort((a,b) => a-b);
+  const mid = Math.floor(s.length/2);
+  return s.length % 2 ? s[mid] : (s[mid-1]+s[mid])/2;
+}
+function invPercentile(arr, p) {
+  const s = [...arr].sort((a,b) => a-b);
+  return s[Math.min(Math.floor(s.length * p), s.length - 1)];
+}
+function invYieldColor(t) {
+  // красный (низкая доходность) -> жёлтый -> зелёный (высокая)
+  t = Math.max(0, Math.min(1, t));
+  const stops = [[239,68,68],[250,204,21],[34,197,94]];
+  const pos = t * (stops.length - 1);
+  const i = Math.min(Math.floor(pos), stops.length - 2);
+  const frac = pos - i;
+  const from = stops[i], to = stops[i+1];
+  const c = from.map((f,k) => Math.round(f + (to[k]-f)*frac));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+fetch('/admin/api/heat-points').then(r => r.json()).then(d => {
+  const pts = (d.points || []).filter(p => p.yield_pct != null && p.yield_pct > 0);
+  const buckets = new Map();
+  pts.forEach(p => {
+    const [q, r] = invHexAxial(p.lat, p.lon, INV_EDGE_M);
+    const key = q + ':' + r;
+    if (!buckets.has(key)) buckets.set(key, {q, r, items: []});
+    buckets.get(key).items.push(p.yield_pct);
+  });
+  const medians = [];
+  buckets.forEach(b => { b.value = invMedian(b.items); medians.push(b.value); });
+  if (!medians.length) return;
+  const lo = invPercentile(medians, 0.10), hi = invPercentile(medians, 0.90);
+  buckets.forEach(b => {
+    const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
+    L.polygon(invHexCorners(b.q, b.r, INV_EDGE_M), {
+      color: '#fff', weight: 0.5, fillColor: invYieldColor(t), fillOpacity: 0.55,
+    }).bindTooltip(`медиана доходности: ${b.value.toFixed(1)}% · ${b.items.length} объявл.`, {sticky:true}).addTo(invHexLayer);
+  });
+  setTimeout(() => invMap.invalidateSize(), 50);
+}).catch(() => {});
+</script>
+{% endblock %}

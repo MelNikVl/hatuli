@@ -25,31 +25,31 @@
   Управление включением/выключением слоёв — на вкладке <a href="/admin/analytics/ai?tab=status">AI-анализ: статус</a>.
 </p>
 
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:16px 0;">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+<div class="admin-block" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+  <div>
     <div style="font-size:24px;font-weight:800;">{{ "{:,}".format(counts.eligible or 0).replace(",", " ") }}</div>
     <div style="font-size:12px;color:#888;">объявлений с описанием (кандидаты)</div>
   </div>
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+  <div>
     <div style="font-size:24px;font-weight:800;color:#16a34a;">{{ "{:,}".format(counts.processed or 0).replace(",", " ") }}</div>
     <div style="font-size:12px;color:#888;">разобрано AI{% if counts.eligible %} ({{ ((counts.processed or 0) / counts.eligible * 100) | round(2) }}%){% endif %}</div>
   </div>
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+  <div>
     <div style="font-size:24px;font-weight:800;">{{ complexes_enriched }}</div>
     <div style="font-size:12px;color:#888;">ЖК дополнено фактами</div>
   </div>
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;">
+  <div>
     <div style="font-size:24px;font-weight:800;color:#2563eb;">{{ counts.layout_bonus_cnt or 0 }}</div>
     <div style="font-size:12px;color:#888;">получили плюс к скору за планировку</div>
   </div>
 </div>
 
-<div class="card" style="margin-bottom:14px;">
+<div class="chart-block card" style="flex:1 1 0;min-width:340px;">
   <b style="font-size:14px;">Разбор описаний по дням</b>
   <span style="font-size:12px;color:#888;margin-left:6px;">последние 30 дней, по ai_analyzed_at</span>
   {% if daily_ai %}
   {% set max_cnt = daily_ai | map(attribute='cnt') | max %}
-  <div style="display:flex;align-items:flex-end;gap:3px;height:160px;margin-top:12px;overflow-x:auto;">
+  <div class="chart-block-inner" style="display:flex;align-items:flex-end;gap:3px;margin-top:12px;overflow-x:auto;">
     {% for d in daily_ai %}
     <div style="flex:1;min-width:10px;display:flex;flex-direction:column;justify-content:flex-end;height:100%;" title="{{ d.day }}: {{ d.cnt }}">
       <div style="font-size:10px;color:#666;text-align:center;">{{ d.cnt }}</div>

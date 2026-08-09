@@ -122,7 +122,7 @@ MAX_IMAGE_FETCH = 10  # сколько страниц статей открыв�
 # листинга — можно вытащить одним запросом на раздел, без захода на каждую
 # статью отдельно (в отличие от Google News, где нужен отдельный og:image
 # запрос на каждую ссылку).
-KRISHA_CONTENT_PATHS = ["/content/news", "/content/articles"]
+KRISHA_CONTENT_PATHS: list[str] = []  # Крыша убрана из новостей (не СМИ)
 _KRISHA_ARTICLE_RE = re.compile(
     r'href="(/content/(?:news|articles)/\d{4}/[a-z0-9\-]+)"[^>]*>.*?'
     r'src="([^"]+)"[^>]*alt="[^"]*"[^>]*>.*?'
@@ -290,19 +290,8 @@ def main() -> None:
     items: list[dict] = []
     seen_this_run: set[str] = set()
 
-    # Krisha.kz editorial-раздел — первым, до общего RSS-обхода: это
-    # проверенно релевантный источник (не поиск по ключевым словам), и он
-    # должен пережить обрезку items[:100] ниже (2 запроса на весь список).
-    for path in KRISHA_CONTENT_PATHS:
-        try:
-            for it in fetch_krisha_content(path):
-                if it["url"] in seen_urls or it["url"] in seen_this_run:
-                    continue
-                items.append(it)
-                seen_this_run.add(it["url"])
-            time.sleep(2)
-        except Exception as e:
-            print(f"# krisha content error {path}: {e}", file=sys.stderr)
+    # Krisha.kz больше НЕ собирается в новости — это классифайд, не СМИ
+    # (источник удалён по решению 07.08.2026; см. SOURCE_BLOCK выше).
 
     for q in load_queries():
         try:
@@ -344,9 +333,14 @@ def main() -> None:
             if b.get("summary"):
                 cur.execute("UPDATE news SET summary = %s WHERE id = %s",
                             (b["summary"][:600], b["id"]))
-    # уборка старья
+    # уборка старья — было 14 дней, поднято до 95 (задача "хайп — 3 месяца
+    # вместо 14 дней"): news_analyze.py теперь читает окно в 90 дней для
+    # извлечения упоминаний (ARTICLE_WINDOW_DAYS), удаление новостей раньше
+    # этого окна лишало бы анализ данных ещё до того, как он успел их
+    # обработать — небольшой запас (95 вместо 90) на случай отставания
+    # прогона анализа на день-два.
     try:
-        cur.execute("DELETE FROM news WHERE ts < now() - interval '14 days'")
+        cur.execute("DELETE FROM news WHERE ts < now() - interval '95 days'")
     except Exception:
         pass
     db.commit()

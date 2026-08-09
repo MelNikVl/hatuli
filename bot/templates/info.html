@@ -3,6 +3,10 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <div class="page-title">ℹ️ Как всё устроено</div>
+<div style="display:flex;gap:4px;margin-bottom:16px;">
+  <a href="/admin/info" style="padding:7px 16px;border-radius:8px;background:#2563eb;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">Общее</a>
+  <a href="/admin/investments" style="padding:7px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;text-decoration:none;">💰 Инвестиции</a>
+</div>
 
 <style>
 .info-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px 24px; margin-bottom: 16px; max-width: 900px; }
@@ -37,6 +41,7 @@
   <a href="#hype" data-tab="hype">🔥 Хайп</a>
   <a href="#transport" data-tab="transport">🚌 Транспорт</a>
   <a href="#ai" data-tab="ai">🤖 AI-анализ описаний</a>
+  <a href="#osm" data-tab="osm">🗺 OpenStreetMap</a>
   <a href="#demolition" data-tab="demolition">🏚 Снос домов</a>
 </div>
 
@@ -370,6 +375,43 @@
 <p>Если для ЖК ещё нет такого поля в карточке — AI дополняет её и <b>присылает уведомление в Telegram</b> админу со ссылкой на объявление-источник. Уже заполненные вручную или найденные раньше поля никогда не перезаписываются — первый найденный факт остаётся источником истины.</p>
 </div>
 
+<div id="tab-osm" style="display:none;">
+
+<div class="info-card">
+  <h3>🗺 OpenStreetMap (Nominatim) — геокодирование адресов</h3>
+  <p><b>Nominatim</b> — бесплатный геокодер <a href="https://www.openstreetmap.org/" target="_blank" rel="noopener">OpenStreetMap</a>
+  (<code>nominatim.openstreetmap.org</code>). Он превращает текстовый адрес («Абая 67») в координаты (51.1706, 71.4442)
+  для карты — так мы расставляем по адресам объявления-сироты и дома, у которых Крыша не дала координат.</p>
+
+  <h3 style="margin-top:16px;">⚙️ Как используется</h3>
+  <ul>
+    <li><b>Сироты</b> (объявления без ЖК) — раз в день (крон 05:05, <code>siroty_daily.py</code>): сначала привязка к ЖК по полному совпадению адреса, остаток — геокодирование через Nominatim;</li>
+    <li><b>Дома по адресам</b> (<code>house_years</code>) — адреса без года постройки/координат;</li>
+    <li>Запрос: <code>Астана, &lt;адрес&gt;</code>, страна KZ, <code>limit=1</code> — первый результат.</li>
+  </ul>
+
+  <h3 style="margin-top:16px;">⚠️ Лимиты и бан (HTTP 429)</h3>
+  <p>Nominatim бесплатен, но требует щадящего режима — <b>не более 1 запроса в секунду</b> с одного IP.
+  При превышении возвращает <b>HTTP 429 Too Many Requests</b> и временно банит адрес (мы однажды сделали ~5 000 запросов за день — поймали бан).</p>
+  <p>Правила эксплуатации у нас:</p>
+  <ul>
+    <li>пауза между запросами ≥1.1 с;</li>
+    <li>крон раз в сутки (05:05), а не в реальном времени;</li>
+    <li>при 429 — ретраи с backoff (пауза 10/25/40 с);</li>
+    <li>адрес чистится перед запросом: убирается район («Алматы р-н, »), хвосты («— Горячая цена»), «ул./пр.».</li>
+  </ul>
+
+  <h3 style="margin-top:16px;">📊 Что НЕ находит</h3>
+  <ul>
+    <li>адреса без номера дома («между ул. Толе би и …») — геокодировать нечего;</li>
+    <li>буквенные кварталы Алматы р-на («А 108, А 98») — их нет в OSM;</li>
+    <li>опечатки в объявлениях («Нажимиденова» вместо «Нажимеденова»).</li>
+  </ul>
+  <p>Такие адреса остаются без точных координат (на карте не рисуются) либо на координатах района-фолбэка.</p>
+</div>
+
+</div><!-- /tab-osm -->
+
 <div id="tab-demolition" style="display:none;">
   <h2>🏚 Снос и реновация домов в Астане (2026–2030)</h2>
   <p style="font-size:12px;color:#888;margin-top:-6px;">174 дома, 4 182 квартиры — программа реновации жилища до 2030 (решение маслихата Астаны № 356/47-VIII от 12.12.2025). Тот же слой доступен кнопкой «🏚 Снос домов» в тепловых картах на <a href="/admin" style="color:#2563eb;">главной карте</a>.</p>
@@ -452,6 +494,7 @@ function initDemolitionTab() {
     document.getElementById('tab-hype').style.display = name === 'hype' ? '' : 'none';
     document.getElementById('tab-transport').style.display = name === 'transport' ? '' : 'none';
     document.getElementById('tab-ai').style.display = name === 'ai' ? '' : 'none';
+    document.getElementById('tab-osm').style.display = name === 'osm' ? '' : 'none';
     document.getElementById('tab-demolition').style.display = name === 'demolition' ? '' : 'none';
     if (name === 'demolition' && typeof initDemolitionTab === 'function') initDemolitionTab();
   }
@@ -464,7 +507,7 @@ function initDemolitionTab() {
   // "demolition" раньше не было в этом списке — прямая ссылка
   // /admin/info#demolition открывала вкладку "Общая информация" вместо
   // нужной (закладку/ссылку от пользователя игнорировало).
-  activate(['score', 'noise', 'hype', 'transport', 'ai', 'demolition'].includes(initial) ? initial : 'general');
+  activate(['score', 'noise', 'hype', 'transport', 'ai', 'osm', 'demolition'].includes(initial) ? initial : 'general');
 })();
 </script>
 

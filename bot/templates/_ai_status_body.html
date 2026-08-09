@@ -18,9 +18,7 @@
   <a href="/admin/analytics/ai?tab=analysis">AI-анализ описаний</a> (там же — редактируемые списки слов).
 </p>
 
-<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-top:16px;">
-
-  <div class="ai-block">
+  <div class="ai-block admin-block">
     <h3>🤖 AI-анализ описаний (DeepSeek)</h3>
     <p class="desc">Читает title+описание каждого нового объявления через DeepSeek и достаёт отделку, срочность,
       перепланировку, кондиционер, планировку, факты про ЖК и т.д. Платно (~$0.0001/объявление).</p>
@@ -33,7 +31,7 @@
     </div>
   </div>
 
-  <div class="ai-block">
+  <div class="ai-block admin-block">
     <h3>🏢 ЖК-факты из текста</h3>
     <p class="desc">Часть того же прохода DeepSeek — если в описании есть факты про сам ЖК (локация, охрана,
       консьерж, паркинг и т.д.), которых ещё нет у ЖК — дополняет и шлёт уведомление в Telegram. Можно выключить
@@ -47,7 +45,7 @@
     </div>
   </div>
 
-  <div class="ai-block">
+  <div class="ai-block admin-block">
     <h3>🧱 Отделка по ключевым словам</h3>
     <p class="desc">Бесплатная regex-эвристика по тексту (без LLM) — ищет явные фразы вроде "с отделкой"/"без
       отделки"/"с мебелью" плюс слова, которые админ добавил вручную на странице AI-анализа описаний.</p>
@@ -59,7 +57,7 @@
     </div>
   </div>
 
-  <div class="ai-block">
+  <div class="ai-block admin-block">
     <h3>📐 Планировки на фото</h3>
     <p class="desc">2-этапный детектор: быстрая эвристика OpenCV + локальный SigLIP (CPU) на кандидатах — находит
       среди фото объявления план квартиры. Работает как фоновый таймер каждые ~20-30 минут
@@ -72,8 +70,6 @@
       <div>Последний прогон: <b>{{ fp_counts.last_run.strftime('%d.%m.%Y %H:%M') if fp_counts.last_run else 'ещё не запускался' }}</b></div>
     </div>
   </div>
-
-</div>
 
 <script>
 const FLAG_LABELS = {

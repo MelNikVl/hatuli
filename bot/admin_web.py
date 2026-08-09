@@ -1021,7 +1021,19 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             # проверяет и правит руками, это просто чтобы не печатать с нуля.
             import re as _re
             m = _re.match(r"^[\w\-\.]+(?:[ \-][\w\-\.]+){0,3}", name.strip())
-            return (m.group(0).strip() if m else name.strip())[:60]
+            suggested = (m.group(0).strip() if m else name.strip())[:60]
+            # БАГ (найден): для коротких мусорных имён без разделителя-хвоста
+            # (напр. "Sunset Avenue" — само уже похоже на имя ЖК) regex не
+            # обрезает ничего, suggested == name. Если админ жмёт "Применить
+            # ко всей группе" не глядя (доверяя подсказке), reassign-group
+            # переписывает complex_name на ТО ЖЕ САМОЕ значение — запись
+            # остаётся привязана к тому же is_garbage=true complexes.name и
+            # после обновления страницы снова тут же, будто кнопка не
+            # работает. Пустое поле вместо бесполезной "подсказки" заставляет
+            # ввести реальное имя, а не молча ничего не поменять.
+            if suggested.strip().lower() == name.strip().lower():
+                return ""
+            return suggested
 
         groups: dict[str, list] = {}
         for r in rows:
@@ -1110,12 +1122,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             new_complex_name, garbage_name)
         return JSONResponse({"ok": True, "result": result})
 
+    # Страница сноса перенесена в /admin/info#demolition — тут не дублируем
+    # (маршрут закомментирован, API /admin/api/demolition-points остаётся для карты)
     @app.get("/admin/analytics/demolition", response_class=HTMLResponse)
     async def demolition_page(request: Request):
-        """Снос/реновация домов Астаны 2026-2030: таблица по годам."""
+        """Снос/реновация — перенесено в /admin/info#demolition."""
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
-        from bot.db.pg import fetch as pg_fetch
+        return RedirectResponse(url="/admin/info#demolition", status_code=302)
         year = request.query_params.get("year", "")
         district = request.query_params.get("district", "")
         conds, params = ["1=1"], []
@@ -1161,6 +1175,183 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         return templates.TemplateResponse("genplan.html", {
             "request": request,
             "atab": "genplan",
+        })
+
+    # ── "Основное": сводка работоспособности всего проекта одним взглядом ──
+    # (парсеры/каналы данных/AI-сервисы/бекап) — первая вкладка слева в
+    # админ-панели, см. _analytics_tabs.html. Раньше эти сигналы были
+    # разбросаны по десятку разных страниц (/admin/parsers, /admin/backup,
+    # /admin/analytics/ai, systemctl руками) — не было ни одной страницы,
+    # где сразу видно "всё ли ок". ВАЖНО: должен стоять выше catch-all
+    # /admin/analytics/{listing_id} ниже — иначе "overview" матчится как id.
+    async def _krisha_units_status() -> dict:
+        # Динамическое обнаружение ВСЕХ юнитов krisha-* (а не хардкод
+        # списка) — новый парсер/сервис появится в этой таблице сам,
+        # без правки кода. Отдельно вытягиваем таймеры: сервисы, которых
+        # они триггерят, ЗАКОНОМЕРНО простаивают (inactive/dead) между
+        # запусками — для них "ок" значит "последний запуск успешен"
+        # (systemctl Result=success), а не "сейчас активен".
+        import asyncio as _aio
+        proc = await _aio.create_subprocess_exec(
+            "systemctl", "list-units", "--type=service", "--all", "--no-legend", "--plain", "krisha-*",
+            stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+        raw_services = []
+        for line in out.decode(errors="replace").splitlines():
+            parts = line.split(None, 4)
+            if len(parts) < 4:
+                continue
+            unit, _load, active, sub = parts[:4]
+            desc = parts[4] if len(parts) > 4 else ""
+            raw_services.append({"unit": unit, "active": active, "sub": sub, "desc": desc})
+
+        proc2 = await _aio.create_subprocess_exec(
+            "systemctl", "list-timers", "--all", "--no-legend", "--plain", "krisha-*",
+            stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.DEVNULL,
+        )
+        out2, _ = await proc2.communicate()
+        timer_driven = {}
+        for line in out2.decode(errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            svc, timer_unit = parts[-1], parts[-2]
+            timer_driven[svc] = timer_unit
+
+        services = []
+        for s in raw_services:
+            unit = s["unit"]
+            if unit in timer_driven:
+                proc3 = await _aio.create_subprocess_exec(
+                    "systemctl", "show", unit, "-p", "Result", "--value",
+                    stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.DEVNULL,
+                )
+                out3, _ = await proc3.communicate()
+                result = out3.decode().strip()
+                services.append({
+                    "unit": unit, "desc": s["desc"], "periodic": True,
+                    "timer": timer_driven[unit], "ok": result == "success",
+                    "detail": f"таймер {timer_driven[unit]}, последний запуск: {result or '—'}",
+                })
+            else:
+                ok = s["active"] in ("active", "activating")
+                services.append({
+                    "unit": unit, "desc": s["desc"], "periodic": False,
+                    "ok": ok, "detail": s["active"] + "/" + s["sub"],
+                })
+        return {"services": services, "all_ok": all(s["ok"] for s in services)}
+
+    @app.get("/admin/analytics/overview", response_class=HTMLResponse)
+    async def overview_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch, fetchval as pg_fv, fetchrow as pg_fr
+        from bot.db import settings as app_settings
+
+        units = await _krisha_units_status()
+
+        # ── Каналы данных: последний успешный приём + вердикт "пускает ли
+        # источник парсить" — если сервис жив, но давно нет новых данных,
+        # это не "нет новых объявлений", а скорее всего блокировка/капча.
+        now_row = await pg_fr("SELECT now() AS n")
+        now_ts = now_row["n"]
+
+        async def _channel(name: str, last_ts, stale_after_hours: float, extra: str = ""):
+            if last_ts is None:
+                return {"name": name, "last": None, "ok": None, "extra": extra,
+                        "verdict": "нет данных вовсе"}
+            age_h = (now_ts - last_ts).total_seconds() / 3600.0
+            ok = age_h <= stale_after_hours
+            return {
+                "name": name, "last": last_ts.strftime("%d.%m %H:%M"), "ok": ok, "extra": extra,
+                "verdict": "пускает" if ok else f"нет новых данных {age_h:.0f}ч — возможно блокирует",
+            }
+
+        sale_last = await pg_fv("SELECT MAX(first_seen) FROM apartment_listings")
+        rental_last = await pg_fv("SELECT MAX(found_at) FROM rental_listings")
+        korter_last = await pg_fv("SELECT MAX(updated_at) FROM complexes WHERE source_info->'korter' IS NOT NULL")
+        homsters_last = await pg_fv("SELECT MAX(updated_at) FROM complexes WHERE source_info->'homsters' IS NOT NULL")
+        homeportal_last = None
+        try:
+            homeportal_last = await pg_fv("SELECT MAX(ts) FROM homeportal_parse_log")
+        except Exception:
+            pass
+        market_last = await pg_fv("SELECT MAX(updated_at) FROM banks")
+        hype_news_last = None
+        try:
+            hype_news_last = await pg_fv("SELECT MAX(ts) FROM news")
+        except Exception:
+            pass
+
+        channels = [
+            await _channel("Крыша — продажа", sale_last, 6),
+            await _channel("Крыша — аренда", rental_last, 6),
+            await _channel("Korter.kz", korter_last, 48),
+            await _channel("Homsters.kz", homsters_last, 48),
+            await _channel("Homeportal.kz", homeportal_last, 72),
+            await _channel("Рыночные данные (НБРК/КДИФ/Отбасы/stat.gov.kz)", market_last, 24 * 10),
+            await _channel("Новости (хайп-трекер)", hype_news_last, 30),
+        ]
+
+        # ── 24ч графики: сколько объявлений спаршено, по часам ─────────────
+        sale_hourly = await pg_fetch("""
+            SELECT date_trunc('hour', first_seen) AS h, COUNT(*) AS cnt
+            FROM apartment_listings WHERE first_seen > now() - interval '24 hours'
+            GROUP BY 1 ORDER BY 1""")
+        rental_hourly = await pg_fetch("""
+            SELECT date_trunc('hour', found_at) AS h, COUNT(*) AS cnt
+            FROM rental_listings WHERE found_at > now() - interval '24 hours'
+            GROUP BY 1 ORDER BY 1""")
+
+        # ── AI-сервисы: включён ли тумблер + свежесть последней обработки ──
+        await app_settings.load()
+        ai_text_last = await pg_fv("SELECT MAX(ai_analyzed_at) FROM apartment_listings")
+        floorplan_last = await pg_fv("SELECT MAX(floorplan_checked_at) FROM apartment_listings")
+
+        def _ai_row(label: str, setting_key: str, last_ts, stale_after_hours: float = 48):
+            enabled = app_settings.get_bool(setting_key)
+            if not enabled:
+                return {"label": label, "enabled": False, "ok": None, "detail": "выключено в настройках"}
+            if last_ts is None:
+                return {"label": label, "enabled": True, "ok": False, "detail": "включено, но данных нет"}
+            age_h = (now_ts - last_ts).total_seconds() / 3600.0
+            ok = age_h <= stale_after_hours
+            return {"label": label, "enabled": True, "ok": ok,
+                    "detail": f"последняя обработка: {last_ts.strftime('%d.%m %H:%M')}" + ("" if ok else f" ({age_h:.0f}ч назад)")}
+
+        ai_rows = [
+            _ai_row("Анализ текста объявлений (LLM)", "AI_TEXT_ANALYSIS", ai_text_last),
+            _ai_row("Детекция планировок на фото", "AI_FLOORPLAN_SCAN", floorplan_last, 12),
+            _ai_row("Разбор новостей (хайп)", "AI_HYPE_NEWS", hype_news_last, 30),
+        ]
+        for key, label in (("AI_COMPLEX_FACTS", "Факты о ЖК"), ("AI_FINISH_CLASSIFY", "Классификация отделки")):
+            enabled = app_settings.get_bool(key)
+            ai_rows.append({"label": label, "enabled": enabled, "ok": None,
+                             "detail": "включено" if enabled else "выключено в настройках"})
+        deepseek_key_set = bool(os.getenv("DEEPSEEK_API_KEY"))
+
+        # ── Бекап ────────────────────────────────────────────────────────
+        backup_row = await pg_fr("""
+            SELECT ts, status, kind FROM backup_history ORDER BY ts DESC LIMIT 1
+        """)
+        backup_info = None
+        if backup_row:
+            age_h = (now_ts - backup_row["ts"]).total_seconds() / 3600.0
+            backup_info = {
+                "ts": backup_row["ts"].strftime("%d.%m %H:%M"), "status": backup_row["status"],
+                "kind": backup_row["kind"], "age_h": round(age_h, 1),
+                "ok": backup_row["status"] == "ok" and age_h <= 48,
+            }
+
+        return templates.TemplateResponse("overview.html", {
+            "request": request, "atab": "overview", "tab": "overview",
+            "units": units, "channels": channels, "deepseek_key_set": deepseek_key_set,
+            "ai_rows": ai_rows, "backup_info": backup_info,
+            "sale_hourly": {"labels": [h["h"].strftime("%H:00") for h in sale_hourly],
+                             "counts": [h["cnt"] for h in sale_hourly]},
+            "rental_hourly": {"labels": [h["h"].strftime("%H:00") for h in rental_hourly],
+                               "counts": [h["cnt"] for h in rental_hourly]},
         })
 
     @app.get("/admin/analytics/{listing_id}", response_class=HTMLResponse)

@@ -79,8 +79,8 @@ async def run_cycle() -> None:
 
     try:
         res = await run_rebind(progress_cb=lambda s: log.info("rebind: %s", s))
-        log.info("rebind: bound=%d (url=%d text=%d geo=%d) addr_filled=%d left=%d",
-                  res["bound"], res["by_url"], res["by_text"], res["by_geo"],
+        log.info("rebind: bound=%d (url=%d addr=%d text=%d geo=%d) addr_filled=%d left=%d",
+                  res["bound"], res["by_url"], res["by_addr"], res["by_text"], res["by_geo"],
                   res["addr_filled"], res["left"])
     except Exception as e:
         log.error("rebind stage failed: %s", e, exc_info=True)
@@ -141,8 +141,8 @@ async def fast_rebind_loop() -> None:
         await asyncio.sleep(FAST_REBIND_INTERVAL_MIN * 60)
         try:
             res = await run_rebind(progress_cb=lambda s: log.info("fast-rebind: %s", s))
-            log.info("fast-rebind: bound=%d (url=%d text=%d geo=%d) left=%d",
-                      res["bound"], res["by_url"], res["by_text"], res["by_geo"], res["left"])
+            log.info("fast-rebind: bound=%d (url=%d addr=%d text=%d geo=%d) left=%d",
+                      res["bound"], res["by_url"], res["by_addr"], res["by_text"], res["by_geo"], res["left"])
             await record_unbound_snapshot()
         except Exception as e:
             log.error("fast-rebind loop error: %s", e, exc_info=True)

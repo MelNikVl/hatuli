@@ -310,21 +310,19 @@ tr:last-child td { border-bottom: none; }
 
   <!-- Компактный rental index + гистограмма скоров — левая колонка: графики и показатели -->
   {% if rental_summary %}
-  <div style="display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 18px;font-size:14px;">
-      🏠 Аренда сейчас (медиана):
-      {% if rental_summary.get(1) %}<b>1-комн ~{{ '{:,.0f}'.format(rental_summary[1].price).replace(',', ' ') }} ₸</b> <span style="color:#888;font-size:12px;">({{ rental_summary[1].n }} объявл.)</span>{% endif %}
-      {% if rental_summary.get(2) %} · <b>2-комн ~{{ '{:,.0f}'.format(rental_summary[2].price).replace(',', ' ') }} ₸</b> <span style="color:#888;font-size:12px;">({{ rental_summary[2].n }} объявл.)</span>{% endif %}
-      <div style="font-size:11px;color:#888;margin-top:2px;">база ставок аренды — из неё считается yield и payback в скоринге</div>
-    </div>
+  <div class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 18px;font-size:14px;">
+    🏠 Аренда сейчас (медиана):
+    {% if rental_summary.get(1) %}<b>1-комн ~{{ '{:,.0f}'.format(rental_summary[1].price).replace(',', ' ') }} ₸</b> <span style="color:#888;font-size:12px;">({{ rental_summary[1].n }} объявл.)</span>{% endif %}
+    {% if rental_summary.get(2) %} · <b>2-комн ~{{ '{:,.0f}'.format(rental_summary[2].price).replace(',', ' ') }} ₸</b> <span style="color:#888;font-size:12px;">({{ rental_summary[2].n }} объявл.)</span>{% endif %}
+    <div style="font-size:11px;color:#888;margin-top:2px;">база ставок аренды — из неё считается yield и payback в скоринге</div>
   </div>
   {% endif %}
 
   {% if score_hist %}
   {% set max_cnt = score_hist | map(attribute='cnt') | max %}
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:16px;">
+  <div class="chart-block" style="flex:1 1 0;min-width:340px;">
     <div style="font-size:16px;font-weight:700;margin-bottom:10px;">Распределение объектов по скору <span style="color:#888;font-weight:400;">(без учёта фильтра «мин. скор»)</span></div>
-    <div style="display:flex;align-items:flex-end;gap:4px;height:180px;">
+    <div class="chart-block-inner" style="display:flex;align-items:flex-end;gap:4px;">
       {% for b in score_hist %}
       <a href="/admin/analytics?min_score={{ b.bucket }}&district={{ filters.district }}&rooms={{ filters.rooms }}&seller={{ filters.seller }}"
          title="скор {{ b.bucket }}–{{ b.bucket + 4 }}: {{ b.cnt }} объектов — показать"
@@ -339,9 +337,9 @@ tr:last-child td { border-bottom: none; }
   {% endif %}
 
   {% if price_hist and (price_hist[1] or price_hist[2] or price_hist[3] or price_hist[4]) %}
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:16px;">
+  <div class="chart-block" style="flex:1 1 0;min-width:340px;">
     <div style="font-size:16px;font-weight:700;margin-bottom:10px;">Распределение объектов по цене <span style="color:#888;font-weight:400;">(бакеты по 5 млн ₸)</span></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
+    <div class="chart-block-inner" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
       {% for room_n, room_label, color in [(1,'1-комнатные','#2563eb'), (2,'2-комнатные','#16a34a'), (3,'3-комнатные','#f59e0b'), (4,'4+-комнатные','#8b5cf6')] %}
       {% set hb = price_hist[room_n] %}
       {% if hb %}

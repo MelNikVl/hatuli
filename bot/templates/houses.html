@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+{% set catab = 'houses' %}
+{% include "_complexes_tabs.html" with context %}
+<div class="page-title">🏘 Дома по адресам
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ total_houses }} уникальных адресов, из них без года постройки: {{ no_year }}</small>
+</div>
+<p style="font-size:13px;color:#888;max-width:900px;margin-bottom:14px;">
+  Все уникальные адреса домов из объявлений. Год постройки — из объявлений (медиана). Фильтр «без года» показывает дома, по которым год ещё не найден.
+</p>
+<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+  <a href="/admin/houses?y=no" style="padding:6px 12px;border-radius:8px;font-size:12.5px;font-weight:700;text-decoration:none;{{ 'background:#eab308;color:#1a1a1a;' if y == 'no' else 'background:var(--surface);border:1px solid var(--border);color:var(--text);' }}">❌ Без года ({{ no_year }})</a>
+  <a href="/admin/houses?y=all" style="padding:6px 12px;border-radius:8px;font-size:12.5px;font-weight:700;text-decoration:none;{{ 'background:#eab308;color:#1a1a1a;' if y == 'all' else 'background:var(--surface);border:1px solid var(--border);color:var(--text);' }}">Все адреса ({{ total_houses }})</a>
+  <form method="get" action="/admin/houses" style="display:flex;gap:6px;margin-left:auto;">
+    {% if y %}<input type="hidden" name="y" value="{{ y }}">{% endif %}
+    <input type="text" name="q" value="{{ q }}" placeholder="Поиск по адресу…"
+           style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;width:220px;">
+    <button type="submit" style="padding:6px 12px;border-radius:8px;border:none;background:#eab308;color:#1a1a1a;font-weight:700;font-size:12.5px;cursor:pointer;">🔍</button>
+  </form>
+</div>
+<style>
+.aud-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.aud-table th { text-align: left; color: #888; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 11.5px; text-transform: uppercase; position: sticky; top: 0; background: var(--surface); }
+.aud-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.aud-table tr:hover td { background: var(--bg); }
+.aud-ok { color: #16a34a; font-weight: 700; }
+.aud-no { color: #ef4444; font-weight: 700; }
+.aud-wrap { max-height: 80vh; overflow: auto; border: 1px solid var(--border); border-radius: 10px; }
+</style>
+<div class="aud-wrap">
+<table class="aud-table">
+  <tr>
+    <th>Адрес</th>
+    <th>Объявлений</th>
+    <th>Год постройки</th>
+    <th>ЖК</th>
+    <th>Координаты</th>
+  </tr>
+  {% for r in rows %}
+  <tr{{ ' style="background:#fef2f2;"' | safe if not r['year_built'] }}>
+    <td><b>{{ r['addr'] }}</b></td>
+    <td>{{ r['listings_cnt'] }}</td>
+    <td>{% if r['year_built'] %}<span class="aud-ok">{{ r['year_built'] }}</span>{% else %}<span class="aud-no">—</span>{% endif %}</td>
+    <td>{% if r['zhk_name'] %}<a href="/admin/complex/find?name={{ r['zhk_name'] }}" style="color:inherit;">{{ r['zhk_name'][:30] }}</a>{% else %}<span style="color:#aaa;">—</span>{% endif %}</td>
+    <td>{% if r['with_coords'] %}<span class="aud-ok">✓</span>{% else %}<span class="aud-no">✕</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  {% if not rows %}
+  <tr><td colspan="5" style="text-align:center;color:#888;padding:24px;">Ничего не найдено</td></tr>
+  {% endif %}
+</table>
+</div>
+<p style="font-size:12px;color:#888;margin-top:10px;">Показано {{ rows|length }} адресов.</p>
+{% endblock %}

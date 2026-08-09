@@ -49,7 +49,13 @@ OVERPASS_MIRRORS = [
     "https://overpass.private.coffee/api/interpreter",
 ]
 
-# Один запрос: границы Астаны как area, внутри — школы/садики/вузы
+# Один запрос: границы Астаны как area, внутри — школы/садики/вузы +
+# поликлиники/больницы + гос. учреждения (задача "тепловая карта
+# инфраструктуры — поликлиники, школы, сады, гос учреждения, универы").
+# clinic/hospital — OSM-теги для поликлиник/больниц; office=government
+# и amenity=townhall — акиматы/министерства/ЦОНы и т.п. (частичное
+# покрытие — в OSM Астаны госучреждения размечены неполно, но это тот же
+# бесплатный/легальный источник, что и остальные категории здесь).
 _QUERY = """
 [out:json][timeout:90];
 area["name"~"Астана|Nur-Sultan"]["boundary"="administrative"]["admin_level"~"2|4"]->.a;
@@ -60,6 +66,14 @@ area["name"~"Астана|Nur-Sultan"]["boundary"="administrative"]["admin_level
   way(area.a)[amenity=kindergarten];
   node(area.a)[amenity=university];
   way(area.a)[amenity=university];
+  node(area.a)[amenity=clinic];
+  way(area.a)[amenity=clinic];
+  node(area.a)[amenity=hospital];
+  way(area.a)[amenity=hospital];
+  node(area.a)[office=government];
+  way(area.a)[office=government];
+  node(area.a)[amenity=townhall];
+  way(area.a)[amenity=townhall];
 );
 out tags center 3000;
 """
@@ -99,8 +113,18 @@ async def fetch_poi() -> list[dict]:
     out, seen = [], set()
     for el in data.get("elements", []):
         tags = el.get("tags") or {}
-        kind = tags.get("amenity")
-        if kind not in ("school", "kindergarten", "university"):
+        amenity = tags.get("amenity")
+        # townhall/government office -> единая категория "gov" (гос.
+        # учреждения); clinic/hospital -> единая "clinic" (поликлиники/
+        # больницы) — детальнее не разбиваем, тепловой карте инфраструктуры
+        # достаточно этих 5 категорий.
+        if amenity in ("school", "kindergarten", "university"):
+            kind = amenity
+        elif amenity in ("clinic", "hospital"):
+            kind = "clinic"
+        elif amenity == "townhall" or tags.get("office") == "government":
+            kind = "gov"
+        else:
             continue
         if "lat" in el:
             lat, lon = el["lat"], el["lon"]

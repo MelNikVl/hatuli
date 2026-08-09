@@ -147,13 +147,13 @@
       <a href="/admin/mortgage-calculator" class="{% if 'mortgage-calculator' in request.url.path %}active{% endif %}">Калькулятор ипотеки</a>
       <a href="/admin/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
       {% if admin %}
-      <a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path %}active{% endif %}">Инфо</a>
+      <a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path or 'investments' in request.url.path %}active{% endif %}">Аналитика</a>
             <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Апанель</a>
       {% endif %}
     </nav>
     <div class="pub-row1-right">
       <button class="pub-theme-btn" id="pub-theme-toggle" onclick="togglePubTheme()" type="button" title="Переключить тему">🌓</button>
-      <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;background:rgba(37,99,235,.1);border-radius:8px;padding:4px 10px;"><span style="font-size:16px;line-height:1;">♡</span>Избранное</a>
+      <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;justify-content:center;background:rgba(37,99,235,.1);border-radius:8px;width:32px;height:32px;"><span style="font-size:18px;line-height:1;">♡</span></a>
       {% if site_user %}
       <a href="/cabinet" class="pub-user-chip">{{ site_user.full_name or ('@' + (site_user.username or site_user.user_id|string)) }}</a>
       {% if admin %}<a href="/admin/logout" class="pub-fav-icon" title="Выйти" style="font-size:13px;font-weight:600;">Выйти</a>{% endif %}

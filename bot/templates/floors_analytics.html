@@ -346,7 +346,7 @@ async function rebind() {
       btn.disabled = false;
       if (d.result) {
         const r = d.result;
-        st.textContent = `✅ привязано ${r.bound} (по ссылке: ${r.by_url}, по тексту: ${r.by_text}, по гео: ${r.by_geo}) · адресов из заголовков: ${r.addr_filled} · осталось: ${r.left}`;
+        st.textContent = `✅ привязано ${r.bound} (по ссылке: ${r.by_url}, по адресу: ${r.by_addr}, по тексту: ${r.by_text}, по гео: ${r.by_geo}) · адресов из заголовков: ${r.addr_filled} · осталось: ${r.left}`;
         loadPoints();
         loadUnboundChart();
       } else {

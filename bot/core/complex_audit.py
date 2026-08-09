@@ -41,6 +41,12 @@ async def ensure_columns() -> None:
 _JUNK_NAMES = {"астана", "город", "жк", "квартира", "дом", "нур-султан",
                "астана город", "казахстан", "продажа", "аренда"}
 
+# Названия районов Астаны — если ЖК называется как район, вхождение в адрес
+# («Сарыарка р-н, …») не делает его улицей
+_DISTRICTS = {"сарыарка", "есиль", "алматы", "байконур", "нура", "сарайшык",
+              "есильский", "сарыаркинский", "алматинский", "байконурский",
+              "нуринский", "сарайшинский"}
+
 
 async def audit_complexes(min_share: float = 0.6, min_cnt: int = 3) -> list[dict]:
     """Возвращает список подозрительных 'ЖК':
@@ -56,11 +62,19 @@ async def audit_complexes(min_share: float = 0.6, min_cnt: int = 3) -> list[dict
                    WHERE al.address IS NOT NULL
                      AND position(lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
                                   in lower(al.address)) > 0
+                     -- не считаем совпадение, если это НАЗВАНИЕ РАЙОНА
+                     -- («Сарыарка р-н», «Есильский р-н» — район, а не улица)
+                     AND NOT (
+                         lower(al.address) ~ (lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
+                                              || '\\s+(р-н|район|ауданы|аудан)')
+                     )
                ) AS street_hits
         FROM complexes c
         JOIN apartment_listings al
           ON lower(trim(al.complex_name)) = lower(trim(c.name))
         WHERE COALESCE(c.is_street, FALSE) = FALSE
+          -- ЖК с карточкой Крыши — реальные, не трогаем
+          AND c.krisha_url IS NULL
         GROUP BY c.id, c.name, c.is_street
         HAVING COUNT(al.id) >= $1
         ORDER BY listings DESC
@@ -74,7 +88,9 @@ async def audit_complexes(min_share: float = 0.6, min_cnt: int = 3) -> list[dict
         # короткое имя (<4) — мусор, только если нет своей карточки
         junk = (n in _JUNK_NAMES) or \
                (len(n) < 4 and not r["krisha_url"] and not r["korter_url"])
-        if share >= min_share or junk:
+        # ЖК с названием района — не улица (адреса «Сарыарка р-н, …»)
+        district_named = n in _DISTRICTS
+        if (share >= min_share and not district_named) or junk:
             out.append({
                 "id": r["id"], "name": r["name"],
                 "listings": r["listings"], "street_hits": r["street_hits"],

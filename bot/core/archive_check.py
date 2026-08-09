@@ -110,3 +110,50 @@ async def check_archived(limit: int = 20) -> dict:
                 )
     logger.info("archive check: %d checked, %d archived/deleted", checked, archived)
     return {"checked": checked, "archived": archived}
+
+
+async def check_archived_rentals(limit: int = 20) -> dict:
+    """Аналог check_archived, но для rental_listings — до миграции 040 у
+    аренды не было понятия "в архиве" вообще: пропавшее объявление просто
+    переставало обновлять last_seen. Нужно для тепловой карты аренды за
+    последний месяц (см. archived-rental-points): без этой проверки "ушло
+    в архив недавно" — не отличить от "просто давно не перепарсивали"."""
+    rows = await fetch("""
+        SELECT id, url FROM rental_listings
+        WHERE is_active IS NOT FALSE
+          AND url IS NOT NULL
+          AND (archive_checked_at IS NULL OR archive_checked_at < now() - interval '24 hours')
+        ORDER BY archive_checked_at ASC NULLS FIRST, last_seen DESC NULLS LAST
+        LIMIT $1
+    """, limit)
+
+    checked = archived = 0
+    async with httpx.AsyncClient(headers=HEADERS, timeout=25.0, follow_redirects=True) as client:
+        for r in rows:
+            await asyncio.sleep(random.uniform(2.5, 5.0))
+            try:
+                result = await _check_one(client, r["url"])
+            except RuntimeError:
+                break  # заблокировали — не продолжаем в этом цикле
+            if result is None:
+                continue
+            checked += 1
+            if result == "deleted":
+                archived += 1
+                await execute("DELETE FROM rental_listings WHERE id = $1", r["id"])
+                logger.info("rental deleted (страница удалена): %s", r["url"])
+            elif result == "archived":
+                archived += 1
+                await execute("""
+                    UPDATE rental_listings
+                    SET is_active = FALSE, archived_at = now(), archive_checked_at = now()
+                    WHERE id = $1
+                """, r["id"])
+                logger.info("rental archived: %s", r["url"])
+            else:
+                await execute(
+                    "UPDATE rental_listings SET archive_checked_at = now() WHERE id = $1",
+                    r["id"],
+                )
+    logger.info("rental archive check: %d checked, %d archived/deleted", checked, archived)
+    return {"checked": checked, "archived": archived}

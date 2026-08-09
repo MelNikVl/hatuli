@@ -62,6 +62,7 @@ SLIDER_SETTINGS = {
     "DETAIL_FETCH_BATCH": ("Деталей/координат за цикл (полскора+полслучайно)", 2, 40, 1, "шт.", "🕷 Обход парсера"),
     "COORD_BACKFILL_BATCH": ("Добивка координат по ВСЕЙ базе за цикл (~3-5 стр. объявлений/час)", 0, 200, 5, "шт.", "🕷 Обход парсера"),
     "ARCHIVE_CHECK_BATCH": ("Проверка архивности за цикл (2.5-5с/шт — влияет на длину цикла)", 15, 400, 5, "шт.", "🕷 Обход парсера"),
+    "RENTAL_ARCHIVE_CHECK_BATCH": ("Проверка архивности аренды за цикл (2.5-5с/шт)", 0, 200, 5, "шт.", "🕷 Обход парсера"),
     "COORD_FETCH_DELAY_MIN": ("Задержка между запросами деталей — мин", 3, 30, 1, "с", "🕷 Обход парсера"),
     "COORD_FETCH_DELAY_MAX": ("Задержка между запросами деталей — макс", 5, 45, 1, "с", "🕷 Обход парсера"),
 }
@@ -119,10 +120,13 @@ async def hex_price_cells(lat0: float, lon0: float, rooms: int | None = None) ->
         # если там что-то продалось (ушло в архив), последняя цена перед
         # архивацией всё ещё полезный ориентир вместо пустой серой клетки.
         archive_buckets: dict[str, list[float]] = {}
+        archive_totals: dict[str, list[float]] = {}
         if archive_rows:
             for r in archive_rows:
                 hid = _hex_id(float(r["lat"]), float(r["lon"]), HEX_EDGE)
                 archive_buckets.setdefault(hid, []).append(float(r["price"]) / float(r["area"]))
+                if with_total:
+                    archive_totals.setdefault(hid, []).append(float(r["price"]))
         self_hid = _hex_id(lat0, lon0, HEX_EDGE)
         wanted = [("здесь", self_hid)] + [
             (f"сосед {i+1}", h) for i, h in enumerate(_hex_neighbors(self_hid))
@@ -134,6 +138,7 @@ async def hex_price_cells(lat0: float, lon0: float, rooms: int | None = None) ->
             is_archived = False
             if not vals and archive_buckets.get(hid):
                 vals = archive_buckets[hid]
+                tvals = archive_totals.get(hid, [])
                 is_archived = True
             cells.append({
                 "label": label,
@@ -158,7 +163,7 @@ async def hex_price_cells(lat0: float, lon0: float, rooms: int | None = None) ->
           AND is_active = FALSE AND archived_at IS NOT NULL
           AND COALESCE(is_duplicate, FALSE) = FALSE
           AND price > 500000 AND area > 0
-          AND archived_at > now() - interval '180 days'
+          AND archived_at > now() - interval '30 days'
     """, lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon)
     rental_params = [lat0 - dlat, lat0 + dlat, lon0 - dlon, lon0 + dlon]
     rental_room_cond = ""
@@ -169,10 +174,18 @@ async def hex_price_cells(lat0: float, lon0: float, rooms: int | None = None) ->
         SELECT lat, lon, price, area FROM rental_listings
         WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
           AND price > 0 AND area > 0
-          AND last_seen > now() - interval '30 days'
+          AND is_active IS NOT FALSE AND last_seen > now() - interval '30 days'
           {rental_room_cond}
     """, *rental_params)
-    return _build(nearby_sale, archive_rows=nearby_sale_archived), _build(nearby_rental, with_total=True)
+    nearby_rental_archived = await fetch(f"""
+        SELECT lat, lon, price, area FROM rental_listings
+        WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
+          AND price > 0 AND area > 0
+          AND is_active = FALSE AND archived_at > now() - interval '30 days'
+          {rental_room_cond}
+    """, *rental_params)
+    return (_build(nearby_sale, archive_rows=nearby_sale_archived),
+            _build(nearby_rental, with_total=True, archive_rows=nearby_rental_archived))
 
 
 _UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "static", "uploads")
@@ -614,34 +627,36 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse({"hexes": []})
         EDGE_M = 150.0
         cells: dict[str, dict] = {}
-        # hard_code — категория 0-4 (похоже, тяжесть) — используем как вес,
-        # тяжкие происшествия весят больше в скоре гекса, чем мелкие.
+        # hard_code — категория тяжести 0-4 (0 — мелкое хищение/побои,
+        # 4 — убийство/изнасилование, проверено на реальных crime_title).
+        # Раньше count и тяжесть схлопывались в один "weight" — гекс с
+        # многими мелкими нарушениями и гекс с одним тяжким могли давать
+        # похожий score и красились одинаково, хотя ситуации разные (задача
+        # "палитра больше — не только количество, но и тяжесть"). Отдаём
+        # count и avg_severity ОТДЕЛЬНО — фронт красит по двум измерениям
+        # (оттенок = тяжесть, интенсивность/непрозрачность = количество).
         for r in rows:
             hid = hex_id(float(r["lat"]), float(r["lon"]), EDGE_M)
-            cell = cells.setdefault(hid, {"count": 0, "weight": 0.0})
+            cell = cells.setdefault(hid, {"count": 0, "severity_sum": 0.0})
             cell["count"] += 1
-            cell["weight"] += 1.0 + 0.5 * (r["hard_code"] or 0)
-        # Нормировка score = weight/max(weight) визуально "гасила" почти
-        # всё: распределение резко скошено (median count по гексу — 2,
-        # 78% гексов <=0.05 после нормировки на один гекс-outlier с 139
-        # инцидентами) — при гамма-коррекции 1.6 эти гексы получались
-        # практически белыми/невидимыми, глазами были видны только
-        # единицы самых "горячих" гексов ("на карте только 4 гекса, у
-        # Крыши сотни точек" — 2026-08-07, данные-то были все 1494 гекса,
-        # просто визуально неотличимы от фона). Нормируем на 90-й
-        # перцентиль веса, а не на максимум — топовые outlier-гексы
-        # клэмпятся в score=1, зато остальная масса растягивается в
-        # видимый диапазон (тот же приём, что у ценовой тепловой карты,
-        # percentile(medians, 0.90) вместо голого max).
-        weights = sorted(c["weight"] for c in cells.values())
-        p90_idx = min(len(weights) - 1, int(len(weights) * 0.90))
-        max_w = weights[p90_idx] or 1.0
+            cell["severity_sum"] += float(r["hard_code"] or 0)
+        # Нормировка count по 90-му перцентилю, а не максимуму — та же
+        # причина, что и раньше: один гекс-outlier с сотнями инцидентов
+        # гасил бы визуальную разницу у всей остальной массы гексов.
+        counts = sorted(c["count"] for c in cells.values())
+        p90_idx = min(len(counts) - 1, int(len(counts) * 0.90))
+        max_count = counts[p90_idx] or 1
         hexes = []
         for hid, cell in cells.items():
             clat, clon = hex_center(hid, EDGE_M)
+            avg_severity = cell["severity_sum"] / cell["count"]
             hexes.append({
                 "lat": clat, "lon": clon, "count": cell["count"],
-                "score": round(cell["weight"] / max_w, 4),
+                "avg_severity": round(avg_severity, 2),
+                "count_norm": round(min(1.0, cell["count"] / max_count), 4),
+                # score оставлен для обратной совместимости (сортировка) —
+                # тот же блендинг, что раньше, но уже не единственный сигнал.
+                "score": round((cell["count"] / max_count) * (1.0 + 0.5 * avg_severity) / 3.0, 4),
             })
         hexes.sort(key=lambda h: h["score"], reverse=True)
         return JSONResponse({"hexes": hexes})
@@ -759,9 +774,52 @@ def make_extras_router(templates) -> APIRouter:
                 pop = apt_est * BLENDED_OCC
             if not pop:
                 continue
+            # Санити-проверка на пределы Астаны — см. комментарий у
+            # старых пятиэтажек ниже (защита от одной плохой координаты,
+            # раздувающей bbox KDE-сетки и вешающей веб-процесс).
+            if not (50.0 < r["lat"] < 53.0 and 69.0 < r["lon"] < 73.0):
+                continue
             considered += 1
             x, y = _to_xy(float(r["lat"]), float(r["lon"]))
             pts.append((x, y, float(pop), r["name"]))
+
+        # ── Старые пятиэтажки (не ЖК — не попадают в таблицу complexes
+        # вообще, поэтому выше их население никогда не считалось) ─────────
+        # Задача: "если это пятиэтажный дом то в нём 4 подъезда, ~1950-1980
+        # годов, по 2 квартиры на этаж — то есть примерно 80 квартир,
+        # половина однушки, половина двушки. + в Казахстане большие семьи,
+        # ~280 человек в одной пятиэтажке." Источник — обычные адреса из
+        # apartment_listings БЕЗ привязки к ЖК (после стадии геопривязки по
+        # адресу это как раз "старый дом" случай, см. bot.core.rebind) и с
+        # floors_total=5 (сигнатура сталинки/хрущёвки/панельки).
+        # Санити-проверка на пределы Астаны (та же логика, что в
+        # bot.core.rebind.geocode_missing_coords) — БАГ (найден на живых
+        # данных): без неё один плохо сгеокодированный адрес с lon≈57
+        # (за 1000+ км от Астаны) растягивал bbox KDE-сетки в тысячи раз и
+        # вешал весь веб-процесс (100% CPU не отвечал ни на один запрос,
+        # ловил только рестартом сервиса) — координаты объявления/адреса не
+        # проверялись на разумность нигде на этом пути.
+        old_bldg_rows = await pg_fetch(r"""
+            SELECT lower(trim(regexp_replace(address, '\s*—.*$', ''))) AS naddr,
+                   AVG(lat) AS lat, AVG(lon) AS lon, MIN(address) AS address
+            FROM apartment_listings
+            WHERE (complex_name IS NULL OR btrim(complex_name) = '')
+              AND address IS NOT NULL AND btrim(address) != ''
+              AND floors_total = 5
+              AND lat BETWEEN 50.0 AND 53.0 AND lon BETWEEN 69.0 AND 73.0
+            GROUP BY naddr
+        """)
+        FIVE_STORY_APT_TOTAL = 80  # 4 подъезда × 2 кв./этаж × 5 этажей
+        five_story_pop = (FIVE_STORY_APT_TOTAL / 2) * OCC[1] + (FIVE_STORY_APT_TOTAL / 2) * OCC[2]  # 40*3 + 40*4 = 280
+        old_considered = 0
+        for r in old_bldg_rows:
+            if r["lat"] is None or r["lon"] is None:
+                continue
+            old_considered += 1
+            x, y = _to_xy(float(r["lat"]), float(r["lon"]))
+            pts.append((x, y, five_story_pop, r["address"]))
+        considered += old_considered
+
         if not pts:
             return JSONResponse({"hexes": [], "complexes_considered": 0})
         xs = np.array([p[0] for p in pts])
@@ -886,6 +944,65 @@ def make_extras_router(templates) -> APIRouter:
             dlon = r_km / (111.0 * max(0.1, __import__("math").cos(__import__("math").radians(lat))))
             bbox_sql = "AND lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4"
             params = [lat - dlat, lat + dlat, lon - dlon, lon + dlon]
+        if type == "yield":
+            # Доходность (задача "Инвестиции" — тепловая карта по доходности
+            # на кеплере) — тут не density-heatmap (та просто показывает, ГДЕ
+            # много точек), а hexagon-слой с агрегацией colorField=yield_pct,
+            # average — показывает, ГДЕ доходность выше, вне зависимости от
+            # плотности предложения (это то, что нужно для "на правом берегу
+            # выгоднее").
+            rows_db = await pg_fetch(f"""
+                SELECT lat, lon, yield_pct, rooms FROM apartment_listings
+                WHERE lat IS NOT NULL AND lon IS NOT NULL AND yield_pct IS NOT NULL
+                  AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+                  {bbox_sql}
+                ORDER BY id""", *params)
+            data_rows = [[float(r["lat"]), float(r["lon"]), float(r["yield_pct"]), r.get("rooms")] for r in rows_db]
+            fields = [
+                {"name": "lat", "format": "", "type": "real"},
+                {"name": "lon", "format": "", "type": "real"},
+                {"name": "yield_pct", "format": "", "type": "real"},
+                {"name": "rooms", "format": "", "type": "integer"},
+            ]
+            content = {
+                "datasets": [{
+                    "version": "v1",
+                    "data": {"id": "listings", "label": "listings", "color": [255, 153, 31],
+                              "allData": data_rows, "fields": fields},
+                }],
+                "config": {"version": "v1", "config": {
+                    "visState": {"layers": [{
+                        "id": "hexlayer1", "type": "hexagon",
+                        "config": {
+                            "dataId": "listings", "label": "Доходность",
+                            "columns": {"lat": "lat", "lng": "lon"},
+                            "isVisible": True,
+                            "visConfig": {
+                                "opacity": 0.8, "worldUnitSize": 0.5, "coverage": 1,
+                                "colorRange": {
+                                    "name": "ColorBrewer RdYlGn-6", "type": "diverging", "category": "ColorBrewer",
+                                    "colorMap": None,
+                                    "colors": ["#a50026", "#f46d43", "#fee08b", "#d9ef8b", "#66bd63", "#006837"],
+                                },
+                                "colorAggregation": "average",
+                            },
+                            "visualChannels": {
+                                "colorField": {"name": "yield_pct", "type": "real"},
+                                "colorScale": "quantile",
+                            },
+                        },
+                    }]},
+                    "mapState": {
+                        "latitude": lat if lat is not None else 51.128,
+                        "longitude": lon if lon is not None else 71.43,
+                        "zoom": 14 if lat is not None else 11,
+                    },
+                    "mapStyle": {"styleType": "light"},
+                }},
+                "info": {"app": "kepler.gl", "created_at": "2026-08-06T00:00:00.000Z"},
+            }
+            return JSONResponse(content=content, headers={"Access-Control-Allow-Origin": "*"})
+
         table = "rental_listings" if type == "rental" else "apartment_listings"
         active_sql = "AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE" if type != "rental" else ""
         rows_db = await pg_fetch(f"""
@@ -1389,6 +1506,14 @@ def make_extras_router(templates) -> APIRouter:
         from bot.core.auth_users import set_password
         if new_password:
             await set_password(user_id, new_password)
+        return RedirectResponse(url="/admin/settings", status_code=302)
+
+    @router.post("/admin/users-manage/delete")
+    async def users_manage_delete(request: Request, user_id: int = Form(...)):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.core.auth_users import delete_user
+        await delete_user(user_id)
         return RedirectResponse(url="/admin/settings", status_code=302)
 
     @router.post("/admin/settings/save")
@@ -2107,6 +2232,25 @@ def make_extras_router(templates) -> APIRouter:
             "detail_fetch_batch": detail_fetch_batch,
         })
 
+    @router.get("/admin/investments", response_class=HTMLResponse)
+    async def investments_page(request: Request):
+        # Публичная, как /admin/info рядом (та же вкладочная группа
+        # "Аналитика") — тепловая карта доходности (задача "Инвестиции").
+        from bot.db.pg import fetchrow as pg_fr
+        row = await pg_fr("""
+            SELECT COUNT(*) AS n, AVG(yield_pct) AS avg_yield,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY yield_pct) AS median_yield
+            FROM apartment_listings
+            WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND yield_pct IS NOT NULL AND lat IS NOT NULL
+        """)
+        return templates.TemplateResponse("investments.html", {
+            "request": request,
+            "n": row["n"] if row else 0,
+            "avg_yield": round(row["avg_yield"], 1) if row and row["avg_yield"] else None,
+            "median_yield": round(row["median_yield"], 1) if row and row["median_yield"] else None,
+        })
+
     # ── API: точки для карты на дашборде ─────────────────────────────────
 
     # ── Детализация парсера: один график продажи+аренда, разными цветами ───
@@ -2548,7 +2692,10 @@ def make_extras_router(templates) -> APIRouter:
                     WHERE h.listing_id = r.id
                 ) ph ON TRUE
                 WHERE {' AND '.join(conds)}
-                  AND r.last_seen > now() - interval '14 days'
+                  AND (
+                    (r.is_active IS NOT FALSE AND r.last_seen > now() - interval '30 days')
+                    OR (r.is_active = FALSE AND r.archived_at > now() - interval '30 days')
+                  )
                   AND COALESCE(r.is_duplicate, FALSE) = FALSE
                 ORDER BY r.found_at DESC LIMIT 1000
             """, *params)
@@ -2717,6 +2864,7 @@ def make_extras_router(templates) -> APIRouter:
                    a.floorplan_url,
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
+                   a.hex_deal_index, a.deal_confidence, a.yield_pct,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
                    (CASE WHEN a.market_type = 'primary' AND a.primary_score_total IS NOT NULL
                          THEN a.primary_score_total
@@ -2820,6 +2968,18 @@ def make_extras_router(templates) -> APIRouter:
             "prev_price": r["prev_price"],
             "price_changed": r["price_changed_at"].strftime("%d.%m.%Y") if r["price_changed_at"] else None,
             "top": r["id"] in top10_ids,  # настоящий топ-10 сайта, не первые 10 текущей (отфильтрованной) выдачи
+            # ── Бейджи "недооценено"/"высокая доходность" (см. задачу) ──────
+            # Пороги — топ-10% по городу, утверждены пользователем 2026-08-09:
+            # доходность ≥13.9%, "дешевле ожидания" ≥28.8% (перцентили на
+            # активных объявлениях на момент утверждения). hex_deal_index —
+            # это и есть di=expected/actual из deal_score.py, отдельной
+            # колонки под точный % не потребовалось, она уже писалась.
+            # deal_confidence≥50 — отсекаем случаи с тонким набором
+            # сравнимых объектов, где di может быть шумом, а не сигналом.
+            "underpriced_pct": (round((r["hex_deal_index"] - 1) * 100)
+                                 if r["hex_deal_index"] and (r["deal_confidence"] or 0) >= 50
+                                 and (r["hex_deal_index"] - 1) * 100 >= 28.8 else None),
+            "high_yield": bool(r["yield_pct"] and r["yield_pct"] >= 13.9),
         } for idx, r in enumerate(rows)]
         resp = {"points": pts, "count": len(pts), "offset": offset, "limit": limit,
                 "has_more": (len(pts) == limit) and not cheapest_only}
@@ -2862,7 +3022,7 @@ def make_extras_router(templates) -> APIRouter:
         нигде на карте, хотя сами объявления/ЖК были видны."""
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
-            SELECT lat, lon, price, rooms
+            SELECT lat, lon, price, rooms, area, yield_pct
             FROM apartment_listings
             WHERE lat IS NOT NULL AND lon IS NOT NULL
               AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
@@ -2871,22 +3031,51 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({"points": [{
             "lat": float(r["lat"]), "lon": float(r["lon"]),
             "price": r["price"], "rooms": r["rooms"],
+            "area": float(r["area"]) if r["area"] else None,
+            "yield_pct": float(r["yield_pct"]) if r["yield_pct"] is not None else None,
         } for r in rows]})
 
     @router.get("/admin/api/archived-sale-points")
     async def archived_sale_points(request: Request):
-        """Последняя цена перед уходом в архив (за последние 180 дней) — для
+        """Последняя цена перед уходом в архив за последний месяц — для
         теплокарты продаж на дашборде: гексагоны без активных объявлений
-        сейчас не обязаны быть пустыми, если там недавно что-то продалось."""
+        сейчас не обязаны быть пустыми, если там недавно что-то продалось.
+        Окно — 30 дней (согласовано с archived-rental-points), раньше было
+        180 — тепловая карта должна отражать последний месяц рынка, а не
+        полгода истории."""
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
-            SELECT id, lat, lon, price, rooms
+            SELECT id, lat, lon, price, rooms, area, yield_pct
             FROM apartment_listings
             WHERE is_active = FALSE AND archived_at IS NOT NULL
               AND COALESCE(is_duplicate, FALSE) = FALSE
               AND lat IS NOT NULL AND lon IS NOT NULL
               AND price > 500000
-              AND archived_at > now() - interval '180 days'
+              AND archived_at > now() - interval '30 days'
+        """)
+        return JSONResponse({"points": [{
+            "id": r["id"], "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "price": r["price"], "rooms": r["rooms"],
+            "area": float(r["area"]) if r["area"] else None,
+            "yield_pct": float(r["yield_pct"]) if r["yield_pct"] is not None else None,
+        } for r in rows]})
+
+    @router.get("/admin/api/archived-rental-points")
+    async def archived_rental_points(request: Request):
+        """Аналог archived-sale-points для аренды (см. миграцию 040 —
+        is_active/archived_at появились у rental_listings только сейчас).
+        Последняя цена аренды перед уходом в архив за последний месяц —
+        гексагоны без активных объявлений аренды всё ещё показывают, что
+        там недавно сдавалось."""
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT id, lat, lon, price, rooms
+            FROM rental_listings
+            WHERE is_active = FALSE AND archived_at IS NOT NULL
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND lat IS NOT NULL AND lon IS NOT NULL
+              AND price > 0
+              AND archived_at > now() - interval '30 days'
         """)
         return JSONResponse({"points": [{
             "id": r["id"], "lat": float(r["lat"]), "lon": float(r["lon"]),
@@ -3115,6 +3304,58 @@ def make_extras_router(templates) -> APIRouter:
             "orphan_no_origin": orphan_no_origin[0]["n"] if orphan_no_origin else 0,
         })
 
+    @router.get("/admin/houses", response_class=HTMLResponse)
+    async def admin_houses_page(request: Request, y: str = "no", q: str = "", limit: int = 500):
+        """Таблица «Дома по адресам»: все уникальные адреса домов из объявлений,
+        с годом постройки (house_years) и привязкой к ЖК. Фильтр y=no — без года."""
+        limit = max(50, min(limit, 3000))
+        where = []
+        params = []
+        if y == "no":
+            where.append("hy.year_built IS NULL")
+        if q:
+            params.append(f"%{q}%")
+            where.append(f"a.norm_addr LIKE ${len(params)}")
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        rows = await fetch(f"""
+            SELECT a.norm_addr AS addr,
+                   COUNT(*) AS listings_cnt,
+                   COUNT(*) FILTER (WHERE a.lat IS NOT NULL) AS with_coords,
+                   hy.year_built,
+                   a.zhk_name
+            FROM (
+                SELECT lower(trim(regexp_replace(address, '\\s*—.*$', ''))) AS norm_addr,
+                       lat, lon,
+                       (SELECT c.name FROM complexes c
+                        WHERE lower(trim(c.name)) = lower(trim(al.complex_name))
+                          AND c.is_garbage IS NOT TRUE LIMIT 1) AS zhk_name
+                FROM apartment_listings al
+                WHERE address IS NOT NULL AND address != ''
+            ) a
+            LEFT JOIN house_years hy ON hy.address = a.norm_addr
+            {where_sql}
+            GROUP BY a.norm_addr, hy.year_built, a.zhk_name
+            ORDER BY listings_cnt DESC
+            LIMIT ${len(params) + 1}
+        """, *params, limit)
+
+        total = await fetch("SELECT COUNT(DISTINCT lower(trim(regexp_replace(address, '\\s*—.*$', '')))) AS n "
+                            "FROM apartment_listings WHERE address IS NOT NULL AND address != ''")
+        no_year = await fetch("""
+            SELECT COUNT(*) AS n FROM (
+                SELECT lower(trim(regexp_replace(address, '\\s*—.*$', ''))) AS addr
+                FROM apartment_listings WHERE address IS NOT NULL AND address != ''
+                GROUP BY 1
+            ) t LEFT JOIN house_years hy ON hy.address = t.addr
+            WHERE hy.year_built IS NULL
+        """)
+        return templates.TemplateResponse("houses.html", {
+            "request": request, "rows": rows, "limit": limit,
+            "y": y, "q": q,
+            "total_houses": total[0]["n"] if total else 0,
+            "no_year": no_year[0]["n"] if no_year else 0,
+        })
+
     @router.get("/admin/complex/{complex_id}", response_class=HTMLResponse)
     async def complex_detail(request: Request, complex_id: int):
         # Публичная страница — админ-элементы (редактирование фото/контактов)
@@ -3127,8 +3368,13 @@ def make_extras_router(templates) -> APIRouter:
         """, complex_id)
         if not cx:
             return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
-        if cx.get("is_garbage") is True or cx.get("is_street") is True:
+        if cx.get("is_garbage") is True:
             return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+        # is_street (аудит определил, что это улица/район, а не ЖК) — НЕ 404:
+        # шаблон (complex_detail.html) уже умеет показать предупреждение
+        # "Это улица, а не ЖК" и отрендерить страницу (баг: ссылка на такой
+        # id — например /admin/complex/2614 «Сарыарка», это район города —
+        # раньше давала голый 404 вместо этого баннера).
         cx = dict(cx)
         # photos — JSONB, asyncpg отдаёт как строку; без парсинга шаблон
         # итерировался бы по символам строки, а не по элементам массива
@@ -3988,6 +4234,12 @@ def make_extras_router(templates) -> APIRouter:
             # выше остаётся для обратной совместимости со старым скорингом.
             "net_yield_pct": l.get("net_yield_pct"),
             "payback_years": l.get("payback_years"),
+            # ── Бейджи "недооценено"/"высокая доходность" — те же пороги
+            # (топ-10%), что и в /admin/api/map-points, см. комментарий там.
+            "underpriced_pct": (round((l["hex_deal_index"] - 1) * 100)
+                                 if l.get("hex_deal_index") and (l.get("deal_confidence") or 0) >= 50
+                                 and (l["hex_deal_index"] - 1) * 100 >= 28.8 else None),
+            "high_yield": bool(l.get("yield_pct") and l["yield_pct"] >= 13.9),
             "rent_source": l.get("rent_source") or "",
             "zone_name": l.get("zone_name") or "",
             "zone_bonus": l.get("zone_bonus"),
@@ -4204,6 +4456,38 @@ def make_extras_router(templates) -> APIRouter:
             "delta": r["new_price"] - r["old_price"],
             "changed_at": r["changed_at"].strftime("%d.%m.%Y"),
             "url": r["url"], "complex_name": r["complex_name"], "address": r["address"],
+        } for r in rows]})
+
+    @router.get("/admin/api/price-by-district")
+    async def price_by_district(request: Request):
+        """Средняя цена за м² по комнатности и району (задача "график средней
+        цены по комнатности по районам") — используем официальные 6 районов
+        Астаны (apartment_listings.district), т.к. неформальные зоны вроде
+        "Туран"/"Мангилик" — это названия проспектов/микрорайонов ВНУТРИ
+        Есильского района без готовых границ в базе (только один вручную
+        нарисованный полигон в priority_zones), а не отдельный столбец с
+        надёжным покрытием. Официальные районы дают то же сравнение "какая
+        часть города дороже/дешевле", просто на другой, но реальной сетке."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT district,
+                   LEAST(rooms, 4) AS room_bucket,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY price/NULLIF(area,0)) AS median_m2,
+                   COUNT(*) AS cnt
+            FROM apartment_listings
+            WHERE is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND price > 500000 AND area > 0 AND rooms BETWEEN 1 AND 10
+              AND district IN ('Есильский р-н', 'Алматы р-н', 'Сарыарка р-н',
+                                'Сарайшык р-н', 'р-н Байконур', 'Нура р-н')
+            GROUP BY district, LEAST(rooms, 4)
+            HAVING COUNT(*) >= 3
+        """)
+        return JSONResponse({"rows": [{
+            "district": r["district"], "rooms": r["room_bucket"],
+            "median_m2": round(r["median_m2"]) if r["median_m2"] else None,
+            "count": r["cnt"],
         } for r in rows]})
 
     # ── Ушедшие в архив: динамика по дням, по комнатности ──────────────────

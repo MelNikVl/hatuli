@@ -14,27 +14,29 @@
   а не когда объявление реально сняли с Крыши.
 </p>
 
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:6px;max-width:900px;">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<div class="admin-block" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;">
+  <div>
     <div style="font-size:20px;font-weight:800;">{{ stats.archive_batch }}</div>
     <div style="font-size:11.5px;color:#888;">объявлений проверяется за цикл (~60-90 мин)</div>
   </div>
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+  <div>
     <div style="font-size:20px;font-weight:800;color:#16a34a;">{{ stats.checked_24h }}</div>
     <div style="font-size:11.5px;color:#888;">активных проверено за 24ч{% if stats.total_active %} ({{ (stats.checked_24h / stats.total_active * 100) | round(1) }}%){% endif %}</div>
   </div>
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+  <div>
     <div style="font-size:20px;font-weight:800;color:#f59e0b;">{{ stats.stale_over_7d }}</div>
     <div style="font-size:11.5px;color:#888;">не проверялись 7+ дней</div>
   </div>
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
+  <div>
     <div style="font-size:20px;font-weight:800;color:#ef4444;">{{ stats.never_checked }}</div>
     <div style="font-size:11.5px;color:#888;">активных ни разу не проверены</div>
   </div>
 </div>
 
-<div style="display:flex;gap:14px;margin-top:14px;flex-wrap:wrap;align-items:flex-start;">
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:0 0 calc(50% - 7px);min-width:320px;max-width:calc(50% - 7px);overflow:hidden;box-sizing:border-box;">
+<div class="chart-block" style="flex:1 1 0;min-width:340px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
     <b style="font-size:14px;">По дням, отдельно продажа/аренда, с разбивкой по комнатности</b>
     <div style="display:flex;gap:6px;">
@@ -49,10 +51,10 @@
     <span><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;"></span> 3+-комн</span>
     <span style="color:#555;">·  два бара в день: <b>продажа</b> / <b>аренда</b> (аренда: ≥3 дня не видели)</span>
   </div>
-  <div id="archived-chart"></div>
+  <div class="chart-block-inner" id="archived-chart"></div>
 </div>
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:0 0 calc(50% - 7px);min-width:320px;max-width:calc(50% - 7px);overflow:hidden;box-sizing:border-box;">
+<div class="chart-block" style="flex:1 1 0;min-width:340px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
     <b style="font-size:14px;">Медианная цена/м² ушедших в архив, по дням</b>
     <div style="display:flex;gap:6px;">
@@ -62,16 +64,10 @@
       {% endfor %}
     </div>
   </div>
-  {# Инлайн-соседняя колонка 50/50 с SVG-графиком слева — оставляем ширину
-     гибкой (fixed 800px сломал бы этот 2-колоночный сплит), но высоту
-     canvas-области берём из общего стандарта .chart-block-inner (520px). #}
   <div class="chart-block-inner"><canvas id="archived-pm2-chart"></canvas></div>
 </div>
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;flex:0 0 calc(50% - 7px);min-width:320px;max-width:calc(50% - 7px);overflow:hidden;box-sizing:border-box;">
+<div class="chart-block" style="flex:1 1 0;min-width:340px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
     <b style="font-size:14px;">🗺 Гекс-карта ушедших в архив</b>
     <div style="display:flex;gap:6px;flex-wrap:wrap;">
@@ -99,10 +95,9 @@
       {% endfor %}
     </div>
   </div>
-  <div id="arch-hex-map" style="aspect-ratio:16/9;width:100%;min-height:340px;border-radius:8px;"></div>
+  <div class="chart-block-inner" id="arch-hex-map"></div>
   <div id="arch-hex-status" style="font-size:12px;color:#888;margin-top:6px;"></div>
 </div>
-</div><!-- /half-width row -->
 
 <script>
 // ── Гекс-карта: последняя цена / скорость ухода объявлений в архив ────────

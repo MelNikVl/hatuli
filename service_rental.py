@@ -109,7 +109,42 @@ async def main():
         except Exception as e:
             log.warning("Rental backfill failed: %s", e)
 
+        # === Проверка архивности объявлений аренды ===
+        try:
+            from bot.db import settings as _st_arch
+            from bot.core.archive_check import check_archived_rentals
+            await _st_arch.load()
+            archive_batch = _st_arch.get_int("RENTAL_ARCHIVE_CHECK_BATCH", 60)
+            if archive_batch > 0:
+                res = await check_archived_rentals(limit=archive_batch)
+                log.info("Rental archive check: %s", res)
+        except Exception as e:
+            log.warning("Rental archive check failed: %s", e)
+
+        # === Привязка аренды по адресу (см. bot.core.rebind.bind_by_address) ===
+        # Приоритет ПЕРЕД геопривязкой по близости ниже: точное совпадение
+        # нормализованного адреса с адресом уже подтверждённых объявлений
+        # ПРОДАЖИ того же ЖК — надёжнее, чем "ближайший по прямой" (см.
+        # докстринг rebind.py — та же логика, что убрали для sale-объявлений
+        # из-за качества). Правильный порядок: сначала точные сигналы
+        # (офиц. блок Крыши в backfill выше, потом адрес), и только если
+        # ничего не подтвердилось — угадывание по близости как крайний
+        # случай, а не как основной способ привязки.
+        try:
+            from bot.core.rebind import bind_by_address
+            n_addr = await bind_by_address("rental_listings")
+            if n_addr:
+                log.info("Rental address-bind: %d", n_addr)
+        except Exception as e:
+            log.warning("Rental address-bind failed: %s", e)
+
         # === Геопривязка аренды к ближайшему ЖК (≤ ~350 м, без ЖК-улиц) ===
+        # КРАЙНИЙ СЛУЧАЙ — только для того, что не подтвердилось выше ни
+        # офиц. ссылкой Крыши, ни адресом. Блайнд-угадывание по расстоянию,
+        # без текстового подтверждения; для sale-объявлений аналогичная
+        # стадия была убрана вовсе (см. rebind.py) — здесь пока оставлена
+        # (у аренды меньше альтернативных сигналов), но теперь выполняется
+        # ПОСЛЕДНЕЙ, а не единственной.
         try:
             from bot.db.pg import execute as _pex_geo
             await _pex_geo("""
@@ -118,6 +153,7 @@ async def main():
                     SELECT c2.name FROM complexes c2
                     WHERE c2.lat IS NOT NULL AND c2.lon IS NOT NULL
                       AND COALESCE(c2.is_street, FALSE) = FALSE
+                      AND COALESCE(c2.is_garbage, FALSE) = FALSE
                     ORDER BY (c2.lat - r.lat)^2 + (c2.lon - r.lon)^2
                     LIMIT 1)
                 WHERE (r.complex_name IS NULL OR btrim(r.complex_name) = '')
@@ -125,7 +161,8 @@ async def main():
                   AND (SELECT min((c.lat - r.lat)^2 + (c.lon - r.lon)^2)
                        FROM complexes c
                        WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL
-                         AND COALESCE(c.is_street, FALSE) = FALSE) < 2.0e-5
+                         AND COALESCE(c.is_street, FALSE) = FALSE
+                         AND COALESCE(c.is_garbage, FALSE) = FALSE) < 2.0e-5
             """)
         except Exception as e:
             log.warning("Rental geo-bind failed: %s", e)

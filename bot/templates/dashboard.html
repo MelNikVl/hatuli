@@ -170,6 +170,9 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="count" onclick="toggleHeat('count')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔢 Кол-во объявлений</button>
         <button type="button" class="heat-btn" data-mode="demolition" onclick="toggleHeat('demolition')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🏚 Снос домов</button>
         <button type="button" class="heat-btn" data-mode="crime" onclick="toggleHeat('crime')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🚨 Преступность</button>
+        <button type="button" class="heat-btn" data-mode="price_m2" onclick="toggleHeat('price_m2')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">📐 Цена за м²</button>
+        <button type="button" class="heat-btn" data-mode="yield" onclick="toggleHeat('yield')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">💰 Доходность</button>
+        <button type="button" class="heat-btn" data-mode="infra" onclick="toggleHeat('infra')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🏥 Инфраструктура</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
         <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
@@ -240,8 +243,14 @@ html, body { overflow: hidden !important; }
      margin компенсируют padding у .pub-main (18px 24px 32px, см. base_public.html);
      реальная высота выставляется в JS (resizeMapToViewport), т.к. она зависит от
      того, где на странице оказался верх карты (после шапки/строки фильтров). -->
-<div id="map-wrap" style="background:var(--surface);margin:0 -24px -32px -24px;position:relative;">
-  <div id="objects-map" style="width:100%;"></div>
+<div id="map-wrap" style="background:var(--surface);margin:0 -24px -32px -24px;position:relative;display:flex;">
+  <div id="objects-map" style="width:100%;min-width:0;"></div>
+  <div id="split-map-pane" style="display:none;width:50%;min-width:0;border-left:2px solid var(--accent);position:relative;">
+    <button type="button" onclick="closeSplitView()" title="Закрыть сравнение"
+            style="position:absolute;top:10px;right:10px;z-index:1000;width:32px;height:32px;border:none;border-radius:50%;background:#fff;color:#111;font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.3);">✕</button>
+    <div id="split-map-label" style="position:absolute;top:10px;left:10px;z-index:1000;background:#fff;color:#111;padding:5px 10px;border-radius:8px;font-size:12px;font-weight:700;box-shadow:0 1px 4px rgba(0,0,0,.3);"></div>
+    <div id="split-map" style="width:100%;height:100%;"></div>
+  </div>
 </div>
 
 <style>
@@ -824,8 +833,8 @@ const HeatControls = L.Control.extend({
     // правого края кнопки "Линейка" — визуально одна общая панель под ней.
     box.style.cssText = 'display:none;position:absolute;top:60px;left:10px;flex-direction:column;gap:4px;background:#fff;border-radius:10px;padding:8px 10px;box-shadow:0 1px 4px rgba(0,0,0,.25);box-sizing:border-box;';
     box.innerHTML = `
-      <label style="font-size:10.5px;font-weight:700;color:#333;">Сторона гекса (м): <span id="f-heat-edge-val">70</span></label>
-      <input id="f-heat-edge" type="range" min="10" max="80" step="5" value="70" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
+      <label style="font-size:10.5px;font-weight:700;color:#333;">Сторона гекса (м): <span id="f-heat-edge-val">80</span></label>
+      <input id="f-heat-edge" type="range" min="10" max="150" step="5" value="80" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
       <label style="font-size:10.5px;font-weight:700;color:#333;margin-top:4px;">Прозрачность гексов: <span id="f-heat-opacity-val">30</span>%</label>
       <input id="f-heat-opacity" type="range" min="10" max="50" step="5" value="30" oninput="document.getElementById('f-heat-opacity-val').textContent=this.value;setHeatOpacity(this.value)" style="width:100%;">
       <button type="button" onclick="turnOffHeat()" style="margin-top:4px;height:26px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;">Убрать тепловую карту</button>
@@ -1129,6 +1138,10 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
     trendHtml = `<span class="price-trend-arrow" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:4px;font-size:11px;color:${color};background:#fff;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">${down ? '▼' : '▲'}</span>`;
   }
   const svoyDomBadge = SVOY_DOM_DEV_IDS.has(pt.developer_id) ? `<span title="Застройщик: Свой Дом" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:8px;font-weight:800;color:#fff;background:#16a34a;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">SD</span>` : '';
+  // Недооценено/высокая доходность (топ-10% по городу, см. map_points на
+  // бэкенде) — маленькие бейджи прямо на пине, чтобы было видно без клика.
+  const underpricedBadge = pt.underpriced_pct != null ? `<span title="Недооценено на ${pt.underpriced_pct}%" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:9px;color:#fff;background:#ef4444;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">🔥</span>` : '';
+  const highYieldBadge = pt.high_yield ? `<span title="Высокая доходность (≥13.9%)" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:9px;color:#fff;background:#16a34a;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">💰</span>` : '';
   // Топ-10 по умному рейтингу: единая овальная плашка с градиентом
   // красный→тёмно-синий, звезда и цена внутри одного пилла (раньше были
   // раздельные звезда-бейдж + обычная синяя плашка — просили слить в одно).
@@ -1140,7 +1153,7 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
 <div id="pin-${pt.id}" style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;transition:filter .15s ease;">
   <div style="display:flex;align-items:center;">
     <div style="${pillStyle}color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;gap:5px;">${starHtml}<span>${roomsTxt}</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${priceTxt}</span></div>
-    ${trendHtml}${svoyDomBadge}
+    ${trendHtml}${svoyDomBadge}${underpricedBadge}${highYieldBadge}
   </div>
   ${sellerTxt ? `<div style="font-size:9px;color:#fff;background:rgba(0,0,0,.55);border-radius:5px;padding:0 5px;margin-top:1px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sellerTxt}</div>` : ''}
   <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid ${pinBg};"></div>
@@ -1832,7 +1845,13 @@ function sparklineSVG(points, w, h) {
   const areaPath = path + ` L${coords[coords.length-1][0].toFixed(1)},${chartH} L${PAD},${chartH} Z`;
   const gid = 'sg' + Math.random().toString(36).slice(2, 9);
   const labels = coords.map((c, i) => {
-    const x = Math.min(Math.max(c[0], 14), w - 14);  // не даём подписи вылезти за край
+    // Клэмп по фиксированным 14px не учитывал реальную ширину текста —
+    // у длинных подписей ("38.5 М" и т.п.) на КРАЙНИХ точках правая половина
+    // текста всё равно вылезала за край SVG и обрезалась контейнером
+    // (последнее значение графика цены оказывалось невидимым/обрубленным).
+    // Клэмпим на половину оценочной ширины подписи вместо магического 14.
+    const halfW = Math.min(w / 2 - 1, (labelTexts[i].length * 6.2 + 6) / 2);
+    const x = Math.min(Math.max(c[0], halfW), w - halfW);
     const y = crowded && i % 2 === 1 ? h - 3 : chartH + 12;  // нижний ярус чуть ниже верхнего
     return `<text x="${x.toFixed(1)}" y="${y}" text-anchor="middle" font-size="10.5" font-weight="700" fill="#2563eb">${labelTexts[i]}</text>`;
   }).join('');
@@ -2106,9 +2125,14 @@ function drawHexGrid() {
   hexLayer.addTo(map);
 }
 // ── Тепловые карты (hexbin): цены продажи/аренды, школы, шум по полосам ───
-let HEAT_EDGE_M = 70;  // синхронизирован с дефолтом ползунка "сторона гекса" (f-heat-edge) ниже
+let HEAT_EDGE_M = 80;  // синхронизирован с дефолтом ползунка "сторона гекса" (f-heat-edge) ниже — 80м для тепловых карт продажи/аренды по умолчанию
 let NOISE_EDGE_M = 60;  // раньше был фиксирован отдельно (30м) — теперь все гексы тепловых карт (цены/аренда/шум, фон и детальный слой) одного размера, из общего ползунка "сторона гекса"
 const heatLayer = L.layerGroup();
+// heatTargetLayer — куда draw*Heat-функции реально кладут полигоны. По
+// умолчанию основной heatLayer; на время отрисовки split-панели (см. "карта
+// делится на две" ниже) временно подменяется на splitHeatLayer — сами
+// draw-функции не знают о split-режиме, просто рисуют в heatTargetLayer.
+let heatTargetLayer = heatLayer;
 let heatMode = null;
 let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, count: null};
 let noiseDefaultsApplied = false;  // гекс 40м / прозрачность 50% при первом включении шума за сессию
@@ -2222,7 +2246,7 @@ function drawTransportHeat(hexes) {
     const score = b.items.reduce((s, h) => s + (h.score || 0), 0) / b.items.length;
     L.polygon(hexCorners(b.q, b.r, 100), {
       color: 'transparent', weight: 0, fillColor: transportColor(score), fillOpacity: 0.4,
-    }).addTo(heatLayer);
+    }).addTo(heatTargetLayer);
   });
 }
 
@@ -2270,7 +2294,7 @@ function drawDemolitionHeat(points) {
       `🏚 ${escapeHtml(p.address || '')}${p.district ? ' · ' + escapeHtml(p.district) : ''}<br>` +
       `снос: ${p.demolish_year || '?'} г.${p.year_built ? ' · построен ' + p.year_built : ''}${p.apartments ? ' · ' + p.apartments + ' кв.' : ''}`,
       {sticky:true}
-    ).addTo(heatLayer);
+    ).addTo(heatTargetLayer);
   });
 }
 
@@ -2293,7 +2317,7 @@ function drawHypeNewsHeat(hexes) {
     L.polygon(hexCorners(b.q, b.r, 100), {
       color: 'transparent', weight: 0, fillColor: hypeNewsColor(s), fillOpacity: 0.5,
     }).bindTooltip(`${label} · хайп ${Math.round(top.value || 0)}`, {sticky:true})
-      .addTo(heatLayer);
+      .addTo(heatTargetLayer);
   });
 }
 
@@ -2332,39 +2356,50 @@ function drawPopulationHeat(hexes) {
     L.polygon(transportHexCorners(h.lat, h.lon, 100), {
       color: 'transparent', weight: 0, fillColor: popDensityColor(t), fillOpacity: 0.35 + tGamma * 0.45,
     }).bindTooltip(`${h.name || ''} · население: ~${Math.round(h.population).toLocaleString('ru-RU')} чел. (${h.complexes} ЖК)`, {sticky:true})
-      .addTo(heatLayer);
+      .addTo(heatTargetLayer);
   });
 }
 
 // Преступность (см. задачу "тепловая карта преступности", krisha.kz/ms/geodata/crime
-// -> crime_incidents -> /admin/api/crime-hexes) — тот же визуальный подход,
-// что у плотности населения (плавная градиентная шкала + гамма-коррекция,
-// не сырые точки) по просьбе "все тепловые карты сделай по примеру карт
-// плотности населения и транспортной доступности — они красивые, аккуратные".
-const CRIME_STOPS = [
-  [255,255,235], [254,215,170], [252,165,116], [239,68,68], [153,27,27],
+// -> crime_incidents -> /admin/api/crime-hexes) — ДВУМЕРНАЯ кодировка по
+// просьбе "не только количество нарушений, но и их тяжесть — закрашивать на
+// основе этих 2 параметров": раньше count и hard_code (тяжесть 0-4:
+// 0=мелкое хищение...4=убийство/изнасилование) схлопывались в один score,
+// и гекс с кучей мелких нарушений красился похоже на гекс с одним тяжким.
+// Теперь ОТТЕНОК = средняя тяжесть (жёлтый->оранжевый->красный->бордовый),
+// НЕПРОЗРАЧНОСТЬ = количество (норм. по 90-му перцентилю, как раньше) —
+// гекс виден издалека по интенсивности заливки (сколько там вообще
+// происшествий), а конкретный цвет говорит, насколько они серьёзные.
+const CRIME_SEVERITY_STOPS = [
+  [250,204,21],   // жёлтый — только мелкие (avg_severity ~0)
+  [249,115,22],   // оранжевый
+  [239,68,68],    // красный
+  [153,27,27],    // тёмно-красный
+  [88,28,86],     // бордово-фиолетовый — тяжкие (avg_severity ~4)
 ];
-const CRIME_GAMMA = 1.6;
-function crimeColor(t) {
-  t = Math.max(0, Math.min(1, Math.pow(t, CRIME_GAMMA)));
-  const n = CRIME_STOPS.length - 1;
+const CRIME_GAMMA = 1.4;
+function crimeSeverityColor(avgSeverity) {
+  const t = Math.max(0, Math.min(1, avgSeverity / 4));
+  const n = CRIME_SEVERITY_STOPS.length - 1;
   const pos = t * n;
   const i = Math.min(Math.floor(pos), n - 1);
   const frac = pos - i;
-  const from = CRIME_STOPS[i], to = CRIME_STOPS[i + 1];
+  const from = CRIME_SEVERITY_STOPS[i], to = CRIME_SEVERITY_STOPS[i + 1];
   const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
+const CRIME_SEVERITY_LABELS = ['мелкие нарушения', 'лёгкие/средние', 'значительные', 'тяжкие', 'особо тяжкие'];
 function drawCrimeHeat(hexes) {
-  const vals = (hexes || []).map(h => h.score).filter(v => v > 0);
-  if (!vals.length) return;
-  (hexes || []).forEach(h => {
-    const t = Math.max(0, Math.min(1, h.score));
-    const tGamma = Math.pow(t, CRIME_GAMMA);
+  if (!hexes || !hexes.length) return;
+  hexes.forEach(h => {
+    const countT = Math.max(0, Math.min(1, h.count_norm ?? h.score));
+    const tGamma = Math.pow(countT, CRIME_GAMMA);
+    const sevIdx = Math.min(4, Math.round((h.avg_severity ?? 0)));
     L.polygon(transportHexCorners(h.lat, h.lon, 150), {
-      color: 'transparent', weight: 0, fillColor: crimeColor(t), fillOpacity: 0.3 + tGamma * 0.5,
-    }).bindTooltip(`🚨 происшествий: ${h.count}`, {sticky:true})
-      .addTo(heatLayer);
+      color: 'transparent', weight: 0, fillColor: crimeSeverityColor(h.avg_severity ?? 0),
+      fillOpacity: 0.2 + tGamma * 0.65,
+    }).bindTooltip(`🚨 происшествий: ${h.count} · тяжесть: ${(h.avg_severity ?? 0).toFixed(1)}/4 (${CRIME_SEVERITY_LABELS[sevIdx]})`, {sticky:true})
+      .addTo(heatTargetLayer);
   });
 }
 
@@ -2390,7 +2425,7 @@ function drawListingCountHeat(points) {
     const t = Math.min(1, b.items.length / hi);
     L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
       color: 'transparent', weight: 0, fillColor: listingCountColor(t), fillOpacity: 0.5,
-    }).bindTooltip(`объявлений: ${b.items.length}`, {sticky:true}).addTo(heatLayer);
+    }).bindTooltip(`объявлений: ${b.items.length}`, {sticky:true}).addTo(heatTargetLayer);
   });
 }
 function drawPriceHeat(points, archivedPoints) {
@@ -2432,7 +2467,61 @@ function drawPriceHeat(points, archivedPoints) {
       weight: b.isArchived ? 1.2 : 0.5,
       dashArray: b.isArchived ? '3,3' : null,
       fillColor: priceHeatColor(t), fillOpacity: 0.4 + tGamma * 0.4,
-    }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatLayer);
+    }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatTargetLayer);
+  });
+}
+
+// Цена за м² (задача "новые тепловые карты — цена за квадрат") — тот же
+// подход, что и drawPriceHeat (архивный фолбэк на пустые гексы, только
+// реальные ячейки без интерполяции), но медиана считается по price/area,
+// а не по абсолютной цене — иначе крупные и мелкие квартиры в одном гексе
+// сравнивать нечестно (гекс с одними студиями всегда выглядел бы "дёшево"
+// рядом с гексом из трёшек, хотя ₸/м² там может быть одинаковым).
+function drawPriceM2Heat(points, archivedPoints) {
+  const withArea = p => p.price > 0 && p.area > 0;
+  const buckets = hexBucket(points.filter(withArea), p => [p.lat, p.lon]);
+  if (archivedPoints && archivedPoints.length) {
+    const archBuckets = hexBucket(archivedPoints.filter(withArea), p => [p.lat, p.lon]);
+    archBuckets.forEach((b, key) => {
+      if (!buckets.has(key)) { b.isArchived = true; buckets.set(key, b); }
+    });
+  }
+  const medians = [];
+  buckets.forEach(b => { b.value = median(b.items.map(i => i.price / i.area)); medians.push(b.value); });
+  if (!medians.length) return;
+  const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
+  buckets.forEach(b => {
+    const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
+    const tGamma = Math.pow(Math.max(0, Math.min(1, t)), PRICE_GAMMA);
+    const txt = Math.round(b.value / 1000) + ' тыс ₸/м²';
+    const archNote = b.isArchived ? ' (по последним продажам, архив)' : '';
+    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
+      color: b.isArchived ? '#8b5cf6' : '#fff',
+      weight: b.isArchived ? 1.2 : 0.5,
+      dashArray: b.isArchived ? '3,3' : null,
+      fillColor: priceHeatColor(t), fillOpacity: 0.4 + tGamma * 0.4,
+    }).bindTooltip(`медиана: ${txt} · ${b.items.length} объявл.${archNote}`, {sticky:true}).addTo(heatTargetLayer);
+  });
+}
+
+// Доходность аренды (задача "тепловая карта доходности — увидеть, что на
+// правом берегу выгоднее") — медиана yield_pct по гексу. Семантика цвета
+// ОБРАТНАЯ цене: высокая доходность = хорошо для инвестора = зелёный (как
+// низкая цена), поэтому t считается от (hi - value), а не (value - lo).
+function drawYieldHeat(points) {
+  const withYield = p => p.yield_pct != null && p.yield_pct > 0;
+  const buckets = hexBucket(points.filter(withYield), p => [p.lat, p.lon]);
+  const medians = [];
+  buckets.forEach(b => { b.value = median(b.items.map(i => i.yield_pct)); medians.push(b.value); });
+  if (!medians.length) return;
+  const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
+  buckets.forEach(b => {
+    const t = hi > lo ? (hi - b.value) / (hi - lo) : 0.5;
+    const tGamma = Math.pow(Math.max(0, Math.min(1, t)), PRICE_GAMMA);
+    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
+      color: '#fff', weight: 0.5,
+      fillColor: priceHeatColor(t), fillOpacity: 0.4 + tGamma * 0.4,
+    }).bindTooltip(`медиана доходности: ${b.value.toFixed(1)}% · ${b.items.length} объявл.`, {sticky:true}).addTo(heatTargetLayer);
   });
 }
 
@@ -2491,7 +2580,7 @@ function drawCountHeat(items, latLonFn, label) {
     const t = 1 - Math.min(1, c.value / hi);  // инверсия: мало рядом -> t~1 -> красный/бордовый
     L.polygon(hexCorners(c.q, c.r, HEAT_EDGE_M), {
       color: 'transparent', weight: 0, fillColor: heatColor(t), fillOpacity: 0.4,
-    }).bindTooltip(`${label} рядом: ${c.value.toFixed(1)}`, {sticky:true}).addTo(heatLayer);
+    }).bindTooltip(`${label} рядом: ${c.value.toFixed(1)}`, {sticky:true}).addTo(heatTargetLayer);
   });
 }
 
@@ -2619,7 +2708,7 @@ function drawRoadHeatBackground(roads) {
     const t = Math.min(1, c.score / NOISE_BG_MAX);
     L.polygon(hexCorners(c.q, c.r, NOISE_BG_EDGE_M), {
       color: 'transparent', weight: 0, fillColor: heatColor(t), fillOpacity: 0.21,
-    }).bindTooltip(`внешний шум (фон): ~${c.score.toFixed(0)} из ${NOISE_BG_MAX} ≈ ${noiseDb(t)} дБ (см. Инфо → Внешний шум)`, {sticky:true}).addTo(heatLayer);
+    }).bindTooltip(`внешний шум (фон): ~${c.score.toFixed(0)} из ${NOISE_BG_MAX} ≈ ${noiseDb(t)} дБ (см. Инфо → Внешний шум)`, {sticky:true}).addTo(heatTargetLayer);
   });
 }
 
@@ -2695,8 +2784,12 @@ async function loadHeatData(mode) {
     heatCache.sale = d.points || [];
     heatCache.saleArchived = archived.points || [];
   } else if (mode === 'rental') {
-    const d = await cachedFetchJson('/admin/api/map-points?type=rental');
+    const [d, archived] = await Promise.all([
+      cachedFetchJson('/admin/api/map-points?type=rental'),
+      fetch('/admin/api/archived-rental-points').then(r => r.json()),
+    ]);
     heatCache.rental = d.points || [];
+    heatCache.rentalArchived = archived.points || [];
   } else if (mode === 'noise') {
     const d = await (await fetch('/admin/api/city-roads')).json();
     // /admin/api/city-roads теперь отдаёт компактные массивы [lat,lon,lanes,highway]
@@ -2724,6 +2817,27 @@ async function loadHeatData(mode) {
   } else if (mode === 'crime') {
     const d = await fetch('/admin/api/crime-hexes').then(r => r.json());
     heatCache.crime = d.hexes || [];
+  } else if (mode === 'price_m2' || mode === 'yield') {
+    // Цена за м² и доходность — те же точки продажи (heat-points теперь
+    // отдаёт area/yield_pct), просто красим по другому полю в draw-функции
+    // ниже, не тянем данные заново, если 'sale' уже загружен.
+    if (!heatCache.sale) {
+      const [d, archived] = await Promise.all([
+        fetch('/admin/api/heat-points').then(r => r.json()),
+        fetch('/admin/api/archived-sale-points').then(r => r.json()),
+      ]);
+      heatCache.sale = d.points || [];
+      heatCache.saleArchived = archived.points || [];
+    }
+    heatCache[mode] = heatCache.sale;
+  } else if (mode === 'infra') {
+    // Инфраструктура (задача "тепловая карта инфраструктуры — поликлиники,
+    // школы, сады, гос учреждения, универы") — те же точки, что и слой
+    // "🏫 Школы" на карте (/admin/api/city-poi), landmark исключён (это
+    // не инфраструктура в этом смысле, а достопримечательности).
+    const d = await fetch('/admin/api/city-poi').then(r => r.json());
+    const kinds = new Set(['school', 'kindergarten', 'university', 'clinic', 'gov']);
+    heatCache.infra = (d.poi || []).filter(p => kinds.has(p.kind) && p.lat != null && p.lon != null);
   }
   return heatCache[mode];
 }
@@ -2738,6 +2852,7 @@ async function toggleHeat(mode) {
     map.removeLayer(fineNoiseLayer);
     fineNoiseLayer.clearLayers();
     if (noiseViewHandler) { map.off('moveend zoomend', noiseViewHandler); noiseViewHandler = null; }
+    closeSplitView();
     // Кнопки всегда синие/белые (просили не делать их серыми) — активную
     // отличаем рамкой, а не сменой фона на приглушённый.
     document.querySelectorAll('.heat-btn').forEach(b => { b.style.boxShadow = 'none'; });
@@ -2784,21 +2899,36 @@ async function toggleHeat(mode) {
     setTimeout(() => { barWrap.style.display = 'none'; bar.style.width = '0%'; }, 250);
   }
   if (heatMode !== mode) return;  // успели переключиться, пока грузилось
-  if (mode === 'sale' || mode === 'rental') drawPriceHeat(data, mode === 'sale' ? heatCache.saleArchived : null);
+  renderHeatMode(mode, data);
+  if (mode === 'noise' && applyingNoiseDefaults) setHeatOpacity(25);
+  refreshSplitView();
+}
+
+// Собственно отрисовка режима тепловой карты в heatTargetLayer (см.
+// определение выше) — вынесено отдельной функцией, чтобы splitMap (см.
+// "карта делится на две" ниже) мог отрисовать ТОТ ЖЕ режим повторно, просто
+// подменив heatTargetLayer на слой второй панели, без дублирования всего
+// этого if/else здесь и там.
+function renderHeatMode(mode, data) {
+  if (mode === 'sale' || mode === 'rental') drawPriceHeat(data, mode === 'sale' ? heatCache.saleArchived : heatCache.rentalArchived);
   else if (mode === 'noise') {
     drawRoadHeatBackground(data);
-    if (!map.hasLayer(fineNoiseLayer)) fineNoiseLayer.addTo(map);
-    drawRoadHeat(data);
-    if (applyingNoiseDefaults) setHeatOpacity(25);
-    // Догружаем/чистим детальный слой при панорамировании/зуме, пока режим
-    // шума активен — debounce, чтобы не пересчитывать на каждый пиксель драга.
-    let t;
-    noiseViewHandler = () => { clearTimeout(t); t = setTimeout(() => {
-      heatLayer.clearLayers();
-      drawRoadHeatBackground(heatCache.noise);
-      drawRoadHeat(heatCache.noise);
-    }, 200); };
-    map.on('moveend zoomend', noiseViewHandler);
+    // Детальный слой шума (fineNoiseLayer, по факт. точкам дорог, только на
+    // главной карте) — только для основной панели, не для split-копии: он
+    // завязан на события pan/zoom главной карты (noiseViewHandler ниже),
+    // а split-панель показывает только фоновый слой той же тепловой карты.
+    if (heatTargetLayer === heatLayer) {
+      if (!map.hasLayer(fineNoiseLayer)) fineNoiseLayer.addTo(map);
+      drawRoadHeat(data);
+      let t;
+      noiseViewHandler = () => { clearTimeout(t); t = setTimeout(() => {
+        heatLayer.clearLayers();
+        drawRoadHeatBackground(heatCache.noise);
+        drawRoadHeat(heatCache.noise);
+        refreshSplitView();
+      }, 200); };
+      map.on('moveend zoomend', noiseViewHandler);
+    }
   } else if (mode === 'transport') {
     drawTransportHeat(data);
   } else if (mode === 'hype') {
@@ -2811,8 +2941,73 @@ async function toggleHeat(mode) {
     drawDemolitionHeat(data);
   } else if (mode === 'crime') {
     drawCrimeHeat(data);
+  } else if (mode === 'price_m2') {
+    drawPriceM2Heat(data, heatCache.saleArchived);
+  } else if (mode === 'yield') {
+    drawYieldHeat(data);
+  } else if (mode === 'infra') {
+    drawCountHeat(data, p => [p.lat, p.lon], 'объектов инфраструктуры');
   }
 }
+
+// ── "Карта делится на две" — клик по активной тепловой карте открывает
+// вторую панель: та же карта 1:1, синхронный пан/зум, но БЕЗ объявлений —
+// только выбранная тепловая карта, для чистого визуального сравнения
+// (напр. переключить основную панель на аренду, а split-копия останется
+// на продаже — виден сразу и оверлей объявлений, и чистая картина рядом). ──
+let splitMap = null, splitHeatLayer = null, splitSyncing = false;
+const HEAT_MODE_LABELS = {
+  sale: 'Цены продажи', rental: 'Цены аренды', noise: 'Внешний шум',
+  transport: 'Транспортная доступность', hype: '🔥 Хайп (новости)',
+  population: '👥 Плотность нас.', count: '🔢 Кол-во объявлений',
+  demolition: '🏚 Снос домов', crime: '🚨 Преступность',
+  price_m2: '📐 Цена за м²', yield: '💰 Доходность', infra: '🏥 Инфраструктура',
+};
+function openSplitView() {
+  if (!heatMode || splitMap) return;
+  const pane = document.getElementById('split-map-pane');
+  pane.style.display = 'block';
+  document.getElementById('split-map-label').textContent = HEAT_MODE_LABELS[heatMode] || heatMode;
+  splitMap = L.map('split-map', {preferCanvas: true}).setView(map.getCenter(), map.getZoom());
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(splitMap);
+  splitHeatLayer = L.layerGroup().addTo(splitMap);
+  // Синхронный пан/зум в обе стороны — флаг splitSyncing защищает от
+  // бесконечного пинг-понга (move на одной карте триггерит move на другой,
+  // который без флага снова триггерил бы первую и т.д.).
+  map.on('move zoom', () => {
+    if (splitSyncing || !splitMap) return;
+    splitSyncing = true;
+    splitMap.setView(map.getCenter(), map.getZoom(), {animate: false});
+    splitSyncing = false;
+  });
+  splitMap.on('move zoom', () => {
+    if (splitSyncing) return;
+    splitSyncing = true;
+    map.setView(splitMap.getCenter(), splitMap.getZoom(), {animate: false});
+    splitSyncing = false;
+  });
+  setTimeout(() => { map.invalidateSize(); splitMap.invalidateSize(); }, 50);
+  refreshSplitView();
+}
+function refreshSplitView() {
+  if (!splitMap || !heatMode) return;
+  document.getElementById('split-map-label').textContent = HEAT_MODE_LABELS[heatMode] || heatMode;
+  splitHeatLayer.clearLayers();
+  const cached = heatCache[heatMode] || (heatMode === 'sale' && heatCache.sale);
+  if (!cached) return;
+  const prevTarget = heatTargetLayer;
+  heatTargetLayer = splitHeatLayer;
+  renderHeatMode(heatMode, cached);
+  heatTargetLayer = prevTarget;
+}
+function closeSplitView() {
+  if (!splitMap) return;
+  splitMap.remove();
+  splitMap = null; splitHeatLayer = null;
+  document.getElementById('split-map-pane').style.display = 'none';
+  setTimeout(() => map.invalidateSize(), 50);
+}
+map.on('click', () => { if (heatMode && !splitMap) openSplitView(); });
 
 function toggleHexGrid() {
   hexOn = !hexOn;
@@ -2968,6 +3163,12 @@ function openDetailModal(id, ev, scrollToScore) {
     }).join('')}
   </div>` : ''}
 </div>` : '<div style="height:60px;"></div>';
+
+    const dealBadgesHtml = (d.underpriced_pct != null || d.high_yield) ? `
+<div style="margin:14px 22px 0;display:flex;gap:8px;flex-wrap:wrap;">
+  ${d.underpriced_pct != null ? `<span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;background:rgba(239,68,68,.12);color:#ef4444;font-weight:700;font-size:12.5px;">🔥 Недооценено на ${d.underpriced_pct}%</span>` : ''}
+  ${d.high_yield ? `<span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;background:rgba(22,163,74,.12);color:#16a34a;font-weight:700;font-size:12.5px;">💰 Высокая доходность</span>` : ''}
+</div>` : '';
 
     const bargainHtml = (d.bargain && d.bargain.discount_pct > 0) ? `
 <div style="margin:14px 22px 0;">
@@ -3161,6 +3362,7 @@ ${photoHtml}
   <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
   ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
 </div>
+${dealBadgesHtml}
 ${bargainHtml}
 ${priceHistoryHtml}
 ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">

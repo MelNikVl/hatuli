@@ -72,3 +72,14 @@ async def set_password(user_id: int, new_password: str) -> None:
         "UPDATE admin_users SET password_hash = $2 WHERE id = $1",
         user_id, hash_password(new_password),
     )
+
+
+async def delete_user(user_id: int) -> bool:
+    """True, если удалён. Не даёт удалить последнего админа — иначе доступ
+    к /admin/settings и всей админке потерялся бы без способа его вернуть
+    (кроме прямого доступа к БД)."""
+    count = await fetchrow("SELECT COUNT(*) AS n FROM admin_users")
+    if count and count["n"] <= 1:
+        return False
+    await execute("DELETE FROM admin_users WHERE id = $1", user_id)
+    return True

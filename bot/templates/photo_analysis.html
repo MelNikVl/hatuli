@@ -3,51 +3,46 @@
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">📷 Анализ фото (планировки SigLIP)</div>
 
-<div id="pa-recent-wrap" style="margin-bottom:14px;"></div>
+<div id="pa-recent-wrap" class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;"></div>
 
-<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">
-  <div style="flex:1 1 0;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+<div class="admin-block" style="display:flex;gap:10px;flex-wrap:wrap;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  <div style="flex:1 1 0;min-width:150px;">
     <div style="font-size:11.5px;color:#888;">Обработано объявлений</div>
     <div id="pa-processed" style="font-size:22px;font-weight:700;">—</div>
   </div>
-  <div style="flex:1 1 0;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  <div style="flex:1 1 0;min-width:150px;">
     <div style="font-size:11.5px;color:#888;">Фото проанализировано</div>
     <div id="pa-photos" style="font-size:22px;font-weight:700;">—</div>
   </div>
-  <div style="flex:1 1 0;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  <div style="flex:1 1 0;min-width:150px;">
     <div style="font-size:11.5px;color:#888;">📐 Планов найдено</div>
     <div id="pa-floorplans" style="font-size:22px;font-weight:700;color:#f59e0b;">—</div>
   </div>
-  <div style="flex:1 1 0;min-width:150px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  <div style="flex:1 1 0;min-width:150px;">
     <div style="font-size:11.5px;color:#888;">В очереди</div>
     <div id="pa-queue" style="font-size:22px;font-weight:700;">—</div>
   </div>
 </div>
 
-<div style="display:flex;gap:4px;margin-bottom:10px;">
-  <button type="button" class="pa-days-btn" data-days="1" onclick="paSetDays(1)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">1д</button>
-  <button type="button" class="pa-days-btn" data-days="3" onclick="paSetDays(3)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:#2563eb;color:#fff;font-size:11.5px;cursor:pointer;">3д</button>
-  <button type="button" class="pa-days-btn" data-days="7" onclick="paSetDays(7)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">7д</button>
-  <button type="button" class="pa-days-btn" data-days="30" onclick="paSetDays(30)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">30д</button>
-  <button type="button" class="pa-days-btn" data-days="90" onclick="paSetDays(90)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">90д</button>
+<div class="chart-block" style="flex:1 1 0;min-width:340px;">
+  <div style="font-weight:700;margin-bottom:4px;">🖼 Фото классифицировано</div>
+  <div style="font-size:12.5px;color:#888;margin-bottom:6px;">По часам/дням (SigLIP, CPU, ~1 фото/сек) — зависит от выбранного периода.</div>
+  <div style="display:flex;gap:4px;margin-bottom:10px;">
+    <button type="button" class="pa-days-btn" data-days="1" onclick="paSetDays(1)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">1д</button>
+    <button type="button" class="pa-days-btn" data-days="3" onclick="paSetDays(3)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:#2563eb;color:#fff;font-size:11.5px;cursor:pointer;">3д</button>
+    <button type="button" class="pa-days-btn" data-days="7" onclick="paSetDays(7)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">7д</button>
+    <button type="button" class="pa-days-btn" data-days="30" onclick="paSetDays(30)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">30д</button>
+    <button type="button" class="pa-days-btn" data-days="90" onclick="paSetDays(90)" style="padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">90д</button>
+  </div>
+  <div class="chart-block-inner"><canvas id="pa-photos-chart"></canvas></div>
 </div>
-<div style="display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;">
-  <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
-    <div style="font-weight:700;margin-bottom:4px;">🖼 Фото классифицировано</div>
-    <div style="font-size:12.5px;color:#888;margin-bottom:10px;">По часам/дням (SigLIP, CPU, ~1 фото/сек) — зависит от выбранного периода.</div>
-    {# 2 узкие колонки side-by-side под сводкой — ширину оставляем гибкой
-       (fixed 800px сломал бы этот парный layout), высоту canvas-области
-       берём из общего стандарта .chart-block-inner (520px). #}
-    <div class="chart-block-inner"><canvas id="pa-photos-chart"></canvas></div>
-  </div>
-  <div style="flex:1 1 0;min-width:340px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
-    <div style="font-weight:700;margin-bottom:4px;">📐 Планов найдено</div>
-    <div style="font-size:12.5px;color:#888;margin-bottom:10px;">Накопленным итогом.</div>
-    <div class="chart-block-inner"><canvas id="pa-fp-chart"></canvas></div>
-  </div>
+<div class="chart-block" style="flex:1 1 0;min-width:340px;">
+  <div style="font-weight:700;margin-bottom:4px;">📐 Планов найдено</div>
+  <div style="font-size:12.5px;color:#888;margin-bottom:10px;">Накопленным итогом.</div>
+  <div class="chart-block-inner"><canvas id="pa-fp-chart"></canvas></div>
 </div>
 
-<div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:1100px;">
+<div class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;">
   <div style="font-weight:700;margin-bottom:4px;">⚙️ Частота анализа</div>
   <div style="font-size:12.5px;color:#888;margin-bottom:12px;">
     Работает по таймеру (krisha-floorplan.timer, каждые ~20-30 мин). За раз обрабатывает <b>N объявлений</b> ниже,
@@ -68,7 +63,7 @@
   </div>
 </div>
 
-<div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;max-width:1100px;">
+<div class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;">
   <div style="font-weight:700;margin-bottom:8px;">🤖 Какая модель работает и как</div>
   <div style="font-size:12.5px;color:#f59e0b;margin-bottom:8px;">Гибрид: эвристика OpenCV (фильтр) → SigLIP (подтверждение). Эвристика отсекает ~90% фото (цветные интерьеры, фасады), SigLIP запускается только на ч/б-кандидатах.</div>
   <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
@@ -103,8 +98,7 @@ function paLoad() {
     const recent = d.recent || [];
     const wrap = document.getElementById('pa-recent-wrap');
     if (recent.length) {
-      wrap.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;width:100%;box-sizing:border-box;">' +
-        '<div style="font-weight:700;margin-bottom:4px;">🆕 Последние найденные планы</div>' +
+      wrap.innerHTML = '<div style="font-weight:700;margin-bottom:4px;">🆕 Последние найденные планы</div>' +
         '<div style="font-size:12.5px;color:#888;margin-bottom:10px;">Обновляется раз в минуту · клик — объявление с планом.</div>' +
         '<div style="display:flex;gap:10px;overflow-x:auto;padding:2px;">' +
         recent.map(r => {
@@ -117,7 +111,7 @@ function paLoad() {
               '<div style="color:#888;margin-top:2px;">' + String(r.checked_at).slice(5, 16).replace('T', ' ') + '</div>' +
             '</div></a>';
         }).join('') +
-        '</div></div>';
+        '</div>';
     } else {
       wrap.innerHTML = '';
     }
