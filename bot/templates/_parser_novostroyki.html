@@ -1,0 +1,139 @@
+{# Вкладка "Новостройки" hub-страницы /admin/parsers — прямой парсинг
+   шахматок у застройщиков (BI Group, дальше остальные из списка).
+   Ожидает: by_developer, by_complex, all_developers, chart_nb, nb_days,
+   nb_developer (см. _novostroyki_data). #}
+
+<div class="admin-block" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding-top:14px;align-items:center;">
+  <div class="stat-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:130px;">
+    <div style="font-size:22px;font-weight:700;">{{ by_complex|length }}</div>
+    <div style="font-size:12px;color:#888;">ЖК-новостроек</div>
+  </div>
+  <div class="stat-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:130px;">
+    <div style="font-size:22px;font-weight:700;color:#22c55e;">{{ by_developer|sum(attribute='active') }}</div>
+    <div style="font-size:12px;color:#888;">квартир в наличии</div>
+  </div>
+  <div class="stat-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;min-width:130px;">
+    <div style="font-size:22px;font-weight:700;color:#888;">{{ by_developer|sum(attribute='sold') }}</div>
+    <div style="font-size:12px;color:#888;">продано (всего)</div>
+  </div>
+  <button type="button" onclick="runNovostroykiNow()" id="nb-run-btn"
+          style="padding:9px 18px;border:none;border-radius:9px;background:#2563eb;color:#fff;font-weight:700;font-size:13px;cursor:pointer;">
+    ▶ Запустить полный обход сейчас
+  </button>
+  <span id="nb-run-status" style="font-size:12.5px;color:#888;"></span>
+</div>
+
+<p style="font-size:12.5px;color:#888;max-width:900px;margin-bottom:14px;">
+  Каждый застройщик — отдельный скрипт (*_import.py в корне проекта), пишут в общие
+  newbuild_units/complexes через newbuild_common.py. Продано = юниты, пропавшие из выдачи
+  застройщика между двумя обходами (сами они статус "продано" не публикуют).
+</p>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px;">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+    <div style="font-size:14.5px;font-weight:700;">📊 Спарсено во времени <small style="font-weight:400;color:#888;">— новых юнитов найдено / ушло в продажу</small></div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <select onchange="location.href='?tab=novostroyki&days={{ nb_days }}&developer='+this.value"
+              style="padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:12.5px;">
+        <option value="0" {{ 'selected' if not nb_developer }}>Все застройщики</option>
+        {% for d in all_developers %}
+        <option value="{{ d.id }}" {{ 'selected' if nb_developer == d.id }}>{{ d.name }}</option>
+        {% endfor %}
+      </select>
+      <div style="display:flex;gap:6px;">
+        {% for d in [1, 3, 7, 30] %}
+        <a href="?tab=novostroyki&developer={{ nb_developer }}&days={{ d }}"
+           style="padding:4px 12px;border-radius:8px;font-size:12.5px;text-decoration:none;
+                  {% if nb_days == d %}background:#2563eb;color:#fff;{% else %}background:var(--bg);border:1px solid var(--border);color:var(--text);{% endif %}">
+          {{ d }} дн
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  <div class="chart-block-inner" style="height:220px;"><canvas id="nbActivityChart"></canvas></div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px;">
+  <div style="font-size:13px;font-weight:600;margin-bottom:8px;">По застройщикам</div>
+  <div style="overflow-x:auto;">
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+    <tr style="color:#888;text-align:left;">
+      <th style="padding:6px 8px;">Застройщик</th><th style="padding:6px 8px;">ЖК</th>
+      <th style="padding:6px 8px;">В наличии</th><th style="padding:6px 8px;">Продано</th>
+      <th style="padding:6px 8px;">Последний обход</th>
+    </tr>
+    {% for r in by_developer %}
+    <tr style="border-top:1px solid var(--border);">
+      <td style="padding:6px 8px;"><a href="/admin/developer/{{ r.id }}" style="color:inherit;font-weight:600;">{{ r.name }}</a></td>
+      <td style="padding:6px 8px;">{{ r.complexes }}</td>
+      <td style="padding:6px 8px;color:#22c55e;font-weight:600;">{{ r.active }}</td>
+      <td style="padding:6px 8px;color:#888;">{{ r.sold }}</td>
+      <td style="padding:6px 8px;white-space:nowrap;">{{ r.last_scan.strftime('%d.%m %H:%M') if r.last_scan else '—' }}</td>
+    </tr>
+    {% endfor %}
+    {% if not by_developer %}
+    <tr><td colspan="5" style="text-align:center;color:#888;padding:16px;">Пока пусто — нажми "Запустить полный обход сейчас".</td></tr>
+    {% endif %}
+  </table>
+  </div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;">
+  <div style="font-size:13px;font-weight:600;margin-bottom:8px;">По ЖК ({{ by_complex|length }})</div>
+  <div style="overflow-x:auto;max-height:480px;overflow-y:auto;">
+  <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+    <tr style="color:#888;text-align:left;position:sticky;top:0;background:var(--surface);">
+      <th style="padding:6px 8px;">ЖК</th><th style="padding:6px 8px;">Застройщик</th>
+      <th style="padding:6px 8px;">Сдача</th><th style="padding:6px 8px;">В наличии</th>
+      <th style="padding:6px 8px;">Продано</th><th style="padding:6px 8px;">Обновлено</th>
+    </tr>
+    {% for c in by_complex %}
+    <tr style="border-top:1px solid var(--border);">
+      <td style="padding:6px 8px;"><a href="/admin/complex/{{ c.id }}" style="color:inherit;font-weight:600;">{{ c.name }}</a></td>
+      <td style="padding:6px 8px;">{{ c.developer or '—' }}</td>
+      <td style="padding:6px 8px;white-space:nowrap;">{{ c.completion_quarter and 'кв.' + c.completion_quarter|string + ' ' or '' }}{{ c.completion_year or '—' }}</td>
+      <td style="padding:6px 8px;color:#22c55e;font-weight:600;">{{ c.newbuild_units_count or 0 }}</td>
+      <td style="padding:6px 8px;color:#888;">{{ c.newbuild_sold_count or 0 }}</td>
+      <td style="padding:6px 8px;white-space:nowrap;">{{ c.newbuild_last_scan_at.strftime('%d.%m %H:%M') if c.newbuild_last_scan_at else '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const NB_CHART = {{ chart_nb | tojson }};
+new Chart(document.getElementById('nbActivityChart'), {
+  type: 'line',
+  data: {
+    labels: NB_CHART.labels,
+    datasets: [
+      { label: 'новых юнитов', data: NB_CHART.new, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.3, pointRadius: 2 },
+      { label: 'ушло в продажу', data: NB_CHART.sold, borderColor: '#888', backgroundColor: 'rgba(136,136,136,.12)', fill: true, tension: 0.3, pointRadius: 2 },
+    ],
+  },
+  options: {
+    maintainAspectRatio: false,
+    scales: { x: { ticks: { color: '#888', maxTicksLimit: 12 } },
+              y: { ticks: { color: '#888' }, beginAtZero: true } },
+    plugins: { legend: { labels: { color: '#ccc', font: { size: 11 } } } },
+  },
+});
+
+async function runNovostroykiNow() {
+  const btn = document.getElementById('nb-run-btn');
+  const status = document.getElementById('nb-run-status');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/admin/parsers/novostroyki/run', { method: 'POST' });
+    const d = await r.json();
+    status.textContent = d.ok ? '✓ запущено в фоне — весь каталог Астаны занимает ~3-4 минуты, обнови страницу позже' : '✗ ошибка запуска';
+  } catch (e) {
+    status.textContent = '✗ ошибка запроса: ' + e;
+  } finally {
+    setTimeout(() => { btn.disabled = false; }, 3000);
+  }
+}
+</script>

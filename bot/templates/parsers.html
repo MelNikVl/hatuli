@@ -69,6 +69,9 @@
   {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
   {% include "_parser_source_changes.html" %}
   {% include "_parser_activity_chart.html" %}
+{% elif tab == 'novostroyki' %}
+  {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
+  {% include "_parser_novostroyki.html" %}
 {% else %}
   {% if active_block %}
     {{ toggle_card(active_block) }}

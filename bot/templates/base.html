@@ -255,7 +255,6 @@
   <div class="pub-row1{% if not panel_family %} narrow{% endif %}">
     <a href="/admin" class="pub-logo">Hatuli</a>
     <nav class="pub-nav">
-      <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">Карта</a>
       <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
       <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>
       <a href="/admin/banks" class="{% if 'banks' in request.url.path %}active{% endif %}">Банки</a>
@@ -263,7 +262,7 @@
       <a href="/admin/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
       {% if admin %}<a href="/admin/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path or 'investments' in request.url.path %}active{% endif %}">Аналитика</a>{% endif %}
       {% if admin %}
-      <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Апанель</a>
+      <a href="/admin/panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Админка</a>
       {% endif %}
     </nav>
     <div class="pub-row1-right">

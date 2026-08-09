@@ -97,11 +97,21 @@ html, body { overflow: hidden !important; }
 .filterbar #fb-load-progress-wrap { display:none; align-items:center; gap:6px; width:130px; flex-shrink:0; }
 .filterbar #fb-load-progress-wrap .bar-track { flex:1; height:5px; border-radius:3px; background:var(--bg); overflow:hidden; }
 .filterbar #load-progress-pct { font-size:11px; color:#888; flex-shrink:0; min-width:2.5em; text-align:right; }
+.year-chip.active { background:#2563eb !important; color:#fff !important; border-color:#2563eb !important; }
 </style>
 <div class="filterbar">
   <select id="f-type" onchange="applyFilters()">
     <option value="sale">Продажа</option><option value="rental">Аренда</option><option value="complex">ЖК</option>
+    <option value="newbuild">🏗 Новостройки</option>
   </select>
+
+  <div id="f-year-wrap" style="display:none;align-items:center;gap:4px;flex-wrap:wrap;">
+    {% for y in [2026, 2027, 2028, 2029, 2030] %}
+    <button type="button" class="year-chip" data-year="{{ y }}" onclick="toggleYearChip({{ y }})"
+            style="padding:6px 12px;border:1px solid var(--border);border-radius:16px;background:var(--bg);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;">{{ y }}</button>
+    {% endfor %}
+    <input type="hidden" id="f-newbuild-year" value="">
+  </div>
 
   <div id="f-rooms-wrap" class="rooms-dd">
     <button type="button" class="rooms-dd-btn" id="rooms-dd-btn" onclick="toggleRoomsDropdown(event)">Комнатность</button>
@@ -844,6 +854,52 @@ const HeatControls = L.Control.extend({
   },
 });
 map.addControl(new HeatControls());
+
+// Панель выбора застройщиков (только режим "Новостройки") — тот же приём,
+// что у HeatControls: свой L.Control поверх карты, скрыт по умолчанию,
+// показывается/прячется в applyFilters(). Список — с /admin/api/newbuild-
+// developers (стабильный, не мигает при смене фильтра комнатности/года,
+// см. докстринг ручки на бэкенде).
+let nbDevListLoaded = false;
+let selectedDeveloperIds = new Set();  // пусто = показываем всех (как rooms/year)
+const NewbuildDevPanel = L.Control.extend({
+  options: {position: 'topleft'},
+  onAdd: function() {
+    const box = L.DomUtil.create('div', '');
+    box.id = 'nb-dev-panel';
+    box.style.cssText = 'display:none;position:absolute;top:60px;left:10px;flex-direction:column;gap:4px;background:#fff;border-radius:10px;padding:10px 12px;box-shadow:0 1px 4px rgba(0,0,0,.25);box-sizing:border-box;min-width:160px;max-height:260px;overflow-y:auto;';
+    box.innerHTML = '<div style="font-size:10.5px;font-weight:700;color:#333;margin-bottom:4px;">Застройщики</div><div id="nb-dev-list" style="font-size:11.5px;color:#333;">Загрузка…</div>';
+    L.DomEvent.disableClickPropagation(box);
+    return box;
+  },
+});
+map.addControl(new NewbuildDevPanel());
+
+async function ensureNewbuildDevPanel() {
+  if (nbDevListLoaded) return;
+  nbDevListLoaded = true;
+  const devs = await fetch('/admin/api/newbuild-developers').then(r => r.json()).then(d => d.developers || []);
+  const list = document.getElementById('nb-dev-list');
+  list.innerHTML = devs.map(d => `
+    <label style="display:flex;align-items:center;gap:6px;padding:3px 0;cursor:pointer;">
+      <input type="checkbox" class="nb-dev-cb" value="${d.id}" checked onchange="onDevCheckboxChange()">
+      ${d.logo ? `<img src="${d.logo}" style="width:16px;height:16px;object-fit:contain;flex-shrink:0;">` : ''}
+      <span>${escapeHtml(d.name)}</span>
+    </label>`).join('') || '<div style="color:#888;">нет данных</div>';
+}
+function onDevCheckboxChange() {
+  const boxes = Array.from(document.querySelectorAll('.nb-dev-cb'));
+  const checked = boxes.filter(cb => cb.checked).map(cb => cb.value);
+  if (checked.length === boxes.length) {
+    selectedDeveloperIds = new Set();  // все отмечены — фильтр не применяем
+  } else if (checked.length === 0) {
+    selectedDeveloperIds = new Set(['-1']);  // никого не выбрано — не показываем ничего
+  } else {
+    selectedDeveloperIds = new Set(checked);
+  }
+  drawNewbuildLayer();
+}
+
 function resizeHeatControlsBox() {
   const zoomCtl = document.querySelector('.leaflet-control-zoom');
   const mapBtns = document.getElementById('btn-ruler');
@@ -1111,6 +1167,139 @@ function openComplexPopup(c, layer) {
   </div>
 </div>`);
   }).catch(() => {});
+}
+
+// ── Новостройки: слой карты (лого застройщика + счётчик), попап ЖК со
+// списком вариантов, кнопка "Связаться с застройщиком" в превью каждого. ──
+
+const newbuildLayer = L.layerGroup();
+let selectedYears = [];  // чипы годов сдачи — multi-select, пусто = все года
+
+function toggleYearChip(y) {
+  const idx = selectedYears.indexOf(y);
+  if (idx === -1) selectedYears.push(y); else selectedYears.splice(idx, 1);
+  document.querySelectorAll('.year-chip').forEach(el => {
+    el.classList.toggle('active', selectedYears.includes(parseInt(el.dataset.year, 10)));
+  });
+  document.getElementById('f-newbuild-year').value = selectedYears.join(',');
+  drawNewbuildLayer();
+}
+
+function newbuildPinHtml(p) {
+  // Лого застройщика (если есть файл в БД) + бэйдж с числом вариантов в
+  // наличии (пересчитывается на бэкенде под текущий фильтр комнатности —
+  // см. newbuild_map_points). Без лого — просто первая буква названия.
+  const logoHtml = p.logo
+    ? `<img src="${p.logo}" style="width:28px;height:28px;border-radius:50%;object-fit:contain;background:#fff;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);">`
+    : `<div style="width:28px;height:28px;border-radius:50%;background:#7c3aed;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);color:#fff;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;">${(p.developer||'?')[0]}</div>`;
+  return `
+<div id="pin-nb-cx-${p.id}" style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;transition:filter .15s ease;">
+  <div style="position:relative;">
+    ${logoHtml}
+    <span style="position:absolute;right:-6px;bottom:-4px;background:#16a34a;color:#fff;border-radius:9px;padding:1px 6px;font-size:10.5px;font-weight:800;border:2px solid #fff;white-space:nowrap;">${p.units_count}</span>
+  </div>
+  <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid #7c3aed;margin-top:2px;"></div>
+</div>`;
+}
+
+async function drawNewbuildLayer() {
+  ensureNewbuildDevPanel();
+  if (!map.hasLayer(newbuildLayer)) newbuildLayer.addTo(map);
+  newbuildLayer.clearLayers();
+  const rooms = document.getElementById('f-rooms').value;
+  const p = new URLSearchParams();
+  if (rooms) p.set('rooms', rooms);
+  if (selectedDeveloperIds.size) p.set('developers', Array.from(selectedDeveloperIds).join(','));
+  // Чипы годов — сервер фильтрует по одному году за раз; при нескольких
+  // выбранных годах просто грузим несколько ответов и сливаем (чипов мало,
+  // ЖК на город тоже не тысячи — не стоит городить OR на бэкенде ради этого).
+  const years = selectedYears.length ? selectedYears : [0];
+  document.getElementById('result-count').classList.add('loading');
+  const batches = await Promise.all(years.map(y => {
+    const pp = new URLSearchParams(p); if (y) pp.set('year', y);
+    return fetch('/admin/api/newbuild-map-points?' + pp.toString()).then(r => r.json()).then(d => d.points || []);
+  }));
+  document.getElementById('result-count').classList.remove('loading');
+  let list = [].concat(...batches);
+  const seen = new Set(); list = list.filter(pt => !seen.has(pt.id) && seen.add(pt.id));
+  if (drawnPolygons.length) list = list.filter(pt => pointInAnyDrawnPolygon(pt.lat, pt.lon));
+  document.getElementById('result-count').textContent = list.length + ' ЖК';
+  list.forEach(pt => {
+    const icon = L.divIcon({html: newbuildPinHtml(pt), className: '', iconSize: [0, 0]});
+    const marker = L.marker([pt.lat, pt.lon], {icon}).addTo(newbuildLayer);
+    marker.on('click', () => openNewbuildSidePanel(pt));
+  });
+}
+
+// Клик по ЖК-новостройке — та же боковая панель справа, что у вторички
+// (см. openSidePanel выше), а не Leaflet-попап над картой: длиннее список
+// поместится, вертикальный скролл, не перекрывает карту под пином.
+// Отдельная функция (не переиспользует CARD_HTML/ptPhotos/loadPriceHistory
+// и т.п.) — те специфичны для apartment_listings, тут другая природа данных.
+function openNewbuildSidePanel(pt) {
+  const body = document.getElementById('side-panel-body');
+  body.innerHTML = '<div style="padding:40px 0;text-align:center;color:#888;">Загрузка…</div>';
+  document.getElementById('side-panel-count').textContent = '';
+  document.getElementById('side-panel-head').classList.remove('has-count');
+  document.getElementById('side-panel').classList.add('open');
+  selectPin('nb-cx-' + pt.id);
+
+  const rooms = document.getElementById('f-rooms').value;
+  const qs = rooms ? ('?rooms=' + encodeURIComponent(rooms)) : '';
+  fetch('/admin/api/newbuild-complex/' + pt.id + '/units' + qs).then(r => r.json()).then(d => {
+    if (d.error) { body.innerHTML = '<div style="padding:40px 0;text-align:center;color:#888;">Не найдено</div>'; return; }
+    const sdача = d.completion_quarter ? `${d.completion_quarter} кв. ${d.completion_year}` : (d.completion_year || '—');
+    document.getElementById('side-panel-count').textContent = d.units.length ? d.units.length + ' вариантов' : '';
+    document.getElementById('side-panel-head').classList.toggle('has-count', d.units.length > 0);
+
+    const headHtml = `
+<div style="padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid var(--border);">
+  <div style="font-weight:800;font-size:17px;"><a href="/admin/complex/${d.id}" style="color:inherit;text-decoration:none;">🏗 ЖК ${escapeHtml(d.name)}</a></div>
+  <div style="font-size:13px;color:var(--text);margin-top:4px;">
+    ${d.developer_id ? `<a href="/admin/developer/${d.developer_id}">${escapeHtml(d.developer || '')}</a>` : escapeHtml(d.developer || 'застройщик не указан')} · сдача ${sdача}${d.district ? ' · ' + escapeHtml(d.district) : ''}
+  </div>
+</div>`;
+
+    const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+    const unitsHtml = d.units.length ? d.units.map(u => `
+<div style="width:100%;box-sizing:border-box;">
+  <a href="javascript:void(0)" onclick="openDetailModal('nb-${u.id}', event)" style="text-decoration:none;color:inherit;display:block;">
+    ${u.photo ? `<img src="${u.photo}" style="width:100%;height:170px;object-fit:contain;background:#f7f7f7;border-radius:9px;display:block;">` : ''}
+    <div style="padding:8px 2px 0;">
+      <div style="font-size:19px;font-weight:800;">${u.price ? (u.price/1e6).toFixed(1) + ' млн ₸' : 'цена по запросу'}</div>
+      <div style="margin-top:4px;">
+        <span style="${pillStyle}">${u.rooms || '?'}-комн</span>
+        <span style="${pillStyle}">${u.area ? Math.round(u.area) : '?'} м²</span>
+        <span style="${pillStyle}">${u.floor || '?'}/${u.floors_total || '?'} эт.</span>
+      </div>
+    </div>
+  </a>
+  <div style="padding:0 2px;max-width:280px;">${contactDevBtnHtml(d, u.id)}</div>
+</div>`).join('<div style="height:5px;background:var(--bg);margin:11px -2px;"></div>')
+      : '<div style="font-size:13px;color:#888;padding:20px 0;text-align:center;">Нет вариантов в наличии по этому фильтру</div>';
+
+    body.innerHTML = headHtml + unitsHtml;
+  }).catch(() => {
+    body.innerHTML = '<div style="padding:40px 0;text-align:center;color:#888;">Ошибка загрузки</div>';
+  });
+}
+
+// Кнопка "Связаться с застройщиком" в превью каждого варианта — по клику
+// сама пропадает и на её месте показывается номер (см. задачу: "пока так —
+// может потом сделаем попап отдельный"). uid делает id уникальным на
+// случай нескольких карточек одного ЖК в одном попапе.
+let _contactBtnSeq = 0;
+function contactDevBtnHtml(d, unitId) {
+  if (!d.sales_phone) return '';
+  const uid = 'nbphone-' + (_contactBtnSeq++) + '-' + unitId;
+  return `<button type="button" id="${uid}" onclick="revealDevPhone('${uid}', '${d.sales_phone}', event)"
+    style="width:100%;padding:5px 0;border:none;border-radius:6px;background:#16a34a;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;">☎ Связаться с застройщиком</button>`;
+}
+function revealDevPhone(btnId, phone, ev) {
+  if (ev) ev.stopPropagation();
+  const btn = document.getElementById(btnId);
+  if (!btn) return;
+  btn.outerHTML = `<a href="tel:${phone}" style="display:block;text-align:center;width:100%;padding:5px 0;border-radius:6px;background:#eff6ff;color:#2563eb;font-weight:800;font-size:12px;text-decoration:none;">☎ ${phone}</a>`;
 }
 
 // Цена компактно: "30.5 М" (от 1 млн) или "850.0K" (меньше 1 млн)
@@ -1459,17 +1648,26 @@ function applyFilters() {
   applyFiltersSeq++;  // обрывает батчи предыдущего вызова (см. loadSaleBatch)
   const type = document.getElementById('f-type').value;
   reconfigurePriceSlider(type);
-  document.getElementById('f-price-wrap').style.display = type === 'complex' ? 'none' : '';
-  document.getElementById('f-area-wrap').style.display = type === 'complex' ? 'none' : '';
+  document.getElementById('f-price-wrap').style.display = (type === 'complex' || type === 'newbuild') ? 'none' : '';
+  document.getElementById('f-area-wrap').style.display = (type === 'complex' || type === 'newbuild') ? 'none' : '';
   document.getElementById('f-rooms-wrap').style.display = type === 'complex' ? 'none' : '';
-  document.getElementById('f-seller-wrap').style.display = type === 'complex' ? 'none' : '';
+  document.getElementById('f-seller-wrap').style.display = (type === 'complex' || type === 'newbuild') ? 'none' : '';
+  document.getElementById('f-year-wrap').style.display = type === 'newbuild' ? 'flex' : 'none';
+  const nbPanelEl = document.getElementById('nb-dev-panel');
+  if (nbPanelEl) nbPanelEl.style.display = type === 'newbuild' ? 'flex' : 'none';
   if (type === 'complex') {
-    map.removeLayer(pointsLayer); map.removeLayer(topLayer); map.removeLayer(saleCluster); map.removeLayer(liteCluster);
-    pointsLayer.clearLayers(); topLayer.clearLayers(); saleCluster.clearLayers(); liteCluster.clearLayers();
+    map.removeLayer(pointsLayer); map.removeLayer(topLayer); map.removeLayer(saleCluster); map.removeLayer(liteCluster); map.removeLayer(newbuildLayer);
+    pointsLayer.clearLayers(); topLayer.clearLayers(); saleCluster.clearLayers(); liteCluster.clearLayers(); newbuildLayer.clearLayers();
     drawComplexLayer();
+    return;
+  } else if (type === 'newbuild') {
+    map.removeLayer(pointsLayer); map.removeLayer(topLayer); map.removeLayer(saleCluster); map.removeLayer(liteCluster); map.removeLayer(complexLayer);
+    pointsLayer.clearLayers(); topLayer.clearLayers(); saleCluster.clearLayers(); liteCluster.clearLayers(); complexLayer.clearLayers();
+    drawNewbuildLayer();
     return;
   } else {
     map.removeLayer(complexLayer); complexLayer.clearLayers();
+    map.removeLayer(newbuildLayer); newbuildLayer.clearLayers();
   }
   const p = new URLSearchParams({type});
   if (map.getZoom() >= ZOOM_GATE) {
@@ -3117,6 +3315,46 @@ async function loadModalPriceHeat(kind) {
   setTimeout(() => modalHeatMap && modalHeatMap.invalidateSize(), 60);
 }
 
+// Большой попап варианта новостройки — визуально тот же оверлей/шелл, что
+// у объявления вторички (ensureModalRoot/closeDetailModal общие), контент
+// проще: планировка вместо галереи фото, ключевые факты, застройщик +
+// кнопка "Связаться" (та же revealDevPhone, что в превью на карте).
+function renderNewbuildDetail(unitId, content) {
+  fetch('/admin/api/newbuild-unit/' + encodeURIComponent(unitId)).then(r => r.json()).then(d => {
+    if (d.error) { content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Не найдено</div>'; return; }
+    const priceTxt = d.price ? (d.price/1e6).toFixed(1) + ' млн ₸' : 'цена по запросу';
+    const sdача = d.completion_quarter ? `${d.completion_quarter} кв. ${d.completion_year}` : (d.completion_year || '—');
+    const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+    content.innerHTML = `
+<div style="padding:0 0 20px;">
+  ${d.photo ? `<img src="${d.photo}" style="width:100%;height:360px;object-fit:contain;background:#f7f7f7;display:block;">` : '<div style="height:60px;"></div>'}
+  <div style="padding:16px 22px 0;">
+    <span style="display:inline-block;padding:4px 12px;border-radius:20px;background:rgba(124,58,237,.12);color:#7c3aed;font-weight:700;font-size:12.5px;">🏗 Новостройка${d.status === 'reserved' ? ' · бронируется' : ''}</span>
+    <div style="font-size:26px;font-weight:800;margin-top:10px;">${priceTxt}</div>
+    ${d.price_per_m2 ? `<div style="font-size:13px;color:var(--text);margin-top:2px;">${Math.round(d.price_per_m2/1000)} тыс ₸/м²</div>` : ''}
+    <div style="margin-top:10px;">
+      <span style="${pillStyle}">${d.rooms || '?'}-комн</span>
+      ${d.area ? `<span style="${pillStyle}">${Math.round(d.area)} м²</span>` : ''}
+      ${d.floor ? `<span style="${pillStyle}">${d.floor}/${d.floors_total || '?'} эт.</span>` : ''}
+      ${d.building ? `<span style="${pillStyle}">корпус ${escapeHtml(d.building)}</span>` : ''}
+      ${d.section ? `<span style="${pillStyle}">подъезд ${escapeHtml(d.section)}</span>` : ''}
+    </div>
+    <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="font-weight:800;font-size:17px;"><a href="/admin/complex/${d.complex_id}" style="color:inherit;text-decoration:none;">🏢 ЖК ${escapeHtml(d.complex_name || '')}</a></div>
+      <div style="font-size:13px;color:var(--text);margin-top:4px;">
+        ${d.developer_id ? `<a href="/admin/developer/${d.developer_id}">${escapeHtml(d.developer_name || '')}</a>` : escapeHtml(d.developer_name || 'застройщик не указан')}
+        · сдача ${sdача}${d.district ? ' · ' + escapeHtml(d.district) : ''}
+      </div>
+      ${d.address ? `<div style="font-size:12.5px;color:#888;margin-top:2px;">📍 ${escapeHtml(d.address)}</div>` : ''}
+    </div>
+    <div style="margin-top:16px;max-width:280px;">${contactDevBtnHtml({sales_phone: d.sales_phone}, d.id)}</div>
+  </div>
+</div>`;
+  }).catch(() => {
+    content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Ошибка загрузки</div>';
+  });
+}
+
 function openDetailModal(id, ev, scrollToScore) {
   if (ev) ev.stopPropagation();
   modalListingId = id;
@@ -3132,6 +3370,10 @@ function openDetailModal(id, ev, scrollToScore) {
   }
   const content = document.getElementById('detail-modal-content');
   content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Загрузка…</div>';
+
+  // Вариант новостройки — гораздо более простой контент (нет скора/торга/
+  // доходности/похожих у ещё не построенной квартиры), тот же оверлей-шелл.
+  if (String(id).startsWith('nb-')) { renderNewbuildDetail(String(id).slice(3), content); return; }
 
   fetch('/admin/api/listing/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
     if (d.error) { content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Не найдено</div>'; return; }

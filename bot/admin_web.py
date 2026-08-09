@@ -188,6 +188,33 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # объявления (этот попап и отдельная /admin/analytics/{id}) — теперь
         # только это, старый роут ниже редиректит сюда.
         from bot.db.pg import fetchrow as pg_fetchrow
+
+        # Вариант новостройки (см. миграцию 041_newbuild.sql) — отдельная
+        # таблица, id с префиксом "nb-" (openDetailModal в dashboard.html
+        # различает по нему секондари/новостройку). OG-превью попроще:
+        # без title/complex_name объявления, просто комн+площадь+ЖК+цена.
+        if listing_id.startswith("nb-"):
+            try:
+                unit_id_int = int(listing_id[3:])
+            except ValueError:
+                unit_id_int = None
+            unit_row = await pg_fetchrow("""
+                SELECT u.rooms, u.area, u.price, u.layout_photo_url, c.name AS complex_name
+                FROM newbuild_units u JOIN complexes c ON c.id = u.complex_id
+                WHERE u.id = $1
+            """, unit_id_int) if unit_id_int is not None else None
+            listing_meta = None
+            if unit_row:
+                r = dict(unit_row)
+                price_txt = f"{r['price']/1e6:.1f} млн ₸" if r.get("price") else ""
+                title_bits = [f"{r.get('rooms') or '?'}-комн", f"{r.get('area') or '?'} м²", r["complex_name"]]
+                listing_meta = {
+                    "title": f"{price_txt} · {' · '.join(title_bits)} · Новостройка — Hatuli".strip(" ·"),
+                    "description": f"{' · '.join(title_bits)} — цена {price_txt or 'по запросу'} на Hatuli.",
+                    "image": r.get("layout_photo_url"),
+                }
+            return await _render_dashboard(request, listing_id=listing_id, listing_meta=listing_meta)
+
         row = await pg_fetchrow(
             "SELECT id, title, price, rooms, area, district, complex_name, photos "
             "FROM apartment_listings WHERE id = $1", listing_id)

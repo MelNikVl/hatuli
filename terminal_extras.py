@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 
 import httpx
 from fastapi import APIRouter, File, Form, Request, UploadFile
@@ -1764,6 +1765,29 @@ def make_extras_router(templates) -> APIRouter:
             "last": stats.get("last"),
         })
 
+        # 9) Новостройки — прямой парсинг шахматок у застройщиков (BI Group,
+        # дальше остальные из списка). Пока ручной запуск кнопкой + флаг под
+        # будущий cron (см. _parser_novostroyki.html); "последний запуск" —
+        # newbuild_last_scan_at свежайшего обновлённого ЖК.
+        enabled_nb = app_settings.get_bool("PARSER_NEWBUILD_SCAN", True)
+        nb_last = await pg_fetchrow(
+            "SELECT max(newbuild_last_scan_at) AS last FROM complexes WHERE is_newbuild")
+        nb_totals = one(await pg_fetch("""
+            SELECT count(DISTINCT c.id)::int AS complexes,
+                   count(*) FILTER (WHERE u.status IN ('available','reserved'))::int AS active,
+                   count(*) FILTER (WHERE u.status = 'sold')::int AS sold
+            FROM complexes c JOIN newbuild_units u ON u.complex_id = c.id
+            WHERE c.is_newbuild
+        """))
+        blocks.append({
+            "key": "novostroyki", "kind": "flag", "active": enabled_nb,
+            "name": "🏗 Новостройки (застройщики напрямую)",
+            "desc": "Шахматки квартир у застройщиков (BI Group и далее) — что в наличии, что уже ушло",
+            "activity": (f"ЖК: {nb_totals.get('complexes', 0)}, в наличии: {nb_totals.get('active', 0)}, "
+                         f"продано: {nb_totals.get('sold', 0)}"),
+            "last": nb_last["last"] if nb_last else None,
+        })
+
         return blocks
 
     async def _activity_over_time(table: str, ts_col: str, days: int,
@@ -1868,6 +1892,7 @@ def make_extras_router(templates) -> APIRouter:
         {"key": "krisha-viewcount", "label": "👁 Просмотры"},
         {"key": "krisha-complex-scan", "label": "📸 ЖК (Крыша)"},
         {"key": "krisha-homeportal", "label": "🏛 Homeportal"},
+        {"key": "novostroyki", "label": "🏗 Новостройки"},
         {"key": "recheck", "label": "🔁 Повторный обход"},
     ]
 
@@ -2075,8 +2100,87 @@ def make_extras_router(templates) -> APIRouter:
                       "err": [h["err"] for h in hours]},
         }
 
+    async def _novostroyki_data(developer_id: int = 0, days: int = 7) -> dict:
+        """Данные вкладки "Новостройки" hub-страницы /admin/parsers: разбивка
+        по застройщикам + по ЖК (для контроля что реально спарсилось) + график
+        "спарсено во времени" (новых юнитов / ушло в продажу), с опциональным
+        фильтром по одному застройщику — developer_id=0 значит "все"."""
+        from bot.db.pg import fetch as pg_fetch
+
+        all_developers = await pg_fetch("""
+            SELECT DISTINCT d.id, d.name FROM complexes c
+            JOIN developers d ON d.id = c.developer_id
+            WHERE c.is_newbuild ORDER BY d.name
+        """)
+        by_developer = await pg_fetch("""
+            SELECT d.id, d.name, count(DISTINCT c.id)::int AS complexes,
+                   count(*) FILTER (WHERE u.status IN ('available','reserved'))::int AS active,
+                   count(*) FILTER (WHERE u.status = 'sold')::int AS sold,
+                   max(c.newbuild_last_scan_at) AS last_scan
+            FROM complexes c
+            JOIN developers d ON d.id = c.developer_id
+            JOIN newbuild_units u ON u.complex_id = c.id
+            WHERE c.is_newbuild
+            GROUP BY d.id, d.name ORDER BY complexes DESC
+        """)
+        by_complex = await pg_fetch("""
+            SELECT c.id, c.name, d.name AS developer, c.completion_year, c.completion_quarter,
+                   c.newbuild_units_count, c.newbuild_sold_count, c.newbuild_last_scan_at
+            FROM complexes c LEFT JOIN developers d ON d.id = c.developer_id
+            WHERE c.is_newbuild AND ($1::int = 0 OR c.developer_id = $1)
+            ORDER BY c.newbuild_units_count DESC NULLS LAST LIMIT 100
+        """, developer_id)
+
+        # График "спарсено во времени": новых юнитов (first_seen_at) и ушедших
+        # в продажу (sold_at) по бакетам — два разных timestamp-столбца одной
+        # таблицы, поэтому не подходит общий _activity_over_time (он на один
+        # столбец), считаем отдельным запросом с UNION ALL.
+        bucket = "hour" if days <= 3 else "day"
+        fmt = "%d.%m %H:00" if bucket == "hour" else "%d.%m"
+        rows = await pg_fetch(f"""
+            SELECT date_trunc('{bucket}', ts) AS b, kind, COUNT(*) AS cnt FROM (
+                SELECT first_seen_at AS ts, 'new' AS kind FROM newbuild_units
+                WHERE first_seen_at > now() - ($2 || ' days')::interval
+                  AND ($1::int = 0 OR developer_id = $1)
+                UNION ALL
+                SELECT sold_at AS ts, 'sold' AS kind FROM newbuild_units
+                WHERE sold_at IS NOT NULL AND sold_at > now() - ($2 || ' days')::interval
+                  AND ($1::int = 0 OR developer_id = $1)
+            ) x GROUP BY 1, 2 ORDER BY 1
+        """, developer_id, str(days))
+        buckets = sorted({r["b"] for r in rows})
+        by_bucket_kind = {(r["b"], r["kind"]): r["cnt"] for r in rows}
+        chart_nb = {
+            "bucket": bucket,
+            "labels": [b.strftime(fmt) for b in buckets],
+            "new": [by_bucket_kind.get((b, "new"), 0) for b in buckets],
+            "sold": [by_bucket_kind.get((b, "sold"), 0) for b in buckets],
+        }
+
+        return {"by_developer": by_developer, "by_complex": by_complex,
+                "all_developers": all_developers, "chart_nb": chart_nb}
+
+    @router.post("/admin/parsers/novostroyki/run")
+    async def novostroyki_run_now(request: Request):
+        """Ручной запуск полного обхода новостроек (пока только BI Group —
+        см. bi_group_import.py) прямо из админки, не дожидаясь cron. Не
+        ждём завершения (весь каталог Астаны ~3-4 минуты) — фронт покажет
+        "запущено", свежие цифры появятся на странице при следующем заходе."""
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        import asyncio as _aio
+        import sys as _sys
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        await _aio.create_subprocess_exec(
+            _sys.executable, os.path.join(project_root, "bi_group_import.py"),
+            cwd=project_root,
+            stdout=_aio.subprocess.DEVNULL, stderr=_aio.subprocess.DEVNULL,
+        )
+        logger.info("novostroyki: ручной запуск bi_group_import.py")
+        return JSONResponse({"ok": True, "started": True})
+
     @router.get("/admin/parsers", response_class=HTMLResponse)
-    async def parsers_page(request: Request, tab: str = "general", days: int = 1):
+    async def parsers_page(request: Request, tab: str = "general", days: int = 1, developer: int = 0):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         blocks = await _parser_registry_blocks()
@@ -2100,6 +2204,11 @@ def make_extras_router(templates) -> APIRouter:
             ctx.update(await _homeportal_data())
         elif tab == "krisha-complex-scan":
             ctx.update(await _parse_monitor_data())
+        elif tab == "novostroyki":
+            days = days if days in (1, 3, 7, 30) else 7
+            ctx["nb_days"] = days
+            ctx["nb_developer"] = developer
+            ctx.update(await _novostroyki_data(developer, days))
         elif tab in ("krisha-korter", "krisha-homsters"):
             days = days if days in (1, 3, 7, 30) else 7
             src = "korter" if tab == "krisha-korter" else "homsters"
@@ -2130,6 +2239,13 @@ def make_extras_router(templates) -> APIRouter:
             new_value = "0" if app_settings.get_bool("PARSER_KRISHA_COMPLEX_SCAN", True) else "1"
             await app_settings.set("PARSER_KRISHA_COMPLEX_SCAN", new_value)
             logger.info("PARSER_KRISHA_COMPLEX_SCAN -> %s", new_value)
+            return JSONResponse({"ok": True, "active": new_value == "1"})
+
+        if key == "novostroyki":
+            await app_settings.load()
+            new_value = "0" if app_settings.get_bool("PARSER_NEWBUILD_SCAN", True) else "1"
+            await app_settings.set("PARSER_NEWBUILD_SCAN", new_value)
+            logger.info("PARSER_NEWBUILD_SCAN -> %s", new_value)
             return JSONResponse({"ok": True, "active": new_value == "1"})
 
         if key not in PARSERS_SYSTEMD:
@@ -2502,6 +2618,141 @@ def make_extras_router(templates) -> APIRouter:
                 "area": float(l["area"]) if l["area"] else None,
                 "url": l["url"], "photo": _first_photo(l["photos"]),
             } for l in listings],
+        })
+
+    # ── Новостройки: точки на карту, юниты ЖК, деталь юнита ────────────────
+    # Публичные ручки (раздел "можно будет показывать всем") — та же логика
+    # анонимного доступа, что у complexes_map ниже: без is_authed вообще.
+
+    @router.get("/admin/api/newbuild-developers")
+    async def newbuild_developers(request: Request):
+        """Список застройщиков с живыми новостройками — для панели-фильтра
+        слева на карте в режиме "Новостройки" (см. dashboard.html). Отдельная
+        ручка, а не выборка из newbuild-map-points, чтобы список галочек не
+        мигал при смене фильтра комнатности/года (стабилен между перерисовками)."""
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT DISTINCT d.id, d.name, d.logo
+            FROM complexes c JOIN developers d ON d.id = c.developer_id
+            WHERE c.is_newbuild AND c.lat IS NOT NULL AND c.lon IS NOT NULL
+            ORDER BY d.name
+        """)
+        return JSONResponse({"developers": [
+            {"id": r["id"], "name": r["name"], "logo": r["logo"]} for r in rows]})
+
+    @router.get("/admin/api/newbuild-map-points")
+    async def newbuild_map_points(request: Request, rooms: str = "", year: int = 0,
+                                   developers: str = ""):
+        """Маркеры ЖК-новостроек для режима "Новостройки" на главной карте.
+        units_count — с учётом фильтра по комнатности (если задан) и года
+        сдачи, пересчитывается на лету, а не берётся из кэша
+        complexes.newbuild_units_count (тот — для всех комнатностей сразу,
+        см. bi_group_import.save_realestate). developers — CSV id застройщиков
+        из панели слева (см. newbuild_developers ниже), пусто = все."""
+        from bot.db.pg import fetch as pg_fetch
+        room_list = [int(r) for r in rooms.split(",") if r.strip().isdigit()]
+        # НЕ .isdigit() — "-1".isdigit() == False в Python (минус не цифра),
+        # а -1 нам как раз нужен: фронт шлёт его сентинелом "не выбрано ни
+        # одного застройщика" (см. onDevCheckboxChange в dashboard.html),
+        # который не должен совпасть ни с одним реальным id.
+        dev_list = []
+        for d in developers.split(","):
+            d = d.strip()
+            try:
+                dev_list.append(int(d))
+            except ValueError:
+                pass
+        rows = await pg_fetch("""
+            SELECT c.id, c.name, c.lat, c.lon, c.completion_year, c.completion_quarter,
+                   c.developer_id, d.name AS developer, d.logo,
+                   count(u.id) FILTER (
+                       WHERE u.status IN ('available','reserved')
+                         AND ($1::int[] = '{}' OR u.rooms = ANY($1::int[]))
+                   ) AS units_count
+            FROM complexes c
+            JOIN developers d ON d.id = c.developer_id
+            JOIN newbuild_units u ON u.complex_id = c.id
+            WHERE c.is_newbuild AND c.lat IS NOT NULL AND c.lon IS NOT NULL
+              AND ($2::int = 0 OR c.completion_year = $2)
+              AND ($3::int[] = '{}' OR c.developer_id = ANY($3::int[]))
+            GROUP BY c.id, c.name, c.lat, c.lon, c.completion_year, c.completion_quarter,
+                     c.developer_id, d.name, d.logo
+            HAVING count(u.id) FILTER (
+                       WHERE u.status IN ('available','reserved')
+                         AND ($1::int[] = '{}' OR u.rooms = ANY($1::int[]))
+                   ) > 0
+        """, room_list, year, dev_list)
+        return JSONResponse({"points": [{
+            "id": r["id"], "name": r["name"], "lat": float(r["lat"]), "lon": float(r["lon"]),
+            "developer": r["developer"], "developer_id": r["developer_id"], "logo": r["logo"],
+            "units_count": r["units_count"],
+            "completion_year": r["completion_year"], "completion_quarter": r["completion_quarter"],
+        } for r in rows]})
+
+    @router.get("/admin/api/newbuild-complex/{complex_id}/units")
+    async def newbuild_complex_units(request: Request, complex_id: int, rooms: str = ""):
+        """Список вариантов квартир в наличии для попапа ЖК на карте (клик
+        по маркеру) — как listings в complex_summary, только из newbuild_units."""
+        from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
+        cx = await pg_fetchrow("""
+            SELECT c.id, c.name, c.completion_year, c.completion_quarter, c.district,
+                   d.name AS developer, d.sales_phone, d.logo
+            FROM complexes c JOIN developers d ON d.id = c.developer_id
+            WHERE c.id = $1 AND c.is_newbuild
+        """, complex_id)
+        if not cx:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        room_list = [int(r) for r in rooms.split(",") if r.strip().isdigit()]
+        units = await pg_fetch("""
+            SELECT id, rooms, area, floor, floors_total, price, layout_photo_url, status
+            FROM newbuild_units
+            WHERE complex_id = $1 AND status IN ('available','reserved')
+              AND ($2::int[] = '{}' OR rooms = ANY($2::int[]))
+            ORDER BY price ASC NULLS LAST LIMIT 30
+        """, complex_id, room_list)
+        return JSONResponse({
+            "id": cx["id"], "name": cx["name"], "district": cx["district"],
+            "completion_year": cx["completion_year"], "completion_quarter": cx["completion_quarter"],
+            "developer": cx["developer"], "developer_id": None, "sales_phone": cx["sales_phone"],
+            "developer_logo": cx["logo"],
+            "units": [{
+                "id": u["id"], "rooms": u["rooms"],
+                "area": float(u["area"]) if u["area"] is not None else None,
+                "floor": u["floor"], "floors_total": u["floors_total"], "price": u["price"],
+                "photo": u["layout_photo_url"], "status": u["status"],
+            } for u in units],
+        })
+
+    @router.get("/admin/api/newbuild-unit/{unit_id}")
+    async def newbuild_unit_detail(request: Request, unit_id: int):
+        """Деталь одного варианта — для большого попапа (аналог
+        /admin/api/listing/{id} у вторички, см. openDetailModal в
+        dashboard.html: ветка по префиксу id 'nb-')."""
+        from bot.db.pg import fetchrow as pg_fetchrow
+        u = await pg_fetchrow("""
+            SELECT u.*, c.name AS complex_name, c.district, c.address,
+                   c.completion_year, c.completion_quarter, c.id AS complex_id,
+                   d.id AS developer_id, d.name AS developer_name, d.sales_phone, d.logo
+            FROM newbuild_units u
+            JOIN complexes c ON c.id = u.complex_id
+            JOIN developers d ON d.id = c.developer_id
+            WHERE u.id = $1
+        """, unit_id)
+        if not u:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({
+            "id": u["id"], "rooms": u["rooms"],
+            "area": float(u["area"]) if u["area"] is not None else None,
+            "floor": u["floor"], "floors_total": u["floors_total"],
+            "building": u["building"], "section": u["section"],
+            "price": u["price"],
+            "price_per_m2": float(u["price_per_m2"]) if u["price_per_m2"] is not None else None,
+            "photo": u["layout_photo_url"], "status": u["status"],
+            "complex_id": u["complex_id"], "complex_name": u["complex_name"],
+            "district": u["district"], "address": u["address"],
+            "completion_year": u["completion_year"], "completion_quarter": u["completion_quarter"],
+            "developer_id": u["developer_id"], "developer_name": u["developer_name"],
+            "developer_logo": u["logo"], "sales_phone": u["sales_phone"],
         })
 
     @router.get("/admin/api/complexes-map")
@@ -3356,8 +3607,37 @@ def make_extras_router(templates) -> APIRouter:
             "no_year": no_year[0]["n"] if no_year else 0,
         })
 
+    # "Материал стен" иногда встречается прямо в тексте описания ЖК (не в
+    # структурированных complex_materials/tech_specs) — вытаскиваем оттуда в
+    # табличку "Материалы и оборудование" вместо дублирования в свободном
+    # тексте. Два случая: явная подпись ("материал стен: монолит") и просто
+    # упоминание материала рядом со словом "стен" без подписи ("монолитные
+    # стены"). Возвращает (найденный_материал | None, текст_без_этого_куска).
+    _WALL_MATERIAL_LABELED_RE = re.compile(
+        r"материал[а-я]*\s+стен[а-я]*\s*[:—-]\s*([^.\n;]+)", re.IGNORECASE)
+    _WALL_MATERIAL_KEYWORDS = ("монолит", "кирпич", "газоблок", "пеноблок",
+                               "керамзитобетон", "панель")
+    _WALL_MATERIAL_NEARBY_RE = re.compile(
+        r"([а-яё]*(?:" + "|".join(_WALL_MATERIAL_KEYWORDS) + r")[а-яё]*)\s+стен[а-я]*",
+        re.IGNORECASE)
+
+    def _extract_wall_material(text: str | None) -> tuple[str | None, str | None]:
+        if not text:
+            return None, text
+        m = _WALL_MATERIAL_LABELED_RE.search(text)
+        if m:
+            material = m.group(1).strip(" .")
+            cleaned = (text[:m.start()] + text[m.end():]).strip()
+            return material, cleaned
+        m = _WALL_MATERIAL_NEARBY_RE.search(text)
+        if m:
+            material = m.group(1).strip().capitalize()
+            cleaned = (text[:m.start()] + text[m.end():]).strip()
+            return material, cleaned
+        return None, text
+
     @router.get("/admin/complex/{complex_id}", response_class=HTMLResponse)
-    async def complex_detail(request: Request, complex_id: int):
+    async def complex_detail(request: Request, complex_id: int, nb_rooms: int = 0):
         # Публичная страница — админ-элементы (редактирование фото/контактов)
         # скрываются в шаблоне через is_admin(request)
         from bot.db.pg import fetchrow
@@ -3385,6 +3665,15 @@ def make_extras_router(templates) -> APIRouter:
                 cx["photos"] = _json_cxph.loads(cx["photos"])
             except ValueError:
                 cx["photos"] = None
+
+        # "Материал стен" из свободного текста описания -> отдельная строка
+        # в "Материалы и оборудование", из самого описания убираем (задача
+        # "убрать дублирование материала стен из текста описания").
+        wall_material_from_desc = None
+        if cx.get("notes"):
+            wall_material_from_desc, cx["notes"] = _extract_wall_material(cx["notes"])
+        elif cx.get("residents_notes"):
+            wall_material_from_desc, cx["residents_notes"] = _extract_wall_material(cx["residents_notes"])
 
         cname = cx["name"]
 
@@ -3653,6 +3942,23 @@ def make_extras_router(templates) -> APIRouter:
         # рендер страницы и может позволить себе больший таймаут.
         loc_score = None
 
+        # Варианты квартир в доме (новостройки, см. migrations/041_newbuild.sql) —
+        # блок под "Материалы и оборудование" на странице ЖК, с фильтром по
+        # комнатности (nb_rooms=0 значит "все"). Публичная ручка, is_authed
+        # не нужен — та же логика, что у остальных newbuild-эндпоинтов.
+        newbuild_units_list = await fetch("""
+            SELECT id, rooms, area, floor, floors_total, price, layout_photo_url, status
+            FROM newbuild_units
+            WHERE complex_id = $1 AND status IN ('available','reserved')
+              AND ($2::int = 0 OR rooms = $2)
+            ORDER BY rooms, price ASC NULLS LAST
+        """, complex_id, nb_rooms)
+        newbuild_rooms_available = await fetch("""
+            SELECT DISTINCT rooms FROM newbuild_units
+            WHERE complex_id = $1 AND status IN ('available','reserved') AND rooms IS NOT NULL
+            ORDER BY rooms
+        """, complex_id)
+
         return templates.TemplateResponse("complex_detail.html", {
             "request": request,
             "cx": dict(cx),
@@ -3675,7 +3981,11 @@ def make_extras_router(templates) -> APIRouter:
             "tech_specs": tech_specs,
             "hp": hp,
             "materials": materials,
+            "wall_material_from_desc": wall_material_from_desc,
             "loc_score": loc_score,
+            "newbuild_units_list": [dict(r) for r in newbuild_units_list],
+            "newbuild_rooms_available": [r["rooms"] for r in newbuild_rooms_available],
+            "nb_rooms": nb_rooms,
         })
 
     # ── Отзывы о ЖК (задача "блок отзывов", 2026-08-07) — смотреть могут
