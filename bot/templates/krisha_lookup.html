@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🔗 Поиск объявления по ссылке</div>
+<div style="display:flex;gap:4px;margin-bottom:16px;">
+  <a href="/admin/info" style="padding:7px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;text-decoration:none;">Общее</a>
+  <a href="/admin/investments" style="padding:7px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;text-decoration:none;">💰 Инвестиции</a>
+  <a href="/admin/krisha-lookup" style="padding:7px 16px;border-radius:8px;background:#2563eb;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">🔗 Поиск по ссылке</a>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:560px;">
+  <p style="font-size:14px;color:var(--text);margin-top:0;">
+    Вставьте ссылку на объявление с krisha.kz (или просто его номер) —
+    откроется карточка объявления с картой, ипотекой, оценкой цены и т.д.
+    (то же самое, что было раньше в строке фильтров на карте, — переехало
+    сюда отдельной страницей).
+  </p>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <input type="text" id="krisha-url-input" placeholder="Вставьте ссылку или номер объявления"
+           style="flex:1;min-width:220px;padding:10px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:14px;"
+           onkeydown="if(event.key==='Enter') lookupKrishaUrl();">
+    <button type="button" onclick="lookupKrishaUrl()"
+            style="padding:10px 20px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:14px;cursor:pointer;">Показать</button>
+  </div>
+  <div id="krisha-lookup-error" style="display:none;margin-top:10px;color:#ef4444;font-size:13px;"></div>
+</div>
+
+<script>
+// Принимает и полный URL (krisha.kz/a/show/12345678), и голый id — вырезаем
+// первую цифровую последовательность из 5+ цифр, как и раньше в строке
+// фильтров на карте (см. историю lookupKrishaUrl в dashboard.html). Тут
+// вместо openDetailModal(...) — просто переход на уже существующий
+// /admin/listing/{id}, который сам открывает тот же большой попап.
+function lookupKrishaUrl() {
+  const input = document.getElementById('krisha-url-input');
+  const errEl = document.getElementById('krisha-lookup-error');
+  errEl.style.display = 'none';
+  const m = (input.value || '').match(/(\d{5,})/);
+  if (!m) {
+    errEl.textContent = 'Не нашёл номер объявления в ссылке — вставьте ссылку вида krisha.kz/a/show/123456789';
+    errEl.style.display = 'block';
+    return;
+  }
+  location.href = '/admin/listing/' + m[1];
+}
+</script>
+{% endblock %}

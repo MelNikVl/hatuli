@@ -115,7 +115,13 @@ html, body { overflow: hidden !important; }
 <div class="filterbar-inner">
   <select id="f-type" onchange="applyFilters()">
     <option value="sale">Продажа</option><option value="rental">Аренда</option><option value="complex">ЖК</option>
-    <option value="newbuild">🏗 Новостройки</option>
+    <!-- "Новостройки" убраны из видимого списка (см. задачу) — теперь только
+         отдельная кнопка в главном меню (base_public.html, /admin?type=newbuild).
+         Опция остаётся в DOM скрытой (display:none у <option> браузеры уважают),
+         чтобы deep-link ?type=newbuild по-прежнему мог программно выставить
+         f-type.value = 'newbuild' (см. IIFE в конце файла) — вся остальная
+         логика (drawNewbuildLayer и т.д.) завязана именно на это значение. -->
+    <option value="newbuild" style="display:none;">Новостройки</option>
   </select>
 
   <div id="f-year-wrap" style="display:none;align-items:center;gap:4px;flex-wrap:wrap;">
@@ -212,18 +218,8 @@ html, body { overflow: hidden !important; }
     <span id="load-progress-pct"></span>
   </div>
 
-  <!-- Быстрый просмотр по ссылке с Крыши — доступен во всех режимах
-       (админ/подписчик/публичный), крайним справа в строке фильтров.
-       Открывает наш попап объявления (лукап по id, вырезанному regex'ом
-       из ссылки) — для публичного тира тот же попап без "похожих рядом"
-       (см. isPublicTier в openDetailModal). -->
-  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-    <input type="text" id="krisha-url-input" placeholder="Вставьте ссылку с Крыши"
-           style="padding:6.7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text);font-size:12px;width:190px;"
-           onkeydown="if(event.key==='Enter') lookupKrishaUrl();">
-    <button type="button" onclick="lookupKrishaUrl()"
-            style="padding:6.7px 14px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Показать</button>
-  </div>
+  <!-- Поиск по ссылке с Крыши переехал на отдельную страницу Аналитики
+       (/admin/krisha-lookup, см. задачу) — тут больше не показывается. -->
 </div>
 </div>
 
@@ -688,8 +684,30 @@ function observeSideCards() {
       });
     }, {root: document.getElementById('side-panel-body'), rootMargin: '300px 0px'});
   }
+  // observe() на уже наблюдаемом элементе — безопасный no-op по спеке,
+  // поэтому можно смело звать для всех карточек, а не только новых.
   document.querySelectorAll('#side-panel-body .side-card').forEach(el => sideCardObserver.observe(el));
 }
+// Наводишь мышь на карточку в панели — соответствующий пин на карте
+// увеличивается (простой и заметный эффект, дешёвый в реализации — прямая
+// правка inline style, без конфликтов с Leaflet-позиционированием через
+// CSS-классы, см. комментарий ниже). Для новостроек пин один на весь ЖК
+// (NB_CARD_COMPLEX сопоставляет карточку юниту -> id ЖК).
+function highlightMapPin(cardId, on) {
+  const complexId = NB_CARD_COMPLEX[cardId];
+  const pinId = complexId != null ? 'nb-cx-' + complexId : cardId;
+  const el = document.getElementById('pin-' + pinId);
+  if (!el) return;
+  // Пин позиционируется через inline transform:translate(-50%,-100%)
+  // (см. buildPricePinHtml/newbuildPinHtml) — CSS-класс с transform:scale
+  // не победил бы инлайн-стиль по специфичности, поэтому просто дописываем
+  // scale к тому же инлайн-transform напрямую через JS.
+  el.style.transform = on ? 'translate(-50%,-100%) scale(1.35)' : 'translate(-50%,-100%)';
+  el.style.zIndex = on ? '10000' : '';
+}
+// Инкрементальный рендер: НЕ пересоздаём уже показанные карточки (теряли
+// бы скролл/hover/уже загруженные фото при каждом moveend) — только
+// добавляем новые id в конец и убираем те, которых больше нет в ids.
 function renderSidePanelIds(ids, emptyMsg, countWord) {
   const body = document.getElementById('side-panel-body');
   if (!ids.length) {
@@ -698,7 +716,24 @@ function renderSidePanelIds(ids, emptyMsg, countWord) {
     document.getElementById('side-panel-head').classList.remove('has-count');
     return;
   }
-  body.innerHTML = ids.map(id => `<div class="side-card" id="card-${id}" data-id="${id}"${NB_CARD_COMPLEX[id] != null ? ` data-complex-id="${NB_CARD_COMPLEX[id]}"` : ''}>${CARD_HTML[id] || ''}</div>`).join('');
+  const idsSet = new Set(ids);
+  const existingEls = Array.from(body.querySelectorAll(':scope > .side-card'));
+  existingEls.forEach(el => { if (!idsSet.has(el.dataset.id)) el.remove(); });
+  const existingIds = new Set(existingEls.map(el => el.dataset.id).filter(id => idsSet.has(id)));
+  const frag = document.createDocumentFragment();
+  ids.forEach(id => {
+    if (existingIds.has(id)) return;
+    const div = document.createElement('div');
+    div.className = 'side-card';
+    div.id = 'card-' + id;
+    div.dataset.id = id;
+    if (NB_CARD_COMPLEX[id] != null) div.dataset.complexId = NB_CARD_COMPLEX[id];
+    div.innerHTML = CARD_HTML[id] || '';
+    div.addEventListener('mouseenter', () => highlightMapPin(id, true));
+    div.addEventListener('mouseleave', () => highlightMapPin(id, false));
+    frag.appendChild(div);
+  });
+  body.appendChild(frag);
   document.getElementById('side-panel-count').textContent = ids.length + ' ' + (countWord || 'объявлений');
   document.getElementById('side-panel-head').classList.add('has-count');
   observeSideCards();
@@ -706,37 +741,70 @@ function renderSidePanelIds(ids, emptyMsg, countWord) {
 // Продажа/аренда — маркеры уже на карте (см. MINI_PIN_MARKERS), просто
 // фильтруем по попаданию в текущие границы карты, сетевой запрос не нужен
 // (данные уже загружены batched'ом с запасом, см. loadViewportIncremental).
+// Панель НИКОГДА не пустеет, пока на карте есть хоть один загруженный
+// маркер — если в текущих границах карты видимых маркеров нет (например,
+// пограничный момент при панорамировании), просто оставляем список как
+// есть, вместо "В этой области карты ничего не найдено" (пустой список —
+// только когда данных вообще нет ни одного).
+let sidePanelShownIds = [];
 function refreshSidePanelList() {
   const type = document.getElementById('f-type').value;
   if (type === 'newbuild') { refreshNewbuildSidePanelList(); return; }
   if (type === 'complex') {
+    sidePanelShownIds = [];
     renderSidePanelIds([], 'Кликните ЖК на карте, чтобы посмотреть варианты.');
     return;
   }
+  const allIds = Object.keys(MINI_PIN_MARKERS);
+  if (!allIds.length) {
+    sidePanelShownIds = [];
+    renderSidePanelIds([], undefined, 'объявлений');
+    return;
+  }
   const bounds = map.getBounds();
-  const ids = Object.keys(MINI_PIN_MARKERS).filter(id => {
+  const visibleIds = allIds.filter(id => {
     const m = MINI_PIN_MARKERS[id];
     return m && bounds.contains(m.getLatLng());
   });
-  renderSidePanelIds(ids, undefined, 'объявлений');
+  // Уже показанные карточки, которые всё ещё существуют на карте, остаются
+  // на месте (не дёргаем список) — новые видимые id просто добавляются в
+  // конец. Если сейчас в кадре вообще ничего нет (visibleIds пуст) — не
+  // пустеем, продолжаем показывать что уже было.
+  const stillShown = sidePanelShownIds.filter(id => MINI_PIN_MARKERS[id]);
+  const shownSet = new Set(stillShown);
+  const pool = visibleIds.length ? visibleIds : allIds;
+  const newOnes = pool.filter(id => !shownSet.has(id));
+  let combined = stillShown.concat(newOnes);
+  const MAX_CARDS = 150;  // не даём списку расти бесконечно при долгом панорамировании
+  if (combined.length > MAX_CARDS) combined = combined.slice(combined.length - MAX_CARDS);
+  sidePanelShownIds = combined;
+  renderSidePanelIds(combined, undefined, 'объявлений');
 }
 // Новостройки — карта показывает пины на уровне ЖК, а не юнита, поэтому
 // список в панели "расплющивает" варианты всех ВИДИМЫХ ЖК в один список
 // карточек-юнитов (см. B4 в задаче). ЖК на экране немного (десятки, не
 // тысячи), поэтому по клику допустимо параллельно дозапросить юниты
 // каждого — в отличие от продажи/аренды тут нет готового bbox-батчинга.
+// Тот же принцип "не пустеть": если видимых ЖК-пинов сейчас нет, но раньше
+// список был непустым — оставляем как есть.
 let newbuildRefreshSeq = 0;
 async function refreshNewbuildSidePanelList() {
   const bounds = map.getBounds();
-  const visibleIds = Object.keys(NEWBUILD_PIN_MARKERS).filter(id => {
+  const allComplexIds = Object.keys(NEWBUILD_PIN_MARKERS);
+  const visibleIds = allComplexIds.filter(id => {
     const m = NEWBUILD_PIN_MARKERS[id];
     return m && bounds.contains(m.getLatLng());
   });
+  const fetchIds = visibleIds.length ? visibleIds : allComplexIds;
+  if (!fetchIds.length) {
+    sidePanelShownIds = [];
+    renderSidePanelIds([], 'В этой области карты нет новостроек.', 'вариантов');
+    return;
+  }
   const seq = ++newbuildRefreshSeq;
-  if (!visibleIds.length) { renderSidePanelIds([], 'В этой области карты нет новостроек.'); return; }
   const rooms = document.getElementById('f-rooms').value;
   const qs = rooms ? ('?rooms=' + encodeURIComponent(rooms)) : '';
-  const results = await Promise.all(visibleIds.map(id =>
+  const results = await Promise.all(fetchIds.map(id =>
     fetch('/admin/api/newbuild-complex/' + id + '/units' + qs).then(r => r.json()).catch(() => null)
   ));
   if (seq !== newbuildRefreshSeq) return;  // карта успела подвинуться ещё раз, пока грузили
@@ -750,6 +818,11 @@ async function refreshNewbuildSidePanelList() {
       flatIds.push(cardId);
     });
   });
+  // Не пустеем: если в этот раз ничего не расплющилось (например, фильтр
+  // по комнатности убрал все варианты видимых ЖК), но список уже был
+  // непустым — оставляем прежний.
+  if (!flatIds.length && sidePanelShownIds.length) return;
+  sidePanelShownIds = flatIds;
   renderSidePanelIds(flatIds, 'В этой области карты нет вариантов в наличии.', 'вариантов');
 }
 // Клик по ЖК-пину на карте — все его варианты уже должны быть в списке
@@ -1356,7 +1429,7 @@ function newbuildPinHtml(p) {
     ? `<img src="${p.logo}" style="width:28px;height:28px;border-radius:50%;object-fit:contain;background:#fff;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);">`
     : `<div style="width:28px;height:28px;border-radius:50%;background:#7c3aed;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);color:#fff;font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;">${(p.developer||'?')[0]}</div>`;
   return `
-<div id="pin-nb-cx-${p.id}" style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;transition:filter .15s ease;">
+<div id="pin-nb-cx-${p.id}" style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;transition:filter .15s ease, transform .15s ease;">
   <div style="position:relative;">
     ${logoHtml}
     <span style="position:absolute;right:-6px;bottom:-4px;background:#16a34a;color:#fff;border-radius:9px;padding:1px 6px;font-size:10.5px;font-weight:800;border:2px solid #fff;white-space:nowrap;">${p.units_count}</span>
@@ -1401,20 +1474,23 @@ async function drawNewbuildLayer() {
 
 // Готовый HTML карточки одного варианта новостройки для персистентного
 // списка — фотогалерея [планировка юнита, …фото ЖК] (переиспользует общий
-// carNav/openLightbox, см. buildRentalCardHtml/renderSaleBatch), адрес и
-// год сдачи под пилюлями, лого застройщика перед именем (см. B4 задачи).
+// carNav, см. buildRentalCardHtml/renderSaleBatch), адрес и год сдачи под
+// пилюлями, лого застройщика перед именем (см. B4 задачи). Клик по фото
+// открывает большой попап (не лайтбокс) — как и остальная карточка.
 function buildNewbuildUnitCardHtml(d, u) {
   const cardId = 'nb-' + u.id;
   const photos = [u.photo, ...(d.photos || [])].filter(Boolean);
   const carHtml = photos.length ? (() => {
     ptPhotos[cardId] = photos; carIdx[cardId] = 0;
     return `
-<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;cursor:pointer;background:#f7f7f7;" onclick="openLightbox('${cardId}', event)">
+<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;background:#f7f7f7;">
   <img id="car-${cardId}" src="${proxyImg(photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:contain;background:#f7f7f7;display:block;border:none;" onerror="this.parentNode.style.display='none'">
   ${photos.length > 1 ? `
-  <button onclick="carNav('${cardId}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">‹</button>
-  <button onclick="carNav('${cardId}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">›</button>
-  <span id="car-n-${cardId}" style="position:absolute;right:6px;bottom:5px;background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;border-radius:6px;padding:1px 7px;">1/${photos.length}</span>` : ''}
+  <button onclick="carNav('${cardId}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
+  <button onclick="carNav('${cardId}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">›</button>
+  <div id="car-dots-${cardId}" style="position:absolute;left:0;right:0;bottom:6px;display:flex;justify-content:center;gap:4px;flex-wrap:wrap;padding:0 24px;">
+    ${photos.map((_, i) => `<span class="car-dot" style="width:6px;height:6px;border-radius:50%;background:${i === 0 ? '#fff' : 'rgba(255,255,255,.45)'};box-shadow:0 0 2px rgba(0,0,0,.7);flex-shrink:0;"></span>`).join('')}
+  </div>` : ''}
 </div>`;
   })() : '';
   const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
@@ -1428,7 +1504,7 @@ function buildNewbuildUnitCardHtml(d, u) {
   return `
 <div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openDetailModal('${cardId}', event)">
   ${carHtml}
-  <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
+  <div style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
     <div style="font-size:23px;font-weight:800;line-height:1.05;">${u.price ? (u.price/1e6).toFixed(1) + ' млн ₸' : 'цена по запросу'}</div>
     <div style="margin-top:4px;">
       <span style="${pillStyle}">${u.rooms || '?'}-комн</span>
@@ -1437,7 +1513,7 @@ function buildNewbuildUnitCardHtml(d, u) {
     </div>
     ${d.address ? `<div style="font-size:12.5px;color:var(--text);margin-top:6px;">📍 Адрес: ${escapeHtml(d.address)}</div>` : ''}
     <div style="font-size:12.5px;color:var(--text);margin-top:2px;">Год сдачи: ${escapeHtml(String(sdача))}</div>
-    <div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/${d.id}" onclick="event.stopPropagation()" style="font-weight:600;">ЖК ${escapeHtml(d.name)}</a> · ${devHtml}</div>
+    <div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/${d.id}" onclick="event.stopPropagation()" style="font-weight:600;">ЖК ${escapeHtml(d.name)}</a> · ${devHtml}</div>
     ${d.sales_phone ? `<div onclick="event.stopPropagation()" style="margin-top:8px;">${contactDevBtnHtml(d, u.id)}</div>` : ''}
   </div>
 </div>`;
@@ -1498,7 +1574,7 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
     : `background:${pinBg};`;
   const starHtml = isTop ? `<span title="Топ-10 по умному рейтингу" style="font-size:12px;line-height:1;">⭐</span>` : '';
   return `
-<div id="pin-${pt.id}" style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;transition:filter .15s ease;">
+<div id="pin-${pt.id}" style="transform:translate(-50%,-100%);display:flex;flex-direction:column;align-items:center;transition:filter .15s ease, transform .15s ease;">
   <div style="display:flex;align-items:center;">
     <div style="${pillStyle}color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:flex;align-items:center;gap:5px;">${starHtml}<span>${roomsTxt}</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${priceTxt}</span></div>
     ${trendHtml}${svoyDomBadge}${underpricedBadge}${highYieldBadge}
@@ -1514,12 +1590,21 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
 function buildRentalCardHtml(pt) {
   const priceTxt = pt.price ? Math.round(pt.price / 1000).toLocaleString('ru') + ' тыс ₸/мес' : '—';
   const photos = pt.photos || [];
+  if (photos.length) { ptPhotos[pt.id] = photos; carIdx[pt.id] = 0; }
+  const favStarHtml = `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" data-active="0" style="position:absolute;top:8px;left:8px;font-size:28px;line-height:1;cursor:pointer;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 3px rgba(0,0,0,.6);z-index:2;">♡</span>`;
+  // Тот же carNav/точки-пагинация, что у продажи — клик по фото открывает
+  // большой попап (не лайтбокс), стрелки только листают (stopPropagation).
   const carHtml = photos.length ? `
 <div style="position:relative;height:190px;overflow:hidden;">
-  <img src="${proxyImg(photos[0])}" style="width:100%;height:100%;object-fit:cover;display:block;">
-  ${photos.length > 1 ? `<span style="position:absolute;right:6px;bottom:5px;background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;border-radius:6px;padding:1px 7px;">1/${photos.length}</span>` : ''}
+  <img id="car-${pt.id}" src="${proxyImg(photos[0])}" style="width:100%;height:100%;object-fit:cover;display:block;">
+  ${favStarHtml}
+  ${photos.length > 1 ? `
+  <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
+  <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">›</button>
+  <div id="car-dots-${pt.id}" style="position:absolute;left:0;right:0;bottom:6px;display:flex;justify-content:center;gap:4px;flex-wrap:wrap;padding:0 24px;">
+    ${photos.map((_, i) => `<span class="car-dot" style="width:6px;height:6px;border-radius:50%;background:${i === 0 ? '#fff' : 'rgba(255,255,255,.45)'};box-shadow:0 0 2px rgba(0,0,0,.7);flex-shrink:0;"></span>`).join('')}
+  </div>` : ''}
 </div>` : '';
-  const favStarHtml = `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" data-active="0" style="position:absolute;top:8px;left:8px;font-size:28px;line-height:1;cursor:pointer;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 3px rgba(0,0,0,.6);z-index:2;">♡</span>`;
   const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
   let priceTrend = '';
   if (pt.prev_price && pt.prev_price !== pt.price) {
@@ -1529,14 +1614,14 @@ function buildRentalCardHtml(pt) {
   }
   const ownerPillHtml = `<span style="${pillStyle}margin:0;background:${pt.is_owner ? '#dcfce7' : '#e5e7eb'};color:${pt.is_owner ? '#166534' : '#374151'};">${pt.is_owner ? 'собственник' : 'риелтор'}</span>`;
   const cxLine = pt.complex
-    ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
+    ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
     : '';
   // Упрощённая карточка (см. B2 в задаче) — только фото/цена/пилюли/ЖК,
   // без банков/описания/кнопок отдельной строкой; вся карточка кликабельна.
   return `
 <div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
-  <div style="position:relative;${carHtml ? 'border-radius:11px 11px 0 0;overflow:hidden;' : ''}">${favStarHtml}${carHtml}</div>
-  <div style="padding:10px 2px 0;">
+  ${carHtml ? `<div style="border-radius:11px 11px 0 0;overflow:hidden;">${carHtml}</div>` : `<div style="position:relative;">${favStarHtml}</div>`}
+  <div style="padding:10px 10px 0;">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
       <div style="font-size:21px;font-weight:800;">${priceTxt}</div>${priceTrend}
       <span style="${pillStyle}margin:0;">${pt.rooms || '?'}-комн</span>
@@ -1659,6 +1744,14 @@ function carNav(id, dir, ev) {
   carIdx[id] = (carIdx[id] + dir + ph.length) % ph.length;
   const img = document.getElementById('car-' + id);
   if (img) img.src = proxyImg(ph[carIdx[id]]);
+  // Точки-пагинация (как на Zillow) вместо счётчика "N/M" — см. carHtml
+  // в renderSaleBatch/buildNewbuildUnitCardHtml, id контейнера car-dots-{id}.
+  const dotsWrap = document.getElementById('car-dots-' + id);
+  if (dotsWrap) {
+    Array.from(dotsWrap.children).forEach((dot, i) => {
+      dot.style.background = i === carIdx[id] ? '#fff' : 'rgba(255,255,255,.45)';
+    });
+  }
   const n = document.getElementById('car-n-' + id);
   if (n) n.textContent = (carIdx[id] + 1) + '/' + ph.length;
 }
@@ -2069,25 +2162,34 @@ function renderSaleBatch(d) {
       const sc = scoreColor(pt.score, p10, p90);
       if (pt.photos && pt.photos.length) { ptPhotos[pt.id] = pt.photos; carIdx[pt.id] = 0; }
       const favStarHtml = `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" data-active="0" style="position:absolute;top:8px;left:8px;font-size:28px;line-height:1;cursor:pointer;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 3px rgba(0,0,0,.6);z-index:2;">♡</span>`;
+      // Фото больше НЕ открывает лайтбокс по клику (было openLightbox) —
+      // клик где угодно на фото должен открывать большой попап, как и на
+      // остальной карточке (см. задачу); стрелки/точки — только листалка,
+      // сами по себе клик не пробрасывают дальше (stopPropagation внутри carNav).
       const carHtml = pt.photos && pt.photos.length ? `
-<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;cursor:pointer;" onclick="openLightbox('${pt.id}', event)">
+<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;">
   <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;display:block;border:none;" onerror="this.parentNode.style.display='none'">
   ${favStarHtml}
   ${pt.photos.length > 1 ? `
-  <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">‹</button>
-  <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;">›</button>
-  <span id="car-n-${pt.id}" style="position:absolute;right:6px;bottom:5px;background:rgba(0,0,0,.55);color:#fff;font-size:10.5px;border-radius:6px;padding:1px 7px;">1/${pt.photos.length}</span>` : ''}
+  <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
+  <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">›</button>
+  <div id="car-dots-${pt.id}" style="position:absolute;left:0;right:0;bottom:6px;display:flex;justify-content:center;gap:4px;flex-wrap:wrap;padding:0 24px;">
+    ${pt.photos.map((_, i) => `<span class="car-dot" style="width:6px;height:6px;border-radius:50%;background:${i === 0 ? '#fff' : 'rgba(255,255,255,.45)'};box-shadow:0 0 2px rgba(0,0,0,.7);flex-shrink:0;"></span>`).join('')}
+  </div>` : ''}
 </div>` : '';
       const isOwner = !!pt.is_owner;
       const cxLabel = pt.complex && /^\s*(жк|кг)\b/i.test(pt.complex) ? pt.complex : `ЖК ${pt.complex}`;
+      const devLogoHtml = pt.developer_logo
+        ? `<img src="${pt.developer_logo}" style="width:15px;height:15px;border-radius:50%;object-fit:contain;vertical-align:-3px;margin-right:3px;">`
+        : '🏗 ';
       const devTxt = pt.developer_name
         ? (pt.developer_id
-            ? ` · <a href="/admin/developer/${pt.developer_id}" onclick="event.stopPropagation()" style="color:#888;font-weight:600;">🏗 ${escapeHtml(pt.developer_name)}</a>`
-            : ` · <span style="color:#888;font-weight:600;">🏗 ${escapeHtml(pt.developer_name)}</span>`)
+            ? ` · <a href="/admin/developer/${pt.developer_id}" onclick="event.stopPropagation()" style="color:#888;font-weight:600;">${devLogoHtml}${escapeHtml(pt.developer_name)}</a>`
+            : ` · <span style="color:#888;font-weight:600;">${devLogoHtml}${escapeHtml(pt.developer_name)}</span>`)
         : '';
       const cxLine = pt.complex
-        ? `<div style="font-size:13px;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
-        : (devTxt ? `<div style="font-size:13px;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : '');
+        ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
+        : (devTxt ? `<div style="font-size:1em;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : '');
       const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
       const ownerPillStyle = isOwner
         ? 'display:inline-block;background:#dcfce7;color:#166534;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;'
@@ -2107,7 +2209,7 @@ function renderSaleBatch(d) {
       CARD_HTML[pt.id] = (`
 <div class="side-card-inner" style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
   ${carHtml}
-  <div style="${carHtml ? 'padding:5px 2px 0;' : 'border-radius:11px;'}">
+  <div style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
       <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
         <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
         ${roomsPillHtml}
@@ -2117,7 +2219,7 @@ function renderSaleBatch(d) {
         ${ceilingPillHtml}
       </div>
   ${cxLine}
-  <div id="bg-${pt.id}" style="font-size:12.5px;margin-top:5px;min-height:19px;"></div>
+  <div id="bg-${pt.id}" style="font-size:1em;margin-top:5px;min-height:19px;"></div>
   </div>
 </div>`);
       m.on('click', () => { selectPin(pt.id); openSidePanel([pt.id]); });

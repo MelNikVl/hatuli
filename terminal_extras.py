@@ -2367,6 +2367,17 @@ def make_extras_router(templates) -> APIRouter:
             "median_yield": round(row["median_yield"], 1) if row and row["median_yield"] else None,
         })
 
+    @router.get("/admin/krisha-lookup", response_class=HTMLResponse)
+    async def krisha_lookup_page(request: Request):
+        # Та же вкладочная группа "Аналитика", что /admin/info и
+        # /admin/investments рядом. Раньше форма "Вставьте ссылку с Крыши"
+        # жила прямо в строке фильтров на главной карте — переехала сюда
+        # отдельной страницей (задача), сама главная карта её больше не
+        # показывает. Логика поиска не дублируется: просто вырезаем id
+        # объявления и редиректим на уже существующий /admin/listing/{id}
+        # (та же карта с открытым большим попапом, см. admin_web.py).
+        return templates.TemplateResponse("krisha_lookup.html", {"request": request})
+
     # ── API: точки для карты на дашборде ─────────────────────────────────
 
     # ── Детализация парсера: один график продажи+аренда, разными цветами ───
@@ -3148,7 +3159,7 @@ def make_extras_router(templates) -> APIRouter:
                     + COALESCE(a.price_drop_bonus,0)) AS eff_score,
                    ph.old_price AS prev_price,
                    ph.changed_at AS price_changed_at,
-                   dv.id AS developer_id, dv.name AS developer_name,
+                   dv.id AS developer_id, dv.name AS developer_name, dv.logo AS developer_logo,
                    cx.photos AS complex_photos
             FROM apartment_listings a
             LEFT JOIN LATERAL (
@@ -3219,6 +3230,7 @@ def make_extras_router(templates) -> APIRouter:
             "address": r["address"] or "", "complex": r["complex_name"] or "",
             "finish_type": r["finish_type"] or "",
             "developer_id": r["developer_id"], "developer_name": r["developer_name"] or "",
+            "developer_logo": r["developer_logo"] or "",
             "year_built": r["year_built"],
             "description": r["description"] or "",
             "ceiling_height": float(r["ceiling_height"]) if r["ceiling_height"] is not None else None,
