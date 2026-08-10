@@ -965,7 +965,27 @@ map.on('moveend', () => {
 // границы карты.
 map.on('moveend', () => {
   clearTimeout(sidePanelRefreshTimer);
-  sidePanelRefreshTimer = setTimeout(() => refreshSidePanelList(), 120);
+  sidePanelRefreshTimer = setTimeout(() => {
+    // На отдалённом виде (zoom < ZOOM_GATE) обычная viewport-подгрузка
+    // пинов не срабатывает вообще (см. viewportNeedsReload) — панель тогда
+    // никогда не увидит объекты в НОВОЙ области после панорамирования.
+    // Дозаказываем свежий панельный батч (без пинов на карту, см.
+    // renderSaleBatch mapVisible:false) под новые границы, только для type=sale.
+    if (map.getZoom() < ZOOM_GATE && document.getElementById('f-type').value === 'sale' && lastFilterParams) {
+      const b = map.getBounds();
+      const pp = new URLSearchParams(lastFilterParams);
+      pp.set('min_lat', b.getSouth()); pp.set('max_lat', b.getNorth());
+      pp.set('min_lon', b.getWest()); pp.set('max_lon', b.getEast());
+      pp.set('offset', 0); pp.set('limit', 60);
+      const seq = applyFiltersSeq;
+      cachedFetchJson('/admin/api/map-points?' + pp.toString()).then(d => {
+        if (seq !== applyFiltersSeq) return;
+        renderSaleBatch(d, {mapVisible: false});
+      }).catch(() => {});
+    } else {
+      refreshSidePanelList();
+    }
+  }, 250);
 });
 // Панорамирование за пределы уже загруженного буфера раньше вызывало
 // applyFilters() целиком — та чистит ВСЕ слои (saleCluster/topLayer/...)
@@ -2118,11 +2138,31 @@ function applyFilters() {
       map.removeLayer(liteCluster);
       loadSaleBatch(0);
     };
+    // Панель справа не должна пустовать, пока карта показывает только
+    // lite-обзор (кружки-счётчики) — сразу подгружаем небольшой батч
+    // полных карточек (сервер сортирует по score) В ГРАНИЦАХ ТЕКУЩЕГО
+    // ВИДА карты, только для списка, без добавления пинов на саму карту
+    // (иначе поверх lite-кружков задвоенно легли бы ещё и ценники).
+    const panelBounds = map.getBounds();
+    const panelParams = new URLSearchParams(p);
+    panelParams.set('min_lat', panelBounds.getSouth()); panelParams.set('max_lat', panelBounds.getNorth());
+    panelParams.set('min_lon', panelBounds.getWest()); panelParams.set('max_lon', panelBounds.getEast());
+    panelParams.set('offset', 0); panelParams.set('limit', 60);
+    cachedFetchJson('/admin/api/map-points?' + panelParams.toString(), mapSignal).then(d => {
+      if (filterSeq !== applyFiltersSeq) return;
+      renderSaleBatch(d, {mapVisible: false});
+    }).catch(() => {});
   } else {
     loadSaleBatch(0);
   }
 }
-function renderSaleBatch(d) {
+function renderSaleBatch(d, opts) {
+    // mapVisible:false — используется на отдалённом виде (zoom < ZOOM_GATE,
+    // см. вызов ниже в applyFilters) для НЕвидимой на карте подгрузки
+    // небольшого батча полных карточек только ради панели справа — сама
+    // карта в этом режиме остаётся с lite-обзором (кружки-счётчики),
+    // отдельные ценники поверх них выглядели бы задвоенно/шумно.
+    const mapVisible = !opts || opts.mapVisible !== false;
     let visiblePoints = d.points;
     if (topOnlyFilter) visiblePoints = visiblePoints.slice(0, 10);  // топ-10 ИМЕННО по текущим фильтрам (сервер уже отсортировал по score) — не глобальный топ-10 сайта
     if (drawnPolygons.length) visiblePoints = visiblePoints.filter(pt => pointInAnyDrawnPolygon(pt.lat, pt.lon));
@@ -2133,8 +2173,19 @@ function renderSaleBatch(d) {
     visiblePoints.forEach(pt => {
       // Инкрементальная подгрузка соседней области (см. loadViewportIncremental)
       // может вернуть точки, уже нарисованные раньше (перекрытие буферов) —
-      // не создаём вторую копию маркера поверх существующей.
-      if (MINI_PIN_MARKERS[pt.id]) return;
+      // не создаём вторую копию маркера поверх существующей. НО если точка
+      // раньше была загружена НЕвидимой (панельный батч на отдалённом виде,
+      // mapVisible:false), а теперь мы должны показать её видимой на карте
+      // (пользователь приблизился) — просто доводим существующий маркер до
+      // видимого состояния, не пересоздавая карточку/фото заново.
+      const existing = MINI_PIN_MARKERS[pt.id];
+      if (existing) {
+        if (mapVisible && !saleCluster.hasLayer(existing) && !topLayer.hasLayer(existing)) {
+          const meta = existing.options.pinMeta;
+          if (meta && meta.isTop) { existing.addTo(topLayer); } else { pendingClusterAdds.push(existing); }
+        }
+        return;
+      }
       // Плашка с ценой всегда обычная синяя — топ-10 по скору отмечается
       // отдельным круглым красным бейджем со звездой слева от плашки
       // (см. buildPricePinHtml/topBadgeHtml), а не покраской самой плашки.
@@ -2151,7 +2202,10 @@ function renderSaleBatch(d) {
         zIndexOffset: isTop ? 1000 : 0,
         pinMeta: {pt, pinBg, isTop},
       });
-      if (isTop) { m.addTo(topLayer); }
+      if (!mapVisible) {
+        // Ничего не добавляем в topLayer/pendingClusterAdds — маркер живёт
+        // только в памяти (MINI_PIN_MARKERS) ради карточки в панели.
+      } else if (isTop) { m.addTo(topLayer); }
       else { pendingClusterAdds.push(m); }
       MINI_PIN_MARKERS[pt.id] = m;
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
