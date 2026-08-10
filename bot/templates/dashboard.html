@@ -81,10 +81,14 @@ html, body { overflow: hidden !important; }
    как и была), а вот её содержимое центрируем — см. задачу "меню и
    фильтры посередине". Ширина у строки фильтров больше, чем у меню
    (1450px против 1100px у .pub-row1/.narrow) — тут много контролов
-   (~1417px в один ряд без переноса), при 1100px пришлось бы постоянно
-   скроллить строку по горизонтали даже на обычных широких мониторах;
-   overflow-x:auto оставлен как safety net на более узких экранах. */
-.filterbar-inner { display:flex; align-items:center; gap:6px; flex-wrap:nowrap; max-width:1450px; margin:0 auto; overflow-x:auto; }
+   (~1417px в один ряд без переноса). БЕЗ overflow-x:auto: по CSS-спеке
+   overflow-x, отличный от visible, молча переводит overflow-y тоже в
+   auto — это обрезало все выпадающие панели (.rooms-dd-panel, position:
+   absolute, torчат ниже строки фильтров) вообще без следа — баг "клик по
+   Комнатность/Цена/Метраж/Тепловые карты — ничего не появляется".
+   На узких экранах ряд просто визуально переполняется (как было и до
+   центрирования) — это лучше, чем невидимые фильтры. */
+.filterbar-inner { display:flex; align-items:center; gap:6px; flex-wrap:nowrap; max-width:1450px; margin:0 auto; }
 .filterbar select, .filterbar input[type=number] { padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; }
 .rooms-dd { position:relative; flex-shrink:0; }
 .rooms-dd-btn { padding:7px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; cursor:pointer; white-space:nowrap; }
