@@ -2497,8 +2497,12 @@ def make_extras_router(templates) -> APIRouter:
         видимой ошибки в UI). Публичная, как /admin/api/city-roads и
         /admin/api/map-points рядом — ничего чувствительного тут нет."""
         from bot.db.pg import fetch as pg_fetch
+        # Раньше без WHERE отдавал вообще всю city_poi (школы+садики+вузы+
+        # клиники+госорганы+ЛРТ-точки, см. poi_import.py) — кнопка "Школы и
+        # садики" на дашборде должна показывать только школы и садики.
         rows = await pg_fetch(
-            "SELECT kind, name, lat, lon, address FROM city_poi LIMIT 3000")
+            "SELECT kind, name, lat, lon, address FROM city_poi "
+            "WHERE kind IN ('school', 'kindergarten') LIMIT 3000")
         return JSONResponse({"poi": [dict(r) for r in rows]})
 
     @router.get("/admin/complex/find")
@@ -2694,9 +2698,11 @@ def make_extras_router(templates) -> APIRouter:
         """Список вариантов квартир в наличии для попапа ЖК на карте (клик
         по маркеру) — как listings в complex_summary, только из newbuild_units."""
         from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
+        import json as _json_nbcu
         cx = await pg_fetchrow("""
             SELECT c.id, c.name, c.completion_year, c.completion_quarter, c.district,
-                   d.name AS developer, d.sales_phone, d.logo
+                   c.address, c.photos, d.id AS developer_id, d.name AS developer,
+                   d.sales_phone, d.logo
             FROM complexes c JOIN developers d ON d.id = c.developer_id
             WHERE c.id = $1 AND c.is_newbuild
         """, complex_id)
@@ -2710,10 +2716,18 @@ def make_extras_router(templates) -> APIRouter:
               AND ($2::int[] = '{}' OR rooms = ANY($2::int[]))
             ORDER BY price ASC NULLS LAST LIMIT 30
         """, complex_id, room_list)
+        # photos — jsonb, asyncpg отдаёт строкой (см. тот же паттерн в complex_detail)
+        cx_photos = cx["photos"]
+        if isinstance(cx_photos, str):
+            try:
+                cx_photos = _json_nbcu.loads(cx_photos)
+            except ValueError:
+                cx_photos = None
         return JSONResponse({
             "id": cx["id"], "name": cx["name"], "district": cx["district"],
+            "address": cx["address"], "photos": cx_photos or [],
             "completion_year": cx["completion_year"], "completion_quarter": cx["completion_quarter"],
-            "developer": cx["developer"], "developer_id": None, "sales_phone": cx["sales_phone"],
+            "developer": cx["developer"], "developer_id": cx["developer_id"], "sales_phone": cx["sales_phone"],
             "developer_logo": cx["logo"],
             "units": [{
                 "id": u["id"], "rooms": u["rooms"],
@@ -2729,8 +2743,10 @@ def make_extras_router(templates) -> APIRouter:
         /admin/api/listing/{id} у вторички, см. openDetailModal в
         dashboard.html: ветка по префиксу id 'nb-')."""
         from bot.db.pg import fetchrow as pg_fetchrow
+        import json as _json_nbu
         u = await pg_fetchrow("""
             SELECT u.*, c.name AS complex_name, c.district, c.address,
+                   c.description AS complex_description, c.photos AS complex_photos,
                    c.completion_year, c.completion_quarter, c.id AS complex_id,
                    d.id AS developer_id, d.name AS developer_name, d.sales_phone, d.logo
             FROM newbuild_units u
@@ -2740,6 +2756,12 @@ def make_extras_router(templates) -> APIRouter:
         """, unit_id)
         if not u:
             return JSONResponse({"error": "not_found"}, status_code=404)
+        cx_photos = u["complex_photos"]
+        if isinstance(cx_photos, str):
+            try:
+                cx_photos = _json_nbu.loads(cx_photos)
+            except ValueError:
+                cx_photos = None
         return JSONResponse({
             "id": u["id"], "rooms": u["rooms"],
             "area": float(u["area"]) if u["area"] is not None else None,
@@ -2749,6 +2771,7 @@ def make_extras_router(templates) -> APIRouter:
             "price_per_m2": float(u["price_per_m2"]) if u["price_per_m2"] is not None else None,
             "photo": u["layout_photo_url"], "status": u["status"],
             "complex_id": u["complex_id"], "complex_name": u["complex_name"],
+            "complex_description": u["complex_description"], "complex_photos": cx_photos or [],
             "district": u["district"], "address": u["address"],
             "completion_year": u["completion_year"], "completion_quarter": u["completion_quarter"],
             "developer_id": u["developer_id"], "developer_name": u["developer_name"],
@@ -3637,7 +3660,7 @@ def make_extras_router(templates) -> APIRouter:
         return None, text
 
     @router.get("/admin/complex/{complex_id}", response_class=HTMLResponse)
-    async def complex_detail(request: Request, complex_id: int, nb_rooms: int = 0):
+    async def complex_detail(request: Request, complex_id: int, nb_rooms: int = -1, nb_all: int = 0):
         # Публичная страница — админ-элементы (редактирование фото/контактов)
         # скрываются в шаблоне через is_admin(request)
         from bot.db.pg import fetchrow
@@ -3944,15 +3967,28 @@ def make_extras_router(templates) -> APIRouter:
 
         # Варианты квартир в доме (новостройки, см. migrations/041_newbuild.sql) —
         # блок под "Материалы и оборудование" на странице ЖК, с фильтром по
-        # комнатности (nb_rooms=0 значит "все"). Публичная ручка, is_authed
-        # не нужен — та же логика, что у остальных newbuild-эндпоинтов.
+        # комнатности (nb_rooms=-1 значит "все"; 0 — отдельный, реальный
+        # бакет "комнатность не указана застройщиком", есть у ряда ЖК типа
+        # BayPlaza/Sensata, где rooms_amount=0 у самого источника). Раньше
+        # сентинел "все" тоже был 0 и совпадал с этим бакетом — кнопка
+        # "0-комн" не фильтровала (баг из терминала 2026-08-09). В карточках
+        # показываем только 5 штук (по задаче), остальное — по ссылке
+        # "показать все" (nb_all=1), полный список никуда не делся.
+        # Публичная ручка, is_authed не нужен — та же логика, что у
+        # остальных newbuild-эндпоинтов.
+        newbuild_units_total = await fetchrow("""
+            SELECT COUNT(*) AS cnt FROM newbuild_units
+            WHERE complex_id = $1 AND status IN ('available','reserved')
+              AND ($2::int = -1 OR rooms = $2)
+        """, complex_id, nb_rooms)
         newbuild_units_list = await fetch("""
             SELECT id, rooms, area, floor, floors_total, price, layout_photo_url, status
             FROM newbuild_units
             WHERE complex_id = $1 AND status IN ('available','reserved')
-              AND ($2::int = 0 OR rooms = $2)
+              AND ($2::int = -1 OR rooms = $2)
             ORDER BY rooms, price ASC NULLS LAST
-        """, complex_id, nb_rooms)
+            {limit_clause}
+        """.format(limit_clause="" if nb_all else "LIMIT 5"), complex_id, nb_rooms)
         newbuild_rooms_available = await fetch("""
             SELECT DISTINCT rooms FROM newbuild_units
             WHERE complex_id = $1 AND status IN ('available','reserved') AND rooms IS NOT NULL
@@ -3984,8 +4020,10 @@ def make_extras_router(templates) -> APIRouter:
             "wall_material_from_desc": wall_material_from_desc,
             "loc_score": loc_score,
             "newbuild_units_list": [dict(r) for r in newbuild_units_list],
+            "newbuild_units_total": (newbuild_units_total["cnt"] or 0) if newbuild_units_total else 0,
             "newbuild_rooms_available": [r["rooms"] for r in newbuild_rooms_available],
             "nb_rooms": nb_rooms,
+            "nb_all": nb_all,
         })
 
     # ── Отзывы о ЖК (задача "блок отзывов", 2026-08-07) — смотреть могут

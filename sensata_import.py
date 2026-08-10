@@ -174,6 +174,15 @@ async def fetch_house_units(browser, house: dict) -> list[UnitData]:
         status = p.get("status")
         if status not in ("AVAILABLE", "BOOKED"):
             continue  # SOLD сознательно пропускаем, см. докстринг модуля
+        # Сайт пока занимается только жилой недвижимостью (задача из
+        # терминала 2026-08-09: ЖК BayPlaza оказался бизнес-центром класса B,
+        # а не жильём — убран из базы) — ProfitBase-аккаунт Sensata отдаёт
+        # вперемешку квартиры и коммерцию (typePurpose: residential/
+        # commercial), офисы/коммерцию пропускаем на импорте. Дом, где ВСЕ
+        # юниты коммерческие (типа BayPlaza), в итоге не создаст ЖК вовсе —
+        # save_complex() ничего не делает при пустом cx.units.
+        if p.get("typePurpose") and p["typePurpose"] != "residential":
+            continue
         price_obj = p.get("price") or {}
         area = (p.get("area") or {}).get("area_total")
         dev_end = house.get("developmentEndQuarter") or {}

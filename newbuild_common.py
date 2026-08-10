@@ -51,6 +51,12 @@ class ComplexData:
     units: list[UnitData]
     lat: float | None = None  # если источник отдаёт координаты сам (NAK) — используем их, без Nominatim
     lon: float | None = None
+    # Фото обложки ЖК + краткое описание — если источник отдаёт их на своей
+    # странице проекта (не все source-скрипты сейчас их парсят, см. задачу
+    # "фото/описание для новостроек" 2026-08-09); COALESCE в ensure_complex
+    # ниже — не затираем то, что уже заполнено вручную из /admin.
+    photo_url: str | None = None
+    description: str | None = None
 
 
 def _quarter(dt: datetime) -> int:
@@ -160,11 +166,15 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
                 newbuild_source_id        = $6,
                 completion_year             = COALESCE($7, completion_year),
                 completion_quarter            = COALESCE($8, completion_quarter),
-                newbuild_last_scan_at          = now(),
-                updated_at                       = now()
+                photo_url                       = COALESCE(photo_url, $11),
+                photos                            = COALESCE(photos, $12),
+                description                         = COALESCE(description, $13),
+                newbuild_last_scan_at                 = now(),
+                updated_at                              = now()
             WHERE id = $1
         """, cid, dev_id, district, cx.address, cx.housing_class, cx.source_id,
-            completion_year, completion_quarter, is_newbuild, source)
+            completion_year, completion_quarter, is_newbuild, source,
+            cx.photo_url, json.dumps([cx.photo_url]) if cx.photo_url else None, cx.description)
         if row["lat"] is None or row["lon"] is None:
             if cx.lat is not None and cx.lon is not None:
                 await execute("UPDATE complexes SET lat = $2, lon = $3 WHERE id = $1", cid, cx.lat, cx.lon)
@@ -175,12 +185,14 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
     cid = await fetchval("""
         INSERT INTO complexes (name, developer_id, district, address, housing_class,
                                is_newbuild, newbuild_source, newbuild_source_id,
-                               completion_year, completion_quarter, newbuild_last_scan_at)
-        VALUES ($1, $2, $3, $4, $5, $9, $10, $6, $7, $8, now())
+                               completion_year, completion_quarter, newbuild_last_scan_at,
+                               photo_url, photos, description)
+        VALUES ($1, $2, $3, $4, $5, $9, $10, $6, $7, $8, now(), $11, $12, $13)
         ON CONFLICT (lower(name)) DO UPDATE SET updated_at = now()
         RETURNING id
     """, cx.name, dev_id, district, cx.address, cx.housing_class, cx.source_id,
-        completion_year, completion_quarter, is_newbuild, source)
+        completion_year, completion_quarter, is_newbuild, source,
+        cx.photo_url, json.dumps([cx.photo_url]) if cx.photo_url else None, cx.description)
     # Источник сам отдаёт точные координаты (NAK) -> используем их напрямую,
     # без Nominatim (тот всё равно менее точен, чем данные самого застройщика).
     if cx.lat is not None and cx.lon is not None:

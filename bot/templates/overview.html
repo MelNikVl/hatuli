@@ -74,14 +74,16 @@
 
 <div class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
   <div style="font-weight:700;margin-bottom:6px;">🗄 Бекап</div>
-  {% if backup_info %}
+  {% if backup_list %}
+  {% for b in backup_list %}
   <div class="ov-row">
     <div>
-      <div class="ov-name">Последний: {{ backup_info.ts }} ({{ backup_info.kind }})</div>
-      <div class="ov-detail">статус: {{ backup_info.status }} · {{ backup_info.age_h }}ч назад</div>
+      <div class="ov-name">{{ b.ts }} ({{ b.kind }})</div>
+      <div class="ov-detail">статус: {{ b.status }} · {{ b.age_h }}ч назад</div>
     </div>
-    <span class="ov-badge {{ 'ov-ok' if backup_info.ok else 'ov-bad' }}">{{ 'ок' if backup_info.ok else 'не ок' }}</span>
+    <span class="ov-badge {{ 'ov-ok' if b.ok else 'ov-bad' }}">{{ 'ок' if b.ok else 'не ок' }}</span>
   </div>
+  {% endfor %}
   {% else %}
   <div style="color:#888;font-size:13px;">Бекапов ещё не было.</div>
   {% endif %}

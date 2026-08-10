@@ -1358,23 +1358,23 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                              "detail": "включено" if enabled else "выключено в настройках"})
         deepseek_key_set = bool(os.getenv("DEEPSEEK_API_KEY"))
 
-        # ── Бекап ────────────────────────────────────────────────────────
-        backup_row = await pg_fr("""
-            SELECT ts, status, kind FROM backup_history ORDER BY ts DESC LIMIT 1
+        # ── Бекап — последние 5 (было LIMIT 1/одна строка) ─────────────────
+        backup_rows = await pg_fetch("""
+            SELECT ts, status, kind FROM backup_history ORDER BY ts DESC LIMIT 5
         """)
-        backup_info = None
-        if backup_row:
-            age_h = (now_ts - backup_row["ts"]).total_seconds() / 3600.0
-            backup_info = {
-                "ts": backup_row["ts"].strftime("%d.%m %H:%M"), "status": backup_row["status"],
-                "kind": backup_row["kind"], "age_h": round(age_h, 1),
-                "ok": backup_row["status"] == "ok" and age_h <= 48,
-            }
+        backup_list = []
+        for row in backup_rows:
+            age_h = (now_ts - row["ts"]).total_seconds() / 3600.0
+            backup_list.append({
+                "ts": row["ts"].strftime("%d.%m %H:%M"), "status": row["status"],
+                "kind": row["kind"], "age_h": round(age_h, 1),
+                "ok": row["status"] == "ok" and age_h <= 48,
+            })
 
         return templates.TemplateResponse("overview.html", {
             "request": request, "atab": "overview", "tab": "overview",
             "units": units, "channels": channels, "deepseek_key_set": deepseek_key_set,
-            "ai_rows": ai_rows, "backup_info": backup_info,
+            "ai_rows": ai_rows, "backup_list": backup_list,
             "sale_hourly": {"labels": [h["h"].strftime("%H:00") for h in sale_hourly],
                              "counts": [h["cnt"] for h in sale_hourly]},
             "rental_hourly": {"labels": [h["h"].strftime("%H:00") for h in rental_hourly],

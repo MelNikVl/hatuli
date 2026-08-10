@@ -95,10 +95,10 @@ async function toggleFavComplex() {
 <!-- Верх страницы: фото слева / описание справа, по 600px — это ВСЁ, что
      выше сгиба. Карта, объявления, графики и остальное — отдельным блоком ниже. -->
 <style>
-/* Было 3fr/1fr (фото 75% / описание 25%) — описание расширено на 15%
-   (0.25 * 1.15 = 0.2875) за счёт фото (1 - 0.2875 = 0.7125), в fr:
-   0.7125/0.2875 ≈ 2.48fr на 1fr. */
-.cx-hero { display:grid; grid-template-columns:2.48fr 1fr; gap:16px; margin-bottom:16px; align-items:stretch; }
+/* Было 3fr/1fr (фото 75% / описание 25%) — описание расширяли на 15%
+   (0.25 * 1.15 = 0.2875), затем ещё на 10% (0.2875 * 1.10 ≈ 0.3163) за
+   счёт фото (1 - 0.3163 = 0.6837), в fr: 0.6837/0.3163 ≈ 2.16fr на 1fr. */
+.cx-hero { display:grid; grid-template-columns:2.16fr 1fr; gap:16px; margin-bottom:16px; align-items:stretch; }
 .cx-hero .cx-col-card { height:600px; overflow-y:auto; }
 @media (max-width:1150px) { .cx-hero { grid-template-columns:1fr; } .cx-hero .cx-col-card { height:auto; max-height:600px; } }
 .cx-col-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
@@ -342,16 +342,19 @@ async function toggleFavComplex() {
 <!-- Варианты квартир в доме (новостройки) — под блоком "Материалы и
      оборудование", 5 карточек в строку, фильтр по комнатности query-
      параметром (?nb_rooms=N), тот же приём, что у day-селекторов на
-     /admin/parsers (простые <a href>, без JS). -->
+     /admin/parsers (простые <a href>, без JS). nb_rooms=-1 — сентинел
+     "все" (0 — отдельный реальный бакет "комнатность не указана
+     застройщиком"). Список ограничен 5 карточками, полный — по ссылке
+     "показать все" (?nb_all=1). -->
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
-    <b style="font-size:13.5px;">🏗 Варианты квартир в доме <span style="font-weight:400;color:#888;">({{ newbuild_units_list|length }})</span></b>
+    <b style="font-size:13.5px;">🏗 Варианты квартир в доме <span style="font-weight:400;color:#888;">({{ newbuild_units_total }})</span></b>
     <div style="display:flex;gap:6px;flex-wrap:wrap;">
-      <a href="?nb_rooms=0" style="padding:4px 12px;border-radius:8px;font-size:12.5px;text-decoration:none;
-              {% if nb_rooms == 0 %}background:#2563eb;color:#fff;{% else %}background:var(--bg);border:1px solid var(--border);color:var(--text);{% endif %}">Все</a>
+      <a href="?nb_rooms=-1" style="padding:4px 12px;border-radius:8px;font-size:12.5px;text-decoration:none;
+              {% if nb_rooms == -1 %}background:#2563eb;color:#fff;{% else %}background:var(--bg);border:1px solid var(--border);color:var(--text);{% endif %}">Все</a>
       {% for r in newbuild_rooms_available %}
       <a href="?nb_rooms={{ r }}" style="padding:4px 12px;border-radius:8px;font-size:12.5px;text-decoration:none;
-              {% if nb_rooms == r %}background:#2563eb;color:#fff;{% else %}background:var(--bg);border:1px solid var(--border);color:var(--text);{% endif %}">{{ r }}-комн</a>
+              {% if nb_rooms == r %}background:#2563eb;color:#fff;{% else %}background:var(--bg);border:1px solid var(--border);color:var(--text);{% endif %}">{% if r %}{{ r }}-комн{% else %}без комнатности{% endif %}</a>
       {% endfor %}
     </div>
   </div>
@@ -362,12 +365,17 @@ async function toggleFavComplex() {
       {% if u.layout_photo_url %}<img src="{{ u.layout_photo_url }}" loading="lazy" style="width:100%;height:120px;object-fit:contain;background:#f7f7f7;display:block;">{% else %}<div style="width:100%;height:120px;background:var(--bg);"></div>{% endif %}
       <div style="padding:7px 8px;">
         <div style="font-weight:800;font-size:13px;">{{ '%.1f'|format(u.price/1e6) if u.price else 'по запросу' }}{% if u.price %} млн ₸{% endif %}</div>
-        <div style="font-size:11px;color:#888;margin-top:2px;">{{ u.rooms or '?' }}-комн · {{ u.area|round(1) if u.area else '?' }} м² · {{ u.floor or '?' }}{% if u.floors_total %}/{{ u.floors_total }}{% endif %} эт.</div>
+        <div style="font-size:11px;color:#888;margin-top:2px;">{% if u.rooms %}{{ u.rooms }}-комн · {% endif %}{{ u.area|round(1) if u.area else '?' }} м² · {{ u.floor or '?' }}{% if u.floors_total %}/{{ u.floors_total }}{% endif %} эт.</div>
         {% if u.status == 'reserved' %}<div style="font-size:10.5px;color:#eab308;margin-top:2px;">бронируется</div>{% endif %}
       </div>
     </a>
     {% endfor %}
   </div>
+  {% if not nb_all and newbuild_units_total > newbuild_units_list|length %}
+  <div style="margin-top:10px;text-align:center;">
+    <a href="?nb_rooms={{ nb_rooms }}&amp;nb_all=1" style="font-size:12.5px;color:#2563eb;text-decoration:none;">Показать все {{ newbuild_units_total }} →</a>
+  </div>
+  {% endif %}
   {% else %}
   <div style="font-size:12.5px;color:#888;">Нет вариантов в наличии по этому фильтру.</div>
   {% endif %}
@@ -472,6 +480,7 @@ async function toggleFavComplex() {
 {% endif %}
 
   <div id="cx-card-map" class="cx-col-card chart-block" data-chart-id="cx-map-block" style="width:100%;height:560px;">
+    <b style="font-size:13.5px;display:block;margin-bottom:6px;">📍 Похожие варианты</b>
     {% if geo %}
     <div class="chart-block-inner" style="display:flex;flex-direction:column;">
     <div id="cx-map" style="flex:1;min-height:0;width:100%;border-radius:8px;"></div>
@@ -570,79 +579,88 @@ async function toggleFavComplex() {
     {% endif %}
   </div>
 
-<!-- Динамика цены по комнатности: продажа + аренд-эквивалент, с фильтрами
-     по комнатности и периоду (3/7/30/90 дней) — данные грузятся с клиента
-     из /admin/api/complex/{id}/price-dynamics, см. скрипт ниже. Остальные
-     графики страницы (статичный бар по комнатности, гистограмма текущих
-     цен, бар аренды по комнатности, гекс-блок 6 соседей) убраны по задаче
-     "упростить графики ЖК" — эта пара покрывает то же самое динамикой. -->
-<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start;margin-bottom:16px;">
-  <div class="chart-block" data-chart-id="cx-sale-dynamics" style="flex:1 1 0;min-width:380px;width:auto;">
-    <b style="font-size:1em;">📈 Динамика цены по комнатности (продажа)</b>
-    <div style="font-size:0.8em;color:#888;margin:2px 0 8px;">медиана цены объявлений по дням — своя линия на каждую комнатность</div>
-    <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
-      {% for val, label in [('', 'Все'), ('1', '1к'), ('2', '2к'), ('3', '3к'), ('4', '4+к')] %}
-      <button type="button" class="cxd-rooms-btn" data-block="sale" data-rooms="{{ val }}" onclick="cxdSetRooms('sale','{{ val }}')"
-              style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
-      {% endfor %}
-      <span style="width:1px;align-self:stretch;background:var(--border);margin:0 4px;"></span>
-      {% for val, label in [(3,'3д'),(7,'7д'),(30,'30д'),(90,'90д')] %}
-      <button type="button" class="cxd-days-btn" data-block="sale" data-days="{{ val }}" onclick="cxdSetDays('sale',{{ val }})"
-              style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#2563eb' if val == 90 else 'var(--bg)' }};color:{{ '#fff' if val == 90 else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
-      {% endfor %}
+<!-- Динамика цены по комнатности: продажа + аренд-эквивалент — раньше два
+     блока рядом, теперь один с переключателем "Продажа"/"Аренда" (задача
+     "объедини графики", терминал 2026-08-09) + фильтры по комнатности и
+     периоду (3/7/30/90 дней) — данные грузятся с клиента из
+     /admin/api/complex/{id}/price-dynamics, см. скрипт ниже. -->
+<div class="chart-block" data-chart-id="cx-price-dynamics" style="width:100%;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <b style="font-size:1em;" id="cxd-title">📈 Динамика цены по комнатности (продажа)</b>
+    <div style="display:flex;gap:6px;">
+      <button type="button" id="cxd-kind-sale" onclick="cxdSetKind('sale')"
+              style="padding:4px 12px;border:1px solid var(--border);border-radius:7px;background:#2563eb;color:#fff;font-size:11.5px;font-weight:600;cursor:pointer;">Продажа</button>
+      <button type="button" id="cxd-kind-rental" onclick="cxdSetKind('rental')"
+              style="padding:4px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);font-size:11.5px;font-weight:600;cursor:pointer;">Аренда</button>
     </div>
-    <div id="cxd-chart-sale" class="chart-block-inner"></div>
   </div>
-
-  <div class="chart-block" data-chart-id="cx-rental-dynamics" style="flex:1 1 0;min-width:380px;width:auto;">
-    <b style="font-size:1em;">🔑 Динамика цены по комнатности (аренда)</b>
-    <div style="font-size:0.8em;color:#888;margin:2px 0 8px;">медиана арендной ставки по дням — своя линия на каждую комнатность</div>
-    <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
-      {% for val, label in [('', 'Все'), ('1', '1к'), ('2', '2к'), ('3', '3к'), ('4', '4+к')] %}
-      <button type="button" class="cxd-rooms-btn" data-block="rental" data-rooms="{{ val }}" onclick="cxdSetRooms('rental','{{ val }}')"
-              style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#16a34a' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
-      {% endfor %}
-      <span style="width:1px;align-self:stretch;background:var(--border);margin:0 4px;"></span>
-      {% for val, label in [(3,'3д'),(7,'7д'),(30,'30д'),(90,'90д')] %}
-      <button type="button" class="cxd-days-btn" data-block="rental" data-days="{{ val }}" onclick="cxdSetDays('rental',{{ val }})"
-              style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#16a34a' if val == 90 else 'var(--bg)' }};color:{{ '#fff' if val == 90 else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
-      {% endfor %}
-    </div>
-    <div id="cxd-chart-rental" class="chart-block-inner"></div>
+  <div style="font-size:0.8em;color:#888;margin:2px 0 8px;" id="cxd-subtitle">медиана цены объявлений по дням — своя линия на каждую комнатность</div>
+  <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
+    {% for val, label in [('', 'Все'), ('1', '1к'), ('2', '2к'), ('3', '3к'), ('4', '4+к')] %}
+    <button type="button" class="cxd-rooms-btn" data-rooms="{{ val }}" onclick="cxdSetRooms('{{ val }}')"
+            style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+    <span style="width:1px;align-self:stretch;background:var(--border);margin:0 4px;"></span>
+    {% for val, label in [(3,'3д'),(7,'7д'),(30,'30д'),(90,'90д')] %}
+    <button type="button" class="cxd-days-btn" data-days="{{ val }}" onclick="cxdSetDays({{ val }})"
+            style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#2563eb' if val == 90 else 'var(--bg)' }};color:{{ '#fff' if val == 90 else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
   </div>
+  <div id="cxd-chart" class="chart-block-inner"></div>
 </div>
 
 <script>
 const CXD_STATE = {
-  sale: {rooms: '', days: 90, color: '#2563eb'},
-  rental: {rooms: '', days: 90, color: '#16a34a'},
+  kind: 'sale', rooms: '', days: 90,
+  colors: {sale: '#2563eb', rental: '#16a34a'},
 };
-function cxdSetRooms(kind, val) {
-  CXD_STATE[kind].rooms = val;
-  document.querySelectorAll(`.cxd-rooms-btn[data-block="${kind}"]`).forEach(b => {
+function cxdSetKind(kind) {
+  CXD_STATE.kind = kind;
+  const color = CXD_STATE.colors[kind];
+  document.getElementById('cxd-kind-sale').style.background = kind === 'sale' ? color : 'var(--bg)';
+  document.getElementById('cxd-kind-sale').style.color = kind === 'sale' ? '#fff' : 'var(--text)';
+  document.getElementById('cxd-kind-rental').style.background = kind === 'rental' ? color : 'var(--bg)';
+  document.getElementById('cxd-kind-rental').style.color = kind === 'rental' ? '#fff' : 'var(--text)';
+  document.getElementById('cxd-title').textContent = kind === 'rental' ? '🔑 Динамика цены по комнатности (аренда)' : '📈 Динамика цены по комнатности (продажа)';
+  document.getElementById('cxd-subtitle').textContent = kind === 'rental' ? 'медиана арендной ставки по дням — своя линия на каждую комнатность' : 'медиана цены объявлений по дням — своя линия на каждую комнатность';
+  // активные rooms/days-кнопки перекрашиваем в цвет нового kind (активность
+  // определяем из состояния, а не читая обратно computed style)
+  document.querySelectorAll('.cxd-rooms-btn').forEach(b => {
+    if (b.dataset.rooms === CXD_STATE.rooms) b.style.background = color;
+  });
+  document.querySelectorAll('.cxd-days-btn').forEach(b => {
+    if (Number(b.dataset.days) === CXD_STATE.days) b.style.background = color;
+  });
+  cxdLoad();
+}
+function cxdSetRooms(val) {
+  CXD_STATE.rooms = val;
+  const color = CXD_STATE.colors[CXD_STATE.kind];
+  document.querySelectorAll('.cxd-rooms-btn').forEach(b => {
     const active = b.dataset.rooms === val;
-    b.style.background = active ? CXD_STATE[kind].color : 'var(--bg)';
+    b.style.background = active ? color : 'var(--bg)';
     b.style.color = active ? '#fff' : 'var(--text)';
   });
-  cxdLoad(kind);
+  cxdLoad();
 }
-function cxdSetDays(kind, val) {
-  CXD_STATE[kind].days = val;
-  document.querySelectorAll(`.cxd-days-btn[data-block="${kind}"]`).forEach(b => {
+function cxdSetDays(val) {
+  CXD_STATE.days = val;
+  const color = CXD_STATE.colors[CXD_STATE.kind];
+  document.querySelectorAll('.cxd-days-btn').forEach(b => {
     const active = Number(b.dataset.days) === val;
-    b.style.background = active ? CXD_STATE[kind].color : 'var(--bg)';
+    b.style.background = active ? color : 'var(--bg)';
     b.style.color = active ? '#fff' : 'var(--text)';
   });
-  cxdLoad(kind);
+  cxdLoad();
 }
-async function cxdLoad(kind) {
-  const st = CXD_STATE[kind];
-  const el = document.getElementById('cxd-chart-' + kind);
+async function cxdLoad() {
+  const st = CXD_STATE;
+  const el = document.getElementById('cxd-chart');
   el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">загрузка…</div>';
   try {
-    const r = await fetch(`/admin/api/complex/{{ cx.id }}/price-dynamics?kind=${kind}&days=${st.days}&rooms=${st.rooms}`);
+    const r = await fetch(`/admin/api/complex/{{ cx.id }}/price-dynamics?kind=${st.kind}&days=${st.days}&rooms=${st.rooms}`);
     const d = await r.json();
-    cxdRender(el, d.data || {}, st.color, kind === 'rental');
+    cxdRender(el, d.data || {}, st.colors[st.kind], st.kind === 'rental');
   } catch (e) {
     el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">ошибка загрузки</div>';
   }
@@ -690,11 +708,9 @@ function cxdRender(el, data, baseColor, isRental) {
   el.innerHTML = `<div style="margin-bottom:4px;">${legend}</div><div style="flex:1;min-height:0;">${svg}</div>`;
   el.style.display = 'flex'; el.style.flexDirection = 'column';
 }
-document.addEventListener('DOMContentLoaded', () => { cxdLoad('sale'); cxdLoad('rental'); });
+document.addEventListener('DOMContentLoaded', () => { cxdLoad(); });
 document.addEventListener('hatuli:chart-resize', (e) => {
-  const id = e.detail && e.detail.id;
-  if (id === 'cx-sale-dynamics') cxdLoad('sale');
-  if (id === 'cx-rental-dynamics') cxdLoad('rental');
+  if (e.detail && e.detail.id === 'cx-price-dynamics') cxdLoad();
 });
 </script>
 
