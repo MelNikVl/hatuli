@@ -717,6 +717,10 @@ function renderSidePanelIds(ids, emptyMsg, countWord) {
     return;
   }
   const idsSet = new Set(ids);
+  // Заглушка "ничего не найдено" (если была) — не .side-card, поэтому не
+  // попадает в querySelectorAll ниже и оставалась бы висеть рядом с
+  // карточками при переходе из пустого списка в непустой.
+  body.querySelectorAll(':scope > :not(.side-card)').forEach(el => el.remove());
   const existingEls = Array.from(body.querySelectorAll(':scope > .side-card'));
   existingEls.forEach(el => { if (!idsSet.has(el.dataset.id)) el.remove(); });
   const existingIds = new Set(existingEls.map(el => el.dataset.id).filter(id => idsSet.has(id)));
