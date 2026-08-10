@@ -78,10 +78,13 @@ html, body { overflow: hidden !important; }
    поэтому попапы Цена/Метраж/Комнатность красились ПОД кнопками на карте. */
 .filterbar { position:relative; z-index:2000; background:var(--surface); border-bottom:1px solid var(--border); padding:9px 24px; margin:-18px -24px 0 -24px; }
 /* Сама .filterbar — full-bleed полоса (фон/бордер во всю ширину экрана,
-   как и была), а вот её содержимое центрируем тем же max-width:1100px,
-   что и меню (.pub-row1) и контент на остальных страницах (base.html
-   .narrow) — см. задачу "меню и фильтры посередине". */
-.filterbar-inner { display:flex; align-items:center; gap:6px; flex-wrap:nowrap; max-width:1100px; margin:0 auto; overflow-x:auto; }
+   как и была), а вот её содержимое центрируем — см. задачу "меню и
+   фильтры посередине". Ширина у строки фильтров больше, чем у меню
+   (1450px против 1100px у .pub-row1/.narrow) — тут много контролов
+   (~1417px в один ряд без переноса), при 1100px пришлось бы постоянно
+   скроллить строку по горизонтали даже на обычных широких мониторах;
+   overflow-x:auto оставлен как safety net на более узких экранах. */
+.filterbar-inner { display:flex; align-items:center; gap:6px; flex-wrap:nowrap; max-width:1450px; margin:0 auto; overflow-x:auto; }
 .filterbar select, .filterbar input[type=number] { padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; }
 .rooms-dd { position:relative; flex-shrink:0; }
 .rooms-dd-btn { padding:7px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; cursor:pointer; white-space:nowrap; }
