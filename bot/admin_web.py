@@ -1358,6 +1358,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                              "detail": "включено" if enabled else "выключено в настройках"})
         deepseek_key_set = bool(os.getenv("DEEPSEEK_API_KEY"))
 
+        # "N объявлений на карте" — раньше показывалось прямо в строке
+        # фильтров на публичной карте, убрали оттуда (см. задачу), тот же
+        # запрос (см. /admin/api/map-points, with_coords) — сюда.
+        map_listings_count = await pg_fv(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE AND lat IS NOT NULL") or 0
+
         # ── Бекап — последние 5 (было LIMIT 1/одна строка) ─────────────────
         backup_rows = await pg_fetch("""
             SELECT ts, status, kind FROM backup_history ORDER BY ts DESC LIMIT 5
@@ -1375,6 +1382,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "request": request, "atab": "overview", "tab": "overview",
             "units": units, "channels": channels, "deepseek_key_set": deepseek_key_set,
             "ai_rows": ai_rows, "backup_list": backup_list,
+            "map_listings_count": map_listings_count,
             "sale_hourly": {"labels": [h["h"].strftime("%H:00") for h in sale_hourly],
                              "counts": [h["cnt"] for h in sale_hourly]},
             "rental_hourly": {"labels": [h["h"].strftime("%H:00") for h in rental_hourly],

@@ -3,6 +3,13 @@
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">🩺 Основное — работоспособность проекта</div>
 
+<!-- "N объявлений на карте" — раньше показывалось в строке фильтров на
+     публичной карте, убрали оттуда (см. задачу), перенесли сюда. -->
+<div class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px;display:inline-flex;align-items:baseline;gap:10px;">
+  <div style="font-size:28px;font-weight:800;">{{ '{:,}'.format(map_listings_count).replace(',', ' ') }}</div>
+  <div style="font-size:13px;color:#888;">объявлений на карте</div>
+</div>
+
 <style>
 .ov-badge { display:inline-flex; align-items:center; gap:5px; font-size:12.5px; font-weight:700; padding:3px 9px; border-radius:12px; }
 .ov-ok { background:rgba(22,163,74,.12); color:#16a34a; }

@@ -106,22 +106,22 @@ html, body { overflow: hidden !important; }
 .filterbar .fb-range-pair { display:flex; gap:6px; align-items:center; }
 .filterbar .fb-range-pair input[type=number] { width:88px; }
 #result-count { flex-shrink:0; white-space:nowrap; }
-.filterbar #fb-load-progress-wrap { display:none; align-items:center; gap:6px; width:130px; flex-shrink:0; }
+.filterbar #fb-load-progress-wrap { display:none; align-items:center; gap:6px; width:130px; flex-shrink:0; margin-left:auto; }
 .filterbar #fb-load-progress-wrap .bar-track { flex:1; height:5px; border-radius:3px; background:var(--bg); overflow:hidden; }
 .filterbar #load-progress-pct { font-size:11px; color:#888; flex-shrink:0; min-width:2.5em; text-align:right; }
 .year-chip.active { background:#2563eb !important; color:#fff !important; border-color:#2563eb !important; }
 </style>
 <div class="filterbar">
 <div class="filterbar-inner">
-  <select id="f-type" onchange="applyFilters()">
+  <!-- "Новостройки" физически убраны из этого select (см. задачу) — теперь
+       только отдельная кнопка в главном меню (base_public.html,
+       /admin?type=newbuild). Раньше был скрытый <option style="display:
+       none">, но это ненадёжно (native-рендер select в некоторых браузерах
+       игнорирует display:none на option, значение всё равно "просачивалось"
+       в видимый список) — deep-link теперь работает через отдельный флаг
+       forcedNewbuildType, см. getFilterType()/IIFE в конце файла. -->
+  <select id="f-type" onchange="forcedNewbuildType=false;applyFilters()">
     <option value="sale">Продажа</option><option value="rental">Аренда</option><option value="complex">ЖК</option>
-    <!-- "Новостройки" убраны из видимого списка (см. задачу) — теперь только
-         отдельная кнопка в главном меню (base_public.html, /admin?type=newbuild).
-         Опция остаётся в DOM скрытой (display:none у <option> браузеры уважают),
-         чтобы deep-link ?type=newbuild по-прежнему мог программно выставить
-         f-type.value = 'newbuild' (см. IIFE в конце файла) — вся остальная
-         логика (drawNewbuildLayer и т.д.) завязана именно на это значение. -->
-    <option value="newbuild" style="display:none;">Новостройки</option>
   </select>
 
   <div id="f-year-wrap" style="display:none;align-items:center;gap:4px;flex-wrap:wrap;">
@@ -212,7 +212,13 @@ html, body { overflow: hidden !important; }
 
   <button type="button" class="more-filters-btn" onclick="openMoreFilters()">Ещё фильтры ▾</button>
 
-  <span id="result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
+  <!-- "N на карте"/"Загружаем…" убрано с публичной карты (см. задачу —
+       "сколько объявлений на карте" переехало в /admin/analytics/overview,
+       см. map_listings_count там). Элемент оставлен в DOM (display:none) —
+       весь код по файлу продолжает писать в него статус загрузки батчей,
+       трогать десятки мест не требовалось, просто не показываем визуально;
+       индикатор прогресса при загрузке — отдельная полоска ниже (#fb-load-progress-wrap). -->
+  <span id="result-count" style="display:none;"></span>
   <div id="fb-load-progress-wrap">
     <div class="bar-track"><div id="load-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:3px;transition:width .2s ease;"></div></div>
     <span id="load-progress-pct"></span>
@@ -606,6 +612,15 @@ function newMapFetchSignal() {
   mapFetchAbort = new AbortController();
   return mapFetchAbort.signal;
 }
+// "Новостройки" физически убраны из <select id="f-type"> (см. задачу —
+// только отдельная кнопка в шапке), поэтому текущий тип берём отсюда, а не
+// напрямую из значения селекта — forcedNewbuildType взводится deep-link'ом
+// ?type=newbuild (см. IIFE в конце файла) и сбрасывается при ручном выборе
+// в самом селекте (onchange="forcedNewbuildType=false;...").
+let forcedNewbuildType = false;
+function getFilterType() {
+  return forcedNewbuildType ? 'newbuild' : document.getElementById('f-type').value;
+}
 const MINI_PIN_MARKERS = {};
 // Готовый HTML карточки объявления на id — раньше уходил в Leaflet-попап
 // (m.bindPopup), теперь рендерится в панели справа (см. openSidePanel) —
@@ -752,7 +767,7 @@ function renderSidePanelIds(ids, emptyMsg, countWord) {
 // только когда данных вообще нет ни одного).
 let sidePanelShownIds = [];
 function refreshSidePanelList() {
-  const type = document.getElementById('f-type').value;
+  const type = getFilterType();
   if (type === 'newbuild') { refreshNewbuildSidePanelList(); return; }
   if (type === 'complex') {
     sidePanelShownIds = [];
@@ -949,7 +964,7 @@ map.on('zoomend', () => {
 // вообще ничего не перезапрашиваем (маркеры уже на карте).
 let loadedViewBounds = null;
 function viewportNeedsReload() {
-  if (document.getElementById('f-type').value === 'complex') return false;
+  if (getFilterType() === 'complex') return false;
   if (map.getZoom() < ZOOM_GATE) return false;
   return !(loadedViewBounds && loadedViewBounds.contains(map.getBounds()));
 }
@@ -971,7 +986,7 @@ map.on('moveend', () => {
     // никогда не увидит объекты в НОВОЙ области после панорамирования.
     // Дозаказываем свежий панельный батч (без пинов на карту, см.
     // renderSaleBatch mapVisible:false) под новые границы, только для type=sale.
-    if (map.getZoom() < ZOOM_GATE && document.getElementById('f-type').value === 'sale' && lastFilterParams) {
+    if (map.getZoom() < ZOOM_GATE && getFilterType() === 'sale' && lastFilterParams) {
       const b = map.getBounds();
       const pp = new URLSearchParams(lastFilterParams);
       pp.set('min_lat', b.getSouth()); pp.set('max_lat', b.getNorth());
@@ -995,7 +1010,7 @@ map.on('moveend', () => {
 // (renderSaleBatch сама пропускает id, которые уже на карте — см. дедупликацию
 // по MINI_PIN_MARKERS), не трогая то, что уже видно.
 function loadViewportIncremental() {
-  const type = document.getElementById('f-type').value;
+  const type = getFilterType();
   if (type !== 'sale' || !lastFilterParams) { applyFilters(); return; }
   const b = map.getBounds().pad(0.6);
   loadedViewBounds = b;
@@ -1922,7 +1937,7 @@ function reconfigurePriceSlider(type) {
 let lastFilterParams = null;  // текущие фильтры БЕЗ границ области — для инкрементальной подгрузки при панорамировании (см. loadViewportIncremental)
 function applyFilters() {
   applyFiltersSeq++;  // обрывает батчи предыдущего вызова (см. loadSaleBatch)
-  const type = document.getElementById('f-type').value;
+  const type = getFilterType();
   reconfigurePriceSlider(type);
   document.getElementById('f-price-wrap').style.display = (type === 'complex' || type === 'newbuild') ? 'none' : '';
   document.getElementById('f-area-wrap').style.display = (type === 'complex' || type === 'newbuild') ? 'none' : '';
@@ -2143,14 +2158,27 @@ function applyFilters() {
     // полных карточек (сервер сортирует по score) В ГРАНИЦАХ ТЕКУЩЕГО
     // ВИДА карты, только для списка, без добавления пинов на саму карту
     // (иначе поверх lite-кружков задвоенно легли бы ещё и ценники).
+    // Первые 6 — отдельным лёгким запросом (быстрая первая отрисовка, см.
+    // задачу "подгружай сразу только 6, дальше — ниже"), остальные до 60 —
+    // вторым запросом следом, просто ДОБАВЛЯЮТСЯ (renderSaleBatch и так
+    // дедуп-safe и не трогает уже отрисованные карточки).
     const panelBounds = map.getBounds();
-    const panelParams = new URLSearchParams(p);
-    panelParams.set('min_lat', panelBounds.getSouth()); panelParams.set('max_lat', panelBounds.getNorth());
-    panelParams.set('min_lon', panelBounds.getWest()); panelParams.set('max_lon', panelBounds.getEast());
-    panelParams.set('offset', 0); panelParams.set('limit', 60);
-    cachedFetchJson('/admin/api/map-points?' + panelParams.toString(), mapSignal).then(d => {
-      if (filterSeq !== applyFiltersSeq) return;
+    const panelBase = new URLSearchParams(p);
+    panelBase.set('min_lat', panelBounds.getSouth()); panelBase.set('max_lat', panelBounds.getNorth());
+    panelBase.set('min_lon', panelBounds.getWest()); panelBase.set('max_lon', panelBounds.getEast());
+    const panelSeq = filterSeq;
+    const firstParams = new URLSearchParams(panelBase);
+    firstParams.set('offset', 0); firstParams.set('limit', 6);
+    cachedFetchJson('/admin/api/map-points?' + firstParams.toString(), mapSignal).then(d => {
+      if (panelSeq !== applyFiltersSeq) return null;
       renderSaleBatch(d, {mapVisible: false});
+      if (!d.has_more) return null;
+      const restParams = new URLSearchParams(panelBase);
+      restParams.set('offset', 6); restParams.set('limit', 54);
+      return cachedFetchJson('/admin/api/map-points?' + restParams.toString(), mapSignal);
+    }).then(d2 => {
+      if (!d2 || panelSeq !== applyFiltersSeq) return;
+      renderSaleBatch(d2, {mapVisible: false});
     }).catch(() => {});
   } else {
     loadSaleBatch(0);
@@ -4093,12 +4121,15 @@ document.addEventListener('DOMContentLoaded', () => openDetailModal({{ listing_i
 // Deep-link по ?type=... (нужно для пункта меню "Новостройки" в шапке —
 // см. base_public.html — который ведёт на /admin?type=newbuild и должен
 // сразу открыть карту в этом режиме, без ручного переключения селекта).
+// "Новостройки" больше НЕ вариант в самом <select id="f-type"> (убраны из
+// видимого списка Продажа/Аренда/ЖК, см. задачу) — раньше был скрытым
+// <option style="display:none">, но это не 100% надёжно во всех браузерах
+// (native-рендер select может проигнорировать display:none на option).
+// Теперь просто взводим forcedNewbuildType (см. getFilterType() выше) —
+// select физически содержит только 3 реальных пункта.
 (function() {
   const qType = new URLSearchParams(location.search).get('type');
-  const fType = document.getElementById('f-type');
-  if (qType && fType && Array.from(fType.options).some(o => o.value === qType)) {
-    fType.value = qType;
-  }
+  if (qType === 'newbuild') forcedNewbuildType = true;
 })();
 applyFilters();
 
