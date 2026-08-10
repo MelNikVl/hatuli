@@ -1810,6 +1810,18 @@ function applyFilters() {
   document.getElementById('f-year-wrap').style.display = type === 'newbuild' ? 'flex' : 'none';
   const nbPanelEl = document.getElementById('nb-dev-panel');
   if (nbPanelEl) nbPanelEl.style.display = type === 'newbuild' ? 'flex' : 'none';
+  // "Готовность"/скор/изменение цены/отделка/план — только для продажи.
+  // ВАЖНО: это должно выполняться ДО ранних return у complex/newbuild ниже
+  // (см. задачу "скрыть Готовность для новостроек") — раньше стояло ниже
+  // по функции, после этих return, и поэтому вообще не срабатывало для
+  // complex/newbuild (баг, найден при живой проверке — #f-market-wrap
+  // оставался видимым при выбранных "Новостройках").
+  document.getElementById('f-market-wrap').style.display = type === 'sale' ? '' : 'none';
+  document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
+  document.getElementById('f-pricechange-wrap').style.display = type === 'sale' ? '' : 'none';
+  document.getElementById('f-finish-wrap').style.display = type === 'sale' ? '' : 'none';
+  document.getElementById('f-floorplan-wrap').style.display = type === 'sale' ? '' : 'none';
+  document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
   if (type === 'complex') {
     map.removeLayer(pointsLayer); map.removeLayer(topLayer); map.removeLayer(saleCluster); map.removeLayer(liteCluster); map.removeLayer(newbuildLayer);
     pointsLayer.clearLayers(); topLayer.clearLayers(); saleCluster.clearLayers(); liteCluster.clearLayers(); newbuildLayer.clearLayers();
@@ -1869,13 +1881,6 @@ function applyFilters() {
 
   lastFilterParams = new URLSearchParams(p);
   ['min_lat', 'max_lat', 'min_lon', 'max_lon', 'offset', 'limit'].forEach(k => lastFilterParams.delete(k));
-
-  document.getElementById('f-market-wrap').style.display = type === 'sale' ? '' : 'none';
-  document.getElementById('f-score-wrap').style.display = type === 'sale' ? '' : 'none';
-  document.getElementById('f-pricechange-wrap').style.display = type === 'sale' ? '' : 'none';
-  document.getElementById('f-finish-wrap').style.display = type === 'sale' ? '' : 'none';
-  document.getElementById('f-floorplan-wrap').style.display = type === 'sale' ? '' : 'none';
-  document.getElementById('f-price-label').textContent = type === 'rental' ? 'Цена (тыс ₸/мес или ₸)' : 'Цена (млн ₸ или ₸)';
 
   if (type === 'rental') {
   const rentalSeq = applyFiltersSeq;  // уже увеличен в начале applyFilters()
