@@ -152,7 +152,6 @@
   <div class="pub-row1">
     <a href="/admin" class="pub-logo">Hatuli</a>
     <nav class="pub-nav">
-      <a href="/admin?type=newbuild" class="nav-newbuild {% if request.query_params.get('type') == 'newbuild' %}active{% endif %}">Новостройки</a>
       <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
       <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>
       <a href="/admin/banks" class="{% if 'banks' in request.url.path %}active{% endif %}">Банки</a>

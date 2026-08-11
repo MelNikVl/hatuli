@@ -88,7 +88,7 @@ html, body { overflow: hidden !important; }
    Комнатность/Цена/Метраж/Тепловые карты — ничего не появляется".
    На узких экранах ряд просто визуально переполняется (как было и до
    центрирования) — это лучше, чем невидимые фильтры. */
-.filterbar-inner { display:flex; align-items:center; gap:6px; flex-wrap:nowrap; max-width:1450px; margin:0 auto; }
+.filterbar-inner { display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:nowrap; max-width:1450px; margin:0 auto; }
 .filterbar select, .filterbar input[type=number] { padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; }
 .rooms-dd { position:relative; flex-shrink:0; }
 .rooms-dd-btn { padding:7px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; cursor:pointer; white-space:nowrap; }
@@ -106,7 +106,7 @@ html, body { overflow: hidden !important; }
 .filterbar .fb-range-pair { display:flex; gap:6px; align-items:center; }
 .filterbar .fb-range-pair input[type=number] { width:88px; }
 #result-count { flex-shrink:0; white-space:nowrap; }
-.filterbar #fb-load-progress-wrap { display:none; align-items:center; gap:6px; width:130px; flex-shrink:0; margin-left:auto; }
+.filterbar #fb-load-progress-wrap { display:none; align-items:center; gap:6px; width:130px; flex-shrink:0; }
 .filterbar #fb-load-progress-wrap .bar-track { flex:1; height:5px; border-radius:3px; background:var(--bg); overflow:hidden; }
 .filterbar #load-progress-pct { font-size:11px; color:#888; flex-shrink:0; min-width:2.5em; text-align:right; }
 .year-chip.active { background:#2563eb !important; color:#fff !important; border-color:#2563eb !important; }
@@ -120,7 +120,11 @@ html, body { overflow: hidden !important; }
        игнорирует display:none на option, значение всё равно "просачивалось"
        в видимый список) — deep-link теперь работает через отдельный флаг
        forcedNewbuildType, см. getFilterType()/IIFE в конце файла. -->
-  <select id="f-type" onchange="forcedNewbuildType=false;applyFilters()">
+  <button type="button" id="f-newbuild-btn" onclick="toggleNewbuildChip()"
+          style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">
+    Новостройки
+  </button>
+  <select id="f-type" onchange="forcedNewbuildType=false;updateNewbuildChip();applyFilters()">
     <option value="sale">Продажа</option><option value="rental">Аренда</option><option value="complex">ЖК</option>
   </select>
 
@@ -276,13 +280,18 @@ html, body { overflow: hidden !important; }
    старой моделью "открывается только по клику на объявление/кластер").
    Карта — flex:1, панель — фиксированная колонка своей ширины, обе тянутся
    на всю высоту #map-wrap за счёт обычного stretch по кросс-оси flex. */
-#objects-map { flex:1; min-width:0; }
-#side-panel { display:flex; flex-direction:column; width:367px; flex-shrink:0; background:var(--surface); border-left:1px solid var(--border); overflow-x:hidden; }
+#map-wrap { align-items:stretch; }
+#objects-map { flex:1; min-width:0; height:100%; }
+#side-panel { display:flex; flex-direction:column; width:367px; flex-shrink:0; height:100%; background:var(--surface); border-left:1px solid var(--border); overflow-x:hidden; }
 #side-panel-head { display:none; align-items:center; padding:14px 16px 4px; flex-shrink:0; }
 #side-panel-head.has-count { display:flex; }
 #side-panel-body { flex:1; overflow-y:auto; overflow-x:hidden; padding:14px 16px 24px; display:grid; grid-template-columns:1fr; gap:14px; align-content:start; }
-.side-card { background:var(--bg); border:1px solid var(--border); border-radius:11px; overflow:hidden; min-width:0; transition:box-shadow .2s ease; }
-.side-card-flash { box-shadow:0 0 0 3px #2563eb; }
+.side-card { background:var(--bg); border:1px solid var(--border); border-radius:11px; overflow:clip; min-width:0; transition:box-shadow .2s ease; }
+.side-card-flash { animation: sideCardFlash 0.6s ease-in-out 5; border-color:#2563eb !important; }
+@keyframes sideCardFlash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(37,99,235,0); }
+  50%      { box-shadow: 0 0 0 6px rgba(37,99,235,.65), 0 0 22px rgba(37,99,235,.45); }
+}
 /* Широкий экран — 735px и 2 карточки в ряд (как просили: "735 пикселей,
    умещается 2 ряда объявлений"); уже сейчас (без media) — половина
    ширины, 1 колонка, у неё же "панель становится в 2 раза меньше". */
@@ -621,6 +630,18 @@ let forcedNewbuildType = false;
 function getFilterType() {
   return forcedNewbuildType ? 'newbuild' : document.getElementById('f-type').value;
 }
+function updateNewbuildChip() {
+  const btn = document.getElementById('f-newbuild-btn');
+  if (!btn) return;
+  btn.style.background = forcedNewbuildType ? '#84cc16' : 'var(--bg)';
+  btn.style.color = forcedNewbuildType ? '#fff' : 'var(--text)';
+  btn.style.borderColor = forcedNewbuildType ? '#84cc16' : 'var(--border)';
+}
+function toggleNewbuildChip() {
+  forcedNewbuildType = !forcedNewbuildType;
+  updateNewbuildChip();
+  applyFilters();
+}
 const MINI_PIN_MARKERS = {};
 // Готовый HTML карточки объявления на id — раньше уходил в Leaflet-попап
 // (m.bindPopup), теперь рендерится в панели справа (см. openSidePanel) —
@@ -662,9 +683,11 @@ function openSidePanel(ids) {
   if (mw && window.innerWidth <= 767) mw.classList.add('mobile-list');
   const el = document.getElementById('card-' + ids[0]);
   if (el) {
-    el.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+    // Мгновенный скролл (без smooth-анимации) — пользователь кликнул по
+    // маркеру и ждёт карточку сразу, а не через полсекунды плавного пролёта.
+    el.scrollIntoView({block: 'nearest', behavior: 'auto'});
     el.classList.add('side-card-flash');
-    setTimeout(() => el.classList.remove('side-card-flash'), 1300);
+    setTimeout(() => el.classList.remove('side-card-flash'), 3000);
   }
 }
 function closeSidePanel() {
@@ -794,8 +817,11 @@ function refreshSidePanelList() {
   const pool = visibleIds.length ? visibleIds : allIds;
   const newOnes = pool.filter(id => !shownSet.has(id));
   let combined = stillShown.concat(newOnes);
-  const MAX_CARDS = 150;  // не даём списку расти бесконечно при долгом панорамировании
-  if (combined.length > MAX_CARDS) combined = combined.slice(combined.length - MAX_CARDS);
+  // Больше НЕ обрезаем список сверху: раньше при превышении MAX_CARDS старые
+  // карточки вытеснялись новыми (slice с хвоста) и блок «подтягивался» на
+  // глазах у пользователя. Теперь новые объявления только ДОБАВЛЯЮТСЯ в конец
+  // очереди, старые остаются на месте, а при большом количестве появляется
+  // обычный скролл правой панели (#side-panel-body: overflow-y:auto).
   sidePanelShownIds = combined;
   renderSidePanelIds(combined, undefined, 'объявлений');
 }
@@ -808,41 +834,58 @@ function refreshSidePanelList() {
 // список был непустым — оставляем как есть.
 let newbuildRefreshSeq = 0;
 async function refreshNewbuildSidePanelList() {
-  const bounds = map.getBounds();
-  const allComplexIds = Object.keys(NEWBUILD_PIN_MARKERS);
-  const visibleIds = allComplexIds.filter(id => {
-    const m = NEWBUILD_PIN_MARKERS[id];
-    return m && bounds.contains(m.getLatLng());
-  });
-  const fetchIds = visibleIds.length ? visibleIds : allComplexIds;
-  if (!fetchIds.length) {
-    sidePanelShownIds = [];
-    renderSidePanelIds([], 'В этой области карты нет новостроек.', 'вариантов');
+  // Режим «выбран ЖК»: показываем ТОЛЬКО предложения этого ЖК (юниты),
+  // независимо от вьюпорта карты.
+  if (selectedNewbuildComplex) {
+    const seq = ++newbuildRefreshSeq;
+    const rooms = document.getElementById('f-rooms').value;
+    const qs = rooms ? ('?rooms=' + encodeURIComponent(rooms)) : '';
+    const d = await fetch('/admin/api/newbuild-complex/' + selectedNewbuildComplex + '/units' + qs)
+      .then(r => r.json()).catch(() => null);
+    if (seq !== newbuildRefreshSeq) return;
+    const flatIds = [];
+    if (d && !d.error && d.units) {
+      d.units.forEach(u => {
+        const cardId = 'nb-' + u.id;
+        CARD_HTML[cardId] = buildNewbuildUnitCardHtml(d, u);
+        NB_CARD_COMPLEX[cardId] = d.id;
+        flatIds.push(cardId);
+      });
+    }
+    const headerId = 'nb-cx-header';
+    const hdr = `<div style="display:flex;align-items:center;gap:8px;padding:2px 0 4px;">
+      <span style="font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 ${escapeHtml((d && d.name) || '')}</span>
+      <button onclick="event.stopPropagation();clearNewbuildSelection()" style="margin-left:auto;background:#e5e7eb;border:none;border-radius:8px;padding:3px 10px;font-size:12px;font-weight:700;cursor:pointer;color:#555;">✕ ко всем ЖК</button>
+    </div>`;
+    CARD_HTML[headerId] = `<div class="side-card-inner" style="width:100%;box-sizing:border-box;">${hdr}</div>`;
+    sidePanelShownIds = [headerId].concat(flatIds);
+    renderSidePanelIds(sidePanelShownIds, d && d.units && d.units.length ? '' : 'В этом ЖК нет вариантов в наличии.', 'вариантов');
     return;
   }
-  const seq = ++newbuildRefreshSeq;
-  const rooms = document.getElementById('f-rooms').value;
-  const qs = rooms ? ('?rooms=' + encodeURIComponent(rooms)) : '';
-  const results = await Promise.all(fetchIds.map(id =>
-    fetch('/admin/api/newbuild-complex/' + id + '/units' + qs).then(r => r.json()).catch(() => null)
-  ));
-  if (seq !== newbuildRefreshSeq) return;  // карта успела подвинуться ещё раз, пока грузили
-  const flatIds = [];
-  results.forEach(d => {
-    if (!d || d.error || !d.units) return;
-    d.units.forEach(u => {
-      const cardId = 'nb-' + u.id;
-      CARD_HTML[cardId] = buildNewbuildUnitCardHtml(d, u);
-      NB_CARD_COMPLEX[cardId] = d.id;
-      flatIds.push(cardId);
-    });
-  });
-  // Не пустеем: если в этот раз ничего не расплющилось (например, фильтр
-  // по комнатности убрал все варианты видимых ЖК), но список уже был
-  // непустым — оставляем прежний.
-  if (!flatIds.length && sidePanelShownIds.length) return;
+
+  // Режим «все ЖК»: панель = карточки самих ЖК (фото, адрес, застройщик,
+  // год сдачи), а не сотни юнитов. ЖК в Астане ~69 — показываем ВСЕ сразу,
+  // БЕЗ фильтрации по границам карты: при каждом moveend границы меняются,
+  // список пересобирался заново и карточки «моргали» (пересоздавались).
+  // Теперь список стабилен, панорамирование его не трогает.
+  const allIds = Object.keys(NEWBUILD_PIN_MARKERS);
+  if (!allIds.length) {
+    sidePanelShownIds = [];
+    renderSidePanelIds([], 'Новостройки не загрузились.', 'ЖК');
+    return;
+  }
+  const seq2 = ++newbuildRefreshSeq;
+  const flatIds = allIds.map(id => {
+    const pt = NEWBUILD_PIN_DATA[id];
+    if (!pt) return null;
+    const cardId = 'nb-cx-' + id;
+    CARD_HTML[cardId] = newbuildComplexCardHtml(pt);
+    NB_CARD_COMPLEX[cardId] = id;
+    return cardId;
+  }).filter(Boolean);
+  if (seq2 !== newbuildRefreshSeq) return;
   sidePanelShownIds = flatIds;
-  renderSidePanelIds(flatIds, 'В этой области карты нет вариантов в наличии.', 'вариантов');
+  renderSidePanelIds(flatIds, 'Новостройки не загрузились.', 'ЖК');
 }
 // Клик по ЖК-пину на карте — все его варианты уже должны быть в списке
 // (пин виден = внутри текущего вьюпорта = его юниты уже расплющены туда),
@@ -852,9 +895,9 @@ function scrollToNewbuildComplex(complexId) {
   const mw = document.getElementById('map-wrap');
   if (mw && window.innerWidth <= 767) mw.classList.add('mobile-list');
   if (!el) return;
-  el.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  el.scrollIntoView({block: 'nearest', behavior: 'auto'});
   el.classList.add('side-card-flash');
-  setTimeout(() => el.classList.remove('side-card-flash'), 1300);
+  setTimeout(() => el.classList.remove('side-card-flash'), 3000);
 }
 // (регистрация map.on('moveend', …) для refreshSidePanelList — см. ниже,
 // ПОСЛЕ строки `const map = L.map(...)`: `map` — const, обращение к ней
@@ -874,6 +917,25 @@ function toggleMobileView() {
 // Кеширующий прокси фото (см. /img-proxy на бэкенде) — первый показ идёт на
 // источник и кэшируется на диске сервера, дальше отдаётся с диска.
 function proxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
+// Ошибка загрузки фото в карточке: если в галерее есть ещё кадры — показать
+// следующий, а не прятать весь блок (раньше onerror скрывал parentNode, из-за
+// чего карточки новостроек с битым первым кадром (мёртвый bazis-online.kz)
+// оставались вообще без фото, хотя дальше шли рабочие фото ЖК). Если кадров
+// больше нет — показываем заглушку «пока нет фото».
+function carImgError(cardId) {
+  const img = document.getElementById('car-' + cardId);
+  if (!img) return;
+  const photos = ptPhotos[cardId] || [];
+  const cur = carIdx[cardId] || 0;
+  const next = cur + 1;
+  if (next < photos.length) {
+    carIdx[cardId] = next;
+    img.src = proxyImg(photos[next]);
+  } else {
+    img.parentNode.style.display = 'none';
+    img.parentNode.innerHTML = '<div style="width:100%;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:var(--bg);color:#999;font-size:13px;">пока нет фото</div>';
+  }
+}
 // preferCanvas: тепловые карты — это тысячи гекс-полигонов (особенно шум:
 // детальный слой у дорог + фоновый на весь город); SVG-рендерер Леافлета по
 // умолчанию создаёт отдельный DOM-узел на каждый — на таком количестве это
@@ -904,7 +966,13 @@ function resizeMapToViewport() {
   // Делим на текущий zoom, чтобы после его повторного применения браузером
   // получился именно тот экранный пиксель, который мы посчитали.
   const zoomLevel = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
-  mapEl.style.height = (Math.max(320, window.innerHeight - top) / zoomLevel) + 'px';
+  // Высота задаётся КОНТЕЙНЕРУ (#map-wrap), а не только карте — тогда и
+  // карта (flex:1, height:100%), и правая панель (#side-panel, height:100%)
+  // всегда ровно одной высоты, панель статична рядом с картой и со своим
+  // скроллом (#side-panel-body overflow-y:auto), если объявлений много.
+  const h = Math.max(320, window.innerHeight - top) / zoomLevel;
+  wrap.style.height = h + 'px';
+  mapEl.style.height = '100%';
   // #side-panel больше не position:fixed с отдельным top — это flex-сиблинг
   // #objects-map внутри #map-wrap (см. CSS выше) и стретчится по кросс-оси
   // на ту же высоту, что и карта, автоматически.
@@ -1460,6 +1528,91 @@ function toggleYearChip(y) {
   drawNewbuildLayer();
 }
 
+// Попап ЖК-новостройки на карте: галерея фото (3-5), кол-во квартир,
+// класс жилья, ссылка на страницу ЖК у застройщика.
+function newbuildComplexPopupHtml(p, photoIdx) {
+  const photos = (p.photos || []).filter(Boolean);
+  const i = photoIdx || 0;
+  const idx = Math.min(i, Math.max(0, photos.length - 1));
+  const img = photos.length
+    ? `<img src="${proxyImg(photos[idx])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:10px 10px 0 0;display:block;" onerror="this.parentNode.style.display='none'">`
+    : `<div style="width:100%;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:#f3f4f6;color:#999;font-size:13px;border-radius:10px 10px 0 0;">пока нет фото</div>`;
+  const nav = photos.length > 1 ? `
+    <button onclick="event.stopPropagation();nbPopupNav(${p.id},-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.4);color:#fff;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:17px;line-height:1;">‹</button>
+    <button onclick="event.stopPropagation();nbPopupNav(${p.id},1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.4);color:#fff;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:17px;line-height:1;">›</button>
+    <div style="position:absolute;left:0;right:0;bottom:6px;display:flex;justify-content:center;gap:4px;">${photos.map((_, k) => `<span style="width:6px;height:6px;border-radius:50%;background:${k === idx ? '#fff' : 'rgba(255,255,255,.5)'};box-shadow:0 0 2px rgba(0,0,0,.7);"></span>`).join('')}</div>` : '';
+  const devTxt = p.logo
+    ? `<img src="${p.logo}" style="width:18px;height:18px;border-radius:4px;object-fit:contain;background:#fff;vertical-align:-4px;margin-right:5px;padding:1px;">${escapeHtml(p.developer || '')}`
+    : escapeHtml(p.developer || '');
+  const yearTxt = (p.completion_year ? `${p.completion_quarter ? p.completion_quarter + ' кв. ' : ''}${p.completion_year}` : '');
+  const url = p.developer_url || '';
+  return `
+<div style="width:260px;font-family:inherit;">
+  <div style="position:relative;overflow:hidden;border-radius:10px 10px 0 0;">
+    ${img}${nav}
+  </div>
+  <div style="padding:9px 11px 11px;">
+    <div style="font-size:15px;font-weight:800;">${escapeHtml(p.name)}</div>
+    <div style="font-size:12.5px;color:#666;margin-top:3px;">${devTxt}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;">
+      <span style="display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${p.units_count} кв. в продаже</span>
+      ${p.housing_class ? `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${escapeHtml(p.housing_class)}</span>` : ''}
+      ${yearTxt ? `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${escapeHtml(yearTxt)}</span>` : ''}
+    </div>
+    ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="display:inline-block;margin-top:9px;padding:6px 12px;border-radius:8px;background:#16a34a;color:#fff;font-size:12.5px;font-weight:700;text-decoration:none;">🏗 Страница ЖК у застройщика</a>` : ''}
+  </div>
+</div>`;
+}
+let nbPopupIdx = {};
+function nbPopupNav(id, dir) {
+  nbPopupIdx[id] = (nbPopupIdx[id] || 0) + dir;
+  const m = NEWBUILD_PIN_MARKERS[id];
+  if (m) m.setPopupContent(newbuildComplexPopupHtml(NEWBUILD_PIN_DATA[id], nbPopupIdx[id]));
+}
+const NEWBUILD_PIN_DATA = {};
+let selectedNewbuildComplex = null;  // id выбранного ЖК (null = режим «все ЖК карточками»)
+// Карточка ЖК для панели в режиме «все ЖК» (до выбора конкретного).
+function newbuildComplexCardHtml(pt) {
+  const photos = (pt.photos || []).filter(Boolean);
+  const img = photos.length
+    ? `<img src="${proxyImg(photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;display:block;border:none;" onerror="carImgError('nb-cx-${pt.id}')">`
+    : `<div style="width:100%;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:var(--bg);color:#999;font-size:13px;">пока нет фото</div>`;
+  const devHtml = pt.logo
+    ? `<img src="${pt.logo}" style="width:18px;height:18px;border-radius:4px;object-fit:contain;background:#fff;vertical-align:-4px;margin-right:5px;padding:1px;">${escapeHtml(pt.developer || '')}`
+    : escapeHtml(pt.developer || '');
+  const yearTxt = pt.completion_year
+    ? `${pt.completion_quarter ? pt.completion_quarter + ' кв. ' : ''}${pt.completion_year}`
+    : '';
+  return `
+<div class="side-card-inner" style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="selectNewbuildFromCard(${pt.id}, event)">
+  <div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;">
+    ${img}
+    <span style="position:absolute;top:8px;right:8px;background:#16a34a;color:#fff;border-radius:9px;padding:2px 8px;font-size:11.5px;font-weight:800;">${pt.units_count} кв.</span>
+  </div>
+  <div style="padding:5px 10px 10px;">
+    <div style="font-size:16px;font-weight:800;line-height:1.15;">${escapeHtml(pt.name)}</div>
+    <div style="font-size:12.5px;color:#888;margin-top:4px;">${devHtml}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;">
+      ${yearTxt ? `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">Сдача: ${escapeHtml(yearTxt)}</span>` : ''}
+      ${pt.housing_class ? `<span style="display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${escapeHtml(pt.housing_class)}</span>` : ''}
+    </div>
+    <div style="font-size:12.5px;color:var(--text);margin-top:6px;">📍 ${escapeHtml((pt.address || '').replace(/^РК,?\s*/i, '').replace(/г\.?\s*Астана,?\s*/i, ''))}</div>
+  </div>
+</div>`;
+}
+function selectNewbuildFromCard(complexId, ev) {
+  if (ev) ev.stopPropagation();
+  const pt = NEWBUILD_PIN_DATA[complexId];
+  if (!pt) return;
+  selectedNewbuildComplex = complexId;
+  const m = NEWBUILD_PIN_MARKERS[complexId];
+  if (m) { map.setView([pt.lat, pt.lon], Math.max(map.getZoom(), 14), {animate: true}); m.openPopup(); }
+  refreshNewbuildSidePanelList();
+}
+function clearNewbuildSelection() {
+  selectedNewbuildComplex = null;
+  refreshNewbuildSidePanelList();
+}
 function newbuildPinHtml(p) {
   // Лого застройщика (если есть файл в БД) + бэйдж с числом вариантов в
   // наличии (пересчитывается на бэкенде под текущий фильтр комнатности —
@@ -1504,7 +1657,15 @@ async function drawNewbuildLayer() {
     const icon = L.divIcon({html: newbuildPinHtml(pt), className: '', iconSize: [0, 0]});
     const marker = L.marker([pt.lat, pt.lon], {icon}).addTo(newbuildLayer);
     NEWBUILD_PIN_MARKERS[pt.id] = marker;
-    marker.on('click', () => scrollToNewbuildComplex(pt.id));
+    NEWBUILD_PIN_DATA[pt.id] = pt;
+    nbPopupIdx[pt.id] = 0;
+    marker.bindPopup(newbuildComplexPopupHtml(pt, 0), {minWidth: 260, maxWidth: 260});
+    marker.on('click', () => {
+      nbPopupIdx[pt.id] = 0; marker.setPopupContent(newbuildComplexPopupHtml(pt, 0)); marker.openPopup();
+      // Клик по ЖК на карте = выбор ЖК: панель показывает только его предложения.
+      selectedNewbuildComplex = pt.id;
+      refreshNewbuildSidePanelList();
+    });
   });
   // Персистентная панель — новый набор видимых ЖК-пинов может менять
   // список вариантов в текущей области карты.
@@ -1523,7 +1684,7 @@ function buildNewbuildUnitCardHtml(d, u) {
     ptPhotos[cardId] = photos; carIdx[cardId] = 0;
     return `
 <div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;background:#f7f7f7;">
-  <img id="car-${cardId}" src="${proxyImg(photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:contain;background:#f7f7f7;display:block;border:none;" onerror="this.parentNode.style.display='none'">
+  <img id="car-${cardId}" src="${proxyImg(photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:contain;background:#f7f7f7;display:block;border:none;" onerror="carImgError('${cardId}')">
   ${photos.length > 1 ? `
   <button onclick="carNav('${cardId}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
   <button onclick="carNav('${cardId}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">›</button>
@@ -2254,19 +2415,23 @@ function renderSaleBatch(d, opts) {
       // сами по себе клик не пробрасывают дальше (stopPropagation внутри carNav).
       const carHtml = pt.photos && pt.photos.length ? `
 <div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;">
-  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;display:block;border:none;" onerror="this.parentNode.style.display='none'">
+  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;display:block;border:none;" onerror="carImgError('${pt.id}')">
   ${favStarHtml}
   ${pt.photos.length > 1 ? `
-  <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
-  <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">›</button>
+  <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
+  <button onclick="carNav('${pt.id}',1,event)" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">›</button>
   <div id="car-dots-${pt.id}" style="position:absolute;left:0;right:0;bottom:6px;display:flex;justify-content:center;gap:4px;flex-wrap:wrap;padding:0 24px;">
     ${pt.photos.map((_, i) => `<span class="car-dot" style="width:6px;height:6px;border-radius:50%;background:${i === 0 ? '#fff' : 'rgba(255,255,255,.45)'};box-shadow:0 0 2px rgba(0,0,0,.7);flex-shrink:0;"></span>`).join('')}
   </div>` : ''}
-</div>` : '';
+</div>` : `
+<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:11px 11px 0 0;border-bottom:1px solid var(--border);color:#999;font-size:13px;">
+  <span>пока нет фото</span>
+  ${favStarHtml}
+</div>`;
       const isOwner = !!pt.is_owner;
       const cxLabel = pt.complex && /^\s*(жк|кг)\b/i.test(pt.complex) ? pt.complex : `ЖК ${pt.complex}`;
       const devLogoHtml = pt.developer_logo
-        ? `<img src="${pt.developer_logo}" style="width:15px;height:15px;border-radius:50%;object-fit:contain;vertical-align:-3px;margin-right:3px;">`
+        ? `<img src="${pt.developer_logo}" style="width:20px;height:20px;border-radius:4px;object-fit:contain;background:#fff;vertical-align:-4px;margin-right:5px;padding:1px;">`
         : '🏗 ';
       const devTxt = pt.developer_name
         ? (pt.developer_id
@@ -2275,7 +2440,8 @@ function renderSaleBatch(d, opts) {
         : '';
       const cxLine = pt.complex
         ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
-        : (devTxt ? `<div style="font-size:1em;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : '');
+        : (pt.address ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">📍 <span style="font-weight:600;">${escapeHtml(pt.address.replace(/\s*—.*$/, '').trim())}</span>${devTxt}</div>`
+           : (devTxt ? `<div style="font-size:1em;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : ''));
       const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
       const ownerPillStyle = isOwner
         ? 'display:inline-block;background:#dcfce7;color:#166534;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;'
@@ -2305,7 +2471,7 @@ function renderSaleBatch(d, opts) {
         ${ceilingPillHtml}
       </div>
   ${cxLine}
-  <div id="bg-${pt.id}" style="font-size:1em;margin-top:5px;min-height:19px;"></div>
+  <div id="bg-${pt.id}" style="font-size:1em;margin-top:5px;margin-bottom:1em;min-height:19px;"></div>
   </div>
 </div>`);
       m.on('click', () => { selectPin(pt.id); openSidePanel([pt.id]); });
@@ -4130,6 +4296,7 @@ document.addEventListener('DOMContentLoaded', () => openDetailModal({{ listing_i
 (function() {
   const qType = new URLSearchParams(location.search).get('type');
   if (qType === 'newbuild') forcedNewbuildType = true;
+  updateNewbuildChip();
 })();
 applyFilters();
 

@@ -228,7 +228,16 @@ _PHOTO_CACHE_DIR = os.path.join(os.path.dirname(__file__), "static", "cache", "p
 os.makedirs(_PHOTO_CACHE_DIR, exist_ok=True)
 # Только известные источники фото объявлений/ЖК — proxy не должен превращаться
 # в открытый прокси для произвольных URL (SSRF).
-_PHOTO_ALLOWED_HOSTS = ("kcdn.online", "krisha.kz")
+_PHOTO_ALLOWED_HOSTS = (
+    "kcdn.online", "krisha.kz",          # Крыша (фото объявлений)
+    "homeportal.kz",                     # api.homeportal.kz — фото ЖК (реестр КЖК)
+    "bazis.kz",                          # admin.sales.bazis.kz / admin.shablon.bazis.kz / bazis-online.kz
+    "orda-invest.kz",                    # new.orda-invest.kz — фото новостроек ORDA
+    "profitbase.ru",                     # pb4678.profitbase.ru — планировки
+    "bi.group",                          # s3.bi.group — фото BI Group
+    "sensata.kz",                        # фото Sensata Group
+    "homsters.kz",                       # getImage?imageId= — фото Homsters
+)
 _PHOTO_EXT_WHITELIST = (".jpg", ".jpeg", ".png", ".webp")
 
 
@@ -2679,30 +2688,50 @@ def make_extras_router(templates) -> APIRouter:
                 pass
         rows = await pg_fetch("""
             SELECT c.id, c.name, c.lat, c.lon, c.completion_year, c.completion_quarter,
-                   c.developer_id, d.name AS developer, d.logo,
+                   c.developer_id, d.name AS developer, d.logo, d.website AS developer_website,
+                   c.housing_class, c.photos, c.source_info, c.address,
                    count(u.id) FILTER (
                        WHERE u.status IN ('available','reserved')
                          AND ($1::int[] = '{}' OR u.rooms = ANY($1::int[]))
                    ) AS units_count
             FROM complexes c
             JOIN developers d ON d.id = c.developer_id
-            JOIN newbuild_units u ON u.complex_id = c.id
+            LEFT JOIN newbuild_units u ON u.complex_id = c.id
             WHERE c.is_newbuild AND c.lat IS NOT NULL AND c.lon IS NOT NULL
               AND ($2::int = 0 OR c.completion_year = $2)
               AND ($3::int[] = '{}' OR c.developer_id = ANY($3::int[]))
             GROUP BY c.id, c.name, c.lat, c.lon, c.completion_year, c.completion_quarter,
-                     c.developer_id, d.name, d.logo
-            HAVING count(u.id) FILTER (
-                       WHERE u.status IN ('available','reserved')
-                         AND ($1::int[] = '{}' OR u.rooms = ANY($1::int[]))
-                   ) > 0
+                     c.developer_id, d.name, d.logo, d.website, c.housing_class, c.photos, c.source_info
         """, room_list, year, dev_list)
-        return JSONResponse({"points": [{
-            "id": r["id"], "name": r["name"], "lat": float(r["lat"]), "lon": float(r["lon"]),
-            "developer": r["developer"], "developer_id": r["developer_id"], "logo": r["logo"],
-            "units_count": r["units_count"],
-            "completion_year": r["completion_year"], "completion_quarter": r["completion_quarter"],
-        } for r in rows]})
+        import json as _json_nbp
+        pts = []
+        for r in rows:
+            ph = r.get("photos")
+            if isinstance(ph, str):
+                try:
+                    ph = _json_nbp.loads(ph)
+                except ValueError:
+                    ph = None
+            # Лендинг ЖК у застройщика (bi.group/sensata/...), если сохранили;
+            # иначе — страница застройщика.
+            si = r.get("source_info") or {}
+            if isinstance(si, str):
+                try:
+                    si = _json_nbp.loads(si)
+                except ValueError:
+                    si = {}
+            dev_url = si.get("bi_group_landing") or si.get("landing_url") or r.get("developer_website") or ""
+            pts.append({
+                "id": r["id"], "name": r["name"], "lat": float(r["lat"]), "lon": float(r["lon"]),
+                "developer": r["developer"], "developer_id": r["developer_id"], "logo": r["logo"],
+                "units_count": r["units_count"],
+                "completion_year": r["completion_year"], "completion_quarter": r["completion_quarter"],
+                "housing_class": r.get("housing_class") or "",
+                "photos": (ph or [])[:5],
+                "developer_url": dev_url,
+                "address": r.get("address") or "",
+            })
+        return JSONResponse({"points": pts})
 
     @router.get("/admin/api/newbuild-complex/{complex_id}/units")
     async def newbuild_complex_units(request: Request, complex_id: int, rooms: str = ""):

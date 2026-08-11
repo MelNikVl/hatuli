@@ -7,3 +7,5 @@ bot.db
 google_creds.json
 static/cache/photos/
 backups/
+.claude/
+hype_tracker/hype.db
