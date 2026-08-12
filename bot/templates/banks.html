@@ -24,7 +24,7 @@
   {% set mins = b.programs|map(attribute='rate_min')|select('!=', None)|list %}
   <div class="bnk-card" data-has-new="{{ '1' if has_new else '0' }}" data-has-secondary="{{ '1' if has_sec else '0' }}"
        style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;">
-    <a href="/admin/banks/{{ b.slug }}" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;flex:1;">
+    <a href="/banks/{{ b.slug }}" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;flex:1;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
         <div style="display:flex;align-items:center;gap:9px;min-width:0;">
           {% if b.logo_url %}

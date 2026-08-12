@@ -41,7 +41,7 @@
           {{ r.rooms or '?' }}-комн{% if r.area %}, {{ r.area }} м²{% endif %} ·
           {{ (r.price/1000000)|round(1) if r.price else '—' }} млн ·
           {{ '👤 хозяин' if r.is_owner else ('🏢 ' + r.seller_name if r.seller_name else '🏢 риелтор') }}
-          {% if r.complex_name %}<br><a href="/admin/complex/find?name={{ r.complex_name | urlencode }}" style="color:#d4af37;font-weight:800;">{{ r.complex_name }}</a>{% endif %}
+          {% if r.complex_name %}<br><a href="/complex/find?name={{ r.complex_name | urlencode }}" style="color:#d4af37;font-weight:800;">{{ r.complex_name }}</a>{% endif %}
         </div>
       </div>
     </div>

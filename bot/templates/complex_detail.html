@@ -3,7 +3,7 @@
 <div class="page-title">🏢 Жилой Комплекс {{ cx.name }}
   <span id="cx-fav-star" onclick="toggleFavComplex()" title="В избранное — уведомления в Telegram об изменениях в ЖК" style="cursor:pointer;font-size:22px;vertical-align:middle;color:#ccc;user-select:none;">☆</span>
   {% if cx.live_url %}<a href="{{ cx.live_url }}" target="_blank" style="display:inline-block;font-size:13px;font-weight:800;padding:6px 14px;border-radius:8px;background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;text-decoration:none;margin-left:8px;box-shadow:0 2px 6px rgba(220,38,38,.35);">🔴 Прямая трансляция</a>{% endif %}
-  {% if developer %}<small style="font-size:14px;font-weight:800;">· 🏗 Застройщик {% if developer_logo %}<img src="{{ developer_logo }}" alt="" style="height:20px;max-width:80px;object-fit:contain;background:#fff;border-radius:4px;padding:1px 4px;vertical-align:middle;margin-right:4px;">{% endif %}{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer }}</span>{% endif %}</small>{% endif %}
+  {% if developer %}<small style="font-size:14px;font-weight:800;">· 🏗 Застройщик {% if developer_logo %}<img src="{{ developer_logo }}" alt="" style="height:20px;max-width:80px;object-fit:contain;background:#fff;border-radius:4px;padding:1px 4px;vertical-align:middle;margin-right:4px;">{% endif %}{% if cx.developer_id %}<a href="/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer }}</span>{% endif %}</small>{% endif %}
   <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% elif cx.housing_class_estimate %} · {{ cx.housing_class_estimate }}{% endif %}</small>
   {% if cx.description %}
   <div style="margin-top:10px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-left:3px solid #eab308;border-radius:8px;font-size:13px;line-height:1.55;color:var(--text);">
@@ -189,7 +189,7 @@ async function toggleFavComplex() {
     {% endif %}
     <table style="font-size:14px;margin-top:10px;border-collapse:collapse;width:100%;">
       <tr><td style="padding:5px 14px 5px 0;color:#888;width:180px;">📍 Адрес</td><td><b>{{ cx.address or cx_address or 'не определён' }}</b></td></tr>
-      <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{% if developer_logo %}<img src="{{ developer_logo }}" alt="" style="height:22px;max-width:90px;object-fit:contain;background:#fff;border-radius:4px;padding:1px 4px;vertical-align:middle;margin-right:4px;">{% endif %}{% if cx.developer_id %}<a href="/admin/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer or '—' }}</span>{% endif %}</b></td></tr>
+      <tr><td style="padding:5px 14px 5px 0;color:#888;">🏗 Застройщик</td><td><b>{% if developer_logo %}<img src="{{ developer_logo }}" alt="" style="height:22px;max-width:90px;object-fit:contain;background:#fff;border-radius:4px;padding:1px 4px;vertical-align:middle;margin-right:4px;">{% endif %}{% if cx.developer_id %}<a href="/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer or '—' }}</span>{% endif %}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Класс жилья</td><td><b>{{ cx.housing_class or '—' }}</b>{% if not cx.housing_class and cx.housing_class_estimate %} <span style="color:#888;font-weight:400;font-size:12.5px;" title="Автоматическая оценка по медианной высоте потолков и цене/м² объявлений в ЖК относительно города — не официальная классификация, см. критерии в Инфо">{{ cx.housing_class_estimate }} ⓘ</span>{% endif %}</td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Год постройки/сдачи</td><td><b>{{ cx.year_built or '—' }}</b></td></tr>
       <tr><td style="padding:5px 14px 5px 0;color:#888;">Район</td><td><b>{{ cx.district or '—' }}</b></td></tr>
@@ -291,7 +291,7 @@ async function toggleFavComplex() {
       {% endfor %}
     </div>
     {% if not (cx.has_parking or cx.has_security or cx.has_closed_territory or cx.has_playground) %}
-    <div style="font-size:12px;color:#888;margin-top:6px;">Пока не заполнено — редактируется в <a href="/admin/complexes" style="color:#2563eb;">списке ЖК</a>.</div>
+    <div style="font-size:12px;color:#888;margin-top:6px;">Пока не заполнено — редактируется в <a href="/complexes" style="color:#2563eb;">списке ЖК</a>.</div>
     {% endif %}
   </div>
 
@@ -407,7 +407,7 @@ async function toggleFavComplex() {
   {% if newbuild_units_list %}
   <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
     {% for u in newbuild_units_list %}
-    <a href="/admin/listing/nb-{{ u.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+    <a href="/listing/nb-{{ u.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
       {% if u.layout_photo_url %}<img src="{{ u.layout_photo_url }}" loading="lazy" style="width:100%;height:120px;object-fit:contain;background:#f7f7f7;display:block;">{% else %}<div style="width:100%;height:120px;background:var(--bg);"></div>{% endif %}
       <div style="padding:7px 8px;">
         <div style="font-weight:800;font-size:13px;">{{ '%.1f'|format(u.price/1e6) if u.price else 'по запросу' }}{% if u.price %} млн ₸{% endif %}</div>

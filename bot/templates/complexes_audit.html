@@ -37,7 +37,7 @@
   </tr>
   {% for r in rows %}
   <tr{{ ' style="background:#fef2f2;"' | safe if r.orphan and not r.has_origin }}>
-    <td><a href="/admin/complex/{{ r.id }}" style="color:inherit;font-weight:600;">{{ r.name }}</a></td>
+    <td><a href="/complex/{{ r.id }}" style="color:inherit;font-weight:600;">{{ r.name }}</a></td>
     <td>{{ r.active_cnt }}</td>
     <td class="{{ 'aud-ok' if r.has_developer else 'aud-no' }}">{{ '✅ ' + r.developer_name if r.has_developer else '✕' }}</td>
     <td class="{{ 'aud-ok' if r.has_desc else 'aud-no' }}">{{ '✅' if r.has_desc else '✕' }}</td>

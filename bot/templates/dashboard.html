@@ -93,7 +93,7 @@ html, body { overflow: hidden !important; }
    а не начинался там же, где логотип. Задача 2026-08-13: левый край меню
    фильтров = левый край логотипа (оба в итоге упираются в те же 36px
    .pub-row1/.main padding, см. .filterbar margin/padding компенсацию выше). */
-.filterbar-inner { display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:nowrap; max-width:1450px; }
+.filterbar-inner { display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:nowrap; max-width:1450px; margin-left:max(0px, calc((100% - 1100px) / 2 + 24px)); }
 .filterbar select, .filterbar input[type=number] { padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; }
 .rooms-dd { position:relative; flex-shrink:0; }
 .rooms-dd-btn { padding:7px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; cursor:pointer; white-space:nowrap; }
@@ -198,7 +198,7 @@ html, body { overflow: hidden !important; }
     <!-- Подсветка кнопки, пока включена тепловая карта — аккуратно, не
        кислотно (задача 2026-08-13: "подсвети немного и аккуратно"), просто
        тонкая рамка + мягкий фон, без смены цвета текста/иконки. -->
-    <button type="button" class="rooms-dd-btn" id="heat-dd-btn" onclick="toggleFbarDropdown(event,'heat-dd-btn')">🌡 Тепловые карты</button>
+    <button type="button" class="rooms-dd-btn" id="heat-dd-btn" onclick="toggleFbarDropdown(event,'heat-dd-btn')" style="background:linear-gradient(135deg,#2563eb 0%,#2563eb 31%,transparent 31.5%),var(--bg);">Тепловые карты</button>
     <!-- Открывается вниз-влево (right:0, не left:0 из общего .rooms-dd-panel)
          — задача 2026-08-13, раньше уходила вправо и обрезалась/налезала. -->
     <div class="rooms-dd-panel" id="heat-dd-panel" style="left:auto;right:0;">
@@ -209,7 +209,8 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
         <button type="button" class="heat-btn" data-mode="transport" onclick="toggleHeat('transport')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Транспортная доступность</button>
         <button type="button" class="heat-btn" data-mode="hype" onclick="toggleHeat('hype')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔥 Хайп (новости)</button>
-        <button type="button" class="heat-btn" data-mode="population" onclick="toggleHeat('population')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">👥 Плотность нас.</button>
+        <button type="button" class="heat-btn" data-mode="population" onclick="toggleHeat('population')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Плотность нас.</button>
+        <button type="button" class="heat-btn" data-mode="interest" onclick="toggleHeat('interest')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Интерес (просмотры)</button>
         <button type="button" class="heat-btn" data-mode="count" onclick="toggleHeat('count')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔢 Кол-во объявлений</button>
         <button type="button" class="heat-btn" data-mode="demolition" onclick="toggleHeat('demolition')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🏚 Снос домов</button>
         <button type="button" class="heat-btn" data-mode="crime" onclick="toggleHeat('crime')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🚨 Преступность</button>
@@ -242,7 +243,7 @@ html, body { overflow: hidden !important; }
   </div>
 
   <!-- Поиск по ссылке с Крыши переехал на отдельную страницу Аналитики
-       (/admin/krisha-lookup, см. задачу) — тут больше не показывается. -->
+       (/krisha-lookup, см. задачу) — тут больше не показывается. -->
 </div>
 </div>
 
@@ -300,6 +301,12 @@ html, body { overflow: hidden !important; }
 #side-panel-head.has-count { display:flex; }
 #side-panel-body { flex:1; overflow-y:auto; overflow-x:hidden; padding:14px 16px 24px; display:grid; grid-template-columns:1fr; gap:14px; align-content:start; }
 .side-card { background:var(--bg); border:1px solid var(--border); border-radius:11px; overflow:clip; min-width:0; transition:box-shadow .2s ease; }
+/* Карточки объявлений на главной (светлая тема): текст чёрный, ссылки
+   подчёркнуты (задача 2026-08-13). В тёмной теме не трогаем — чёрный текст
+   на тёмном фоне нечитаем. !important перебивает инлайновые цвета карточек. */
+:root[data-theme="light"] #side-panel-body .side-card,
+:root[data-theme="light"] #side-panel-body .side-card * { color:#000 !important; }
+:root[data-theme="light"] #side-panel-body .side-card a { text-decoration:underline; }
 .side-card-flash { animation: sideCardFlash 0.6s ease-in-out 5; border-color:#2563eb !important; }
 .nb-cx-popup .leaflet-popup-content-wrapper { padding:0; border-radius:12px; overflow:hidden; }
 .nb-cx-popup .leaflet-popup-content { margin:0; width:280px !important; }
@@ -513,7 +520,7 @@ function openMortgageCalcPopup(priceTenge) {
     document.body.appendChild(overlay);
   }
   const priceM = priceTenge ? (priceTenge / 1e6).toFixed(1) : '';
-  document.getElementById('mc-popup-iframe').src = '/admin/mortgage-calculator?embed=1' + (priceM ? '&price=' + priceM : '');
+  document.getElementById('mc-popup-iframe').src = '/mortgage-calculator?embed=1' + (priceM ? '&price=' + priceM : '');
   overlay.style.display = 'flex';
 }
 function closeMortgageCalcPopup() {
@@ -1577,13 +1584,13 @@ function openComplexPopup(c, layer) {
   <div style="padding:${photoHtml ? '9px 10px 10px' : '4px 4px 4px'};">
     <div style="font-weight:800;font-size:15px;">ЖК ${d.name}</div>
     <div style="font-size:12px;color:#666;margin-top:2px;">
-      ${d.housing_class ? d.housing_class + ' класс · ' : ''}${d.developer ? (d.developer_id ? `<a href="/admin/developer/${d.developer_id}">${d.developer}</a>` : d.developer) : 'застройщик не указан'}${d.year_built ? ' · ' + d.year_built + ' г.' : ''}
+      ${d.housing_class ? d.housing_class + ' класс · ' : ''}${d.developer ? (d.developer_id ? `<a href="/developer/${d.developer_id}">${d.developer}</a>` : d.developer) : 'застройщик не указан'}${d.year_built ? ' · ' + d.year_built + ' г.' : ''}
     </div>
     ${d.avg_price_m2 ? `<div style="font-size:13px;margin-top:5px;">Средняя цена: <b>${Math.round(d.avg_price_m2/1000)} тыс ₸/м²</b></div>` : ''}
     <div style="font-size:12.5px;color:#555;margin-top:2px;">Объявлений в базе: ${d.listings_count}</div>
     ${d.description ? `<div style="font-size:12px;color:#555;margin-top:6px;padding-top:6px;border-top:1px solid #eee;">${d.description}</div>` : ''}
     ${listingsHtml}
-    <a href="/admin/complex/${d.id}" style="display:block;text-align:center;margin-top:9px;padding:7px;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;text-decoration:none;font-size:13px;">Полная карточка ЖК →</a>
+    <a href="/complex/${d.id}" style="display:block;text-align:center;margin-top:9px;padding:7px;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;text-decoration:none;font-size:13px;">Полная карточка ЖК →</a>
   </div>
 </div>`);
   }).catch(() => {});
@@ -1618,12 +1625,12 @@ function newbuildComplexPopupHtml(p, photoIdx) {
     <button onclick="event.stopPropagation();nbPopupNav(${p.id},-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.4);color:#fff;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:17px;line-height:1;">‹</button>
     <button onclick="event.stopPropagation();nbPopupNav(${p.id},1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.4);color:#fff;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:17px;line-height:1;">›</button>
     <div style="position:absolute;left:0;right:0;bottom:6px;display:flex;justify-content:center;gap:4px;">${photos.map((_, k) => `<span style="width:6px;height:6px;border-radius:50%;background:${k === idx ? '#fff' : 'rgba(255,255,255,.5)'};box-shadow:0 0 2px rgba(0,0,0,.7);"></span>`).join('')}</div>` : '';
-  // Застройщик — ссылка на нашу страницу застройщика /admin/developer/{id}.
+  // Застройщик — ссылка на нашу страницу застройщика /developer/{id}.
   const devInner = p.logo
     ? `<img src="${p.logo}" style="width:18px;height:18px;border-radius:4px;object-fit:contain;background:#fff;vertical-align:-4px;margin-right:5px;padding:1px;">${escapeHtml(p.developer || '')}`
     : escapeHtml(p.developer || '');
   const devTxt = p.developer_id
-    ? `<a href="/admin/developer/${p.developer_id}" style="color:#666;text-decoration:none;">${devInner}</a>`
+    ? `<a href="/developer/${p.developer_id}" style="color:#666;text-decoration:none;">${devInner}</a>`
     : devInner;
   const yearTxt = (p.completion_year ? `${p.completion_quarter ? p.completion_quarter + ' кв. ' : ''}${p.completion_year}` : '');
   return `
@@ -1639,7 +1646,7 @@ function newbuildComplexPopupHtml(p, photoIdx) {
       ${p.housing_class ? `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${escapeHtml(p.housing_class)}</span>` : ''}
       ${yearTxt ? `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${escapeHtml(yearTxt)}</span>` : ''}
     </div>
-    <a href="/admin/complex/${p.id}" style="display:inline-block;margin-top:9px;padding:6px 12px;border-radius:8px;background:#16a34a;color:#fff;font-size:12.5px;font-weight:700;text-decoration:none;">Подробнее про ЖК</a>
+    <a href="/complex/${p.id}" style="display:inline-block;margin-top:9px;padding:6px 12px;border-radius:8px;background:#16a34a;color:#fff;font-size:12.5px;font-weight:700;text-decoration:none;">Подробнее про ЖК</a>
   </div>
 </div>`;
 }
@@ -1783,7 +1790,7 @@ function buildNewbuildUnitCardHtml(d, u) {
     ? `<img src="${d.developer_logo}" style="width:16px;height:16px;border-radius:50%;object-fit:contain;vertical-align:-3px;margin-right:4px;">`
     : '';
   const devHtml = d.developer_id
-    ? `<a href="/admin/developer/${d.developer_id}" onclick="event.stopPropagation()" style="color:#888;font-weight:600;text-decoration:none;">${logoHtml}${escapeHtml(d.developer || '')}</a>`
+    ? `<a href="/developer/${d.developer_id}" onclick="event.stopPropagation()" style="color:#888;font-weight:600;text-decoration:none;">${logoHtml}${escapeHtml(d.developer || '')}</a>`
     : `<span style="color:#888;font-weight:600;">${logoHtml}${escapeHtml(d.developer || 'застройщик не указан')}</span>`;
   return `
 <div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openDetailModal('${cardId}', event)">
@@ -1797,7 +1804,7 @@ function buildNewbuildUnitCardHtml(d, u) {
     </div>
     ${d.address ? `<div style="font-size:12.5px;color:var(--text);margin-top:6px;">📍 Адрес: ${escapeHtml(d.address)}</div>` : ''}
     <div style="font-size:12.5px;color:var(--text);margin-top:2px;">Год сдачи: ${escapeHtml(String(sdача))}</div>
-    <div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/${d.id}" onclick="event.stopPropagation()" style="font-weight:600;">ЖК ${escapeHtml(d.name)}</a> · ${devHtml}</div>
+    <div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/${d.id}" onclick="event.stopPropagation()" style="font-weight:600;">ЖК ${escapeHtml(d.name)}</a> · ${devHtml}</div>
     ${d.sales_phone ? `<div onclick="event.stopPropagation()" style="margin-top:8px;">${contactDevBtnHtml(d, u.id)}</div>` : ''}
   </div>
 </div>`;
@@ -1898,7 +1905,7 @@ function buildRentalCardHtml(pt) {
   }
   const ownerPillHtml = `<span style="${pillStyle}margin:0;background:${pt.is_owner ? '#dcfce7' : '#e5e7eb'};color:${pt.is_owner ? '#166534' : '#374151'};">${pt.is_owner ? 'собственник' : 'риелтор'}</span>`;
   const cxLine = pt.complex
-    ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
+    ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
     : '';
   // Упрощённая карточка (см. B2 в задаче) — только фото/цена/пилюли/ЖК,
   // без банков/описания/кнопок отдельной строкой; вся карточка кликабельна.
@@ -2520,11 +2527,11 @@ function renderSaleBatch(d, opts) {
         : '🏗 ';
       const devTxt = pt.developer_name
         ? (pt.developer_id
-            ? ` · <a href="/admin/developer/${pt.developer_id}" onclick="event.stopPropagation()" style="color:#888;font-weight:600;">${devLogoHtml}${escapeHtml(pt.developer_name)}</a>`
+            ? ` · <a href="/developer/${pt.developer_id}" onclick="event.stopPropagation()" style="color:#888;font-weight:600;">${devLogoHtml}${escapeHtml(pt.developer_name)}</a>`
             : ` · <span style="color:#888;font-weight:600;">${devLogoHtml}${escapeHtml(pt.developer_name)}</span>`)
         : '';
       const cxLine = pt.complex
-        ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
+        ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
         : (pt.address ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">📍 <span style="font-weight:600;">${escapeHtml(pt.address.replace(/\s*—.*$/, '').trim())}</span>${devTxt}</div>`
            : (devTxt ? `<div style="font-size:1em;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : ''));
       const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
@@ -2909,7 +2916,7 @@ const heatLayer = L.layerGroup();
 // draw-функции не знают о split-режиме, просто рисуют в heatTargetLayer.
 let heatTargetLayer = heatLayer;
 let heatMode = null;
-let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, count: null};
+let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, interest: null, count: null};
 let noiseDefaultsApplied = false;  // гекс 40м / прозрачность 50% при первом включении шума за сессию
 // Детальный слой шума (30м, по фактическим точкам дорог) при ~39к точек по
 // городу даёт под 100к+ отдельных гексов, если рисовать их все разом — это
@@ -3141,6 +3148,25 @@ function drawPopulationHeat(hexes) {
     L.polygon(transportHexCorners(h.lat, h.lon, 100), {
       color: 'transparent', weight: 0, fillColor: popDensityColor(t), fillOpacity: 0.35 + tGamma * 0.45,
     }).bindTooltip(`${h.name || ''} · население: ~${Math.round(h.population).toLocaleString('ru-RU')} чел. (${h.complexes} ЖК)`, {sticky:true})
+      .addTo(heatTargetLayer);
+  });
+}
+
+// «Интерес» — просматриваемость объявлений (задача 2026-08-13): те же
+// гексы (100м) и та же тепловая палитра, что у плотности населения, но
+// значение = сумма просмотров (views_count) объявлений в гексе. Палитра и
+// гамма переиспользуются (POP_STOPS/POP_GAMMA/popDensityColor) — визуал
+// ровно «как у плотности населения», как просил пользователь.
+function drawInterestHeat(hexes) {
+  const vals = (hexes || []).map(h => h.views).filter(v => v > 0);
+  if (!vals.length) return;
+  const hi = percentile(vals, 0.92) || Math.max(...vals) || 1;
+  (hexes || []).forEach(h => {
+    const t = Math.min(1, h.views / hi);
+    const tGamma = Math.pow(t, POP_GAMMA);
+    L.polygon(transportHexCorners(h.lat, h.lon, 100), {
+      color: 'transparent', weight: 0, fillColor: popDensityColor(t), fillOpacity: 0.35 + tGamma * 0.45,
+    }).bindTooltip(`${h.name || ''} · просмотров: ${h.views.toLocaleString('ru-RU')} · в среднем ${h.avg} на объявление`, {sticky:true})
       .addTo(heatTargetLayer);
   });
 }
@@ -3660,6 +3686,9 @@ async function loadHeatData(mode) {
   } else if (mode === 'population') {
     const d = await fetch('/admin/api/population-hexes').then(r => r.json());
     heatCache.population = d.hexes || [];
+  } else if (mode === 'interest') {
+    const d = await fetch('/admin/api/views-hexes').then(r => r.json());
+    heatCache.interest = d.hexes || [];
   } else if (mode === 'count') {
     // "Кол-во объявлений" раньше был чистым снимком текущего момента —
     // только то, что активно прямо сейчас. По задаче (2026-08-13):
@@ -3825,6 +3854,8 @@ function renderHeatMode(mode, data) {
     drawHypeNewsHeat(data);
   } else if (mode === 'population') {
     drawPopulationHeat(data);
+  } else if (mode === 'interest') {
+    drawInterestHeat(data);
   } else if (mode === 'count') {
     drawListingCountHeat(data);
   } else if (mode === 'demolition') {
@@ -3851,7 +3882,7 @@ let splitMap = null, splitHeatLayer = null, splitSyncing = false;
 const HEAT_MODE_LABELS = {
   sale: 'Цены продажи', rental: 'Цены аренды', noise: 'Внешний шум',
   transport: 'Транспортная доступность', hype: '🔥 Хайп (новости)',
-  population: '👥 Плотность нас.', count: '🔢 Кол-во объявлений',
+  population: 'Плотность нас.', interest: 'Интерес (просмотры)', count: 'Кол-во объявлений',
   demolition: '🏚 Снос домов', crime: '🚨 Преступность',
   price_m2: '📐 Цена за м²', yield: '💰 Доходность', infra: '🏥 Инфраструктура',
   novelty: '🌿 Новизна домов',
@@ -4083,13 +4114,13 @@ function renderNewbuildDetail(unitId, content) {
       ${d.section ? `<span style="${pillStyle}">подъезд ${escapeHtml(d.section)}</span>` : ''}
     </div>
     <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
-      <div style="font-weight:800;font-size:17px;"><a href="/admin/complex/${d.complex_id}" style="color:inherit;text-decoration:none;">🏢 ЖК ${escapeHtml(d.complex_name || '')}</a></div>
+      <div style="font-weight:800;font-size:17px;"><a href="/complex/${d.complex_id}" style="color:inherit;text-decoration:none;">🏢 ЖК ${escapeHtml(d.complex_name || '')}</a></div>
       <div style="font-size:13px;color:var(--text);margin-top:4px;">
-        ${d.developer_id ? `<a href="/admin/developer/${d.developer_id}">${escapeHtml(d.developer_name || '')}</a>` : escapeHtml(d.developer_name || 'застройщик не указан')}
+        ${d.developer_id ? `<a href="/developer/${d.developer_id}">${escapeHtml(d.developer_name || '')}</a>` : escapeHtml(d.developer_name || 'застройщик не указан')}
         · сдача ${sdача}${d.district ? ' · ' + escapeHtml(d.district) : ''}
       </div>
       ${d.address ? `<div style="font-size:12.5px;color:#888;margin-top:2px;">📍 ${escapeHtml(d.address)}</div>` : ''}
-      <div style="margin-top:8px;"><a href="/admin/complex/${d.complex_id}" style="font-size:12.5px;color:#2563eb;font-weight:600;">Страница ЖК →</a></div>
+      <div style="margin-top:8px;"><a href="/complex/${d.complex_id}" style="font-size:12.5px;color:#2563eb;font-weight:600;">Страница ЖК →</a></div>
     </div>
     ${d.complex_description ? `<div style="font-size:13.5px;color:var(--text);margin-top:14px;padding-top:14px;border-top:1px solid var(--border);line-height:1.5;white-space:pre-wrap;">${escapeHtml(d.complex_description)}</div>` : ''}
     <div style="margin-top:16px;max-width:280px;">${contactDevBtnHtml({sales_phone: d.sales_phone}, d.id)}</div>
@@ -4353,7 +4384,7 @@ ${photoHtml}
   <div style="margin-top:8px;">${modalPillsHtml}${aiPlusesHtml}</div>
   ${d.seller_name ? `<div style="font-size:13px;color:var(--text);margin-top:4px;">${escapeHtml(d.seller_name)}</div>` : ''}
   <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
-  ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/admin/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
+  ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
 </div>
 ${dealBadgesHtml}
 ${bargainHtml}
@@ -4495,7 +4526,7 @@ document.addEventListener('keydown', (e) => {
 // кнопки назад/вперёд браузера открывают/закрывают попап как обычную
 // навигацию, а прямой заход на /listing/{id} открывает карту с уже
 // раскрытым попапом (см. блок автооткрытия по listing_id ниже).
-// Старый /admin/listing/{id} тоже матчим (сервер уже 301-редиректит, но
+// Старый /listing/{id} тоже матчим (сервер уже 301-редиректит, но
 // клиент может держать в истории/кэше старую ссылку).
 function modalIdFromPath() {
   const m = location.pathname.match(/^\/(?:admin\/)?listing\/([^/]+)\/?$/);

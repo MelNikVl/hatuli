@@ -37,7 +37,7 @@
 {% if card_devs %}
 <div class="dev-cards">
   {% for d in card_devs %}
-  <a class="dev-card" href="/admin/developer/{{ d.id }}">
+  <a class="dev-card" href="/developer/{{ d.id }}">
     {% if d.photo_url %}
     <img class="dev-card-photo" src="{{ d.photo_url }}" alt="{{ d.name }}" loading="lazy">
     {% else %}
@@ -65,7 +65,7 @@
   <tr>
     <td style="display:flex;align-items:center;gap:8px;">
       {% if d.logo %}<img src="{{ d.logo }}" alt="" style="height:22px;max-width:70px;object-fit:contain;background:#fff;border-radius:4px;padding:2px 4px;border:1px solid var(--border);">{% endif %}
-      <a href="/admin/developer/{{ d.id }}" style="color:inherit;font-weight:600;">{{ d.name }}</a>
+      <a href="/developer/{{ d.id }}" style="color:inherit;font-weight:600;">{{ d.name }}</a>
     </td>
     <td>{{ d.active_cnt }}</td>
     <td>{{ d.cx_cnt }}</td>

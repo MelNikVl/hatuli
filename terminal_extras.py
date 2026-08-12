@@ -371,6 +371,40 @@ def make_extras_router(templates) -> APIRouter:
         hexes.sort(key=lambda h: h["score"], reverse=True)
         return JSONResponse({"hexes": hexes})
 
+    @router.get("/admin/api/views-hexes")
+    async def views_hexes_api(request: Request):
+        # «Интерес» — просматриваемость объявлений (задача 2026-08-13):
+        # гексы 100м (та же сетка, что у hype/transport/population-hexes)
+        # по объявлениям apartment_listings с views_count > 0. Значение
+        # гекса = суммарные просмотры; в тултипе — среднее на объявление.
+        from bot.db.pg import fetch as pg_fetch
+        from bot.core.hexgrid import hex_id, hex_center
+        rows = await pg_fetch("""
+            SELECT lat, lon, views_count
+            FROM apartment_listings
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+              AND views_count IS NOT NULL AND views_count > 0
+              AND lat BETWEEN 50.0 AND 53.0 AND lon BETWEEN 69.0 AND 73.0
+        """)
+        EDGE_M = 100.0
+        cells: dict[str, list] = {}
+        for r in rows:
+            hid = hex_id(float(r["lat"]), float(r["lon"]), EDGE_M)
+            cell = cells.setdefault(hid, [0, 0])  # [views, count]
+            cell[0] += r["views_count"] or 0
+            cell[1] += 1
+        hexes = []
+        for hid, (vsum, cnt) in cells.items():
+            clat, clon = hex_center(hid, EDGE_M)
+            hexes.append({
+                "name": f"{vsum} просмотров · {cnt} объявл.",
+                "lat": clat, "lon": clon,
+                "views": vsum, "listings": cnt,
+                "avg": round(vsum / cnt, 1) if cnt else 0,
+            })
+        hexes.sort(key=lambda h: h["views"], reverse=True)
+        return JSONResponse({"hexes": hexes[:2500]})
+
     @router.get("/admin/api/hype-tracker")
     async def hype_tracker_info(request: Request):
         db = _hype_db_conn()
@@ -2681,6 +2715,7 @@ def make_extras_router(templates) -> APIRouter:
             "WHERE kind IN ('school', 'kindergarten') LIMIT 3000")
         return JSONResponse({"poi": [dict(r) for r in rows]})
 
+    @router.get("/complex/find")
     @router.get("/admin/complex/find")
     async def complex_find(request: Request, name: str = ""):
         """Переход на карточку ЖК по имени (для ссылок из попапов карты).
@@ -4657,12 +4692,21 @@ def make_extras_router(templates) -> APIRouter:
                 hp_contact = cand
         hp_projects = [dict(r) for r in hp_rows] or None
 
+        # Программы покупки (ипотека/рассрочка/50-50) — блок на странице
+        # застройщика, обновляются еженедельным крон-скриптом
+        # developer_programs_check.py.
+        programs = await fetch(
+            "SELECT title, description, url, source, sort_order "
+            "FROM developer_programs WHERE developer_id = $1 "
+            "ORDER BY sort_order, title", dev_id)
+
         return templates.TemplateResponse("developer_detail.html", {
             "request": request,
             "dev": dict(dev),
             "complexes": [dict(r) for r in complexes],
             "hp_contact": hp_contact,
             "hp_projects": hp_projects,
+            "programs": [dict(r) for r in programs],
         })
 
     # ── Дороги (кол-во полос) — для предварительной карты шума ─────────────

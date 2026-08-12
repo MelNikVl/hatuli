@@ -44,7 +44,7 @@
       <td style="padding:8px;text-align:center;">
         <input type="checkbox" class="hc-del-cb" name="ids" value="{{ c.id }}" onclick="hcUpdateBulkBtn()" title="Отметить для удаления">
       </td>
-      <td style="padding:8px;font-weight:700;"><a href="/admin/complex/find?name={{ c.name|urlencode }}" style="color:var(--text);text-decoration:none;">{{ c.name }}</a></td>
+      <td style="padding:8px;font-weight:700;"><a href="/complex/find?name={{ c.name|urlencode }}" style="color:var(--text);text-decoration:none;">{{ c.name }}</a></td>
       <td style="padding:8px;color:#888;">{{ c.district or '—' }}</td>
       <td style="padding:8px;color:#888;">{{ c.construction_type or '—' }}</td>
       <td style="padding:8px;text-align:right;font-weight:700;">{{ c.listings_count or 0 }}</td>

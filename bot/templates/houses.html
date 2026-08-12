@@ -41,7 +41,7 @@
     <td><b>{{ r['addr'] }}</b></td>
     <td>{{ r['listings_cnt'] }}</td>
     <td>{% if r['year_built'] %}<span class="aud-ok">{{ r['year_built'] }}</span>{% else %}<span class="aud-no">—</span>{% endif %}</td>
-    <td>{% if r['zhk_name'] %}<a href="/admin/complex/find?name={{ r['zhk_name'] }}" style="color:inherit;">{{ r['zhk_name'][:30] }}</a>{% else %}<span style="color:#aaa;">—</span>{% endif %}</td>
+    <td>{% if r['zhk_name'] %}<a href="/complex/find?name={{ r['zhk_name'] }}" style="color:inherit;">{{ r['zhk_name'][:30] }}</a>{% else %}<span style="color:#aaa;">—</span>{% endif %}</td>
     <td>{% if r['with_coords'] %}<span class="aud-ok">✓</span>{% else %}<span class="aud-no">✕</span>{% endif %}</td>
   </tr>
   {% endfor %}

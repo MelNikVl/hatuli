@@ -7,7 +7,7 @@
   <small style="font-size:13px;color:#888;font-weight:400;">{{ total }} всего в базе{% if shown < total %} · показано {{ shown }}{% endif %}</small>
 </div>
 <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-  <form method="get" action="/admin/complexes" style="display:flex;gap:8px;align-items:center;margin-left:auto;">
+  <form method="get" action="/complexes" style="display:flex;gap:8px;align-items:center;margin-left:auto;">
     <input type="text" name="search" value="{{ filters.search }}" placeholder="Поиск по названию..." style="padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font-size:13px;">
     <button type="submit" style="padding:6px 14px;background:#1a1a2e;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;">Найти</button>
   </form>
@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', function() {
         `Застройщик: ${c.developer}`,
         {sticky: true}
       );
-      m.on('click', () => location.href = '/admin/complex/' + c.id);
+      m.on('click', () => location.href = '/complex/' + c.id);
       return m;
     });
     cluster.addLayers(markers);
@@ -98,7 +98,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const body = document.getElementById('cx-cluster-panel-body');
     const shown = items.slice(0, 3);
     body.innerHTML = shown.map(c => `
-      <a href="/admin/complex/${c.id}" style="display:flex;gap:8px;text-decoration:none;color:inherit;padding:8px 0;border-bottom:1px solid var(--border);">
+      <a href="/complex/${c.id}" style="display:flex;gap:8px;text-decoration:none;color:inherit;padding:8px 0;border-bottom:1px solid var(--border);">
         ${c.photo ? `<img src="${c.photo}" style="width:64px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0;" onerror="this.style.display='none'">` : `<div style="width:64px;height:48px;border-radius:6px;background:var(--bg);flex-shrink:0;"></div>`}
         <div style="min-width:0;">
           <div style="font-weight:700;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.name}</div>
@@ -161,8 +161,8 @@ tr:last-child td{border-bottom:none}
   </tr>
   {% for c in complexes %}
   <tr>
-    <td><a href="/admin/complex/{{ c.id }}" style="color:var(--text);font-weight:700;text-decoration:none;">{{ c.name }}</a></td>
-    <td>{% if c.developer_name %}{% if c.developer_id %}<a href="/admin/developer/{{ c.developer_id }}" style="color:inherit;">{{ c.developer_name }}</a>{% else %}{{ c.developer_name }}{% endif %}{% else %}<span style="color:#888;">—</span>{% endif %}</td>
+    <td><a href="/complex/{{ c.id }}" style="color:var(--text);font-weight:700;text-decoration:none;">{{ c.name }}</a></td>
+    <td>{% if c.developer_name %}{% if c.developer_id %}<a href="/developer/{{ c.developer_id }}" style="color:inherit;">{{ c.developer_name }}</a>{% else %}{{ c.developer_name }}{% endif %}{% else %}<span style="color:#888;">—</span>{% endif %}</td>
     <td>{{ c.district or '—' }}</td>
     <td>{{ c.year_built or '—' }}</td>
     <td>{{ c.listings_count or 0 }}</td>

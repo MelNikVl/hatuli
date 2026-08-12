@@ -2,9 +2,9 @@
 {% block content %}
 <div class="page-title">🔗 Поиск объявления по ссылке</div>
 <div style="display:flex;gap:4px;margin-bottom:16px;">
-  <a href="/admin/info" style="padding:7px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;text-decoration:none;">Общее</a>
-  <a href="/admin/investments" style="padding:7px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;text-decoration:none;">💰 Инвестиции</a>
-  <a href="/admin/krisha-lookup" style="padding:7px 16px;border-radius:8px;background:#2563eb;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">🔗 Поиск по ссылке</a>
+  <a href="/info" style="padding:7px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;text-decoration:none;">Общее</a>
+  <a href="/investments" style="padding:7px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;text-decoration:none;">💰 Инвестиции</a>
+  <a href="/krisha-lookup" style="padding:7px 16px;border-radius:8px;background:#2563eb;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">🔗 Поиск по ссылке</a>
 </div>
 
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;max-width:560px;">
@@ -29,7 +29,7 @@
 // первую цифровую последовательность из 5+ цифр, как и раньше в строке
 // фильтров на карте (см. историю lookupKrishaUrl в dashboard.html). Тут
 // вместо openDetailModal(...) — просто переход на уже существующий
-// /admin/listing/{id}, который сам открывает тот же большой попап.
+// /listing/{id}, который сам открывает тот же большой попап.
 function lookupKrishaUrl() {
   const input = document.getElementById('krisha-url-input');
   const errEl = document.getElementById('krisha-lookup-error');
@@ -40,7 +40,7 @@ function lookupKrishaUrl() {
     errEl.style.display = 'block';
     return;
   }
-  location.href = '/admin/listing/' + m[1];
+  location.href = '/listing/' + m[1];
 }
 </script>
 {% endblock %}

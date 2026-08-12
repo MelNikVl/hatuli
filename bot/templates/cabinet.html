@@ -58,7 +58,7 @@ document.getElementById('login-btn').onclick = async function() {
   {% for c in favorite_complexes %}
   <div class="fav-item">
     <div style="flex:1;">
-      <a href="/admin/complex/{{ c.complex_id }}" style="color:inherit;text-decoration:none;font-weight:700;">{{ c.name or ('ЖК #' + c.complex_id|string) }}</a>
+      <a href="/complex/{{ c.complex_id }}" style="color:inherit;text-decoration:none;font-weight:700;">{{ c.name or ('ЖК #' + c.complex_id|string) }}</a>
       <div style="font-size:11.5px;color:#888;">{{ c.district or '' }}{% if c.year_built %} · {{ c.year_built }} г.{% endif %}</div>
     </div>
     <button onclick="removeFavComplex('{{ c.complex_id }}', this)" style="border:none;background:none;color:#ef4444;cursor:pointer;font-size:18px;">✕</button>
