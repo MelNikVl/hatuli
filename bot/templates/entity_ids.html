@@ -38,26 +38,75 @@
     <div class="sub">в среднем {{ totals.avg_sources_per_resolved or '—' }} источника на резолвленный ЖК</div>
   </div>
   <div class="eid-tile">
-    <div class="n">{{ totals.review_queue_complexes or 0 }}</div>
-    <div class="lbl">ЖК в очереди на ручную проверку</div>
-    <div class="sub">confidence {{ thresholds.review }}–{{ thresholds.auto }}</div>
+    <div class="n">{{ totals.review_queue_count or 0 }} / {{ totals.conflict_count or 0 }}</div>
+    <div class="lbl">В очереди на проверку / конфликтов</div>
+    <div class="sub">confidence {{ thresholds.review }}–{{ thresholds.auto }} · ниже — <a href="#eid-candidates" style="color:#2563eb;">список</a></div>
   </div>
+  <div class="eid-tile">
+    <div class="n">{{ totals.resolved_multi_source or 0 }} / {{ complexes_resolved }}</div>
+    <div class="lbl">Резолвленных ЖК с 2+ источниками</div>
+    <div class="sub">{{ (100 * (totals.resolved_multi_source or 0) / complexes_resolved)|round(1) if complexes_resolved else 0 }}% от резолвленных — главная ценность spine, не просто "привязан хоть как-то"</div>
+  </div>
+  <div class="eid-tile">
+    <div class="n">{{ totals.auto_links_7d or 0 }}</div>
+    <div class="lbl">Авто-связей за 7 дней</div>
+    <div class="sub">скорость роста spine прямо сейчас (парсеры новостроек)</div>
+  </div>
+</div>
+
+<div class="eid-card">
+  <b style="font-size:14.5px;">📊 41% нерезолвнутых ЖК — разбивка (2026-08-13, без правок алгоритма)</b>
+  <p style="font-size:13px;color:var(--text);line-height:1.7;margin-top:8px;">
+    Всего нерезолвнуто: <b>{{ breakdown.unresolved_total }}</b>.
+    Мусор/улицы, которые аудит (<code>complex_audit.audit_complexes</code>) находит, но is_street/is_garbage
+    ещё не проставлен: <b>{{ breakdown.junk }}</b>.
+    Реальные ЖК БЕЗ вообще какого-либо источника (krisha_url/korter_url/newbuild_source пусты — не входили
+    в область прогона krisha_complex_scan/korter_import/homsters_import): <b>{{ breakdown.no_source }}</b>
+    (из них без координат вовсе — <b>{{ breakdown.no_geo }}</b>, у остальных гео есть, просто источник не сканировал).
+    Реальные ЖК С источником, но не в спайне: <b>{{ breakdown.has_source_but_unmatched }}</b> — почти всегда
+    это ДУБЛЬ строки complexes на тот же krisha_url/korter_url (первой достаётся связь через
+    <code>ON CONFLICT (source, source_id)</code>, вторая формально остаётся "без пары" — кандидат на ручное
+    слияние, не проблема алгоритма матчинга).
+  </p>
+  <p style="font-size:12px;color:#888;margin-top:8px;">
+    Вывод: доминирующая причина — не качество матчинга, а покрытие источников (99% нерезолвнутых — категория
+    "без источника"). Аудит "мусор/улицы" сейчас ничего нового не находит — уже чисто.
+  </p>
 </div>
 
 <div class="eid-card">
   <b style="font-size:14.5px;">⚙️ Как считается матчинг</b>
   <p style="font-size:13px;color:var(--text);line-height:1.7;margin-top:8px;">
     Каждая связь источник→ЖК получает confidence из сигналов, которые реально удалось проверить:
-    точное совпадение нормализованного имени — базовый сигнал (+{{ thresholds.w_name }}),
-    гео-близость в пределах {{ thresholds.geo_radius_m|int }} м — сильный сигнал (+{{ thresholds.w_geo }}),
-    совпадение застройщика — доп. сигнал (+{{ thresholds.w_developer }}).
+    имя — точное совпадение (+{{ thresholds.w_name }}) ИЛИ похожее по pg_trgm similarity ≥ {{ thresholds.fuzzy }}
+    (fuzzy-ступень, вес линейно растёт от +{{ thresholds.w_name_fuzzy_min }} до +{{ thresholds.w_name }} —
+    ловит ребрендинг/опечатки между источниками), гео-близость в пределах {{ thresholds.geo_radius_m|int }} м
+    (+{{ thresholds.w_geo }}), совпадение застройщика (+{{ thresholds.w_developer }}), пересечение токенов
+    адреса (+{{ thresholds.w_address }}).
     confidence ≥ <b>{{ thresholds.auto }}</b> — связь пишется в спайн автоматически;
-    <b>{{ thresholds.review }}–{{ thresholds.auto }}</b> — попадает в очередь на ручную проверку
-    (сейчас — на <a href="/admin/analytics/complexes?tab=complexes_fix" style="color:#2563eb;">странице переназначения ЖК</a>);
-    ниже {{ thresholds.review }} — связь не создаётся вовсе. Первый источник, принёсший новый ЖК
-    (а не совпавший с уже существующим), пишется с confidence 1.0 — там неоднозначности нет,
-    это и есть происхождение объекта (<code>seed_source</code>).
+    <b>{{ thresholds.review }}–{{ thresholds.auto }}</b> — уходит в очередь <a href="#eid-candidates" style="color:#2563eb;">ниже</a>
+    (НЕ в спайн, пока не подтверждена руками); ниже {{ thresholds.review }} — не создаётся вовсе.
+    Первый источник, принёсший новый ЖК (а не совпавший с существующим), пишется с confidence 1.0 — там
+    неоднозначности нет (<code>seed_source</code>). Если source_id уже привязан к ДРУГОМУ ЖК — новый вариант
+    не перезаписывает молча, тоже уходит в очередь как конфликт. Руками отклонённые пары запоминаются
+    (<code>complex_source_link_rejections</code>) — повторно не предлагаются.
   </p>
+</div>
+
+<div class="eid-card">
+  <b style="font-size:14.5px;">📶 Гистограмма confidence (спайн, только auto/seed/legacy)</b>
+  <div id="eid-hist" style="display:flex;align-items:flex-end;gap:4px;height:120px;margin-top:12px;">
+    {% for i in range(1, 11) %}
+    {% set n = conf_hist.get(i, 0) %}
+    {% set maxn = conf_hist.values() | max if conf_hist else 1 %}
+    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;">
+      <div style="font-size:10px;color:#888;">{{ n }}</div>
+      <div style="width:100%;background:{{ '#16a34a' if i >= 8 else '#2563eb' }};border-radius:3px 3px 0 0;height:{{ (n / maxn * 90)|round(0) if maxn else 0 }}px;min-height:{{ '2px' if n else '0' }};"></div>
+      <div style="font-size:9px;color:#888;margin-top:2px;">{{ '%.1f'|format((i-1)/10) }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  <div style="font-size:11px;color:#888;margin-top:6px;">по 0.1 confidence, зелёное — авто-порог (≥0.8)</div>
 </div>
 
 <div class="chart-block" data-chart-id="eid-timeline" style="width:100%;">
@@ -65,6 +114,35 @@
   <div style="font-size:0.8em;color:#888;margin:2px 0 8px;">накопительно: связей источник→ЖК и резолвленных ЖК по дню первой связи</div>
   <div id="eid-chart" class="chart-block-inner"></div>
 </div>
+
+<div class="eid-card" id="eid-candidates">
+  <b style="font-size:14.5px;">🔍 Очередь на проверку и конфликты ({{ candidates|length }})</b>
+  <table class="eid-table" style="margin-top:8px;">
+    <tr><th>Тип</th><th>ЖК</th><th>Источник</th><th>Метод</th><th>Confidence</th><th>Конфликт с</th><th></th></tr>
+    {% for c in candidates %}
+    <tr id="eid-cand-{{ c.id }}">
+      <td>{{ '⚠️ конфликт' if c.kind == 'conflict' else '⏳ проверка' }}</td>
+      <td><a href="/complex/{{ c.complex_id }}" style="color:var(--text);">{{ c.complex_name }}</a></td>
+      <td>{{ c.source }} · {{ c.source_id }}</td>
+      <td>{{ c.match_method }}</td>
+      <td>{{ c.confidence }}</td>
+      <td>{% if c.conflict_with_name %}<a href="/complex/{{ c.conflict_with_complex_id }}" style="color:var(--text);">{{ c.conflict_with_name }}</a>{% else %}—{% endif %}</td>
+      <td style="white-space:nowrap;">
+        <a href="javascript:void(0)" onclick="eidResolve({{ c.id }}, 'approve')" style="color:#16a34a;font-size:12px;margin-right:8px;">подтвердить</a>
+        <a href="javascript:void(0)" onclick="eidResolve({{ c.id }}, 'reject')" style="color:#ef4444;font-size:12px;">отклонить</a>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" style="color:#888;text-align:center;">пусто</td></tr>
+    {% endfor %}
+  </table>
+</div>
+<script>
+async function eidResolve(id, action) {
+  const r = await fetch(`/admin/api/entity-ids/candidates/${id}/${action}`, {method: 'POST'});
+  if (r.ok) { const row = document.getElementById('eid-cand-' + id); if (row) row.remove(); }
+}
+</script>
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
   <div class="eid-card">

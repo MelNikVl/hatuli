@@ -372,7 +372,7 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({"hexes": hexes})
 
     @router.get("/admin/api/views-hexes")
-    async def views_hexes_api(request: Request):
+    async def views_hexes_api(request: Request, edge: int | None = None):
         # «Интерес» — просматриваемость объявлений (задача 2026-08-13):
         # гексы 100м (та же сетка, что у hype/transport/population-hexes)
         # по объявлениям apartment_listings с views_count > 0. Значение
@@ -386,7 +386,7 @@ def make_extras_router(templates) -> APIRouter:
               AND views_count IS NOT NULL AND views_count > 0
               AND lat BETWEEN 50.0 AND 53.0 AND lon BETWEEN 69.0 AND 73.0
         """)
-        EDGE_M = 100.0
+        EDGE_M = float(edge) if edge else 100.0
         cells: dict[str, list] = {}
         for r in rows:
             hid = hex_id(float(r["lat"]), float(r["lon"]), EDGE_M)
@@ -642,7 +642,7 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({"points": points})
 
     @router.get("/admin/api/crime-hexes")
-    async def crime_hexes_api(request: Request, days: int | None = None):
+    async def crime_hexes_api(request: Request, days: int | None = None, edge: int | None = None):
         """Тепловая карта преступности — официальный ГИС-портал КПСиСУ ГП РК
         (gis.kgp.kz, слой KPSSU/crime, собрано в crime_incidents
         crime_collect.py). Гексы 150м (та же сетка-подход, что и
@@ -659,7 +659,7 @@ def make_extras_router(templates) -> APIRouter:
         """, *params)
         if not rows:
             return JSONResponse({"hexes": []})
-        EDGE_M = 150.0
+        EDGE_M = float(edge) if edge else 150.0
         cells: dict[str, dict] = {}
         # hard_code — категория тяжести 0-4 (0 — мелкое хищение/побои,
         # 4 — убийство/изнасилование, проверено на реальных crime_title).
@@ -696,7 +696,7 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({"hexes": hexes})
 
     @router.get("/admin/api/population-hexes")
-    async def population_hexes_api(request: Request):
+    async def population_hexes_api(request: Request, edge: int | None = None):
         # Оценка плотности населения по гексам (100м, та же сетка, что и
         # hype-hexes/transport_hexes): apartment_count * оценка людей/квартиру
         # по разбивке комнатности, где она известна (housing_class_test —
@@ -748,7 +748,7 @@ def make_extras_router(templates) -> APIRouter:
         # ЖК на 4000 квартир): режем apartment_count разумным потолком перед
         # оценкой населения, а не отбрасываем ЖК целиком.
         MAX_PLAUSIBLE_APT = 1500
-        EDGE_M = 100.0
+        EDGE_M = float(edge) if edge else 100.0
         # KDE-сглаживание (вместо дискретного суммирования по гексу, где
         # лежит ЖК): каждая точка ЖК "размазывается" гауссовым ядром по
         # окрестности, значения соседних ЖК складываются. Убирает дырки
@@ -1506,8 +1506,9 @@ def make_extras_router(templates) -> APIRouter:
             return RedirectResponse(url="/admin/login", status_code=302)
         from bot.db.pg import fetchrow as pg_fetchrow, fetch as pg_fetch
         from bot.core.entity_resolution import (
-            AUTO_MATCH_THRESHOLD, REVIEW_QUEUE_THRESHOLD,
-            GEO_MATCH_RADIUS_M, _W_NAME_EXACT, _W_GEO, _W_DEVELOPER,
+            AUTO_MATCH_THRESHOLD, REVIEW_QUEUE_THRESHOLD, FUZZY_NAME_THRESHOLD,
+            GEO_MATCH_RADIUS_M, _W_NAME_EXACT, _W_NAME_FUZZY_MIN, _W_GEO,
+            _W_DEVELOPER, _W_ADDRESS,
         )
 
         totals = await pg_fetchrow("""
@@ -1519,11 +1520,19 @@ def make_extras_router(templates) -> APIRouter:
                 (SELECT COUNT(*) FROM newbuild_units u
                     WHERE EXISTS (SELECT 1 FROM complex_source_links l WHERE l.complex_id = u.complex_id)) AS units_resolved,
                 (SELECT COUNT(*) FROM complex_source_links) AS links_total,
-                (SELECT COUNT(DISTINCT complex_id) FROM complex_source_links
-                    WHERE confidence >= 0.5 AND confidence < 0.8) AS review_queue_complexes,
+                (SELECT COUNT(*) FROM complex_source_link_candidates WHERE kind = 'review') AS review_queue_count,
+                (SELECT COUNT(*) FROM complex_source_link_candidates WHERE kind = 'conflict') AS conflict_count,
                 (SELECT ROUND(AVG(cnt), 2) FROM (
                     SELECT complex_id, COUNT(*) AS cnt FROM complex_source_links GROUP BY complex_id
-                ) x) AS avg_sources_per_resolved
+                ) x) AS avg_sources_per_resolved,
+                -- Доля резолвленных ЖК с 2+ независимыми источниками — это и
+                -- есть главная ценность spine (не просто "привязан хоть
+                -- как-то", а перекрёстно подтверждён несколькими сайтами).
+                (SELECT COUNT(*) FROM (
+                    SELECT complex_id FROM complex_source_links GROUP BY complex_id HAVING COUNT(*) >= 2
+                ) x) AS resolved_multi_source,
+                (SELECT COUNT(*) FROM complex_source_links
+                    WHERE matched_by = 'auto' AND matched_at >= now() - interval '7 days') AS auto_links_7d
         """)
         by_source = await pg_fetch("""
             SELECT source, COUNT(*) AS n, ROUND(AVG(confidence)::numeric, 2) AS avg_conf
@@ -1533,17 +1542,86 @@ def make_extras_router(templates) -> APIRouter:
             SELECT match_method, COUNT(*) AS n
             FROM complex_source_links GROUP BY match_method ORDER BY n DESC
         """)
+        # Гистограмма confidence — bucket'ы по 0.1, только auto (в спайне
+        # только auto и legacy/seed теперь — review/conflict живут отдельно
+        # в complex_source_link_candidates, см. запрос ниже).
+        conf_hist = await pg_fetch("""
+            SELECT width_bucket(confidence, 0, 1, 10) AS bucket, COUNT(*) AS n
+            FROM complex_source_links GROUP BY 1 ORDER BY 1
+        """)
+        candidates = await pg_fetch("""
+            SELECT cslc.id, cslc.complex_id, c.name AS complex_name, cslc.source, cslc.source_id,
+                   cslc.match_method, cslc.confidence, cslc.kind, cslc.conflict_with_complex_id,
+                   c2.name AS conflict_with_name, cslc.created_at
+            FROM complex_source_link_candidates cslc
+            JOIN complexes c ON c.id = cslc.complex_id
+            LEFT JOIN complexes c2 ON c2.id = cslc.conflict_with_complex_id
+            ORDER BY cslc.kind, cslc.confidence DESC LIMIT 100
+        """)
+
+        # ── Разбивка нерезолвнутых ЖК (задача 2026-08-13) — без правок кода
+        # в алгоритме матчинга, чистая диагностика: (а) мусор/дубли — сверка
+        # с bot.core.complex_audit (та же эвристика street/junk, что уже
+        # используется для is_street); (б) реальные без источников вовсе
+        # (не сканировались krisha_complex_scan/korter_import/...);
+        # (в) реальные С источником (krisha_url/korter_url/newbuild_source),
+        # но не в спайне — почти всегда дубль complexes-строки на тот же
+        # источник (ON CONFLICT (source, source_id) в бэкафилле/матчинге
+        # достаётся только первой, вторая остаётся "как будто без пары").
+        from bot.core.complex_audit import audit_complexes
+        audit_rows = await audit_complexes(min_share=0.6, min_cnt=3)
+        audit_ids = {r["id"] for r in audit_rows}
+        unresolved_rows = await pg_fetch("""
+            SELECT c.id, c.krisha_url, c.korter_url, c.newbuild_source, c.lat, c.lon
+            FROM complexes c
+            WHERE COALESCE(c.is_garbage, FALSE) = FALSE AND COALESCE(c.is_street, FALSE) = FALSE
+              AND NOT EXISTS (SELECT 1 FROM complex_source_links l WHERE l.complex_id = c.id)
+        """)
+        unresolved_ids = {r["id"] for r in unresolved_rows}
+        breakdown_junk = len(audit_ids & unresolved_ids)
+        breakdown_has_source = [r for r in unresolved_rows
+                                 if (r["krisha_url"] or r["korter_url"] or r["newbuild_source"])
+                                 and r["id"] not in audit_ids]
+        breakdown_no_geo = sum(1 for r in unresolved_rows if r["lat"] is None or r["lon"] is None)
+        breakdown_no_source = len(unresolved_rows) - breakdown_junk - len(breakdown_has_source)
+
         return templates.TemplateResponse("entity_ids.html", {
             "request": request,
             "totals": dict(totals) if totals else {},
             "by_source": [dict(r) for r in by_source],
             "by_method": [dict(r) for r in by_method],
+            "conf_hist": {r["bucket"]: r["n"] for r in conf_hist},
+            "candidates": [dict(r) for r in candidates],
+            "breakdown": {
+                "unresolved_total": len(unresolved_rows),
+                "junk": breakdown_junk,
+                "has_source_but_unmatched": len(breakdown_has_source),
+                "no_source": breakdown_no_source,
+                "no_geo": breakdown_no_geo,
+            },
             "thresholds": {
                 "auto": AUTO_MATCH_THRESHOLD, "review": REVIEW_QUEUE_THRESHOLD,
-                "geo_radius_m": GEO_MATCH_RADIUS_M,
-                "w_name": _W_NAME_EXACT, "w_geo": _W_GEO, "w_developer": _W_DEVELOPER,
+                "fuzzy": FUZZY_NAME_THRESHOLD, "geo_radius_m": GEO_MATCH_RADIUS_M,
+                "w_name": _W_NAME_EXACT, "w_name_fuzzy_min": _W_NAME_FUZZY_MIN,
+                "w_geo": _W_GEO, "w_developer": _W_DEVELOPER, "w_address": _W_ADDRESS,
             },
         })
+
+    @router.post("/admin/api/entity-ids/candidates/{candidate_id}/approve")
+    async def entity_ids_approve(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import approve_candidate
+        await approve_candidate(candidate_id, approved_by="admin")
+        return JSONResponse({"ok": True})
+
+    @router.post("/admin/api/entity-ids/candidates/{candidate_id}/reject")
+    async def entity_ids_reject(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import reject_candidate
+        await reject_candidate(candidate_id, rejected_by="admin")
+        return JSONResponse({"ok": True})
 
     @router.get("/admin/api/entity-ids/timeline")
     async def entity_ids_timeline(request: Request):

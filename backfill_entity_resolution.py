@@ -6,8 +6,11 @@
   1) complexes.code для всех строк, где его ещё нет (JK-000123).
   2) complex_source_links из уже существующих однослотовых полей —
      krisha_url, korter_url, newbuild_source(+_id), homeportal_objects.
-     Всё это уже руками/импортом подтверждённые связи -> match_method
-     'manual', confidence 1.0.
+     Всё это уже руками/импортом подтверждённые связи ДО того, как
+     появился сам spine -> match_method 'legacy_import' (задача ревью
+     2026-08-13: отличать от 'manual' — того, что реально подтвердил
+     админ через approve_candidate() в уже работающей очереди),
+     confidence 1.0.
 
 source_info (korter/homsters JSONB-блоки без выделенного id) сознательно
 НЕ разбираем здесь — см. план, "могут остаться на старой схеме, если у
@@ -54,7 +57,7 @@ def backfill_from(select_sql: str, cols: list[str], *, source_col: str | None = 
         matched_at = f"'{esc(d[matched_at_col])}'" if matched_at_col and d.get(matched_at_col) else "now()"
         psql(f"""INSERT INTO complex_source_links
                     (complex_id, source, source_id, url, match_method, confidence, matched_by, matched_at)
-                 VALUES ({cid}, '{esc(src)}', '{esc(sid)}', {url}, 'manual', 1.0, 'backfill_2026-08-12', {matched_at})
+                 VALUES ({cid}, '{esc(src)}', '{esc(sid)}', {url}, 'legacy_import', 1.0, 'backfill_2026-08-12', {matched_at})
                  ON CONFLICT (source, source_id) DO NOTHING""")
         n += 1
     print(f"{label}: {n}")

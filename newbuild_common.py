@@ -138,7 +138,7 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
     """Upsert ЖК по нормализованному имени (единый матчинг с korter/homsters/
     krisha-complex-scan — один ЖК, много источников, см. complexes.source_info
     для тех обогащений и newbuild_source/_source_id для этого)."""
-    from bot.db.pg import fetchrow, fetchval, execute
+    from bot.db.pg import fetchrow, fetchval, execute, fetch
 
     deadlines = [u.deadline for u in cx.units if u.deadline]
     completion_year = min(deadlines).year if deadlines else None
@@ -152,20 +152,23 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
     district = dm.group(1).strip() if dm else None
 
     row = await fetchrow(
-        "SELECT id, lat, lon, developer_id FROM complexes WHERE lower(trim(name)) = lower(trim($1))", cx.name)
+        "SELECT id, lat, lon, developer_id, address FROM complexes WHERE lower(trim(name)) = lower(trim($1))", cx.name)
     if row:
         cid = row["id"]
         # Entity resolution (фаза 1, docs/entity_resolution_plan.md): этот
         # источник только что нашёлся по точному совпадению имени с уже
         # существующим ЖК — записываем связь в spine (complex_source_links)
-        # с confidence по сигналам имя+гео+застройщик, а не молча теряем
-        # источник в одном из старых однослотовых полей ниже.
+        # с confidence по сигналам имя+гео+застройщик+адрес, а не молча
+        # теряем источник в одном из старых однослотовых полей ниже.
+        # name_a=name_b=cx.name — совпадение уже гарантировано WHERE выше
+        # (точный матч), пересчитывать через pg_trgm незачем.
         from bot.core.entity_resolution import score_match, record_source_link, ensure_complex_code
-        conf, method = score_match(
-            name_exact=True,
+        conf, method = await score_match(
+            cx.name, cx.name,
             existing_lat=row["lat"], existing_lon=row["lon"],
             candidate_lat=cx.lat, candidate_lon=cx.lon,
             developer_match=(row["developer_id"] is not None and row["developer_id"] == dev_id),
+            existing_address=row["address"], candidate_address=cx.address,
         )
         await record_source_link(cid, source, cx.source_id, confidence=conf, method=method)
         await ensure_complex_code(cid)
@@ -209,9 +212,36 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
         cx.photo_url, json.dumps([cx.photo_url]) if cx.photo_url else None, cx.description)
     # Этот источник — первый, кто принёс этот ЖК (новый entity_id) —
     # confidence максимальный, никакой неоднозначности нет (seed, а не match).
-    from bot.core.entity_resolution import record_source_link, ensure_complex_code
+    from bot.core.entity_resolution import record_source_link, ensure_complex_code, score_match
     await record_source_link(cid, source, cx.source_id, confidence=1.0, method="seed_source")
     await ensure_complex_code(cid)
+
+    # Fuzzy-проверка на дубль (задача ревью 2026-08-13): раз тут заводится
+    # СОВСЕМ НОВЫЙ ЖК — не спутали ли его с уже существующим под чуть
+    # другим именем (ребрендинг застройщиком, опечатка на одном из
+    # сайтов)? Точного совпадения по имени быть не может (иначе попали бы
+    # в ветку выше) — ищем похожие через pg_trgm и, если нашли, кладём
+    # находку в очередь на подтверждение (record_source_link сам решит
+    # review/conflict/skip по итоговому confidence) — НЕ трогаем cid,
+    # только предлагаем на рассмотрение.
+    try:
+        near = await fetch("""
+            SELECT id, name, lat, lon, developer_id, address
+            FROM complexes WHERE id != $1 AND similarity(name, $2) >= 0.55
+            ORDER BY similarity(name, $2) DESC LIMIT 3
+        """, cid, cx.name)
+        for n in near:
+            conf2, method2 = await score_match(
+                cx.name, n["name"],
+                existing_lat=n["lat"], existing_lon=n["lon"],
+                candidate_lat=cx.lat, candidate_lon=cx.lon,
+                developer_match=(n["developer_id"] is not None and n["developer_id"] == dev_id),
+                existing_address=n["address"], candidate_address=cx.address,
+            )
+            if conf2 >= 0.5:
+                await record_source_link(n["id"], source, cx.source_id, confidence=conf2, method=method2)
+    except Exception as e:
+        log.warning("fuzzy-проверка на дубль ЖК %r не удалась: %s", cx.name, e)
     # Источник сам отдаёт точные координаты (NAK) -> используем их напрямую,
     # без Nominatim (тот всё равно менее точен, чем данные самого застройщика).
     if cx.lat is not None and cx.lon is not None:
