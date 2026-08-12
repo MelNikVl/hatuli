@@ -146,8 +146,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         await app_settings.load()
         # Личный кабинет посетителя (вход через Telegram, см. bot/core/site_auth.py) —
         # нужен в шапке для кнопки "Войти"/имени пользователя, см. base_public.html.
-        from bot.core.site_auth import get_user_by_session
+        from bot.core.site_auth import get_user_by_session, get_user_tier
         site_user = await get_user_by_session(request.cookies.get("site_session"))
+        # Задача "только Новостройки для всех" (2026-08-12): фронт форсирует
+        # режим "Новостройки" и блокирует переключение на Продажу/Аренду для
+        # tier=public — см. дальше в dashboard.html (SITE_TIER). Бэкенд
+        # (map-points/map-points-lite/listing) блокирует это независимо, тут
+        # только UX (не единственная линия защиты, но без неё выбор "Продажа"
+        # молча отдавал 0 точек — выглядело как баг, а не как ограничение).
+        tier = await get_user_tier(request)
         return templates.TemplateResponse(
             "dashboard.html", {
                 "request": request,
@@ -158,6 +165,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "parse_interval_max": _state.parse_interval_max,
                 "popup_width": app_settings.get_int("POPUP_WIDTH_PX", 380),
                 "site_user": site_user,
+                "site_tier": tier,
                 "listing_id": listing_id,
                 "listing_meta": listing_meta,
             }
@@ -230,18 +238,19 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         row = await pg_fetchrow(
             "SELECT id, title, price, rooms, area, district, complex_name, photos, market_type "
             "FROM apartment_listings WHERE id = $1", listing_id)
-        if row and row.get("market_type") != "primary":
-            # Задача "общий доступ" (2026-08-12): прямая ссылка на объявление
-            # вторички публичному тиру раньше рендерила карту с полностью
-            # раскрытым попапом (и OG-превью с реальной ценой/фото в
-            # мета-тегах для шаринга) — теперь страница-заглушка, попап и
-            # так вернёт {"error":"restricted"} с /admin/api/listing/{id}.
+        if row:
+            # Задача "только Новостройки для всех" (2026-08-12): apartment_listings
+            # — личные объявления с Крыши, публичному тиру не видны вовсе
+            # (даже market_type='primary' — раньше показывали эти, оставляя
+            # OG-превью с реальной ценой/фото в мета-тегах для шаринга).
+            # Попап и так вернёт {"error":"restricted"} с /admin/api/listing/{id},
+            # тут — чтобы не рендерить карту с открытым попапом вообще.
             from bot.core.site_auth import get_user_tier
             if await get_user_tier(request) == "public":
                 return templates.TemplateResponse("access_locked.html", {
                     "request": request,
                     "title": "Объявление доступно по запросу",
-                    "message": "Это объявление вторичного рынка. Публично открыты только новостройки — войдите через Telegram и запросите расширенный доступ.",
+                    "message": "Публично открыт только раздел новостроек. Это отдельное объявление — войдите через Telegram и запросите расширенный доступ.",
                 })
         listing_meta = None
         if row:

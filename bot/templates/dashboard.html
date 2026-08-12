@@ -124,7 +124,7 @@ html, body { overflow: hidden !important; }
           style="padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">
     Новостройки
   </button>
-  <select id="f-type" onchange="forcedNewbuildType=false;updateNewbuildChip();applyFilters()">
+  <select id="f-type" onchange="if(SITE_TIER!=='public'){forcedNewbuildType=false;updateNewbuildChip();applyFilters();}">
     <option value="sale">Продажа</option><option value="rental">Аренда</option><option value="complex">ЖК</option>
   </select>
 
@@ -624,13 +624,22 @@ function newMapFetchSignal() {
   mapFetchAbort = new AbortController();
   return mapFetchAbort.signal;
 }
+// Тир доступа (bot/core/site_auth.get_user_tier, задача "только
+// Новостройки для всех", 2026-08-12) — public заблокирован в режиме
+// "Новостройки", переключение недоступно. Это UX-слой: реальная защита от
+// утечки вторички — на бэкенде (map-points/map-points-lite/listing
+// отдают пусто/restricted для public независимо от того, что шлёт фронт).
+const SITE_TIER = {{ site_tier | tojson }};
+
 // "Новостройки" физически убраны из <select id="f-type"> (см. задачу —
 // только отдельная кнопка в шапке), поэтому текущий тип берём отсюда, а не
 // напрямую из значения селекта — forcedNewbuildType взводится deep-link'ом
 // ?type=newbuild (см. IIFE в конце файла) и сбрасывается при ручном выборе
-// в самом селекте (onchange="forcedNewbuildType=false;...").
-let forcedNewbuildType = false;
+// в самом селекте (onchange="forcedNewbuildType=false;..."), либо навсегда
+// включён и незыблем для SITE_TIER === 'public'.
+let forcedNewbuildType = (SITE_TIER === 'public');
 function getFilterType() {
+  if (SITE_TIER === 'public') return 'newbuild';
   return forcedNewbuildType ? 'newbuild' : document.getElementById('f-type').value;
 }
 function updateNewbuildChip() {
@@ -642,8 +651,22 @@ function updateNewbuildChip() {
   // В Новостройках селект «Продажа/Аренда/ЖК» не нужен — прячем его.
   const ftype = document.getElementById('f-type');
   if (ftype) ftype.style.display = forcedNewbuildType ? 'none' : '';
+  if (SITE_TIER === 'public') {
+    // Публичному тиру нечего переключать — прячем сам чип-переключатель
+    // (не просто CSS-декор: getFilterType() всё равно всегда вернёт
+    // 'newbuild' для public, но незачем показывать кликабельную кнопку,
+    // которая ничего не делает) и неактуальные для новостроек фильтры
+    // "готовность"/"продавец" (вторички без вторички не бывает).
+    btn.style.cursor = 'default';
+    btn.title = 'Всем открыт только раздел новостроек';
+    const mw = document.getElementById('f-market-wrap');
+    const sw = document.getElementById('f-seller-wrap');
+    if (mw) mw.style.display = 'none';
+    if (sw) sw.style.display = 'none';
+  }
 }
 function toggleNewbuildChip() {
+  if (SITE_TIER === 'public') return;  // заблокировано, см. updateNewbuildChip()
   forcedNewbuildType = !forcedNewbuildType;
   updateNewbuildChip();
   applyFilters();

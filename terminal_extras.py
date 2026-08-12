@@ -3077,9 +3077,14 @@ def make_extras_router(templates) -> APIRouter:
             """)
             return JSONResponse({"points": [[float(r["lat"]), float(r["lon"])] for r in rows]})
 
-        conds, params, i = [], [], 1
         if tier == "public":
-            conds.append("AND market_type = 'primary'")
+            # Задача "только Новостройки для всех" (2026-08-12): та же
+            # логика, что в map_points — apartment_listings не показывается
+            # публичному тиру вовсе, даже market_type='primary' (это личные
+            # объявления с Крыши, не карточки застройщика). Только
+            # структурированный слой "Новостройки" + тепловые карты.
+            return JSONResponse({"points": []})
+        conds, params, i = [], [], 1
         if rooms:
             # UI отдаёт список через запятую при выборе нескольких чекбоксов
             # комнатности ("1,2") — int(rooms) на такой строке падал с
@@ -3251,15 +3256,19 @@ def make_extras_router(templates) -> APIRouter:
             with_coords = await pg_fetchval2(
                 "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
                 "AND COALESCE(is_duplicate, FALSE) = FALSE AND lat IS NOT NULL") or 0
-        conds, params, i = [], [], 1
         if tier == "public":
-            # Задача "общий доступ" (2026-08-12, переформулировано): публичному
-            # тиру — весь раздел новостроек (market_type='primary') СО ВСЕМИ
-            # фильтрами (комнатность/цена/метраж/скор и т.д. — не режем их,
-            # как раньше фиксированным набором top-10+5 застройщиков). Просто
-            # жёстко навязываем market_type='primary' поверх остальных
-            # условий, даже если клиент явно просил market=secondary.
-            conds.append("AND a.market_type = 'primary'")
+            # Задача "только Новостройки для всех" (2026-08-12, ещё раз
+            # переформулировано): apartment_listings — это отдельные
+            # объявления с Крыши (продавец/контакт/адрес конкретной
+            # квартиры), даже те, что помечены market_type='primary' (дом
+            # ещё строится, но это всё равно чей-то персональный листинг,
+            # а не карточка застройщика). Публичному тиру эта таблица не
+            # показывается вовсе — только структурированный слой
+            # "Новостройки" (/admin/api/newbuild-map-points, из
+            # newbuild_units — без продавца/контактов) + тепловые карты.
+            return JSONResponse({"points": [], "count": 0, "offset": offset, "limit": limit,
+                                  "has_more": False})
+        conds, params, i = [], [], 1
         if rooms:
             room_list = [int(x) for x in rooms.split(',') if x.strip().isdigit()]
             if room_list:
@@ -4699,10 +4708,15 @@ def make_extras_router(templates) -> APIRouter:
         l = dict(row)
 
         tier = await get_user_tier(request)
-        if tier == "public" and l.get("market_type") != "primary":
+        if tier == "public":
+            # Задача "только Новостройки для всех" (2026-08-12): эта таблица
+            # (apartment_listings) — личные объявления с Крыши, публичному
+            # тиру не показываются вовсе, даже market_type='primary'.
+            # Новостройки — отдельная таблица newbuild_units, свой роут
+            # (/admin/api/newbuild-unit/{id}), сюда не попадает вообще.
             return JSONResponse({
                 "error": "restricted",
-                "message": "Это объявление вторичного рынка. Полный доступ открывает администратор — войдите через Telegram (Личный кабинет) и запросите доступ.",
+                "message": "Публично открыт только раздел новостроек. Полный доступ к остальным объявлениям открывает администратор — войдите через Telegram (Личный кабинет) и запросите доступ.",
             }, status_code=403)
 
         photos = l.get("photos")
