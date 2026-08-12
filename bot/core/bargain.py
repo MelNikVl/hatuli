@@ -35,6 +35,11 @@ from bot.core.hexgrid import hex_id, neighbors
 logger = logging.getLogger(__name__)
 
 MIN_COMPARABLES = 5
+# Свои же объявления ЖК — сигнал точнее гекс-соседства (см. get_comparables),
+# поэтому порог ниже, чем у общего MIN_COMPARABLES: заказчик прямо просил
+# "хотя бы 3-5" — 3 своих объявления уже достаточно надёжная медиана для
+# внутри-ЖК сравнения площадей того же метража.
+MIN_SAME_COMPLEX = 3
 _M_PER_DEG_LAT = 110_574.0
 
 
@@ -51,7 +56,7 @@ async def get_comparables(
     """Найти аналоги: тот же гексагон+кольцо, комнаты, площадь ±15%, класс ЖК.
 
     Возвращает (comparables, meta). meta:
-      method      — 'hex+ring+class' | 'hex+ring' | 'city_segment' | 'district_fallback'
+      method      — 'same_complex' | 'hex+ring+class' | 'hex+ring' | 'city_segment' | 'district_fallback'
       class       — класс ЖК оцениваемой квартиры (или None, если не определён)
       class_note  — текст для UI, если расчёт цены не учитывает класс ЖК
     """
@@ -64,6 +69,41 @@ async def get_comparables(
         area_max = area * 1.15
 
     meta = {"method": "district_fallback", "class": None, "class_note": None}
+
+    # ПРИОРИТЕТ №1 — аналоги в ТОМ ЖЕ ЖК (задача "проверить реальные цены",
+    # 2026-08-13): у большинства ЖК complexes.housing_class не заполнен
+    # (официальной классификации нет), из-за чего ниже логика молча мешает
+    # эту квартиру с домами по соседству любого качества — а если у ЖК
+    # заметно выше медиана цены/м² своих же объявлений, чем у соседей,
+    # это и есть класс/качество постройки, которое просто ещё не занесли в
+    # housing_class руками. Если у ЖК есть хотя бы MIN_SAME_COMPLEX своих
+    # объявлений — они точнее любого гекс-соседства, используем их первым
+    # делом (площадь всё ещё ±15% — сравниваем сопоставимые квартиры внутри
+    # ЖК, а не студию с трёшкой).
+    if complex_name:
+        same_complex_rows = await fetch(
+            """
+            SELECT id, price, area, floor, floors_total,
+                   first_seen, last_seen, complex_name, district, address
+            FROM apartment_listings
+            WHERE lower(trim(complex_name)) = lower(trim($1))
+              AND ($2::int IS NULL OR rooms = $2)
+              AND area BETWEEN $3 AND $4
+              AND price > 0 AND price < 200000000
+              AND (is_duplicate IS NULL OR is_duplicate = FALSE)
+              AND ($5::text IS NULL OR id != $5)
+            ORDER BY last_seen DESC NULLS LAST
+            LIMIT 30
+            """,
+            complex_name, rooms, area_min, area_max, exclude_id,
+        )
+        if len(same_complex_rows) >= MIN_SAME_COMPLEX:
+            meta["method"] = "same_complex"
+            meta["class_note"] = (
+                f"сравнение с {len(same_complex_rows)} объявлениями в этом же ЖК — "
+                f"точнее соседей по гексагону, если у ЖК свой уровень цены"
+            )
+            return [dict(r) for r in same_complex_rows], meta
 
     if lat is None or lon is None:
         # Без координат гекс-сравнение невозможно — старый район-фоллбэк.
