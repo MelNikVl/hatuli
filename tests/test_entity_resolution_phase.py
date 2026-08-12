@@ -180,3 +180,69 @@ async def test_sibling_pair_never_auto(db, base_name, base_lat, base_lon, base_d
         f"{base_name!r} vs {num_name!r}: conf={conf} method={method} — "
         f"ушло в auto, это WOULD-MERGE ошибка")
     assert expect_fragment in method, f"{base_name!r} vs {num_name!r}: method={method!r}"
+
+
+# ── Буквенные блоки (задача 2026-08-12, найдено живым gap_sweep_krisha_
+#    korter.py --test): "Family Nest F" (id=2481) vs безномерной базовой
+#    "Family Nest" (id=3743) — реальная пара, дала 0.81 auto ДО фикса
+#    _phase_token() под буквы. В базе уже отдельные строки под блок
+#    ("Family Nest F | Bi Group" id=3996, "Family Nest - F Блок" id=3235) —
+#    тот же класс ошибки, что Darmen/Nur Aspan, просто литерой вместо
+#    номера. ────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_family_nest_base_vs_letter_block_capped_to_review(db):
+    """Безномерная 'Family Nest' против буквенного блока 'Family Nest F' —
+    нет осмысленной "буквы по умолчанию" (в отличие от числовой фазы,
+    где implicit-1 обоснован) -> всегда потолок 0.79, никогда auto."""
+    from bot.db.pg import fetchrow
+
+    base = await fetchrow("SELECT name, lat, lon, developer_id, address FROM complexes WHERE id = 3743")
+    letter = await fetchrow("SELECT name, lat, lon, developer_id, address FROM complexes WHERE id = 2481")
+    assert base and letter, "фикстура предполагает id=3743 'Family Nest' и id=2481 'Family Nest F' в БД"
+
+    conf, method = await score_match(
+        base["name"], letter["name"],
+        existing_lat=base["lat"], existing_lon=base["lon"],
+        candidate_lat=letter["lat"], candidate_lon=letter["lon"],
+        developer_match=(base["developer_id"] == letter["developer_id"]),
+        existing_address=base["address"], candidate_address=letter["address"],
+        name_a_full=base["name"], name_b_full=letter["name"],
+    )
+    assert _verdict(conf) == "review", f"conf={conf} method={method}"
+    assert "block:f" in method and "?~implicit" in method, method
+
+
+@pytest.mark.asyncio
+async def test_same_letter_block_matches_auto(db):
+    """Тот же блок 'F' с двух разных источников — номера/буквы совпадают,
+    должно спокойно уйти в auto (бонус, не потолок)."""
+    from bot.db.pg import fetchrow
+
+    letter = await fetchrow("SELECT name, lat, lon FROM complexes WHERE id = 2481")
+    assert letter, "фикстура предполагает id=2481 'Family Nest F' в БД"
+
+    conf, method = await score_match(
+        'ЖК "Family Nest F"', letter["name"],
+        existing_lat=letter["lat"], existing_lon=letter["lon"],
+        candidate_lat=letter["lat"] + 0.0003, candidate_lon=letter["lon"] + 0.0003,
+        developer_match=True,
+        name_a_full='ЖК "Family Nest F"', name_b_full=letter["name"],
+    )
+    assert _verdict(conf) == "auto", f"conf={conf} method={method}"
+    assert "phase(block:f)" in method, method
+
+
+@pytest.mark.asyncio
+async def test_different_letter_blocks_never_auto(db):
+    """'Family Nest F' против гипотетического 'Family Nest A' (разные
+    блоки одного ЖК) — синтетические гео/адрес (in-DB блока 'A' нет),
+    но сути фикса это не касается: разные явные буквы -> потолок 0.79."""
+    conf, method = await score_match(
+        "Family Nest F", "Family Nest A",
+        existing_lat=51.053, existing_lon=71.432, candidate_lat=51.0531, candidate_lon=71.4321,
+        developer_match=True,
+        name_a_full="Family Nest F", name_b_full="Family Nest A",
+    )
+    assert _verdict(conf) != "auto", f"conf={conf} method={method} — WOULD-MERGE"
+    assert "phase_mismatch(block:f!=block:a)" in method, method

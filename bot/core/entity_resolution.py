@@ -183,6 +183,19 @@ _PHASE_TRAILING_JUNK_RE = re.compile(r'["\'\)\]»,.]+$')
 # токен (не часть слова типа "Ishim C3", там перед цифрой нет пробела/тире)
 _PHASE_TRAILING_NUM_RE = re.compile(r"(?:^|[\s\-])(\d{1,3})$")
 _PHASE_TRAILING_ROMAN_RE = re.compile(r"(?:^|[\s\-])([ivxlcdmIVXLCDM]{1,7})$")
+# Буквенный блок/корпус — та же фаза-по-смыслу, что и номер очереди,
+# просто литерой вместо цифры ("Family Nest F" vs "Family Nest" —
+# калибровка 2026-08-12, живой sweep нашёл этот кейс). Со словом-маркером
+# ("F блок"/"блок F"/"корпус F"/"литера F") регистр буквы не важен —
+# маркер сам достаточно однозначен. Без маркера (голая хвостовая буква)
+# регистр ВАЖЕН и проверяется отдельно на исходном (не lower-нутом)
+# тексте — иначе "Paris" (заканчивается на "s") или любое другое слово
+# ловится как "блок s". Это и есть валидация по формату (аналог
+# round-trip у римских цифр: не любая хвостовая буква — токен, только
+# отдельным словом И заглавная).
+_BLOCK_LETTER_BEFORE_RE = re.compile(r"\b([a-zа-яё])\s+(?:блок|корпус)[а-яё]*\b", re.I)
+_BLOCK_LETTER_AFTER_RE = re.compile(r"\b(?:блок|корпус|литера)[а-яё]*\s+([a-zа-яё])\b", re.I)
+_BLOCK_LETTER_TRAILING_RE = re.compile(r"(?:^|[\s\-])([A-ZА-ЯЁ])$")
 # "жк"/"мжк"-приставка маркетплейсов + обёрточные кавычки — база нужна
 # ИМЕННО для сравнения с "голой" стороной у чужого источника (у той их,
 # как правило, уже нет), иначе 'жк "darmen' vs 'darmen' занижает trgm
@@ -204,12 +217,16 @@ def _phase_token(name: str) -> tuple[str | None, str]:
     сигнала сырой текст и нужен, иначе "Дармен (2 очередь)" после
     агрессивной нормализации имени превращается в просто "дармен" и
     токен теряется), хвостовой номер, хвостовые римские цифры
-    (валидируются round-trip'ом, см. _roman_to_int). "База" — имя с
-    вырезанным суффиксом фазы, нужна score_match() для калибровки-2026-
-    08-12: сравнивать "голую" сторону ("Nur Aspan") с базой номерованной
-    ("Nur Aspan 2" -> "Nur Aspan") — первую очередь почти никогда не
-    подписывают номером вовсе, так что сама по себе "нет токена" не
-    значит "не про фазу"."""
+    (валидируются round-trip'ом, см. _roman_to_int), буквенный блок/
+    корпус ("F блок"/"блок F"/"Family Nest F" — тот же класс сигнала,
+    только литерой; см. калибровку 2026-08-12 в docs/
+    entity_resolution_plan.md). Токен вида "block:f" никогда не
+    совпадёт с числовым — сравнение в score_match() просто строковое,
+    типы токенов различать не нужно. "База" — имя с вырезанным суффиксом
+    фазы, нужна score_match() для калибровки-2026-08-12: сравнивать
+    "голую" сторону ("Nur Aspan") с базой номерованной ("Nur Aspan 2" ->
+    "Nur Aspan") — первую очередь/блок почти никогда не подписывают
+    явно, так что сама по себе "нет токена" не значит "не про фазу"."""
     if not name:
         return None, ""
     s = name.lower()
@@ -218,6 +235,11 @@ def _phase_token(name: str) -> tuple[str | None, str]:
         if m:
             base = (s[:m.start()] + s[m.end():]).strip(" -.,")
             return str(int(m.group(1))), _clean_base(base)
+    for pat in (_BLOCK_LETTER_BEFORE_RE, _BLOCK_LETTER_AFTER_RE):
+        m = pat.search(s)
+        if m:
+            base = (s[:m.start()] + s[m.end():]).strip(" -.,")
+            return f"block:{m.group(1).lower()}", _clean_base(base)
     tail = _PHASE_TRAILING_JUNK_RE.sub("", s).strip()
     m = _PHASE_TRAILING_NUM_RE.search(tail)
     if m:
@@ -227,6 +249,18 @@ def _phase_token(name: str) -> tuple[str | None, str]:
         n = _roman_to_int(m.group(1))
         if n is not None:
             return str(n), _clean_base(tail[:m.start()].strip(" -.,"))
+    # хвостовая ОДИНОЧНАЯ буква — без маркера ("блок"/"корпус") регистр
+    # решает: заглавная в исходном (не lower-нутом) тексте похожа на
+    # обозначение блока ("Family Nest F"), строчная — почти наверняка
+    # обычный конец слова, не трогаем вовсе (нет надёжного способа
+    # отличить "и" как последнее слово смыслового имени от буквы-блока).
+    raw_tail = _PHASE_TRAILING_JUNK_RE.sub("", name).strip()
+    m = _BLOCK_LETTER_TRAILING_RE.search(raw_tail)
+    if m:
+        # m.start() считан по raw_tail (регистр сохранён для проверки
+        # выше), но длина/позиции совпадают с tail (уже lower-нутым) —
+        # регистронезависимая свёртка не меняет длину строки здесь.
+        return f"block:{m.group(1).lower()}", _clean_base(tail[:m.start()].strip(" -.,"))
     return None, _clean_base(tail)
 
 
@@ -291,24 +325,29 @@ async def score_match(
             cap = PHASE_MISMATCH_CAP
             parts.append(f"phase_mismatch({phase_a}!={phase_b})")
     elif phase_a is not None or phase_b is not None:
-        # ровно у одной стороны явный номер. Калибровка 2026-08-12 (живой
+        # ровно у одной стороны явный токен. Калибровка 2026-08-12 (живой
         # прогон newbuild): первую очередь почти никогда не подписывают
         # номером вовсе ("Nur Aspan" / "Nur Aspan 2" — не "Nur Aspan 1"),
-        # так что "нет токена" — это НЕ то же самое, что "цифра не про
+        # так что "нет токена" — это НЕ то же самое, что "токен не про
         # фазу". Проверяем: "голая" сторона совпадает с базой номерованной
-        # (той же строкой без суффикса фазы)? Если да — это неявная
-        # первая фаза, сравниваем как обычно; если нет — цифра, похоже,
-        # правда часть бренда, остаёмся нейтральны.
+        # (той же строкой без суффикса фазы)? Если нет — токен, похоже,
+        # правда часть бренда, остаёмся нейтральны. Если да — дальше по
+        # типу токена: у ЧИСЛА есть осмысленный implicit-default ("1" —
+        # первая фаза); у БУКВЕННОГО блока такого дефолта нет (голая
+        # сторона не может "означать" конкретную букву без подтверждения,
+        # см. Family Nest — калибровка 2026-08-12, sweep) — только cap.
         bare_base, numbered_token, numbered_base = (
             (base_a, phase_b, base_b) if phase_a is None else (base_b, phase_a, base_a))
         base_sim = await name_similarity(bare_base, numbered_base) if bare_base and numbered_base else 0.0
         if base_sim >= 0.8:
-            if numbered_token == "1":
+            is_letter = numbered_token.startswith("block:")
+            implicit_label = "?~implicit" if is_letter else "1~implicit"
+            if not is_letter and numbered_token == "1":
                 score = min(score + _W_PHASE_BONUS, 1.0)
-                parts.append("phase(1~implicit)")
+                parts.append(f"phase({implicit_label})")
             else:
                 cap = PHASE_MISMATCH_CAP
-                parts.append(f"phase_mismatch(1~implicit!={numbered_token})")
+                parts.append(f"phase_mismatch({implicit_label}!={numbered_token})")
         # иначе — нейтрально, не трогаем score (цифра, похоже, не про фазу)
 
     if cap is not None:
