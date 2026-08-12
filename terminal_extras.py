@@ -1599,6 +1599,20 @@ def make_extras_router(templates) -> APIRouter:
         breakdown_no_geo = sum(1 for r in unresolved_rows if r["lat"] is None or r["lon"] is None)
         breakdown_no_source = len(unresolved_rows) - breakdown_junk - len(breakdown_has_source)
 
+        # Карантин координат (задача 2026-08-12, docs/entity_resolution_plan.md
+        # — geo_quarantine.py: точки дальше 50 км от медианы ЖК обнуляются
+        # на уровне значения, не строки, см. migrations/045_geo_quarantine.sql).
+        geo_quarantine = await pg_fetchrow("""
+            SELECT
+                (SELECT COUNT(*) FROM complexes WHERE geo_quarantined_at IS NOT NULL) AS complexes,
+                (SELECT COUNT(*) FROM homeportal_objects WHERE geo_quarantined_at IS NOT NULL) AS homeportal,
+                (SELECT MAX(geo_quarantined_at) FROM (
+                    SELECT geo_quarantined_at FROM complexes WHERE geo_quarantined_at IS NOT NULL
+                    UNION ALL
+                    SELECT geo_quarantined_at FROM homeportal_objects WHERE geo_quarantined_at IS NOT NULL
+                ) x) AS last_at
+        """)
+
         return templates.TemplateResponse("entity_ids.html", {
             "request": request,
             "totals": dict(totals) if totals else {},
@@ -1613,6 +1627,7 @@ def make_extras_router(templates) -> APIRouter:
                 "no_source": breakdown_no_source,
                 "no_geo": breakdown_no_geo,
             },
+            "geo_quarantine": dict(geo_quarantine) if geo_quarantine else {},
             "thresholds": {
                 "auto": AUTO_MATCH_THRESHOLD, "review": REVIEW_QUEUE_THRESHOLD,
                 "fuzzy": FUZZY_NAME_THRESHOLD, "geo_radius_m": GEO_MATCH_RADIUS_M,

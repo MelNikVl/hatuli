@@ -20,6 +20,23 @@ _HEADERS = {
     "Accept-Language": "ru,en",
 }
 
+# Астана + разумный запас (растущие районы, соседние посёлки), НЕ вся
+# область (задача 2026-08-12, карантин координат: geo_quarantine.py
+# нашёл значения в 899 км/475 км от остальных точек того же ЖК —
+# Туркестан/Караганда вместо Астаны — ни один парсер геоданных их не
+# отсеивал на входе, дошли до complexes.lat/lon и homeportal_objects
+# невалидированными). Использовать ПЕРЕД записью lat/lon в БД в любом
+# парсере, который сам вычисляет/парсит координаты — грубая, дешёвая
+# защита, не замена геокодингу/точности.
+ASTANA_BBOX = (50.70, 51.55, 70.80, 72.10)  # lat_min, lat_max, lon_min, lon_max
+
+
+def in_astana_bbox(lat: float | None, lon: float | None) -> bool:
+    if lat is None or lon is None:
+        return False
+    lat_min, lat_max, lon_min, lon_max = ASTANA_BBOX
+    return lat_min <= lat <= lat_max and lon_min <= lon <= lon_max
+
 # Module-level lock: ensures only one geocoding request runs at a time
 _geocode_lock = asyncio.Lock()
 _last_request_time: float = 0.0
@@ -66,6 +83,12 @@ async def geocode(address: str, city: str | None = None) -> tuple[float, float] 
 
             lat = float(results[0]["lat"])
             lon = float(results[0]["lon"])
+            # bbox-защита (см. ASTANA_BBOX выше) — только когда явно
+            # искали в Астане/без указания города (по умолчанию), иначе
+            # легитимный результат по другому городу ложно отбросим.
+            if (city is None or city.lower() == "astana") and not in_astana_bbox(lat, lon):
+                logger.warning("Nominatim: %r → (%.5f, %.5f) вне bbox Астаны, отбрасываю", query, lat, lon)
+                return None
             logger.debug("Nominatim: %r → (%.5f, %.5f)", query, lat, lon)
             return lat, lon
 

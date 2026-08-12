@@ -19,6 +19,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from bot.core.geo import in_astana_bbox
+
 log = logging.getLogger("newbuild_common")
 
 _DISTRICT_RE = re.compile(r"район\s+([^,]+)", re.I)
@@ -193,7 +195,7 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
             completion_year, completion_quarter, is_newbuild, source,
             cx.photo_url, json.dumps([cx.photo_url]) if cx.photo_url else None, cx.description)
         if row["lat"] is None or row["lon"] is None:
-            if cx.lat is not None and cx.lon is not None:
+            if cx.lat is not None and cx.lon is not None and in_astana_bbox(cx.lat, cx.lon):
                 await execute("UPDATE complexes SET lat = $2, lon = $3 WHERE id = $1", cid, cx.lat, cx.lon)
             elif cx.address:
                 await geocode_complex(cid, cx.address)
@@ -244,7 +246,9 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
         log.warning("fuzzy-проверка на дубль ЖК %r не удалась: %s", cx.name, e)
     # Источник сам отдаёт точные координаты (NAK) -> используем их напрямую,
     # без Nominatim (тот всё равно менее точен, чем данные самого застройщика).
-    if cx.lat is not None and cx.lon is not None:
+    # bbox-проверка (задача 2026-08-12, карантин координат) — источник тоже
+    # может отдать битые данные, не доверяем вслепую.
+    if cx.lat is not None and cx.lon is not None and in_astana_bbox(cx.lat, cx.lon):
         await execute("UPDATE complexes SET lat = $2, lon = $3 WHERE id = $1", cid, cx.lat, cx.lon)
     elif cx.address:
         await geocode_complex(cid, cx.address)

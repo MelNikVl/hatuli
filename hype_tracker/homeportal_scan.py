@@ -75,6 +75,7 @@ def norm_name(n: str) -> str:
 async def main() -> int:
     from bot.db.pg import init_pool, close_pool, fetch, fetchrow, fetchval
     from bot.core.entity_resolution import score_match, record_source_link
+    from bot.core.geo import in_astana_bbox
     await init_pool(DATABASE_URL)
 
     # индексы complexes для маппинга (загружаем один раз)
@@ -136,6 +137,21 @@ async def main() -> int:
             sup = comp.get("supervisingData") or {}
             tech = comp.get("technicalSupervisingData") or {}
 
+            # bbox-валидация координат ДО записи (задача 2026-08-12,
+            # карантин — geo_quarantine.py постфактум нашёл 2 значения в
+            # сотнях км от Астаны, отданных этим же API; отсекаем на входе,
+            # чтобы такое больше не копилось). hp_lat/hp_lon — вниз по
+            # коду для score_match(), тот же провалидированный источник,
+            # не парсим loc.get(...) дважды.
+            try:
+                hp_lat = float(loc.get("latitude")) if loc.get("latitude") not in (None, "") else None
+                hp_lon = float(loc.get("longitude")) if loc.get("longitude") not in (None, "") else None
+            except (TypeError, ValueError):
+                hp_lat = hp_lon = None
+            if hp_lat is not None and not in_astana_bbox(hp_lat, hp_lon):
+                print(f"  ⚠️ {oid}: координаты вне bbox Астаны ({hp_lat},{hp_lon}) от API — не пишу")
+                hp_lat = hp_lon = None
+
             # сумма квартир и проданных по очередям
             apt_total = sum((a.get("no_of_apartments") or 0) for a in apt)
             apt_sold = sum((a.get("no_of_apartments_sold") or 0) for a in apt)
@@ -159,8 +175,8 @@ async def main() -> int:
                 '{ESC((basic.get("authority") or {}).get("name"))}', '{ESC(basic.get("warranty_number"))}',
                 '{ESC(basic.get("issue_date"))}', '{ESC(basic.get("start_date"))}',
                 '{ESC(basic.get("commissioning_date"))}', '{ESC(basic.get("address"))}',
-                '{ESC((basic.get("region") or {}).get("name_ru"))}', '{ESC(loc.get("latitude"))}',
-                '{ESC(loc.get("longitude"))}', '{ESC(loc.get("cadastral_number"))}',
+                '{ESC((basic.get("region") or {}).get("name_ru"))}', '{ESC(hp_lat)}',
+                '{ESC(hp_lon)}', '{ESC(loc.get("cadastral_number"))}',
                 '{ESC(dev.get("bin"))}', '{ESC(dev.get("name"))}', '{ESC(dev.get("phone"))}', '{ESC(dev.get("email"))}',
                 '{ESC(auth.get("bin"))}', '{ESC(auth.get("name"))}',
                 '{ESC(sup.get("bin"))}', '{ESC(sup.get("name"))}',
@@ -236,11 +252,8 @@ async def main() -> int:
                 if cid:
                     cand = await fetchrow("SELECT name, lat, lon, address FROM complexes WHERE id = $1", cid)
                     dev_bin = await fetchval("SELECT developer_bin FROM complex_tech_specs WHERE complex_id = $1", cid)
-                    try:
-                        hp_lat = float(loc["latitude"]) if loc.get("latitude") not in (None, "") else None
-                        hp_lon = float(loc["longitude"]) if loc.get("longitude") not in (None, "") else None
-                    except (TypeError, ValueError):
-                        hp_lat = hp_lon = None
+                    # hp_lat/hp_lon уже провалидированы bbox-проверкой выше
+                    # (до записи в homeportal_objects) — переиспользуем.
                     conf, method = await score_match(
                         nm or obj_name, norm_name(cand["name"]) if cand else (nm or obj_name),
                         existing_lat=cand["lat"] if cand else None,

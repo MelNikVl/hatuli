@@ -57,6 +57,11 @@
     <div class="lbl">Приток / разбор очереди за 7 дней</div>
     <div class="sub">приток — новые кандидаты (review+conflict); разбор — подтверждено или отклонено руками. Еженедельный ритуал: приток стабильно &gt; разбора — очередь копится, надо разбирать чаще</div>
   </div>
+  <div class="eid-tile">
+    <div class="n">{{ geo_quarantine.complexes or 0 }} / {{ geo_quarantine.homeportal or 0 }}</div>
+    <div class="lbl">🚧 Карантин координат: ЖК / homeportal-точек</div>
+    <div class="sub">точки дальше 50 км от медианы того же ЖК — обнулены на уровне значения, не строки (geo_quarantine.py){% if geo_quarantine.last_at %}, последний прогон {{ geo_quarantine.last_at.strftime('%Y-%m-%d') }}{% endif %}</div>
+  </div>
 </div>
 
 <div class="eid-card">
