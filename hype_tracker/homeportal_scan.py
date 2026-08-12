@@ -249,6 +249,11 @@ async def main() -> int:
                         developer_match=bool(dev_bin) and dev_bin == dev.get("bin"),
                         existing_address=cand["address"] if cand else None,
                         candidate_address=basic.get("address"),
+                        # СЫРЫЕ имена отдельно — токен очереди/фазы («2
+                        # очередь», хвостовой номер) часто сидит внутри
+                        # скобок, которые norm_name() уже вырезал из nm/
+                        # cand["name"] выше (см. докстринг _phase_token).
+                        name_a_full=obj_name, name_b_full=cand["name"] if cand else obj_name,
                     )
                     link_result = await record_source_link(
                         cid, "homeportal", str(oid), confidence=conf, method=method, matched_by="auto")

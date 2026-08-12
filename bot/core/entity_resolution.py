@@ -18,6 +18,18 @@ similarity), сигнал адреса, реальное разделение au
 по факту хранения (раньше и то, и другое одинаково писалось в спайн),
 роутинг конфликтов в очередь вместо тихой перезаписи, память отклонений.
 
+Ревью 2026-08-12 (калибровка на живом homeportal-прогоне, см.
+docs/entity_resolution_plan.md) добавило сигнал номера очереди/фазы:
+"Дармен 2" и "Дармен 1" — разные корпуса одного застройщика в 150 м
+друг от друга, гео+застройщик одни без сигнала фазы протаскивали их в
+auto как один ЖК. Извлекаем номер очереди из имени (см. _phase_token) —
+у обеих сторон он есть и он РАЗНЫЙ -> потолок confidence 0.79 (не
+auto, но и не 0 — остальные сигналы всё ещё валидны, просто решение
+не машинное); ОБЕ стороны и токен РАВНЫЙ -> небольшой бонус (то же
+имя + та же фаза — это усиление, не новый независимый сигнал); токен
+есть только у одной стороны -> нейтрально, не мешаем остальным
+сигналам (не гарантия, что цифра в имени вообще про фазу).
+
 Фаза 2 (юниты — unit_source_links, тот же spine на уровне
 newbuild_units.id) зафиксирована в плане, но НЕ реализуется здесь —
 ждём, пока фаза 1 покажет уровень шума автоматического матчинга в проде.
@@ -25,6 +37,7 @@ newbuild_units.id) зафиксирована в плане, но НЕ реал�
 from __future__ import annotations
 
 import math
+import re
 
 # Пороги авто-матч / очередь на ручную проверку / не создавать связь
 # вовсе — согласовано в плане (docs/entity_resolution_plan.md).
@@ -43,6 +56,12 @@ _W_GEO = 0.25
 _W_DEVELOPER = 0.15
 _W_ADDRESS = 0.15
 GEO_MATCH_RADIUS_M = 150.0
+
+# Токен очереди/фазы: расходящийся токен не даёт confidence уйти в auto
+# (0.79 < AUTO_MATCH_THRESHOLD), но и не гасит совпадение целиком — есть
+# и другие валидные сигналы, решение просто уходит человеку в очередь.
+PHASE_MISMATCH_CAP = 0.79
+_W_PHASE_BONUS = 0.1
 
 
 def generate_complex_code(complex_id: int) -> str:
@@ -114,17 +133,100 @@ def address_match(addr_a: str | None, addr_b: str | None) -> bool | None:
     return overlap / min(len(ta), len(tb)) >= 0.5
 
 
+_ROMAN_VALUES = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
+_ROMAN_SYMBOLS = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"),
+                  (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"),
+                  (5, "V"), (4, "IV"), (1, "I")]
+
+
+def _int_to_roman(n: int) -> str:
+    out = []
+    for v, sym in _ROMAN_SYMBOLS:
+        while n >= v:
+            out.append(sym)
+            n -= v
+    return "".join(out)
+
+
+def _roman_to_int(token: str) -> int | None:
+    """None, если это не валидная римская запись — round-trip через
+    _int_to_roman отсекает случайные слова из тех же букв (например
+    "MIX": буквы m/i/x все "римские", но это не корректная запись)."""
+    s = token.lower()
+    if not s or any(ch not in _ROMAN_VALUES for ch in s):
+        return None
+    total, prev = 0, 0
+    for ch in reversed(s):
+        v = _ROMAN_VALUES[ch]
+        total += -v if v < prev else v
+        prev = max(prev, v)
+    if 0 < total <= 49 and _int_to_roman(total) == s.upper():
+        return total
+    return None
+
+
+# "2-я очередь" / "2 я очередь" — цифра перед словом
+_PHASE_QUEUE_BEFORE_RE = re.compile(r"(\d{1,3})\s*-?\s*я\s*очеред[ьи]")
+# "2 очередь" — цифра перед словом, без "-я"
+_PHASE_QUEUE_NUM_RE = re.compile(r"(\d{1,3})\s*очеред[ьи]")
+# "очередь 2" / "очередь № 2"
+_PHASE_QUEUE_AFTER_RE = re.compile(r"очеред[ьи]\s*[№#]?\s*(\d{1,3})")
+_PHASE_TRAILING_JUNK_RE = re.compile(r'["\'\)\]»,.]+$')
+# хвостовой номер: "Дармен - 2", "Dastur 2" — только цифра как последний
+# токен (не часть слова типа "Ishim C3", там перед цифрой нет пробела/тире)
+_PHASE_TRAILING_NUM_RE = re.compile(r"(?:^|[\s\-])(\d{1,3})$")
+_PHASE_TRAILING_ROMAN_RE = re.compile(r"(?:^|[\s\-])([ivxlcdmIVXLCDM]{1,7})$")
+
+
+def _phase_token(name: str) -> str | None:
+    """Номер очереди/фазы ЖК из имени (эвристика, не гарантия — иногда
+    цифра в имени часть бренда, не фаза): "N-я очередь"/"очередь N" (в
+    любом месте строки, включая внутри скобок — работает на СЫРОМ имени,
+    вызывающая сторона не обязана заранее resolveвырезать скобки/приставку
+    "ЖК" — как раз наоборот, для этого сигнала сырой текст и нужен, иначе
+    "Дармен (2 очередь)" после агрессивной нормализации имени превращается
+    в просто "дармен" и токен теряется), хвостовой номер, хвостовые
+    римские цифры (валидируются round-trip'ом, см. _roman_to_int)."""
+    if not name:
+        return None
+    s = name.lower()
+    for pat in (_PHASE_QUEUE_BEFORE_RE, _PHASE_QUEUE_NUM_RE, _PHASE_QUEUE_AFTER_RE):
+        m = pat.search(s)
+        if m:
+            return str(int(m.group(1)))
+    tail = _PHASE_TRAILING_JUNK_RE.sub("", s).strip()
+    m = _PHASE_TRAILING_NUM_RE.search(tail)
+    if m:
+        return str(int(m.group(1)))
+    m = _PHASE_TRAILING_ROMAN_RE.search(tail)
+    if m:
+        n = _roman_to_int(m.group(1))
+        if n is not None:
+            return str(n)
+    return None
+
+
 async def score_match(
     name_a: str, name_b: str, *,
     existing_lat: float | None = None, existing_lon: float | None = None,
     candidate_lat: float | None = None, candidate_lon: float | None = None,
     developer_match: bool | None = None,
     existing_address: str | None = None, candidate_address: str | None = None,
+    name_a_full: str | None = None, name_b_full: str | None = None,
 ) -> tuple[float, str]:
     """Считает confidence + human-readable match_method по сигналам,
     которые реально удалось проверить (сигнал без данных просто не
     участвует — не штрафуем и не выдумываем). Имя — единственный
-    обязательный сигнал (без него нет базы для сравнения вовсе)."""
+    обязательный сигнал (без него нет базы для сравнения вовсе).
+
+    name_a/name_b — то, что реально идёт в pg_trgm similarity (вызывающая
+    сторона вправе заранее подчистить их для лучшего fuzzy-сравнения,
+    как это делает homeportal_scan.py через norm_name()). name_a_full/
+    name_b_full — опционально, СЫРЫЕ имена для извлечения токена
+    очереди/фазы (_phase_token) — если не переданы, для этого сигнала
+    используются name_a/name_b как есть (ок для источников, которые и
+    так передают сырые имена без предварительной чистки, см.
+    newbuild_common.ensure_complex)."""
     sim = await name_similarity(name_a, name_b)
     if sim >= 1.0:
         score, parts = _W_NAME_EXACT, ["name_exact"]
@@ -153,7 +255,23 @@ async def score_match(
         score += _W_ADDRESS
         parts.append("address")
 
-    return round(min(score, 1.0), 2), "+".join(parts)
+    score = min(score, 1.0)
+    phase_a = _phase_token(name_a_full or name_a)
+    phase_b = _phase_token(name_b_full or name_b)
+    cap = None
+    if phase_a is not None and phase_b is not None:
+        if phase_a == phase_b:
+            score = min(score + _W_PHASE_BONUS, 1.0)
+            parts.append(f"phase({phase_a})")
+        else:
+            cap = PHASE_MISMATCH_CAP
+            parts.append(f"phase_mismatch({phase_a}!={phase_b})")
+    # ровно у одной стороны токен есть, у другой нет -> нейтрально,
+    # не трогаем score вовсе (цифра могла и не быть про фазу)
+
+    if cap is not None:
+        score = min(score, cap)
+    return round(score, 2), "+".join(parts)
 
 
 async def record_source_link(
