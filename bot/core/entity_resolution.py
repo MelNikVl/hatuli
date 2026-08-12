@@ -23,12 +23,19 @@ docs/entity_resolution_plan.md) добавило сигнал номера оч�
 "Дармен 2" и "Дармен 1" — разные корпуса одного застройщика в 150 м
 друг от друга, гео+застройщик одни без сигнала фазы протаскивали их в
 auto как один ЖК. Извлекаем номер очереди из имени (см. _phase_token) —
-у обеих сторон он есть и он РАЗНЫЙ -> потолок confidence 0.79 (не
-auto, но и не 0 — остальные сигналы всё ещё валидны, просто решение
-не машинное); ОБЕ стороны и токен РАВНЫЙ -> небольшой бонус (то же
-имя + та же фаза — это усиление, не новый независимый сигнал); токен
-есть только у одной стороны -> нейтрально, не мешаем остальным
-сигналам (не гарантия, что цифра в имени вообще про фазу).
+у обеих сторон он есть и он РАЗНЫЙ -> потолок confidence 0.79; ОБЕ
+стороны и токен РАВНЫЙ -> небольшой бонус.
+
+Тот же день, вторая калибровка (sibling-sweep на живом newbuild-
+прогоне): "токен только с одной стороны -> нейтрально" не ловило
+доминирующий в реальных данных паттерн — первую очередь почти никогда
+не подписывают номером вовсе ("Nur Aspan"/"Nur Aspan 2", НЕ "Nur Aspan
+1"/"Nur Aspan 2"). 6 из 7 реальных пар "база+номер" в проде проходили
+в auto именно поэтому. Теперь при токене с одной стороны сравниваем
+"голую" сторону с базой номерованной (той же строкой без суффикса
+фазы) — совпадает -> это неявная первая фаза, сравниваем как обычно
+(1 vs N); не совпадает -> цифра, похоже, не про фазу, остаёмся
+нейтральны, как раньше.
 
 Фаза 2 (юниты — unit_source_links, тот же spine на уровне
 newbuild_units.id) зафиксирована в плане, но НЕ реализуется здесь —
@@ -178,32 +185,39 @@ _PHASE_TRAILING_NUM_RE = re.compile(r"(?:^|[\s\-])(\d{1,3})$")
 _PHASE_TRAILING_ROMAN_RE = re.compile(r"(?:^|[\s\-])([ivxlcdmIVXLCDM]{1,7})$")
 
 
-def _phase_token(name: str) -> str | None:
-    """Номер очереди/фазы ЖК из имени (эвристика, не гарантия — иногда
-    цифра в имени часть бренда, не фаза): "N-я очередь"/"очередь N" (в
-    любом месте строки, включая внутри скобок — работает на СЫРОМ имени,
-    вызывающая сторона не обязана заранее resolveвырезать скобки/приставку
-    "ЖК" — как раз наоборот, для этого сигнала сырой текст и нужен, иначе
-    "Дармен (2 очередь)" после агрессивной нормализации имени превращается
-    в просто "дармен" и токен теряется), хвостовой номер, хвостовые
-    римские цифры (валидируются round-trip'ом, см. _roman_to_int)."""
+def _phase_token(name: str) -> tuple[str | None, str]:
+    """(номер_очереди/фазы_или_None, база_без_суффикса_фазы). Номер —
+    эвристика, не гарантия (иногда цифра в имени часть бренда, не фаза):
+    "N-я очередь"/"очередь N" (в любом месте строки, включая внутри
+    скобок — работает на СЫРОМ имени, вызывающая сторона не обязана
+    заранее вырезать скобки/приставку "ЖК" — как раз наоборот, для этого
+    сигнала сырой текст и нужен, иначе "Дармен (2 очередь)" после
+    агрессивной нормализации имени превращается в просто "дармен" и
+    токен теряется), хвостовой номер, хвостовые римские цифры
+    (валидируются round-trip'ом, см. _roman_to_int). "База" — имя с
+    вырезанным суффиксом фазы, нужна score_match() для калибровки-2026-
+    08-12: сравнивать "голую" сторону ("Nur Aspan") с базой номерованной
+    ("Nur Aspan 2" -> "Nur Aspan") — первую очередь почти никогда не
+    подписывают номером вовсе, так что сама по себе "нет токена" не
+    значит "не про фазу"."""
     if not name:
-        return None
+        return None, ""
     s = name.lower()
     for pat in (_PHASE_QUEUE_BEFORE_RE, _PHASE_QUEUE_NUM_RE, _PHASE_QUEUE_AFTER_RE):
         m = pat.search(s)
         if m:
-            return str(int(m.group(1)))
+            base = (s[:m.start()] + s[m.end():]).strip(" -.,")
+            return str(int(m.group(1))), base
     tail = _PHASE_TRAILING_JUNK_RE.sub("", s).strip()
     m = _PHASE_TRAILING_NUM_RE.search(tail)
     if m:
-        return str(int(m.group(1)))
+        return str(int(m.group(1))), tail[:m.start()].strip(" -.,")
     m = _PHASE_TRAILING_ROMAN_RE.search(tail)
     if m:
         n = _roman_to_int(m.group(1))
         if n is not None:
-            return str(n)
-    return None
+            return str(n), tail[:m.start()].strip(" -.,")
+    return None, tail
 
 
 async def score_match(
@@ -256,8 +270,8 @@ async def score_match(
         parts.append("address")
 
     score = min(score, 1.0)
-    phase_a = _phase_token(name_a_full or name_a)
-    phase_b = _phase_token(name_b_full or name_b)
+    phase_a, base_a = _phase_token(name_a_full or name_a)
+    phase_b, base_b = _phase_token(name_b_full or name_b)
     cap = None
     if phase_a is not None and phase_b is not None:
         if phase_a == phase_b:
@@ -266,8 +280,26 @@ async def score_match(
         else:
             cap = PHASE_MISMATCH_CAP
             parts.append(f"phase_mismatch({phase_a}!={phase_b})")
-    # ровно у одной стороны токен есть, у другой нет -> нейтрально,
-    # не трогаем score вовсе (цифра могла и не быть про фазу)
+    elif phase_a is not None or phase_b is not None:
+        # ровно у одной стороны явный номер. Калибровка 2026-08-12 (живой
+        # прогон newbuild): первую очередь почти никогда не подписывают
+        # номером вовсе ("Nur Aspan" / "Nur Aspan 2" — не "Nur Aspan 1"),
+        # так что "нет токена" — это НЕ то же самое, что "цифра не про
+        # фазу". Проверяем: "голая" сторона совпадает с базой номерованной
+        # (той же строкой без суффикса фазы)? Если да — это неявная
+        # первая фаза, сравниваем как обычно; если нет — цифра, похоже,
+        # правда часть бренда, остаёмся нейтральны.
+        bare_base, numbered_token, numbered_base = (
+            (base_a, phase_b, base_b) if phase_a is None else (base_b, phase_a, base_a))
+        base_sim = await name_similarity(bare_base, numbered_base) if bare_base and numbered_base else 0.0
+        if base_sim >= 0.8:
+            if numbered_token == "1":
+                score = min(score + _W_PHASE_BONUS, 1.0)
+                parts.append("phase(1~implicit)")
+            else:
+                cap = PHASE_MISMATCH_CAP
+                parts.append(f"phase_mismatch(1~implicit!={numbered_token})")
+        # иначе — нейтрально, не трогаем score (цифра, похоже, не про фазу)
 
     if cap is not None:
         score = min(score, cap)
