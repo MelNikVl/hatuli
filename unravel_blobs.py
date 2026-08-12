@@ -254,14 +254,30 @@ async def main():
 
             if not args.test:
                 seed_name = names[0]
-                new_cid = await fetchrow("""
-                    INSERT INTO complexes (name, developer_id, address, lat, lon, provenance, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6, now(), now())
-                    RETURNING id
-                """, seed_name, cx["developer_id"] if cx else None,
-                    next(iter(addrs), None), new_lat, new_lon,
-                    json.dumps({"split_from": cid, "split_at": datetime.now(timezone.utc).isoformat(),
-                                "method": "unravel_2026-08-12"}))
+                provenance = json.dumps({"split_from": cid, "split_at": datetime.now(timezone.utc).isoformat(),
+                                          "method": "unravel_2026-08-12"})
+                try:
+                    new_cid = await fetchrow("""
+                        INSERT INTO complexes (name, developer_id, address, lat, lon, provenance, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, now())
+                        RETURNING id
+                    """, seed_name, cx["developer_id"] if cx else None,
+                        next(iter(addrs), None), new_lat, new_lon, provenance)
+                except Exception as e:
+                    # complexes.name уникально (тоже совпадает в двух разных
+                    # blob'ах, редко, но встретилось — "Panorama park (блок
+                    # 3)") — не роняем весь массовый прогон, дизамбигуируем
+                    # object_id первого объекта кластера, он точно уникален.
+                    if "unique" not in str(e).lower() and "duplicate" not in str(e).lower():
+                        raise
+                    seed_name = f"{seed_name} [{cl[0]['object_id']}]"
+                    print(f"     ! коллизия имени, дизамбигуация -> {seed_name!r}")
+                    new_cid = await fetchrow("""
+                        INSERT INTO complexes (name, developer_id, address, lat, lon, provenance, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, now())
+                        RETURNING id
+                    """, seed_name, cx["developer_id"] if cx else None,
+                        next(iter(addrs), None), new_lat, new_lon, provenance)
                 new_cid = new_cid["id"]
                 for o in cl:
                     await execute("""
