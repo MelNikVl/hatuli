@@ -1,20 +1,40 @@
 #!/usr/bin/env python3
 """Парсер homeportal.kz: официальные данные по ЖК (долевое строительство КЖК).
 Список: POST /api/v1/getobjects (публичный) → детали: GET /api/v1/objects-detail/{id}.
-Щадящий: пауза 1с между деталками. Заполняет homeportal_objects + маппинг на complexes."""
+Щадящий: пауза 1с между деталками. Заполняет homeportal_objects + маппинг на complexes.
+
+Маппинг на complexes (задача 2026-08-12, см. README): кандидата находим
+локально (дёшево, без похода в БД на каждый из ~600 объектов) через
+норм./fuzzy/first_word индексы по именам, а вот итоговые confidence и
+match_method считает bot.core.entity_resolution.score_match() по реальным
+сигналам (имя через pg_trgm + гео + застройщик БИН + адрес) — и пишет
+через record_source_link() в spine (complex_source_links) при auto,
+иначе в очередь на проверку (учитывает уже отклонённые руками пары и не
+перезаписывает молча конфликт с другим ЖК). Раньше кандидат писался в
+homeportal_objects.matched_complex_id напрямую, мимо spine — 585 связей
+скопились вне единой истины между источниками, гасили backfill'ом
+разово; теперь копится через record_source_link() каждый прогон."""
+import asyncio
 import difflib
 import json
 import re
 import subprocess
 import sys
-import time
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from dotenv import load_dotenv
+load_dotenv()
+import os
 
 FUZZY_THRESHOLD = 0.75
+MAX_AGE_DAYS = 7  # инкремент: деталки только для новых ЖК и старше 7 дней
 
 API = "https://api.homeportal.kz/api/v1"
 UA = "Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0 Safari/537.36"
 DELAY = 90.0  # щадящий темп: 1 ЖК / 90 сек (по требованию пользователя)
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
 
 
 def psql(sql: str) -> str:
@@ -52,7 +72,11 @@ def norm_name(n: str) -> str:
     return n
 
 
-def main() -> int:
+async def main() -> int:
+    from bot.db.pg import init_pool, close_pool, fetch, fetchrow, fetchval
+    from bot.core.entity_resolution import score_match, record_source_link
+    await init_pool(DATABASE_URL)
+
     # индексы complexes для маппинга (загружаем один раз)
     global COMPLEX_INDEX, NORM_INDEX
     cx_rows = [r.split("|", 1) for r in psql("SELECT id, name FROM complexes WHERE is_garbage IS NOT TRUE").splitlines() if r]
@@ -63,6 +87,19 @@ def main() -> int:
         if nm and nm not in NORM_INDEX:
             NORM_INDEX[nm] = int(cid)
     print(f"complexes проиндексировано: {len(COMPLEX_INDEX)}")
+    link_stats: dict[str, int] = {}
+
+    # Уже подтверждённые связи этого источника в spine — если source_id
+    # там уже есть, это settled fact (сам object_id стабилен между
+    # прогонами), пере-скорить и заново класть в очередь на review при
+    # каждом перезапуске таймера (раз в 45 мин) незачем: geo у homeportal
+    # (точные координаты объекта) и у complexes (обычно Nominatim по
+    # улице) может расходиться на 100-300+ м — этого одного достаточно,
+    # чтобы уже подтверждённая пара не набрала 0.8 заново и заспамила
+    # очередь тем же кандидатом на каждый прогон.
+    hp_links = {r["source_id"]: r["complex_id"] for r in
+                await fetch("SELECT source_id, complex_id FROM complex_source_links WHERE source = 'homeportal'")}
+    print(f"уже в spine (homeportal): {len(hp_links)}")
 
     # 1) список всех объектов
     d = req(f"{API}/getobjects", {})
@@ -70,8 +107,21 @@ def main() -> int:
     astana = [r for r in rows if (r.get("region") or {}).get("ru") == "г. Астана"]
     print(f"всего: {len(rows)}, Астана: {len(astana)}")
 
+    # Инкрементальный проход: реестр конечный (620 ЖК), раньше каждый
+    # таймерный запуск (~45 мин) переписывал ВСЕ 620 заново ≈ 15.5 ч.
+    # Теперь деталки тянем только для новых ЖК и тех, чьи данные старше
+    # MAX_AGE_DAYS дней (свежесть по fetched_at, считаем в SQL).
+    fresh_ids = set()
+    for r in psql(f"SELECT object_id FROM homeportal_objects "
+                  f"WHERE fetched_at > now() - interval '{MAX_AGE_DAYS} days'").splitlines():
+        if r:
+            fresh_ids.add(int(r))
+    todo = [o for o in astana if o["id"] not in fresh_ids]
+    skipped = len(astana) - len(todo)
+    print(f"свежих (< {MAX_AGE_DAYS} дн): {skipped}, к обновлению: {len(todo)}")
+
     done, errors = 0, 0
-    for o in astana:
+    for o in todo:
         oid = o["id"]
         try:
             det = req(f"{API}/objects-detail/{oid}")
@@ -141,35 +191,77 @@ def main() -> int:
                 rooms_1 = EXCLUDED.rooms_1, rooms_2 = EXCLUDED.rooms_2, rooms_3 = EXCLUDED.rooms_3,
                 rooms_4 = EXCLUDED.rooms_4, apartment_data = EXCLUDED.apartment_data,
                 images = EXCLUDED.images, fetched_at = now()""")
-            # маппинг на complexes: точное → нормализованное → fuzzy (difflib,
-            # порог FUZZY_THRESHOLD, лучшее совпадение среди всех ЖК) → первое
-            # слово (самый слабый fallback). Метод матчинга сохраняем в
-            # match_method — виден в /admin/analytics/homeportal.
+            # Кандидата на complexes ищем локально (дёшево): точное →
+            # нормализованное → fuzzy (difflib, порог FUZZY_THRESHOLD) →
+            # первое слово (самый слабый fallback) — по индексам выше.
+            # Но confidence/match_method, которые реально пишутся, считает
+            # score_match() по нормализованным именам (сырые "ЖК \"Х\"
+            # (очередь N)" против "Х" у trigram-сравнения почти не похожи —
+            # без norm_name() имя-сигнал гас бы на большинстве настоящих
+            # совпадений) + гео/застройщик/адрес, реальные сигналы, которых
+            # у локального индекса не было вовсе.
             obj_name = o.get("name") or ""
-            cid, method = None, None
-            cid = COMPLEX_INDEX.get(obj_name.strip().lower())
-            if cid:
-                method = "exact"
-            nm = norm_name(obj_name)
-            if not cid and nm:
-                cid = NORM_INDEX.get(nm)
+            cid, method, link_result = None, None, None
+            if str(oid) in hp_links:
+                # уже подтверждённая связь этого источника — используем как
+                # есть, без пере-скоринга и без похода в очередь (см. коммент
+                # у hp_links выше).
+                cid, method, link_result = hp_links[str(oid)], "already_in_spine", "auto"
+                link_stats[link_result] = link_stats.get(link_result, 0) + 1
+            else:
+                find_tier = None
+                cid = COMPLEX_INDEX.get(obj_name.strip().lower())
                 if cid:
-                    method = "normalized"
-            if not cid and nm:
-                best_ratio, best_cid = 0.0, None
-                for cand_norm, cand_cid in NORM_INDEX.items():
-                    ratio = difflib.SequenceMatcher(None, nm, cand_norm).ratio()
-                    if ratio > best_ratio:
-                        best_ratio, best_cid = ratio, cand_cid
-                if best_ratio >= FUZZY_THRESHOLD:
-                    cid, method = best_cid, f"fuzzy:{best_ratio:.2f}"
-            if not cid and nm:
-                parts = nm.split()
-                if len(parts) >= 2:
-                    cid = NORM_INDEX.get(parts[0])
+                    find_tier = "exact"
+                nm = norm_name(obj_name)
+                if not cid and nm:
+                    cid = NORM_INDEX.get(nm)
                     if cid:
-                        method = "first_word"
-            if cid:
+                        find_tier = "normalized"
+                if not cid and nm:
+                    best_ratio, best_cid = 0.0, None
+                    for cand_norm, cand_cid in NORM_INDEX.items():
+                        ratio = difflib.SequenceMatcher(None, nm, cand_norm).ratio()
+                        if ratio > best_ratio:
+                            best_ratio, best_cid = ratio, cand_cid
+                    if best_ratio >= FUZZY_THRESHOLD:
+                        cid, find_tier = best_cid, f"fuzzy:{best_ratio:.2f}"
+                if not cid and nm:
+                    parts = nm.split()
+                    if len(parts) >= 2:
+                        cid = NORM_INDEX.get(parts[0])
+                        if cid:
+                            find_tier = "first_word"
+
+                if cid:
+                    cand = await fetchrow("SELECT name, lat, lon, address FROM complexes WHERE id = $1", cid)
+                    dev_bin = await fetchval("SELECT developer_bin FROM complex_tech_specs WHERE complex_id = $1", cid)
+                    try:
+                        hp_lat = float(loc["latitude"]) if loc.get("latitude") not in (None, "") else None
+                        hp_lon = float(loc["longitude"]) if loc.get("longitude") not in (None, "") else None
+                    except (TypeError, ValueError):
+                        hp_lat = hp_lon = None
+                    conf, method = await score_match(
+                        nm or obj_name, norm_name(cand["name"]) if cand else (nm or obj_name),
+                        existing_lat=cand["lat"] if cand else None,
+                        existing_lon=cand["lon"] if cand else None,
+                        candidate_lat=hp_lat, candidate_lon=hp_lon,
+                        developer_match=bool(dev_bin) and dev_bin == dev.get("bin"),
+                        existing_address=cand["address"] if cand else None,
+                        candidate_address=basic.get("address"),
+                    )
+                    link_result = await record_source_link(
+                        cid, "homeportal", str(oid), confidence=conf, method=method, matched_by="auto")
+                    link_stats[link_result] = link_stats.get(link_result, 0) + 1
+                    print(f"  {oid} {obj_name[:40]!r}: кандидат #{cid} ({find_tier}) -> "
+                          f"{link_result} ({method}, {conf:.2f})")
+
+            # Дальше (matched_complex_id для UI, housing_class_test,
+            # description, developer_bin) пишем только для auto — эти
+            # производные не должны показывать несогласованный/спорный
+            # матч как подтверждённый. review/conflict ждут в очереди
+            # (см. approve_candidate()/reject_candidate()).
+            if cid and link_result == "auto":
                 psql(f"UPDATE homeportal_objects SET matched_complex_id = {cid}, matched_at = now(), "
                      f"match_method = '{ESC(method)}' WHERE object_id = {oid}")
                 psql(f"""INSERT INTO housing_class_test (complex_id, apartment_count, rooms_1, rooms_2, rooms_3, rooms_4, elevator_count, apartment_count_source, updated_at)
@@ -198,11 +290,13 @@ def main() -> int:
             psql(f"INSERT INTO homeportal_parse_log (object_id, name, status, detail) "
                  f"VALUES ({oid}, '{ESC(o.get('name'))}', 'error', '{ESC(str(e)[:150])}')")
             print(f"❌ {oid}: {e}")
-        time.sleep(DELAY)
+        await asyncio.sleep(DELAY)
 
-    print(f"итог: {done} ok, {errors} ошибок")
+    print(f"итог: {done} ok, {errors} ошибок (пропущено свежих: {skipped})")
+    print(f"spine: {link_stats}")
+    await close_pool()
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(asyncio.run(main()))
