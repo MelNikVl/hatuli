@@ -183,6 +183,16 @@ _PHASE_TRAILING_JUNK_RE = re.compile(r'["\'\)\]»,.]+$')
 # токен (не часть слова типа "Ishim C3", там перед цифрой нет пробела/тире)
 _PHASE_TRAILING_NUM_RE = re.compile(r"(?:^|[\s\-])(\d{1,3})$")
 _PHASE_TRAILING_ROMAN_RE = re.compile(r"(?:^|[\s\-])([ivxlcdmIVXLCDM]{1,7})$")
+# "жк"/"мжк"-приставка маркетплейсов + обёрточные кавычки — база нужна
+# ИМЕННО для сравнения с "голой" стороной у чужого источника (у той их,
+# как правило, уже нет), иначе 'жк "darmen' vs 'darmen' занижает trgm
+# similarity шумом, а не реальным несовпадением имени.
+_BASE_MARKETPLACE_PREFIX_RE = re.compile(r'^(жк|мжк)[\s"\'\-:]*')
+
+
+def _clean_base(base: str) -> str:
+    b = _BASE_MARKETPLACE_PREFIX_RE.sub("", base)
+    return b.strip(' "\'()').strip()
 
 
 def _phase_token(name: str) -> tuple[str | None, str]:
@@ -207,17 +217,17 @@ def _phase_token(name: str) -> tuple[str | None, str]:
         m = pat.search(s)
         if m:
             base = (s[:m.start()] + s[m.end():]).strip(" -.,")
-            return str(int(m.group(1))), base
+            return str(int(m.group(1))), _clean_base(base)
     tail = _PHASE_TRAILING_JUNK_RE.sub("", s).strip()
     m = _PHASE_TRAILING_NUM_RE.search(tail)
     if m:
-        return str(int(m.group(1))), tail[:m.start()].strip(" -.,")
+        return str(int(m.group(1))), _clean_base(tail[:m.start()].strip(" -.,"))
     m = _PHASE_TRAILING_ROMAN_RE.search(tail)
     if m:
         n = _roman_to_int(m.group(1))
         if n is not None:
-            return str(n), tail[:m.start()].strip(" -.,")
-    return None, tail
+            return str(n), _clean_base(tail[:m.start()].strip(" -.,"))
+    return None, _clean_base(tail)
 
 
 async def score_match(
