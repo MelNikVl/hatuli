@@ -331,7 +331,18 @@ async def record_source_link(
     которые уже руками отклонили (complex_source_link_rejections), больше
     не предлагаются вовсе.
 
-    Возвращает: 'auto' | 'review' | 'conflict' | 'rejected' | 'skipped'."""
+    Предохранитель 2026-08-12 (см. docs/entity_resolution_plan.md —
+    21 запись bazis/orda_invest, найденная живой калибровкой): если
+    (source, source_id) уже привязан к ЭТОМУ ЖЕ complex_id — решение уже
+    принято и лежит в spine, пере-скор этим прогоном ниже auto (типично
+    из-за источника, который не отдаёт гео/адрес — сигналов меньше, а
+    имя то же самое) не повод класть дубль-кандидата в очередь. Раньше
+    это создавало вечный шум: 21 review-запись, каждая — под тем же
+    complex_id, что уже в spine на confidence 1.0, approve только
+    понизил бы доверие. На ДРУГОЙ complex_id — по-прежнему conflict.
+
+    Возвращает: 'auto' | 'review' | 'conflict' | 'already_linked' |
+    'rejected' | 'skipped'."""
     if confidence < REVIEW_QUEUE_THRESHOLD:
         return "skipped"
     from bot.db.pg import fetchrow, execute
@@ -345,6 +356,8 @@ async def record_source_link(
     existing = await fetchrow(
         "SELECT complex_id FROM complex_source_links WHERE source=$1 AND source_id=$2",
         source, str(source_id))
+    if existing and existing["complex_id"] == complex_id:
+        return "already_linked"
     if existing and existing["complex_id"] != complex_id:
         await execute("""
             INSERT INTO complex_source_link_candidates
