@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
-from bot.core.entity_resolution import _phase_token
+from bot.core.entity_resolution import _phase_token, address_match
 
 
 # ── "пятно"/"квартал"/перечисления — НИКОГДА не split ────────────────
@@ -82,3 +82,31 @@ def test_parkland_explicit_tokens_present_on_all_sides():
     tokens = [_phase_token(n)[0] for n in names]
     assert all(t is not None for t in tokens), tokens
     assert len(set(tokens)) == len(tokens), "токены должны быть все разные (2,1,E,F,C,D)"
+
+
+# ── address_match(): "р."/"уч."/название района — шум, не сигнал ─────
+# Регрессия коммита 2ff574b (задача гейта 2, шаг 2 — обнаружено при
+# перескоре/калибровке, что сам этот фикс не имел прямого теста).
+# Реальные адреса из homeportal_objects (не выдуманные): "PARKLAND 2"
+# (matched_complex_id=3503, ул. С 902) и "Parkland - E"
+# (matched_complex_id=4331, ул. Бейбарыс Сұлтан) — заведомо разные улицы
+# одного района, до фикса делили "р."+"уч."+"сарыарка" как 3 общих
+# шумовых токена из 4 значимых у короткой стороны -> 75% overlap,
+# ложный match (Parkland F "тихо" не разделился при первом прогоне
+# unravel_blobs.py, хотя явные буквенные/номерные токены на всех
+# сторонах уже требовали split — см. test_parkland_explicit_tokens_
+# present_on_all_sides выше).
+
+def test_parkland_district_and_uchastok_are_noise_not_signal():
+    addr_parkland_2 = "г. Астана, р. Сарыарка, ул. С 902, уч. 8"
+    addr_parkland_e = "г. Астана, р. Сарыарка, ул. Бейбарыс Сұлтан, уч. 18"
+    assert address_match(addr_parkland_2, addr_parkland_e) is False, (
+        "разные улицы одного района не должны матчиться по 'р.'/'уч.'/имени района")
+
+
+def test_same_street_still_matches_after_noise_fix():
+    # Фикс не должен был стать overly aggressive — реально совпадающая
+    # улица (тот же дом, другой уч.) обязана остаться match'ем.
+    addr_a = "г. Астана, р. Сарыарка, ул. С 902, уч. 6"
+    addr_b = "г. Астана, р. Сарыарка, ул. С 902, уч. 8"
+    assert address_match(addr_a, addr_b) is True
