@@ -1233,6 +1233,14 @@ const HeatControls = L.Control.extend({
       <input id="f-heat-edge" type="range" min="10" max="150" step="5" value="80" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
       <label style="font-size:9.5px;font-weight:700;color:#333;margin-top:2px;white-space:nowrap;">Прозрачность: <span id="f-heat-opacity-val">30</span>%</label>
       <input id="f-heat-opacity" type="range" min="10" max="50" step="5" value="30" oninput="document.getElementById('f-heat-opacity-val').textContent=this.value;setHeatOpacity(this.value)" style="width:100%;">
+      <div id="f-heat-period-row" style="display:none;flex-direction:column;gap:2px;margin-top:2px;">
+        <label style="font-size:9.5px;font-weight:700;color:#333;white-space:nowrap;">Период:</label>
+        <div style="display:flex;gap:3px;">
+          <button type="button" class="heat-period-btn" data-days="30" onclick="setCrimePeriod(30)" style="flex:1;height:22px;border:none;border-radius:6px;background:#e2e8f0;color:#1e293b;font-weight:700;font-size:9.5px;cursor:pointer;white-space:nowrap;">Месяц</button>
+          <button type="button" class="heat-period-btn" data-days="180" onclick="setCrimePeriod(180)" style="flex:1;height:22px;border:none;border-radius:6px;background:#e2e8f0;color:#1e293b;font-weight:700;font-size:9.5px;cursor:pointer;white-space:nowrap;">Полгода</button>
+          <button type="button" class="heat-period-btn" data-days="365" onclick="setCrimePeriod(365)" style="flex:1;height:22px;border:none;border-radius:6px;background:#e2e8f0;color:#1e293b;font-weight:700;font-size:9.5px;cursor:pointer;white-space:nowrap;">Год</button>
+        </div>
+      </div>
       <button type="button" onclick="turnOffHeat()" style="margin-top:2px;height:24px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:700;font-size:9.5px;cursor:pointer;">Убрать карту</button>
     `;
     L.DomEvent.disableClickPropagation(box);
@@ -1293,6 +1301,19 @@ function resizeHeatControlsBox() {
   if (!zoomCtl || !mapBtns || !hc) return;
   const zr = zoomCtl.getBoundingClientRect(), br = mapBtns.getBoundingClientRect();
   hc.style.width = Math.max(110, Math.round((br.right - zr.left) / 2)) + 'px';
+  // В режиме «Новостройки» панель застройщиков (#nb-dev-panel, top:60px)
+  // перекрывает настройки тепловой карты (top:80px) — настройки уходят «за»
+  // неё и не видны. Опускаем их ПОД панель (пользователь: «либо ниже, либо
+  // выше, но не за»).
+  const dev = document.getElementById('nb-dev-panel');
+  const mapEl = document.getElementById('objects-map');
+  if (dev && mapEl && dev.style.display !== 'none' && dev.offsetHeight > 0) {
+    const devBottom = dev.getBoundingClientRect().bottom;
+    const mapTop = mapEl.getBoundingClientRect().top;
+    hc.style.top = Math.round(devBottom - mapTop + 6) + 'px';
+  } else {
+    hc.style.top = '80px';
+  }
 }
 setTimeout(resizeHeatControlsBox, 300);
 window.addEventListener('resize', resizeHeatControlsBox);
@@ -2153,6 +2174,7 @@ function applyFilters() {
   document.getElementById('f-year-wrap').style.display = type === 'newbuild' ? 'flex' : 'none';
   const nbPanelEl = document.getElementById('nb-dev-panel');
   if (nbPanelEl) nbPanelEl.style.display = type === 'newbuild' ? 'flex' : 'none';
+  resizeHeatControlsBox();  // настройки тепловой карты — ниже панели застройщиков, не «за» ней
   // "Готовность"/скор/изменение цены/отделка/план — только для продажи.
   // ВАЖНО: это должно выполняться ДО ранних return у complex/newbuild ниже
   // (см. задачу "скрыть Готовность для новостроек") — раньше стояло ниже
@@ -3096,8 +3118,8 @@ function drawPopulationHeat(hexes) {
   });
 }
 
-// Преступность (см. задачу "тепловая карта преступности", krisha.kz/ms/geodata/crime
-// -> crime_incidents -> /admin/api/crime-hexes) — ДВУМЕРНАЯ кодировка по
+// Преступность (см. задачу "тепловая карта преступности", официальный портал
+// КПСиСУ gis.kgp.kz -> crime_incidents -> /admin/api/crime-hexes) — ДВУМЕРНАЯ кодировка по
 // просьбе "не только количество нарушений, но и их тяжесть — закрашивать на
 // основе этих 2 параметров": раньше count и hard_code (тяжесть 0-4:
 // 0=мелкое хищение...4=убийство/изнасилование) схлопывались в один score,
@@ -3125,6 +3147,25 @@ function crimeSeverityColor(avgSeverity) {
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 const CRIME_SEVERITY_LABELS = ['мелкие нарушения', 'лёгкие/средние', 'значительные', 'тяжкие', 'особо тяжкие'];
+// Период преступности (месяц/полгода/год) — селектор в настройках тепловой
+// карты (heat-controls-box), показывается только в режиме 'crime'. Меняет
+// окно /admin/api/crime-hexes?days=N и перерисовывает гексы.
+let crimePeriodDays = 365;
+async function setCrimePeriod(days) {
+  crimePeriodDays = days;
+  document.querySelectorAll('.heat-period-btn').forEach(b => {
+    b.style.boxShadow = Number(b.dataset.days) === days ? '0 0 0 2px #2563eb' : 'none';
+  });
+  if (heatMode !== 'crime') return;
+  heatCache.crime = null;
+  heatLayer.clearLayers();
+  map.removeLayer(fineNoiseLayer);
+  fineNoiseLayer.clearLayers();
+  const data = await loadHeatData('crime');
+  if (heatMode !== 'crime') return;
+  renderHeatMode('crime', data);
+  refreshSplitView();
+}
 function drawCrimeHeat(hexes) {
   if (!hexes || !hexes.length) return;
   hexes.forEach(h => {
@@ -3586,7 +3627,7 @@ async function loadHeatData(mode) {
     const d = await fetch('/admin/api/demolition-points').then(r => r.json());
     heatCache.demolition = d.points || [];
   } else if (mode === 'crime') {
-    const d = await fetch('/admin/api/crime-hexes').then(r => r.json());
+    const d = await fetch('/admin/api/crime-hexes?days=' + crimePeriodDays).then(r => r.json());
     heatCache.crime = d.hexes || [];
   } else if (mode === 'price_m2' || mode === 'yield') {
     // Цена за м² и доходность — те же точки продажи (heat-points теперь
@@ -3631,11 +3672,21 @@ async function toggleHeat(mode) {
     // отличаем рамкой, а не сменой фона на приглушённый.
     document.querySelectorAll('.heat-btn').forEach(b => { b.style.boxShadow = 'none'; });
     const hc = document.getElementById('heat-controls-box'); if (hc) hc.style.display = 'none';
+    const prHide = document.getElementById('f-heat-period-row'); if (prHide) prHide.style.display = 'none';
     return;
   }
   document.querySelectorAll('.heat-btn').forEach(b => { b.style.boxShadow = 'none'; });
   if (btn) { btn.style.boxShadow = '0 0 0 3px #93c5fd'; }
   { const hc = document.getElementById('heat-controls-box'); if (hc) hc.style.display = 'flex'; resizeHeatControlsBox(); }
+  const periodRow = document.getElementById('f-heat-period-row');
+  if (periodRow) {
+    periodRow.style.display = (mode === 'crime') ? 'flex' : 'none';
+    if (mode === 'crime') {
+      document.querySelectorAll('.heat-period-btn').forEach(b => {
+        b.style.boxShadow = Number(b.dataset.days) === crimePeriodDays ? '0 0 0 2px #2563eb' : 'none';
+      });
+    }
+  }
   if (noiseViewHandler) { map.off('moveend zoomend', noiseViewHandler); noiseViewHandler = null; }
   map.removeLayer(fineNoiseLayer);
   fineNoiseLayer.clearLayers();

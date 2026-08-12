@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily incremental crime collect (КПСиСУ)
+
+[Timer]
+OnCalendar=*-*-* 06:30:00
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

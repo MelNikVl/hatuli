@@ -1,0 +1,10 @@
+[Unit]
+Description=KGP crime collector (Astana, КПСиСУ)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python3 /home/nik/krisha_bot/crime_collect.py

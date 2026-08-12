@@ -604,18 +604,17 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/crime-hexes")
     async def crime_hexes_api(request: Request, days: int | None = None):
-        """Тепловая карта преступности (см. задачу) — krisha.kz/ms/geodata/crime,
-        собрано в crime_incidents (crime_collect.py). Гексы 150м (та же
-        сетка-подход, что и population/transport-hexes) — сырых точек за
-        2+ года набирается тысячи, гексы читаемее и легче для карты.
-        days — опциональное окно (последние N дней), по умолчанию вся история."""
+        """Тепловая карта преступности — официальный ГИС-портал КПСиСУ ГП РК
+        (gis.kgp.kz, слой KPSSU/crime, собрано в crime_incidents
+        crime_collect.py). Гексы 150м (та же сетка-подход, что и
+        population/transport-hexes). days — окно в днях (месяц 30 / полгода
+        180 / год 365); по умолчанию 365 — с 2015 вся история размывает."""
         from bot.db.pg import fetch as pg_fetch
         from bot.core.hexgrid import hex_id, hex_center
-        where = "1=1"
-        params: list = []
-        if days:
-            where = "date_excitation >= (now() - ($1 || ' days')::interval)::date"
-            params.append(str(days))
+        if days is None:
+            days = 365
+        where = "date_excitation >= (now() - ($1 || ' days')::interval)::date"
+        params: list = [str(days)]
         rows = await pg_fetch(f"""
             SELECT lat, lon, hard_code FROM crime_incidents WHERE {where}
         """, *params)
