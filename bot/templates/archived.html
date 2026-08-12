@@ -267,7 +267,12 @@ function loadArchivedChart(days) {
     const containerW = (el.clientWidth || 900) * 0.98;
     const slotW = Math.max(6, Math.min(220, Math.floor(containerW / d.days.length) - 3));
     const barW = Math.max(2, Math.round((slotW - 2) / 2));
-    const H = Math.round(640 * 2 / 3);
+    // Высота графика — от реальной высоты контейнера (раньше была
+    // фиксированной 640*2/3≈427px, а блок .chart-block-inner на этой
+    // странице ~300px — график обрезался и по верху, и по низу, даты
+    // (rotate -45°) вообще уезжали за пределы блока).
+    const availH = (el.clientHeight || 300) - 46;  // 46px под строку дат
+    const H = Math.max(120, availH);
     function stack(v1, v2, v3, w) {
       const h1 = Math.round(v1 / maxTotal * (H - 20));
       const h2 = Math.round(v2 / maxTotal * (H - 20));
@@ -300,10 +305,10 @@ function loadArchivedChart(days) {
           </div>
         </div>
         <div style="font-size:8px;color:#888;text-align:center;line-height:1.2;margin-top:1px;white-space:nowrap;">прод.·аренда</div>
-        <div style="font-size:9.5px;font-weight:600;color:#888;transform:rotate(-45deg);white-space:nowrap;margin-top:4px;" title="${label}: продажа 1к=${s1},2к=${s2},3+к=${s3} · аренда 1к=${r1},2к=${r2},3+к=${r3}">${label}</div>
+        <div style="font-size:8.5px;font-weight:600;color:#888;white-space:nowrap;margin-top:2px;max-width:${slotW}px;overflow:hidden;text-overflow:ellipsis;" title="${label}: продажа 1к=${s1},2к=${s2},3+к=${s3} · аренда 1к=${r1},2к=${r2},3+к=${r3}">${label}</div>
       </div>`;
     }).join('');
-    el.innerHTML = `<div style="display:flex;align-items:flex-end;justify-content:center;gap:3px;height:${H}px;padding-bottom:28px;width:100%;">${bars}</div>`;
+    el.innerHTML = `<div style="display:flex;align-items:flex-end;justify-content:center;gap:3px;height:${H}px;padding-bottom:14px;width:100%;">${bars}</div>`;
   }).catch(() => {});
 }
 loadArchivedChart(30);

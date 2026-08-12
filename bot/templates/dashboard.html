@@ -193,7 +193,7 @@ html, body { overflow: hidden !important; }
     <button type="button" class="rooms-dd-btn" id="heat-dd-btn" onclick="toggleFbarDropdown(event,'heat-dd-btn')">🌡 Тепловые карты</button>
     <div class="rooms-dd-panel" id="heat-dd-panel">
       <span class="fb-group-label" style="font-size:10px;color:#888;display:block;margin-bottom:4px;">Тепловые карты</span>
-      <div class="heat-btn-grid" style="display:grid;grid-template-rows:repeat(2,auto);grid-auto-flow:column;gap:5px;width:fit-content;">
+      <div class="heat-btn-grid" style="display:grid;grid-template-rows:repeat(3,auto);grid-auto-flow:column;gap:5px;width:fit-content;">
         <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Цены продажи</button>
         <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Цены аренды</button>
         <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
@@ -206,6 +206,7 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="price_m2" onclick="toggleHeat('price_m2')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">📐 Цена за м²</button>
         <button type="button" class="heat-btn" data-mode="yield" onclick="toggleHeat('yield')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">💰 Доходность</button>
         <button type="button" class="heat-btn" data-mode="infra" onclick="toggleHeat('infra')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🏥 Инфраструктура</button>
+        <button type="button" class="heat-btn" data-mode="novelty" onclick="toggleHeat('novelty')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🌿 Новизна домов</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
         <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
@@ -288,6 +289,8 @@ html, body { overflow: hidden !important; }
 #side-panel-body { flex:1; overflow-y:auto; overflow-x:hidden; padding:14px 16px 24px; display:grid; grid-template-columns:1fr; gap:14px; align-content:start; }
 .side-card { background:var(--bg); border:1px solid var(--border); border-radius:11px; overflow:clip; min-width:0; transition:box-shadow .2s ease; }
 .side-card-flash { animation: sideCardFlash 0.6s ease-in-out 5; border-color:#2563eb !important; }
+.nb-cx-popup .leaflet-popup-content-wrapper { padding:0; border-radius:12px; overflow:hidden; }
+.nb-cx-popup .leaflet-popup-content { margin:0; width:280px !important; }
 @keyframes sideCardFlash {
   0%, 100% { box-shadow: 0 0 0 0 rgba(37,99,235,0); }
   50%      { box-shadow: 0 0 0 6px rgba(37,99,235,.65), 0 0 22px rgba(37,99,235,.45); }
@@ -636,6 +639,9 @@ function updateNewbuildChip() {
   btn.style.background = forcedNewbuildType ? '#84cc16' : 'var(--bg)';
   btn.style.color = forcedNewbuildType ? '#fff' : 'var(--text)';
   btn.style.borderColor = forcedNewbuildType ? '#84cc16' : 'var(--border)';
+  // В Новостройках селект «Продажа/Аренда/ЖК» не нужен — прячем его.
+  const ftype = document.getElementById('f-type');
+  if (ftype) ftype.style.display = forcedNewbuildType ? 'none' : '';
 }
 function toggleNewbuildChip() {
   forcedNewbuildType = !forcedNewbuildType;
@@ -683,9 +689,9 @@ function openSidePanel(ids) {
   if (mw && window.innerWidth <= 767) mw.classList.add('mobile-list');
   const el = document.getElementById('card-' + ids[0]);
   if (el) {
-    // Мгновенный скролл (без smooth-анимации) — пользователь кликнул по
-    // маркеру и ждёт карточку сразу, а не через полсекунды плавного пролёта.
-    el.scrollIntoView({block: 'nearest', behavior: 'auto'});
+    // Мгновенный скролл ТОЛЬКО панели (см. centerCardInPanel) — карточка
+    // ровно по центру правого блока, страница не прокручивается.
+    centerCardInPanel(el);
     el.classList.add('side-card-flash');
     setTimeout(() => el.classList.remove('side-card-flash'), 3000);
   }
@@ -895,7 +901,7 @@ function scrollToNewbuildComplex(complexId) {
   const mw = document.getElementById('map-wrap');
   if (mw && window.innerWidth <= 767) mw.classList.add('mobile-list');
   if (!el) return;
-  el.scrollIntoView({block: 'nearest', behavior: 'auto'});
+  centerCardInPanel(el);
   el.classList.add('side-card-flash');
   setTimeout(() => el.classList.remove('side-card-flash'), 3000);
 }
@@ -916,6 +922,20 @@ function toggleMobileView() {
 }
 // Кеширующий прокси фото (см. /img-proxy на бэкенде) — первый показ идёт на
 // источник и кэшируется на диске сервера, дальше отдаётся с диска.
+// Центрирует карточку по вертикали внутри правой панели, НЕ трогая
+// прокрутку страницы. scrollIntoView({block:'center'}) прокручивал ВСЕ
+// прокручиваемые предки (в т.ч. саму страницу) — при клике по маркеру
+// страница уезжала вверх, главное меню пропадало, снизу оставалась пустая
+// полоса ~40px. Теперь крутим только #side-panel-body.
+function centerCardInPanel(el) {
+  const body = document.getElementById('side-panel-body');
+  if (!body || !el) return;
+  const bodyRect = body.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  const elTop = elRect.top - bodyRect.top + body.scrollTop;
+  const target = elTop - (body.clientHeight - el.offsetHeight) / 2;
+  body.scrollTop = Math.max(0, target);
+}
 function proxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
 // Ошибка загрузки фото в карточке: если в галерее есть ещё кадры — показать
 // следующий, а не прятать весь блок (раньше onerror скрывал parentNode, из-за
@@ -1184,13 +1204,13 @@ const HeatControls = L.Control.extend({
     // position:absolute + ширина считается в JS (см. ниже resizeHeatControlsBox)
     // так, чтобы блок растягивался ровно от левого края зум-контрола до
     // правого края кнопки "Линейка" — визуально одна общая панель под ней.
-    box.style.cssText = 'display:none;position:absolute;top:60px;left:10px;flex-direction:column;gap:4px;background:#fff;border-radius:10px;padding:8px 10px;box-shadow:0 1px 4px rgba(0,0,0,.25);box-sizing:border-box;';
+    box.style.cssText = 'display:none;position:absolute;top:80px;left:10px;flex-direction:column;gap:3px;background:#fff;border-radius:10px;padding:6px 8px;box-shadow:0 1px 4px rgba(0,0,0,.25);box-sizing:border-box;';
     box.innerHTML = `
-      <label style="font-size:10.5px;font-weight:700;color:#333;">Сторона гекса (м): <span id="f-heat-edge-val">80</span></label>
+      <label style="font-size:9.5px;font-weight:700;color:#333;white-space:nowrap;">Гекс: <span id="f-heat-edge-val">80</span> м</label>
       <input id="f-heat-edge" type="range" min="10" max="150" step="5" value="80" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
-      <label style="font-size:10.5px;font-weight:700;color:#333;margin-top:4px;">Прозрачность гексов: <span id="f-heat-opacity-val">30</span>%</label>
+      <label style="font-size:9.5px;font-weight:700;color:#333;margin-top:2px;white-space:nowrap;">Прозрачность: <span id="f-heat-opacity-val">30</span>%</label>
       <input id="f-heat-opacity" type="range" min="10" max="50" step="5" value="30" oninput="document.getElementById('f-heat-opacity-val').textContent=this.value;setHeatOpacity(this.value)" style="width:100%;">
-      <button type="button" onclick="turnOffHeat()" style="margin-top:4px;height:26px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;">Убрать тепловую карту</button>
+      <button type="button" onclick="turnOffHeat()" style="margin-top:2px;height:24px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:700;font-size:9.5px;cursor:pointer;">Убрать карту</button>
     `;
     L.DomEvent.disableClickPropagation(box);
     return box;
@@ -1249,7 +1269,7 @@ function resizeHeatControlsBox() {
   const hc = document.getElementById('heat-controls-box');
   if (!zoomCtl || !mapBtns || !hc) return;
   const zr = zoomCtl.getBoundingClientRect(), br = mapBtns.getBoundingClientRect();
-  hc.style.width = Math.max(120, br.right - zr.left) + 'px';
+  hc.style.width = Math.max(110, Math.round((br.right - zr.left) / 2)) + 'px';
 }
 setTimeout(resizeHeatControlsBox, 300);
 window.addEventListener('resize', resizeHeatControlsBox);
@@ -1541,17 +1561,20 @@ function newbuildComplexPopupHtml(p, photoIdx) {
     <button onclick="event.stopPropagation();nbPopupNav(${p.id},-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.4);color:#fff;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:17px;line-height:1;">‹</button>
     <button onclick="event.stopPropagation();nbPopupNav(${p.id},1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.4);color:#fff;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:17px;line-height:1;">›</button>
     <div style="position:absolute;left:0;right:0;bottom:6px;display:flex;justify-content:center;gap:4px;">${photos.map((_, k) => `<span style="width:6px;height:6px;border-radius:50%;background:${k === idx ? '#fff' : 'rgba(255,255,255,.5)'};box-shadow:0 0 2px rgba(0,0,0,.7);"></span>`).join('')}</div>` : '';
-  const devTxt = p.logo
+  // Застройщик — ссылка на нашу страницу застройщика /admin/developer/{id}.
+  const devInner = p.logo
     ? `<img src="${p.logo}" style="width:18px;height:18px;border-radius:4px;object-fit:contain;background:#fff;vertical-align:-4px;margin-right:5px;padding:1px;">${escapeHtml(p.developer || '')}`
     : escapeHtml(p.developer || '');
+  const devTxt = p.developer_id
+    ? `<a href="/admin/developer/${p.developer_id}" style="color:#666;text-decoration:none;">${devInner}</a>`
+    : devInner;
   const yearTxt = (p.completion_year ? `${p.completion_quarter ? p.completion_quarter + ' кв. ' : ''}${p.completion_year}` : '');
-  const url = p.developer_url || '';
   return `
-<div style="width:260px;font-family:inherit;">
-  <div style="position:relative;overflow:hidden;border-radius:10px 10px 0 0;">
+<div style="width:280px;font-family:inherit;">
+  <div style="position:relative;overflow:hidden;">
     ${img}${nav}
   </div>
-  <div style="padding:9px 11px 11px;">
+  <div style="padding:9px 12px 12px;">
     <div style="font-size:15px;font-weight:800;">${escapeHtml(p.name)}</div>
     <div style="font-size:12.5px;color:#666;margin-top:3px;">${devTxt}</div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;">
@@ -1559,7 +1582,7 @@ function newbuildComplexPopupHtml(p, photoIdx) {
       ${p.housing_class ? `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${escapeHtml(p.housing_class)}</span>` : ''}
       ${yearTxt ? `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${escapeHtml(yearTxt)}</span>` : ''}
     </div>
-    ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="display:inline-block;margin-top:9px;padding:6px 12px;border-radius:8px;background:#16a34a;color:#fff;font-size:12.5px;font-weight:700;text-decoration:none;">🏗 Страница ЖК у застройщика</a>` : ''}
+    <a href="/admin/complex/${p.id}" style="display:inline-block;margin-top:9px;padding:6px 12px;border-radius:8px;background:#16a34a;color:#fff;font-size:12.5px;font-weight:700;text-decoration:none;">Подробнее про ЖК</a>
   </div>
 </div>`;
 }
@@ -1659,7 +1682,7 @@ async function drawNewbuildLayer() {
     NEWBUILD_PIN_MARKERS[pt.id] = marker;
     NEWBUILD_PIN_DATA[pt.id] = pt;
     nbPopupIdx[pt.id] = 0;
-    marker.bindPopup(newbuildComplexPopupHtml(pt, 0), {minWidth: 260, maxWidth: 260});
+    marker.bindPopup(newbuildComplexPopupHtml(pt, 0), {minWidth: 280, maxWidth: 280, className: 'nb-cx-popup'});
     marker.on('click', () => {
       nbPopupIdx[pt.id] = 0; marker.setPopupContent(newbuildComplexPopupHtml(pt, 0)); marker.openPopup();
       // Клик по ЖК на карте = выбор ЖК: панель показывает только его предложения.
@@ -3221,6 +3244,41 @@ function drawYieldHeat(points) {
 // целиком (как фон шума, см. drawRoadHeatBackground) — иначе гексы рисуются
 // только там, где есть хоть одна школа, а всё остальное остаётся пустым,
 // хотя "мало школ" — это тоже содержательный результат, который надо видеть.
+// Тепловая карта новизны домов: гексагоны, цвет по СРЕДНЕМУ году постройки
+// в ячейке. Палитра — от светло-салатового (новостройки) до бурого (старый
+// фонд), много промежуточных ступеней. Годы: 1960-2028.
+const NOVELTY_LO_YEAR = 1960, NOVELTY_HI_YEAR = 2028;
+function noveltyColor(year) {
+  if (year == null) return '#cbd5e1';  // без года — серый
+  // 9 ступеней: салатовый -> зелёный -> жёлтый -> оранжевый -> бурый
+  const stops = [
+    '#d9f99d', // ~2028 светло-салатовый (новое)
+    '#bef264', '#a3e635', '#84cc16', '#65a30d',
+    '#facc15', '#f59e0b', '#d97706', '#92400e', '#78350f',  // бурый (старое)
+  ];
+  const t = Math.max(0, Math.min(1, (year - NOVELTY_LO_YEAR) / (NOVELTY_HI_YEAR - NOVELTY_LO_YEAR)));
+  // t=1 (новое) -> САЛАТОВЫЙ (начало палитры), t=0 (старое) -> БУРЫЙ (конец):
+  // idx = (1 - t), т.е. новый дом ближе к stops[0], старый — к stops[last].
+  const idx = (1 - t) * (stops.length - 1);
+  const i0 = Math.floor(idx), i1 = Math.min(stops.length - 1, i0 + 1);
+  const f = idx - i0;
+  const c0 = stops[i0], c1 = stops[i1];
+  const p = (h) => parseInt(h.slice(1,3),16), q = (h) => parseInt(h.slice(3,5),16), r = (h) => parseInt(h.slice(5,7),16);
+  return `rgb(${Math.round(p(c0)+(p(c1)-p(c0))*f)},${Math.round(q(c0)+(q(c1)-q(c0))*f)},${Math.round(r(c0)+(r(c1)-r(c0))*f)})`;
+}
+function drawNoveltyHeat(points) {
+  const buckets = hexBucket(points || [], p => [p.lat, p.lon], HEAT_EDGE_M);
+  if (!buckets.size) return;
+  buckets.forEach(b => {
+    const years = b.items.map(i => i.y).filter(y => y != null);
+    const med = years.length ? median(years) : null;
+    const cnt = b.items.length;
+    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
+      color: 'transparent', weight: 0, fillColor: noveltyColor(med), fillOpacity: 0.62,
+    }).bindTooltip(`домов: ${cnt}<br>${med != null ? 'год: ~' + med : 'год не известен'}<br>${b.items.some(i => i.old) ? 'есть старый фонд' : ''}`, {sticky:true})
+      .addTo(heatTargetLayer);
+  });
+}
 function drawCountHeat(items, latLonFn, label) {
   const buckets = hexBucket(items, latLonFn, HEAT_EDGE_M);
   const hexCount = new Map();
@@ -3520,6 +3578,9 @@ async function loadHeatData(mode) {
       heatCache.saleArchived = archived.points || [];
     }
     heatCache[mode] = heatCache.sale;
+  } else if (mode === 'novelty') {
+    const d = await fetch('/admin/api/novelty-points').then(r => r.json());
+    heatCache.novelty = d.points || [];
   } else if (mode === 'infra') {
     // Инфраструктура (задача "тепловая карта инфраструктуры — поликлиники,
     // школы, сады, гос учреждения, универы") — те же точки, что и слой
@@ -3637,6 +3698,8 @@ function renderHeatMode(mode, data) {
     drawYieldHeat(data);
   } else if (mode === 'infra') {
     drawCountHeat(data, p => [p.lat, p.lon], 'объектов инфраструктуры');
+  } else if (mode === 'novelty') {
+    drawNoveltyHeat(data);
   }
 }
 
@@ -3652,6 +3715,7 @@ const HEAT_MODE_LABELS = {
   population: '👥 Плотность нас.', count: '🔢 Кол-во объявлений',
   demolition: '🏚 Снос домов', crime: '🚨 Преступность',
   price_m2: '📐 Цена за м²', yield: '💰 Доходность', infra: '🏥 Инфраструктура',
+  novelty: '🌿 Новизна домов',
 };
 function openSplitView() {
   if (!heatMode || splitMap) return;

@@ -65,7 +65,7 @@
        между логотипом и правым блоком (тема/избранное/вход), с
        flex-wrap для узких экранов вместо поломки макета. */
     .pub-header { background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 500; }
-    .pub-row1 { display: flex; align-items: center; gap: 14px; padding: 10px 24px; flex-wrap: wrap; }
+    .pub-row1 { display: flex; align-items: center; gap: 14px; padding: 10px 36px; flex-wrap: wrap; }
     .pub-logo { display: flex; align-items: center; gap: 8px; text-decoration: none; color: inherit; font-size: 21.85px; font-weight: 800; text-transform: uppercase; color: var(--logo-color); letter-spacing: .5px; flex-shrink: 0; }
     .pub-logo img { width: 26px; height: 26px; object-fit: contain; border-radius: 5px; }
     .pub-row1-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; margin-left: auto; }
@@ -248,12 +248,13 @@
     or 'issues' in request.url.path or 'users' in request.url.path or 'subscriptions' in request.url.path
     or 'scoring' in request.url.path or 'backup' in request.url.path or 'top10' in request.url.path
     or 'monitoring' in request.url.path or 'complex_scores' in request.url.path
+    or 'entity-ids' in request.url.path
     or request.url.path == '/admin/site-users' or request.url.path == '/admin/panel') %}
 {% set embed = request.query_params.get('embed') %}
 {% if not embed %}
 <header class="pub-header">
   <div class="pub-row1{% if not panel_family %} narrow{% endif %}">
-    <a href="/admin" class="pub-logo">Hatuli</a>
+    <a href="/admin" class="pub-logo" style="color:#000;">AGT</a>
     <nav class="pub-nav">
       <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
       <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>

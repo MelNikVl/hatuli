@@ -33,12 +33,6 @@ async function toggleFavComplex() {
   star.style.color = active ? '#ccc' : '#f59e0b';
 }
 </script>
-{% if cx.is_street %}
-<div style="background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:14px;">
-  ⚠️ <b>Это улица, а не ЖК.</b> Аудит определил, что под этим названием Крыша группирует дома по улице. Объявления отвязаны, из карт и подборок запись исключена.
-</div>
-{% endif %}
-
 <!-- Шапка-сводка: сколько чего продаётся по комнатности + скорость
      поглощения рынком, и кнопки на внешние ресурсы (серые, если для
      этого ЖК нет сопоставления с источником). -->
@@ -89,43 +83,42 @@ async function toggleFavComplex() {
   </div>
 </div>
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-<!-- Верх страницы: фото слева / описание справа, по 600px — это ВСЁ, что
-     выше сгиба. Карта, объявления, графики и остальное — отдельным блоком ниже. -->
+<!-- Верх страницы — как на карточке отеля (Ostrovok-стиль, задача
+     "первые блоки как на сайте", 2026-08-12): первый ряд — галерея на всю
+     ширину; второй ряд — три карточки (описание / удобства / что рядом);
+     третий — варианты квартир (ниже, уже была). Карта — убрана совсем. -->
 <style>
-/* Было 3fr/1fr (фото 75% / описание 25%) — описание расширяли на 15%
-   (0.25 * 1.15 = 0.2875), затем ещё на 10% (0.2875 * 1.10 ≈ 0.3163) за
-   счёт фото (1 - 0.3163 = 0.6837), в fr: 0.6837/0.3163 ≈ 2.16fr на 1fr. */
-.cx-hero { display:grid; grid-template-columns:2.16fr 1fr; gap:16px; margin-bottom:16px; align-items:stretch; }
-.cx-hero .cx-col-card { height:600px; overflow-y:auto; }
-@media (max-width:1150px) { .cx-hero { grid-template-columns:1fr; } .cx-hero .cx-col-card { height:auto; max-height:600px; } }
 .cx-col-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
+.cx-row2 { display:grid; grid-template-columns:1.3fr 1fr 1fr; gap:16px; margin-bottom:16px; align-items:start; }
+@media (max-width:1000px) { .cx-row2 { grid-template-columns:1fr; } }
 .chart-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; }
 .bar-row { display:flex; align-items:flex-end; gap:6px; flex:1; min-height:170px; margin-top:8px; }
 .bar-col { flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; height:100%; }
 .hex-cell { flex:1; min-width:70px; text-align:center; padding:8px 4px; border-radius:8px; background:var(--bg); }
 .hex-cell.self { background:#dbeafe; border:2px solid #2563eb; }
+.cx-amenity { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:13.5px; }
+.cx-amenity .yes { color:#16a34a; } .cx-amenity .no { color:#c4c8d4; }
 </style>
 
-<div class="cx-hero">
-  <div id="cx-card-photo" class="cx-col-card" style="display:flex;flex-direction:column;">
+<!-- Ряд 1: галерея во всю ширину -->
+<div id="cx-card-photo" class="cx-col-card" style="margin-bottom:16px;">
     {% set photos = (cx.photos or ([cx.photo_url] if cx.photo_url else [])) %}
-    <div id="cx-photos-view" style="{{ 'flex:1;min-height:0;display:flex;flex-direction:column;' if photos else '' }}">
+    <div id="cx-photos-view">
       {% if photos %}
-      <div style="display:flex;gap:6px;margin-bottom:10px;flex:1;min-height:0;">
+      <div style="display:flex;gap:6px;height:420px;">
         <img id="cx-main-photo" src="{{ photos[0] }}" loading="lazy" onclick="cxOpenLightbox(0)"
-             style="flex:1;min-width:0;height:100%;object-fit:cover;border-radius:8px;cursor:zoom-in;">
+             style="flex:3;min-width:0;height:100%;object-fit:cover;border-radius:8px;cursor:zoom-in;">
         {% if photos|length > 1 %}
-        <div style="display:flex;flex-direction:column;gap:6px;width:56px;flex-shrink:0;overflow-y:auto;height:100%;">
-          {% for ph in photos[1:6] %}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;flex:2;min-width:0;height:100%;overflow-y:auto;">
+          {% for ph in photos[1:9] %}
           <img src="{{ ph }}" loading="lazy" onclick="cxSetMain({{ loop.index }})"
-               style="width:56px;height:42px;object-fit:cover;border-radius:6px;cursor:pointer;flex-shrink:0;">
+               style="width:100%;height:100%;min-height:95px;object-fit:cover;border-radius:6px;cursor:pointer;">
           {% endfor %}
         </div>
         {% endif %}
       </div>
+      {% else %}
+      <div style="height:220px;display:flex;align-items:center;justify-content:center;color:#888;font-size:13px;background:var(--bg);border-radius:8px;">Фото ЖК пока нет</div>
       {% endif %}
     </div>
     <script>
@@ -185,8 +178,10 @@ async function toggleFavComplex() {
         <span id="ph-upload-status" style="font-size:11px;color:#22c55e;margin-left:6px;"></span>
       </div>
     </div>
-  </div>
+</div>
 
+<!-- Ряд 2: описание / удобства / что рядом (Ostrovok-стиль) -->
+<div class="cx-row2">
   <div id="cx-card-desc" class="cx-col-card">
     <b style="font-size:15px;">📝 Описание</b>
     {% if cx.notes or cx.residents_notes %}
@@ -280,6 +275,57 @@ async function toggleFavComplex() {
         {% if hp.developer_phone or hp.developer_email %}<tr><td style="padding:4px 12px 4px 0;color:#888;">Контакты застройщика (КЖК)</td><td>{{ hp.developer_phone or '' }}{% if hp.developer_phone and hp.developer_email %} · {% endif %}{{ hp.developer_email or '' }}</td></tr>{% endif %}
       </table>
     </div>
+    {% endif %}
+  </div>
+
+  <div id="cx-card-amenities" class="cx-col-card">
+    <b style="font-size:15px;">🛎 Удобства</b>
+    <div style="margin-top:6px;">
+      {% for flag, label in [
+        (cx.has_parking, 'Парковка'),
+        (cx.has_security, 'Охрана'),
+        (cx.has_closed_territory, 'Закрытая территория'),
+        (cx.has_playground, 'Детская площадка'),
+      ] %}
+      <div class="cx-amenity"><span class="{{ 'yes' if flag else 'no' }}">{{ '✓' if flag else '✕' }}</span> {{ label }}</div>
+      {% endfor %}
+    </div>
+    {% if not (cx.has_parking or cx.has_security or cx.has_closed_territory or cx.has_playground) %}
+    <div style="font-size:12px;color:#888;margin-top:6px;">Пока не заполнено — редактируется в <a href="/admin/complexes" style="color:#2563eb;">списке ЖК</a>.</div>
+    {% endif %}
+  </div>
+
+  <div id="cx-card-location" class="cx-col-card">
+    <b style="font-size:15px;">📍 Что рядом</b>
+    <div style="margin-top:6px;font-size:13.5px;line-height:1.7;">
+      {% if cx.district %}<div>Район: <b>{{ cx.district }}</b></div>{% endif %}
+      {% if cx.school_distance_m %}<div>До школы: <b>{{ cx.school_distance_m }} м</b></div>{% endif %}
+      {% if cx.lrt_distance_m %}<div>До ЛРТ: <b>{{ cx.lrt_distance_m }} м</b></div>{% endif %}
+      {% if not cx.district and not cx.school_distance_m and not cx.lrt_distance_m %}<span style="color:#888;">нет данных</span>{% endif %}
+    </div>
+    <!-- Локационный скор (было отдельным блоком ниже страницы) — теперь
+         часть карточки "Что рядом", запрашивается тем же AJAX-вызовом. -->
+    {% if geo %}
+    <div id="cx-loc-score-card" style="margin-top:10px;display:none;"></div>
+    <script>
+    (function() {
+      const card = document.getElementById('cx-loc-score-card');
+      fetch('/admin/api/complex/{{ cx.id }}/location-score').then(r => r.ok ? r.json() : null).then(d => {
+        if (!d || d.error || !d.factors) return;
+        const totalColor = d.total >= 8 ? 'rgba(16,185,129,.15);color:#34d399' : (d.total >= 0 ? 'rgba(245,158,11,.15);color:#f59e0b' : 'rgba(239,68,68,.15);color:#ef4444');
+        const chips = Object.values(d.factors).map(f => {
+          const bg = f.adj > 0 ? 'rgba(16,185,129,.12);color:#16a34a' : (f.adj < 0 ? 'rgba(239,68,68,.12);color:#ef4444' : 'var(--bg);color:#888');
+          const sign = f.adj > 0 ? '+' : '';
+          return '<span title="' + f.reason.replace(/"/g, '&quot;') + '" style="font-size:11.5px;padding:3px 8px;border-radius:20px;background:' + bg + ';border:1px solid var(--border);cursor:help;display:inline-block;margin:0 4px 4px 0;">' + f.label + ' ' + (f.adj ? sign + f.adj : '') + '</span>';
+        }).join('');
+        card.innerHTML = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
+          '<span style="font-weight:800;font-size:14px;padding:2px 9px;border-radius:8px;background:' + totalColor + ';">' + (d.total > 0 ? '+' : '') + d.total + '</span>' +
+          '<span style="font-size:11px;color:#888;">локационный скор · уверенность ' + d.confidence + '%</span>' +
+          '</div><div>' + chips + '</div>';
+        card.style.display = '';
+      }).catch(() => {});
+    })();
+    </script>
     {% endif %}
   </div>
 </div>
@@ -382,202 +428,14 @@ async function toggleFavComplex() {
 </div>
 {% endif %}
 
-<!-- Отзывы о ЖК — смотреть могут все, оставлять только залогиненные через
-     Telegram (задача "блок отзывов", 2026-08-07). -->
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:14px;">
-  <b style="font-size:14.5px;">💬 Отзывы</b>
-  <div id="cx-reviews-list" style="margin-top:10px;font-size:13px;color:#888;">загрузка…</div>
-  <div id="cx-review-form-wrap" style="margin-top:12px;display:none;">
-    <div id="cx-review-stars" style="font-size:20px;letter-spacing:2px;cursor:pointer;margin-bottom:6px;color:#ccc;"></div>
-    <textarea id="cx-review-text" placeholder="Расскажите, каково жить в этом ЖК…" style="width:100%;min-height:70px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
-    <button type="button" onclick="cxSubmitReview({{ cx.id }})" style="margin-top:6px;padding:7px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">Отправить</button>
-    <span id="cx-review-status" style="font-size:12px;color:#888;margin-left:8px;"></span>
-  </div>
-  <div id="cx-review-login-prompt" style="margin-top:12px;font-size:13px;color:#888;display:none;">
-    <a href="/cabinet" style="color:#2563eb;">Войдите через Telegram</a>, чтобы оставить отзыв.
-  </div>
-</div>
-<script>
-(function() {
-  const cid = {{ cx.id }};
-  let myRating = 0;
-  const starsEl = document.getElementById('cx-review-stars');
-  function renderStars() {
-    starsEl.innerHTML = [1,2,3,4,5].map(n =>
-      `<span onclick="cxSetStar(${n})" style="color:${n <= myRating ? '#f59e0b' : '#ccc'};">★</span>`).join('');
-  }
-  window.cxSetStar = function(n) { myRating = n; renderStars(); };
-  renderStars();
-
-  window.cxSubmitReview = function(complexId) {
-    const text = document.getElementById('cx-review-text').value.trim();
-    const status = document.getElementById('cx-review-status');
-    if (!text) { status.textContent = 'Напишите текст отзыва.'; return; }
-    status.textContent = 'Отправка…';
-    fetch('/admin/api/complex/' + complexId + '/reviews', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: text, rating: myRating || null}),
-    }).then(r => r.json()).then(d => {
-      if (d.error) { status.textContent = 'Не удалось отправить.'; return; }
-      status.textContent = 'Спасибо за отзыв!';
-      loadReviews();
-    }).catch(() => { status.textContent = 'Не удалось отправить.'; });
-  };
-
-  function escapeHtml(s) {
-    const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
-  }
-  function loadReviews() {
-    fetch('/admin/api/complex/' + cid + '/reviews').then(r => r.json()).then(d => {
-      const list = document.getElementById('cx-reviews-list');
-      const reviews = d.reviews || [];
-      list.innerHTML = reviews.length ? reviews.map(r => `
-        <div style="padding:8px 0;border-bottom:1px solid var(--border);">
-          <div style="display:flex;justify-content:space-between;gap:8px;">
-            <b style="font-size:13px;">${escapeHtml(r.author)}</b>
-            <span style="font-size:11.5px;color:#888;">${r.created_at}</span>
-          </div>
-          ${r.rating ? `<div style="color:#f59e0b;font-size:13px;">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
-          <div style="font-size:13px;color:var(--text);margin-top:2px;">${escapeHtml(r.text)}</div>
-        </div>`).join('') : '<div style="color:#888;font-size:13px;">Пока нет отзывов — будьте первым.</div>';
-      document.getElementById(d.can_post ? 'cx-review-form-wrap' : 'cx-review-login-prompt').style.display = 'block';
-    }).catch(() => {
-      document.getElementById('cx-reviews-list').textContent = 'Не удалось загрузить отзывы.';
-    });
-  }
-  loadReviews();
-})();
-</script>
-
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13.5px;color:var(--text);">
   <b>Проверить документы застройщика</b> — Управление архитектуры и градостроительства Астаны: по телефону горячей линии или личному обращению можно уточнить наличие полного пакета документов и иногда получить информацию по проекту (конструктивная схема, этажность, материалы).
   Контакты: <b>+7 (7172) 55-04-28</b>, <b>+7 (7172) 55-67-03</b>.
 </div>
 
-{% if geo %}
-<div id="cx-loc-score-card" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:14px;display:none;"></div>
-<script>
-(function() {
-  const card = document.getElementById('cx-loc-score-card');
-  fetch('/admin/api/complex/{{ cx.id }}/location-score').then(r => r.ok ? r.json() : null).then(d => {
-    if (!d || d.error || !d.factors) return;  // тихо скрываем — не всё в OSM всегда быстро/доступно
-    const totalColor = d.total >= 8 ? 'rgba(16,185,129,.15);color:#34d399' : (d.total >= 0 ? 'rgba(245,158,11,.15);color:#f59e0b' : 'rgba(239,68,68,.15);color:#ef4444');
-    const chips = Object.values(d.factors).map(f => {
-      const bg = f.adj > 0 ? 'rgba(16,185,129,.12);color:#16a34a' : (f.adj < 0 ? 'rgba(239,68,68,.12);color:#ef4444' : 'var(--bg);color:#888');
-      const sign = f.adj > 0 ? '+' : '';
-      return '<span title="' + f.reason.replace(/"/g, '&quot;') + '" style="font-size:12px;padding:4px 9px;border-radius:20px;background:' + bg + ';border:1px solid var(--border);cursor:help;">' + f.label + ' ' + (f.adj ? sign + f.adj : '') + '</span>';
-    }).join('');
-    card.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">' +
-      '<b style="font-size:14.5px;">📍 Локация ЖК</b>' +
-      '<span style="font-weight:800;font-size:15px;padding:2px 10px;border-radius:8px;background:' + totalColor + ';">' + (d.total > 0 ? '+' : '') + d.total + '</span>' +
-      '<span style="font-size:11.5px;color:#888;" title="доля факторов, реально посчитанных (не по дефолту/ошибке OSM)">уверенность: ' + d.confidence + '%</span>' +
-      '<span style="font-size:11px;color:#888;margin-left:auto;">только бесплатные источники (OSM + свои данные) — без Yandex/2GIS API</span>' +
-      '</div><div style="display:flex;gap:6px;flex-wrap:wrap;">' + chips + '</div>';
-    card.style.display = '';
-  }).catch(() => {});
-})();
-</script>
-{% endif %}
-
-  <div id="cx-card-map" class="cx-col-card chart-block" data-chart-id="cx-map-block" style="width:100%;height:560px;">
-    <b style="font-size:13.5px;display:block;margin-bottom:6px;">📍 Похожие варианты</b>
-    {% if geo %}
-    <div class="chart-block-inner" style="display:flex;flex-direction:column;">
-    <div id="cx-map" style="flex:1;min-height:0;width:100%;border-radius:8px;"></div>
-    <div style="font-size:11px;color:#888;margin-top:6px;">
-      живых объявлений: <b>{{ live_cnt }}</b> · на карте: <b>{{ map_points | selectattr('lat') | list | length }}</b>
-      {% if live_no_coords %} · <span style="color:#f59e0b;">{{ live_no_coords }} ждут докачки координат</span>{% endif %}
-    </div>
-    </div>
-    <script>
-    // Пины и попап — как на главном дашборде (цена/комнатность на синем
-    // фоне, полное превью по клику), а не голые цветные точки.
-    function cxProxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
-    function cxFmtPriceShort(v) {
-      if (!v) return '—';
-      return v >= 1e6 ? (v/1e6).toFixed(1) + ' М' : (v/1e3).toFixed(1) + 'K';
-    }
-    function cxEscapeHtml(s) {
-      const d = document.createElement('div');
-      d.textContent = s == null ? '' : String(s);
-      return d.innerHTML;
-    }
-    let cxMap = null;
-    document.addEventListener('DOMContentLoaded', function() {
-      const map = L.map('cx-map').setView([{{ geo.lat }}, {{ geo.lon }}], 15);
-      cxMap = map;
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(map);
-      const pts = {{ map_points | tojson }};
-      const bounds = [];
-      pts.forEach(p => {
-        if (!p.lat) return;
-        const isArch = p.is_active === false, isDup = !!p.is_dup;
-        const bg = isArch ? '#9ca3af' : (isDup ? '#f59e0b' : '#0077FF');
-        const pinHtml = `
-<div style="transform:translate(-50%,-100%);">
-  <div style="background:${bg};color:#fff;border-radius:12px;padding:4px 9px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4);display:inline-flex;align-items:center;gap:5px;">
-    <span>${p.rooms || '?'}к</span><span style="width:1px;height:11px;background:rgba(255,255,255,.5);"></span><span>${cxFmtPriceShort(p.price)}</span>
-  </div>
-  <div style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid ${bg};margin:0 auto;"></div>
-</div>`;
-        const m = L.marker([p.lat, p.lon], {
-          icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
-        }).addTo(map);
-        m.bindPopup(`<div id="cxpop-${p.id}" style="min-width:260px;padding:8px 0 2px;">Загрузка…</div>`, {maxWidth: 380, autoPan: false});
-        m.on('popupopen', () => cxLoadPopup(p.id));
-        bounds.push([p.lat, p.lon]);
-      });
-      if (bounds.length > 1) map.fitBounds(bounds, {padding: [24, 24]});
-      setTimeout(() => map.invalidateSize(), 200);
-    });
-    // Блок карты — .chart-block (тот же drag-resize/persist движок, что и
-    // у графиков, см. initChartGrid() в base.html). Leaflet требует явный
-    // invalidateSize() после программного/CSS-ресайза контейнера — сам
-    // размер не подхватывает.
-    document.addEventListener('hatuli:chart-resize', function(e) {
-      if (e.detail && e.detail.id === 'cx-map-block' && cxMap) cxMap.invalidateSize();
-    });
-    const cxPopLoaded = {};
-    function cxLoadPopup(id) {
-      if (cxPopLoaded[id]) return;
-      cxPopLoaded[id] = true;
-      fetch('/admin/api/listing/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
-        const el = document.getElementById('cxpop-' + id);
-        if (!el || d.error) return;
-        const priceM = d.price ? (d.price/1e6).toFixed(1) : '—';
-        const priceM2 = (d.price && d.area) ? Math.round(d.price/d.area/1000) + ' тыс ₸/м²' : '';
-        const photo = (d.photos && d.photos[0]) ? `<img src="${cxProxyImg(d.photos[0])}" style="width:100%;height:150px;object-fit:cover;border-radius:8px 8px 0 0;margin:-8px 0 8px;display:block;">` : '';
-        const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
-        const ownerPill = d.is_owner
-          ? `<span style="display:inline-block;background:#dcfce7;color:#166534;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;">👤 собственник</span>`
-          : `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:600;margin:0 5px 5px 0;">🏢 риелтор</span>`;
-        const areaTxt = d.area ? Math.round(d.area) : '?';
-        const floorTxt = d.floor ? `${d.floor}/${d.floors_total || '?'} эт.` : '';
-        const dealScore = (d.deal_score && d.deal_score.deal != null)
-          ? `<div style="font-size:12px;margin-top:4px;">🎯 Deal Score: <b>${d.deal_score.deal}/100</b></div>` : '';
-        el.innerHTML = `
-          ${photo}
-          <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-            <div style="font-size:20px;font-weight:800;">${priceM} <span style="font-size:14px;font-weight:700;">млн ₸</span></div>
-            ${priceM2 ? `<span style="${pillStyle}margin:0;">${priceM2}</span>` : ''}
-          </div>
-          <div style="margin-top:6px;">
-            <span style="${pillStyle}">${d.rooms || '?'}-комн</span>${ownerPill}<span style="${pillStyle}">${areaTxt} м²</span>${floorTxt ? `<span style="${pillStyle}">${floorTxt}</span>` : ''}
-          </div>
-          <div style="font-size:12px;color:#555;margin-top:4px;">${cxEscapeHtml(d.address || '')}</div>
-          ${dealScore}
-          <div style="margin-top:8px;padding-top:6px;border-top:1px solid #eee;display:flex;gap:8px;font-size:12.5px;">
-            <a href="/admin/analytics/${id}" style="flex:1;text-align:center;background:#0f766e;color:#fff;font-weight:700;padding:6px 8px;border-radius:7px;text-decoration:none;">Аналитика</a>
-            ${d.url ? `<a href="${d.url}" target="_blank" style="flex:1;text-align:center;background:#2563eb;color:#fff;font-weight:700;padding:6px 8px;border-radius:7px;text-decoration:none;">Крыша</a>` : ''}
-          </div>
-        `;
-      }).catch(() => {});
-    }
-    </script>
-    {% else %}
-    <div class="chart-block-inner" style="display:flex;align-items:center;justify-content:center;color:#888;font-size:13px;text-align:center;padding:20px;">🗺 Карта появится после докачки координат объявлений этого ЖК</div>
-    {% endif %}
-  </div>
+<!-- Карта убрана совсем (задача "убери карту", 2026-08-12) — блок
+     "Локация ЖК" переехал в карточку "Что рядом" в ряду 2 выше, попапы
+     объявлений с превью-фото остались в основной карте /admin. -->
 
 <!-- Динамика цены по комнатности: продажа + аренд-эквивалент — раньше два
      блока рядом, теперь один с переключателем "Продажа"/"Аренда" (задача
@@ -714,6 +572,139 @@ document.addEventListener('hatuli:chart-resize', (e) => {
 });
 </script>
 
+<!-- Скорость ухода: раньше были два несвязанных блока ("Аренда: скорость
+     ухода" — таблица без времени, и сводка "Продажа" в шапке страницы) —
+     объединены в один линейный график, тот же UI-паттерн, что у "Динамика
+     цены" выше (переключатель продажа/аренда + фильтры комнатности/периода),
+     задача "объедини и сделай линейным графиком", 2026-08-12. -->
+<div class="chart-block" data-chart-id="cx-turnover-dynamics" style="width:100%;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <b style="font-size:1em;" id="cxt-title">⏱ Скорость ухода (продажа)</b>
+    <div style="display:flex;gap:6px;">
+      <button type="button" id="cxt-kind-sale" onclick="cxtSetKind('sale')"
+              style="padding:4px 12px;border:1px solid var(--border);border-radius:7px;background:#2563eb;color:#fff;font-size:11.5px;font-weight:600;cursor:pointer;">Продажа</button>
+      <button type="button" id="cxt-kind-rental" onclick="cxtSetKind('rental')"
+              style="padding:4px 12px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);font-size:11.5px;font-weight:600;cursor:pointer;">Аренда</button>
+    </div>
+  </div>
+  <div style="font-size:0.8em;color:#888;margin:2px 0 8px;" id="cxt-subtitle">среднее число дней в экспозиции до ухода — по неделям, своя линия на каждую комнатность</div>
+  <div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;align-items:center;">
+    {% for val, label in [('', 'Все'), ('1', '1к'), ('2', '2к'), ('3', '3к'), ('4', '4+к')] %}
+    <button type="button" class="cxt-rooms-btn" data-rooms="{{ val }}" onclick="cxtSetRooms('{{ val }}')"
+            style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#2563eb' if val == '' else 'var(--bg)' }};color:{{ '#fff' if val == '' else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+    <span style="width:1px;align-self:stretch;background:var(--border);margin:0 4px;"></span>
+    {% for val, label in [(30,'30д'),(90,'90д'),(180,'180д'),(365,'365д')] %}
+    <button type="button" class="cxt-days-btn" data-days="{{ val }}" onclick="cxtSetDays({{ val }})"
+            style="padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:{{ '#2563eb' if val == 180 else 'var(--bg)' }};color:{{ '#fff' if val == 180 else 'var(--text)' }};font-size:11.5px;cursor:pointer;">{{ label }}</button>
+    {% endfor %}
+  </div>
+  <div id="cxt-chart" class="chart-block-inner"></div>
+  <p style="font-size:11.5px;color:#888;margin-top:6px;">«Ушло» = продажа — не в выдаче парсера &gt;3 дн. (в архиве); аренда — та же логика. Малое число дней = высокий спрос в этом ЖК. Аренда наполняется с 12.07.2026.</p>
+</div>
+
+<script>
+const CXT_STATE = {
+  kind: 'sale', rooms: '', days: 180,
+  colors: {sale: '#2563eb', rental: '#16a34a'},
+};
+function cxtSetKind(kind) {
+  CXT_STATE.kind = kind;
+  const color = CXT_STATE.colors[kind];
+  document.getElementById('cxt-kind-sale').style.background = kind === 'sale' ? color : 'var(--bg)';
+  document.getElementById('cxt-kind-sale').style.color = kind === 'sale' ? '#fff' : 'var(--text)';
+  document.getElementById('cxt-kind-rental').style.background = kind === 'rental' ? color : 'var(--bg)';
+  document.getElementById('cxt-kind-rental').style.color = kind === 'rental' ? '#fff' : 'var(--text)';
+  document.getElementById('cxt-title').textContent = kind === 'rental' ? '⏱ Скорость ухода (аренда)' : '⏱ Скорость ухода (продажа)';
+  document.querySelectorAll('.cxt-rooms-btn').forEach(b => {
+    if (b.dataset.rooms === CXT_STATE.rooms) b.style.background = color;
+  });
+  document.querySelectorAll('.cxt-days-btn').forEach(b => {
+    if (Number(b.dataset.days) === CXT_STATE.days) b.style.background = color;
+  });
+  cxtLoad();
+}
+function cxtSetRooms(val) {
+  CXT_STATE.rooms = val;
+  const color = CXT_STATE.colors[CXT_STATE.kind];
+  document.querySelectorAll('.cxt-rooms-btn').forEach(b => {
+    const active = b.dataset.rooms === val;
+    b.style.background = active ? color : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  cxtLoad();
+}
+function cxtSetDays(val) {
+  CXT_STATE.days = val;
+  const color = CXT_STATE.colors[CXT_STATE.kind];
+  document.querySelectorAll('.cxt-days-btn').forEach(b => {
+    const active = Number(b.dataset.days) === val;
+    b.style.background = active ? color : 'var(--bg)';
+    b.style.color = active ? '#fff' : 'var(--text)';
+  });
+  cxtLoad();
+}
+async function cxtLoad() {
+  const st = CXT_STATE;
+  const el = document.getElementById('cxt-chart');
+  el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">загрузка…</div>';
+  try {
+    const r = await fetch(`/admin/api/complex/{{ cx.id }}/turnover-dynamics?kind=${st.kind}&days=${st.days}&rooms=${st.rooms}`);
+    const d = await r.json();
+    cxtRender(el, d.data || {}, st.colors[st.kind]);
+  } catch (e) {
+    el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">ошибка загрузки</div>';
+  }
+}
+function cxtRender(el, data, baseColor) {
+  const roomKeys = Object.keys(data).sort((a, b) => a - b);
+  if (!roomKeys.length) { el.innerHTML = '<p style="font-size:12px;color:#888;padding:10px;">Недостаточно данных за выбранный период.</p>'; return; }
+  const days = [...new Set(roomKeys.flatMap(k => data[k].map(p => p.d)))].sort();
+  if (days.length < 2) {
+    const only = roomKeys.map(k => `${k}к: ${data[k][data[k].length-1].avg_days} дн.`).join(' · ');
+    el.innerHTML = `<p style="font-size:13px;padding:10px;">${only} <span style="color:#888;">(мало точек во времени для линии)</span></p>`;
+    return;
+  }
+  const colors = ['#2563eb', '#16a34a', '#f59e0b', '#ef4444', '#9333ea', '#0891b2'];
+  const W = Math.max(400, (el.clientWidth || 460) - 20), H = Math.max(180, (el.clientHeight || 220) - 30), padL = 32, padB = 22, padT = 10, padR = 10;
+  const allDays = roomKeys.flatMap(k => data[k].map(p => p.avg_days));
+  const minP = Math.min(0, Math.min(...allDays) * 0.9), maxP = Math.max(...allDays) * 1.1 || 1;
+  const x = i => padL + (days.length > 1 ? i / (days.length - 1) : 0) * (W - padL - padR);
+  const y = v => padT + (1 - (v - minP) / (maxP - minP || 1)) * (H - padT - padB);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:100%;overflow:visible;">`;
+  for (let g = 0; g <= 4; g++) {
+    const v = minP + (maxP - minP) * g / 4;
+    const yy = y(v);
+    svg += `<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="var(--border)" stroke-width="1"/>`;
+    svg += `<text x="${padL-6}" y="${yy+4}" font-size="10" fill="var(--text)" text-anchor="end">${v.toFixed(0)}</text>`;
+  }
+  const xStep = Math.max(1, Math.ceil(days.length / 8));
+  days.forEach((dd, i) => {
+    if (i % xStep !== 0 && i !== days.length - 1) return;
+    svg += `<text x="${x(i)}" y="${H-4}" font-size="10" fill="var(--text)" text-anchor="middle">${dd.slice(5)}</text>`;
+  });
+  roomKeys.forEach((k, ki) => {
+    const color = colors[ki % colors.length];
+    const byDay = Object.fromEntries(data[k].map(p => [p.d, p]));
+    const pts = days.map((dd, i) => byDay[dd] ? [x(i), y(byDay[dd].avg_days)] : null).filter(Boolean);
+    if (pts.length < 2) return;
+    const path = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    svg += `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/>`;
+    pts.forEach(p => { svg += `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="${color}"/>`; });
+  });
+  svg += '</svg>';
+  const legend = roomKeys.map((k, ki) => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11.5px;">
+    <span style="width:9px;height:9px;border-radius:50%;background:${colors[ki % colors.length]};display:inline-block;"></span>${k}-комн
+  </span>`).join('');
+  el.innerHTML = `<div style="margin-bottom:4px;">${legend}</div><div style="flex:1;min-height:0;">${svg}</div>`;
+  el.style.display = 'flex'; el.style.flexDirection = 'column';
+}
+document.addEventListener('DOMContentLoaded', () => { cxtLoad(); });
+document.addEventListener('hatuli:chart-resize', (e) => {
+  if (e.detail && e.detail.id === 'cx-turnover-dynamics') cxtLoad();
+});
+</script>
+
 <style>
 .cx-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
 .cx-card h3 { margin-top: 0; font-size: 15px; }
@@ -733,23 +724,6 @@ document.addEventListener('hatuli:chart-resize', (e) => {
        drag/resize/span движок, что и в админке — см. initDashboardGrid() в
        base.html), а не в старой 2fr/1fr раскладке. Достаточно навесить
        class="admin-block"/"chart-block" — JS сам соберёт их в сетку. -->
-  <div class="cx-card admin-block" data-chart-id="cx-rental-turnover">
-    <h3>🔑 Аренда: скорость ухода</h3>
-    <table class="cx-table">
-      <tr><th>Комнат</th><th>Объявл.</th><th>Медиана ₸/мес</th><th>Ушло</th><th>Ср. дней в экспозиции</th></tr>
-      {% for r in rental_stats %}
-      <tr>
-        <td><b>{{ r.rooms or '?' }}к</b></td>
-        <td>{{ r.cnt }}</td>
-        <td>{{ '{:,.0f}'.format(r.median_rent or 0).replace(',', ' ') }}</td>
-        <td>{{ r.gone_cnt }}</td>
-        <td>{{ '%.0f'|format(r.avg_days_listed) if r.avg_days_listed else '—' }}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    <p style="font-size:12px;color:#888;">«Ушло» = объявление не появлялось в выдаче парсера больше 3 дней (сдано или снято). Малое «дней в экспозиции» = высокий арендный спрос в этом ЖК. Метрика начнёт наполняться с 12.07.2026.</p>
-  </div>
-
   <div class="cx-card contact-form admin-block" data-chart-id="cx-contacts">
     <h3>👥 Люди, контакты и источники инфы</h3>
     <label>ОСИ (контакты)</label>
@@ -825,6 +799,74 @@ document.addEventListener('hatuli:chart-resize', (e) => {
       <span id="t-status" style="font-size:12px;color:#22c55e;margin-left:8px;"></span>
     </div>
   </div>
+
+<!-- Отзывы о ЖК — смотреть могут все, оставлять только залогиненные через
+     Telegram (задача "блок отзывов", 2026-08-07). Перенесены в самый низ
+     страницы (задача "блок отзывов в самом низу", 2026-08-12). -->
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin-bottom:14px;">
+  <b style="font-size:14.5px;">💬 Отзывы</b>
+  <div id="cx-reviews-list" style="margin-top:10px;font-size:13px;color:#888;">загрузка…</div>
+  <div id="cx-review-form-wrap" style="margin-top:12px;display:none;">
+    <div id="cx-review-stars" style="font-size:20px;letter-spacing:2px;cursor:pointer;margin-bottom:6px;color:#ccc;"></div>
+    <textarea id="cx-review-text" placeholder="Расскажите, каково жить в этом ЖК…" style="width:100%;min-height:70px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+    <button type="button" onclick="cxSubmitReview({{ cx.id }})" style="margin-top:6px;padding:7px 16px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;">Отправить</button>
+    <span id="cx-review-status" style="font-size:12px;color:#888;margin-left:8px;"></span>
+  </div>
+  <div id="cx-review-login-prompt" style="margin-top:12px;font-size:13px;color:#888;display:none;">
+    <a href="/cabinet" style="color:#2563eb;">Войдите через Telegram</a>, чтобы оставить отзыв.
+  </div>
+</div>
+<script>
+(function() {
+  const cid = {{ cx.id }};
+  let myRating = 0;
+  const starsEl = document.getElementById('cx-review-stars');
+  function renderStars() {
+    starsEl.innerHTML = [1,2,3,4,5].map(n =>
+      `<span onclick="cxSetStar(${n})" style="color:${n <= myRating ? '#f59e0b' : '#ccc'};">★</span>`).join('');
+  }
+  window.cxSetStar = function(n) { myRating = n; renderStars(); };
+  renderStars();
+
+  window.cxSubmitReview = function(complexId) {
+    const text = document.getElementById('cx-review-text').value.trim();
+    const status = document.getElementById('cx-review-status');
+    if (!text) { status.textContent = 'Напишите текст отзыва.'; return; }
+    status.textContent = 'Отправка…';
+    fetch('/admin/api/complex/' + complexId + '/reviews', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: text, rating: myRating || null}),
+    }).then(r => r.json()).then(d => {
+      if (d.error) { status.textContent = 'Не удалось отправить.'; return; }
+      status.textContent = 'Спасибо за отзыв!';
+      loadReviews();
+    }).catch(() => { status.textContent = 'Не удалось отправить.'; });
+  };
+
+  function escapeHtml(s) {
+    const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+  }
+  function loadReviews() {
+    fetch('/admin/api/complex/' + cid + '/reviews').then(r => r.json()).then(d => {
+      const list = document.getElementById('cx-reviews-list');
+      const reviews = d.reviews || [];
+      list.innerHTML = reviews.length ? reviews.map(r => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border);">
+          <div style="display:flex;justify-content:space-between;gap:8px;">
+            <b style="font-size:13px;">${escapeHtml(r.author)}</b>
+            <span style="font-size:11.5px;color:#888;">${r.created_at}</span>
+          </div>
+          ${r.rating ? `<div style="color:#f59e0b;font-size:13px;">${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</div>` : ''}
+          <div style="font-size:13px;color:var(--text);margin-top:2px;">${escapeHtml(r.text)}</div>
+        </div>`).join('') : '<div style="color:#888;font-size:13px;">Пока нет отзывов — будьте первым.</div>';
+      document.getElementById(d.can_post ? 'cx-review-form-wrap' : 'cx-review-login-prompt').style.display = 'block';
+    }).catch(() => {
+      document.getElementById('cx-reviews-list').textContent = 'Не удалось загрузить отзывы.';
+    });
+  }
+  loadReviews();
+})();
+</script>
 
 <script>
 async function toggleTechEdit() {

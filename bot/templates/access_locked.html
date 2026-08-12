@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<!-- Заглушка для тира "public" (задача "общий доступ", 2026-08-12) —
+     всем открыт только раздел новостроек + фильтры + тепловые карты на
+     главной; страницы ЖК и остальное требуют full_access, который выдаёт
+     администратор вручную на /admin/site-users после регистрации через
+     Telegram (сама регистрация больше не открывает доступ). -->
+<div style="max-width:520px;margin:60px auto;text-align:center;padding:32px 28px;background:var(--surface);border:1px solid var(--border);border-radius:14px;">
+  <div style="font-size:40px;margin-bottom:10px;">🔒</div>
+  <h2 style="margin:0 0 10px;font-size:19px;">{{ title or 'Доступ ограничен' }}</h2>
+  <p style="color:var(--muted);font-size:14px;line-height:1.6;margin:0 0 18px;">{{ message or 'Эта страница открыта пользователям с расширенным доступом. Всем без ограничений доступны новостройки, фильтры и тепловые карты на главной.' }}</p>
+  <a href="/cabinet" style="display:inline-block;padding:10px 22px;background:#2563eb;color:#fff;border-radius:9px;text-decoration:none;font-weight:700;font-size:13.5px;">Войти через Telegram</a>
+  <p style="color:var(--muted);font-size:12px;margin-top:14px;">После входа доступ откроет администратор.</p>
+</div>
+{% endblock %}

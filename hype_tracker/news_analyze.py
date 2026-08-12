@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -188,15 +189,49 @@ def fetch_new_articles() -> int:
         except Exception as e:
             print(f"[WARN] krisha content error {path}: {e}", flush=True)
 
+    # Крыша не СМИ: страницы фильтров Крыши из Google News режем по
+    # заголовку («Астана · Есильский р-н - Krisha») — как в news_collect.
+    krisha_title = re.compile(r"\b(?:krisha|крыша)\b", re.I)
+    # Телеметрия: какие запросы что дают (для еженедельного ИИ-ревью).
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS news_query_stats (
+            id BIGSERIAL PRIMARY KEY,
+            query TEXT NOT NULL,
+            run_at TIMESTAMP NOT NULL DEFAULT now(),
+            total INT NOT NULL DEFAULT 0,
+            new_items INT NOT NULL DEFAULT 0,
+            duplicates INT NOT NULL DEFAULT 0,
+            blocked INT NOT NULL DEFAULT 0,
+            errors INT NOT NULL DEFAULT 0
+        )
+    """)
+    conn.commit()
+
     for q in news_collect.load_queries():
+        qs = {"total": 0, "new": 0, "dup": 0, "blocked": 0, "err": 0}
         try:
             for it in news_collect.parse_rss(news_collect.get_rss(q)):
+                qs["total"] += 1
                 if it["url"] in seen or it["url"] in [x["url"] for x in new_items]:
+                    qs["dup"] += 1
+                    continue
+                if krisha_title.search(it.get("title") or ""):
+                    qs["blocked"] += 1
                     continue
                 new_items.append(it)
+                qs["new"] += 1
             time.sleep(1)
         except Exception as e:
+            qs["err"] = 1
             print(f"[WARN] rss error {q}: {e}", flush=True)
+        try:
+            cur.execute(
+                "INSERT INTO news_query_stats (query, total, new_items, duplicates, blocked, errors) "
+                "VALUES (%s,%s,%s,%s,%s,%s)",
+                (q, qs["total"], qs["new"], qs["dup"], qs["blocked"], qs["err"]))
+        except Exception as e:
+            print(f"[WARN] stats insert error: {e}", flush=True)
+    conn.commit()
 
     for it in new_items:
         try:

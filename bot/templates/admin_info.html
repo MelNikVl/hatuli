@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🛠 ИНФО для админа</div>
+
+<div class="admin-block" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+  <div>
+    <div style="font-size:20px;font-weight:800;">{{ old_fund_total }}</div>
+    <div style="font-size:11.5px;color:#888;">адресов помечено «старый фонд» (пятиэтажки, средняя цена/м² ≤ 700 тыс ₸)</div>
+  </div>
+  <div>
+    <div style="font-size:20px;font-weight:800;color:#b45309;">{{ old_fund_1970 }}</div>
+    <div style="font-size:11.5px;color:#888;">из них получили год постройки 1970 (не было реального)</div>
+  </div>
+  <div>
+    <div style="font-size:20px;font-weight:800;">{{ hy_with_year }} / {{ hy_total }}</div>
+    <div style="font-size:11.5px;color:#888;">адресов с годом постройки в house_years</div>
+  </div>
+</div>
+
+<div class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:16px;">
+  <div style="font-size:14px;font-weight:800;margin-bottom:8px;">📊 Распределение домов по десятилетиям постройки</div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;">
+    {% for d in decades %}
+    <span style="display:inline-block;background:{% if d.dec < 1990 %}#b45309{% elif d.dec < 2005 %}#d97706{% elif d.dec < 2015 %}#2563eb{% else %}#16a34a{% endif %};color:#fff;border-radius:999px;padding:3px 11px;font-size:12.5px;font-weight:700;">{{ d.dec }}-е · {{ d.cnt }}</span>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+    <div style="font-size:14px;font-weight:800;">🌡 Тепловая карта новизны домов в Астане</div>
+    <div style="display:flex;gap:8px;font-size:12px;color:#888;align-items:center;">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#b45309;"></span> &lt;1990 (старый фонд)</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#d97706;"></span> 1990-2004</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#2563eb;"></span> 2005-2014</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#16a34a;"></span> 2015+</span>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="aih-old-only" onchange="loadAdminHeat()"> только старый фонд
+      </label>
+      <label style="display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="aih-no-year" onchange="loadAdminHeat()"> без года (серым)
+      </label>
+    </div>
+  </div>
+  <div id="admin-heat-map" style="height:620px;border-radius:10px;border:1px solid var(--border);background:var(--bg);"></div>
+  <div id="admin-heat-info" style="font-size:12px;color:#888;margin-top:8px;">загрузка…</div>
+</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let adminHeatMap = null, adminHeatLayer = null, adminHeatData = [];
+function yearColor(y) {
+  if (y == null) return '#9ca3af';
+  if (y < 1990) return '#b45309';
+  if (y < 2005) return '#d97706';
+  if (y < 2015) return '#2563eb';
+  return '#16a34a';
+}
+function loadAdminHeat() {
+  fetch('/admin/api/admin-info-heat').then(r => r.json()).then(d => {
+    adminHeatData = d.points || [];
+    if (!adminHeatMap) {
+      adminHeatMap = L.map('admin-heat-map').setView([51.1605, 71.4704], 11);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution: '&copy; OSM'}).addTo(adminHeatMap);
+      adminHeatLayer = L.layerGroup().addTo(adminHeatMap);
+    }
+    adminHeatLayer.clearLayers();
+    const oldOnly = document.getElementById('aih-old-only').checked;
+    const noYear = document.getElementById('aih-no-year').checked;
+    const shown = adminHeatData.filter(p =>
+      (!oldOnly || p.old_fund) && (noYear || p.year != null));
+    const byKey = {};
+    shown.forEach(p => {
+      // гексагон ~300м: сгруппируем по ячейке сетки
+      const key = Math.round(p.lat * 320) + '_' + Math.round(p.lon * 320);
+      if (!byKey[key]) { byKey[key] = {lat: p.lat, lon: p.lon, years: [], n: 0, old: 0}; }
+      const c = byKey[key];
+      c.lat = (c.lat * c.n + p.lat) / (c.n + 1);
+      c.lon = (c.lon * c.n + p.lon) / (c.n + 1);
+      c.n += 1;
+      if (p.year != null) c.years.push(p.year);
+      if (p.old_fund) c.old += 1;
+    });
+    const cells = Object.values(byKey);
+    cells.forEach(c => {
+      const medY = c.years.length ? c.years.sort((a,b)=>a-b)[Math.floor(c.years.length/2)] : null;
+      const color = yearColor(medY);
+      const r = 110 + Math.min(160, c.n * 6);
+      L.circleMarker([c.lat, c.lon], {
+        radius: Math.max(5, Math.min(16, Math.sqrt(c.n) * 2.2)),
+        color: '#fff', weight: 1, fillColor: color, fillOpacity: 0.75,
+      }).bindPopup(`<b>${c.n} адресов</b><br>${medY != null ? 'год: ~' + medY : 'год не известен'}<br>старый фонд: ${c.old}`)
+        .addTo(adminHeatLayer);
+    });
+    document.getElementById('admin-heat-info').textContent =
+      `${shown.length} домов · ${cells.length} ячеек (~300м) · показаны: ${oldOnly ? 'только старый фонд' : 'все'}${noYear ? ', включая без года' : ''}`;
+  }).catch(e => {
+    document.getElementById('admin-heat-info').textContent = 'ошибка загрузки: ' + e;
+  });
+}
+loadAdminHeat();
+</script>
+{% endblock %}

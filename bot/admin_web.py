@@ -163,19 +163,23 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             }
         )
 
-    @app.get("/")
-    async def root_redirect(request: Request):
-        # Голый домен (hatuli.ai-groundtruth.com без пути) — самый обычный
-        # способ, которым реальный посетитель заходит на сайт — раньше не
-        # был замаплен вообще ни на что и отдавал голый JSON 404 вместо
-        # сайта. Карта живёт на /admin (публична сама по себе, см. ниже) —
-        # редиректим туда.
-        return RedirectResponse(url="/admin", status_code=302)
+    @app.get("/", response_class=HTMLResponse)
+    async def root_dashboard(request: Request):
+        # Голый домен — самый обычный способ, которым реальный посетитель
+        # заходит на сайт. Раньше 302-редиректил на /admin — адресная строка
+        # у обычного посетителя тут же показывала "admin", хотя это
+        # публичная карта без логина (задача "все не должны работать под
+        # админом", 2026-08-12). Рендерим карту прямо тут, без редиректа.
+        # /admin остаётся рабочим URL (не ломаем расшаренные ссылки) —
+        # просто больше не единственный вход.
+        return await _render_dashboard(request)
 
     @app.get("/admin", response_class=HTMLResponse)
     async def dashboard(request: Request):
         # Публичная страница: карта и фильтры без логина; админ-элементы
-        # скрываются в шаблоне через is_admin(request)
+        # скрываются в шаблоне через is_admin(request). Оставлен для
+        # обратной совместимости расшаренных ссылок — см. "/" выше, теперь
+        # тот же контент без "admin" в адресе.
         return await _render_dashboard(request)
 
     @app.get("/admin/listing/{listing_id}", response_class=HTMLResponse)

@@ -147,10 +147,11 @@
 {% set panel_family = ('analytics' in request.url.path or 'parser' in request.url.path
     or 'duplicates' in request.url.path or 'archived' in request.url.path or 'unbound' in request.url.path
     or 'zones' in request.url.path or 'settings' in request.url.path or 'logs' in request.url.path
-    or 'issues' in request.url.path or request.url.path == '/admin/site-users' or request.url.path == '/admin/panel') %}
+    or 'issues' in request.url.path or 'entity-ids' in request.url.path
+    or request.url.path == '/admin/site-users' or request.url.path == '/admin/panel') %}
 <header class="pub-header">
   <div class="pub-row1">
-    <a href="/admin" class="pub-logo">Hatuli</a>
+    <a href="/admin" class="pub-logo" style="color:#000;">AGT</a>
     <nav class="pub-nav">
       <a href="/admin/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
       <a href="/admin/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>

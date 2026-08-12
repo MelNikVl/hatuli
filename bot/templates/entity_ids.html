@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🆔 АЙДИ
+  <small style="font-size:13px;color:#888;font-weight:400;">Entity resolution, фаза 1 (ЖК) — постоянный ID на объект + связи с источниками. См. <code>docs/entity_resolution_plan.md</code>.</small>
+</div>
+
+<style>
+.eid-tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin-bottom:16px; }
+.eid-tile { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
+.eid-tile .n { font-size:24px; font-weight:800; }
+.eid-tile .lbl { font-size:12px; color:#888; margin-top:2px; }
+.eid-tile .sub { font-size:11px; color:#888; margin-top:4px; }
+.eid-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 18px; margin-bottom:16px; }
+.eid-table { width:100%; border-collapse:collapse; font-size:13px; }
+.eid-table th { text-align:left; color:#888; font-weight:600; padding:6px 10px; border-bottom:1px solid var(--border); font-size:11.5px; text-transform:uppercase; }
+.eid-table td { padding:7px 10px; border-bottom:1px solid var(--border); }
+</style>
+
+{% set complexes_total = totals.complexes_total or 0 %}
+{% set complexes_resolved = totals.complexes_resolved or 0 %}
+{% set units_total = totals.units_total or 0 %}
+{% set units_resolved = totals.units_resolved or 0 %}
+<div class="eid-tiles">
+  <div class="eid-tile">
+    <div class="n">{{ complexes_resolved }} / {{ complexes_total }}</div>
+    <div class="lbl">ЖК с постоянным ID + связью с источником</div>
+    <div class="sub">{{ (100 * complexes_resolved / complexes_total)|round(1) if complexes_total else 0 }}% покрытие</div>
+  </div>
+  <div class="eid-tile">
+    <div class="n">{{ units_resolved }} / {{ units_total }}</div>
+    <div class="lbl">Юнитов новостроек в резолвленных ЖК</div>
+    <div class="sub">{{ (100 * units_resolved / units_total)|round(1) if units_total else 0 }}% покрытие</div>
+  </div>
+  <div class="eid-tile">
+    <div class="n">{{ totals.links_total or 0 }}</div>
+    <div class="lbl">Связей источник→ЖК всего</div>
+    <div class="sub">в среднем {{ totals.avg_sources_per_resolved or '—' }} источника на резолвленный ЖК</div>
+  </div>
+  <div class="eid-tile">
+    <div class="n">{{ totals.review_queue_complexes or 0 }}</div>
+    <div class="lbl">ЖК в очереди на ручную проверку</div>
+    <div class="sub">confidence {{ thresholds.review }}–{{ thresholds.auto }}</div>
+  </div>
+</div>
+
+<div class="eid-card">
+  <b style="font-size:14.5px;">⚙️ Как считается матчинг</b>
+  <p style="font-size:13px;color:var(--text);line-height:1.7;margin-top:8px;">
+    Каждая связь источник→ЖК получает confidence из сигналов, которые реально удалось проверить:
+    точное совпадение нормализованного имени — базовый сигнал (+{{ thresholds.w_name }}),
+    гео-близость в пределах {{ thresholds.geo_radius_m|int }} м — сильный сигнал (+{{ thresholds.w_geo }}),
+    совпадение застройщика — доп. сигнал (+{{ thresholds.w_developer }}).
+    confidence ≥ <b>{{ thresholds.auto }}</b> — связь пишется в спайн автоматически;
+    <b>{{ thresholds.review }}–{{ thresholds.auto }}</b> — попадает в очередь на ручную проверку
+    (сейчас — на <a href="/admin/analytics/complexes?tab=complexes_fix" style="color:#2563eb;">странице переназначения ЖК</a>);
+    ниже {{ thresholds.review }} — связь не создаётся вовсе. Первый источник, принёсший новый ЖК
+    (а не совпавший с уже существующим), пишется с confidence 1.0 — там неоднозначности нет,
+    это и есть происхождение объекта (<code>seed_source</code>).
+  </p>
+</div>
+
+<div class="chart-block" data-chart-id="eid-timeline" style="width:100%;">
+  <b style="font-size:1em;">📈 Покрытие ID во времени</b>
+  <div style="font-size:0.8em;color:#888;margin:2px 0 8px;">накопительно: связей источник→ЖК и резолвленных ЖК по дню первой связи</div>
+  <div id="eid-chart" class="chart-block-inner"></div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+  <div class="eid-card">
+    <b style="font-size:14px;">По источникам</b>
+    <table class="eid-table" style="margin-top:8px;">
+      <tr><th>Источник</th><th>Связей</th><th>Ср. confidence</th></tr>
+      {% for s in by_source %}
+      <tr><td>{{ s.source }}</td><td>{{ s.n }}</td><td>{{ s.avg_conf }}</td></tr>
+      {% else %}
+      <tr><td colspan="3" style="color:#888;text-align:center;">пока пусто — запустите backfill_entity_resolution.py</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+  <div class="eid-card">
+    <b style="font-size:14px;">По методу матчинга</b>
+    <table class="eid-table" style="margin-top:8px;">
+      <tr><th>Метод</th><th>Связей</th></tr>
+      {% for m in by_method %}
+      <tr><td>{{ m.match_method }}</td><td>{{ m.n }}</td></tr>
+      {% else %}
+      <tr><td colspan="2" style="color:#888;text-align:center;">—</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<script>
+async function eidLoad() {
+  const el = document.getElementById('eid-chart');
+  el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">загрузка…</div>';
+  try {
+    const r = await fetch('/admin/api/entity-ids/timeline');
+    const d = await r.json();
+    eidRender(el, d.data || {});
+  } catch (e) {
+    el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">ошибка загрузки</div>';
+  }
+}
+function eidRender(el, data) {
+  const series = {
+    links: {label: 'связей всего', color: '#2563eb', pts: data.links || []},
+    complexes: {label: 'резолвленных ЖК', color: '#16a34a', pts: data.complexes || []},
+  };
+  const allDays = [...new Set(Object.values(series).flatMap(s => s.pts.map(p => p.d)))].sort();
+  if (allDays.length < 2) {
+    el.innerHTML = '<p style="font-size:13px;padding:10px;color:#888;">Недостаточно данных — запустите backfill_entity_resolution.py.</p>';
+    return;
+  }
+  const W = Math.max(400, (el.clientWidth || 460) - 20), H = Math.max(180, (el.clientHeight || 260) - 30), padL = 40, padB = 22, padT = 10, padR = 10;
+  const allVals = Object.values(series).flatMap(s => s.pts.map(p => p.cum));
+  const minV = 0, maxV = Math.max(...allVals, 1) * 1.08;
+  const x = i => padL + (allDays.length > 1 ? i / (allDays.length - 1) : 0) * (W - padL - padR);
+  const y = v => padT + (1 - (v - minV) / (maxV - minV || 1)) * (H - padT - padB);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:100%;overflow:visible;">`;
+  for (let g = 0; g <= 4; g++) {
+    const v = minV + (maxV - minV) * g / 4;
+    const yy = y(v);
+    svg += `<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="var(--border)" stroke-width="1"/>`;
+    svg += `<text x="${padL-6}" y="${yy+4}" font-size="10" fill="var(--text)" text-anchor="end">${Math.round(v)}</text>`;
+  }
+  const xStep = Math.max(1, Math.ceil(allDays.length / 8));
+  allDays.forEach((dd, i) => {
+    if (i % xStep !== 0 && i !== allDays.length - 1) return;
+    svg += `<text x="${x(i)}" y="${H-4}" font-size="10" fill="var(--text)" text-anchor="middle">${dd.slice(5)}</text>`;
+  });
+  Object.values(series).forEach(s => {
+    const byDay = Object.fromEntries(s.pts.map(p => [p.d, p]));
+    let lastCum = 0;
+    const pts = allDays.map((dd, i) => {
+      if (byDay[dd]) lastCum = byDay[dd].cum;
+      return [x(i), y(lastCum)];
+    });
+    const path = pts.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+    svg += `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="2.5"/>`;
+  });
+  svg += '</svg>';
+  const legend = Object.values(series).map(s => `<span style="display:inline-flex;align-items:center;gap:5px;margin-right:14px;font-size:11.5px;">
+    <span style="width:9px;height:9px;border-radius:50%;background:${s.color};display:inline-block;"></span>${s.label}
+  </span>`).join('');
+  el.innerHTML = `<div style="margin-bottom:4px;">${legend}</div><div style="flex:1;min-height:0;">${svg}</div>`;
+  el.style.display = 'flex'; el.style.flexDirection = 'column';
+}
+document.addEventListener('DOMContentLoaded', eidLoad);
+document.addEventListener('hatuli:chart-resize', (e) => {
+  if (e.detail && e.detail.id === 'eid-timeline') eidLoad();
+});
+</script>
+{% endblock %}

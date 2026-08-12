@@ -37,51 +37,60 @@ COMPLEX_NAMES = [
     "Parkside Astana", "Vivaldi ЖК Астана", "La Vie ЖК Астана", "Akbulak Riviera",
     "Garden View ЖК Астана", "Aisar ЖК Астана", "AruPark ЖК", "GreenLine ЖК Астана",
     "Capital Park ЖК Астана", "Auez ЖК Астана", "MOD Urban ЖК", "Nexpo Aura ЖК",
-    "Jetisu ЖК Астана", "Expo Plaza ЖК", "UIA.BIRLIK ЖК", "Park City Forum ЖК",
-    "Koktobe City ЖК",
-    # Элит/бизнес
+    "Jetisu ЖК Астана", "Expo Plaza ЖК", "Park City Forum ЖК", # Элит/бизнес
     "The One Bazis ЖК", "Dara Residence ЖК", "Европа Сити ЖК Астана",
     "Swiss Collection ЖК", "GRAND MONACO ЖК Астана", "Highvill Astana",
-    "Highvill Ishim", "London ЖК Астана", "England ЖК Астана", "Вивальди ЖК",
-    "LANDMARK GOLD ЖК", "SALZBURG ЖК Астана", "LEVEL ЖК Астана",
+    "Highvill Ishim", "London ЖК Астана", "England ЖК Астана", "LANDMARK GOLD ЖК", "SALZBURG ЖК Астана", "LEVEL ЖК Астана",
     # Масс-маркет/комфорт
-    "Imran ЖК Астана", "Salman City ЖК", "Altyn Säulet ЖК", "Rauda ЖК Астана",
-    "Tasty ЖК Астана", "Фирдаус ЖК Астана", "Aviator 2 ЖК", "Altyn City ЖК",
-    "Time City ЖК Астана", "Alatau Park ЖК", "PARKLAND ЖК Астана", "Manar ЖК Астана",
-    "W TOWERS ЖК", "UIA.TARIH ЖК", "Sharyn ЖК Астана", "Turan Palace ЖК",
+    "Imran ЖК Астана", "Salman City ЖК", "Altyn Säulet ЖК", "Tasty ЖК Астана", "Фирдаус ЖК Астана", "Aviator 2 ЖК", "Altyn City ЖК",
+    "Time City ЖК Астана", "Alatau Park ЖК", "Manar ЖК Астана",
+    "W TOWERS ЖК", "Sharyn ЖК Астана", "Turan Palace ЖК",
     "Galaxy Star ЖК", "Мирадж ЖК Астана", "Столичный 2 ЖК", "Evolution ЖК Астана",
+    "т полиции радикальных мер после пожара в",
+    "ёл в эксплуатацию 10 из 16 подъёмников в",
+    "что изменилось в",
+    "несколько",
+    "новый",
+    "решили ли жители",
+    "рейтинг худших",
+    "назван топ-10 самых дорогих",
+    "в астане сносят",
+    "какие",
+    "омиссия создана по факту падения лифта в",
+    "BI ЖК Астана",
+    "G-PARK ЖК Астана",
+    "Highvill ЖК Астана",
+    "Madrid-2 ЖК Астана",
+    "NAK ЖК Астана",
+    "R-Club ЖК Астана",
+    "Washington ЖК Астана",
 ]
 
 _QUERIES_L1_MONEY = [
-    "ипотека Казахстан 2026", "Отбасы банк ипотека", "ипотека 2% Астана",
-    "НДС застройщики 2026", "цены на квартиры Астана", "квадратный метр Астана цена",
-    "льготная ипотека Казахстан", "арендное жильё очередь",
+    "цены на квартиры Астана", "квадратный метр Астана цена"
 ]
 _QUERIES_L2_DISTRICTS = [
     "левый берег новостройки Астана", "район Есиль ЖК", "район Нура квартиры",
     "Ботанический сад Астана ЖК", "Триатлон парк ЖК", "проспект Туран новостройки",
-    "Кабанбай батыра ЖК Астана", "район вокзала Нурлы Жол недвижимость",
+    "Кабанбай батыра ЖК Астана", "район вокзала Нурлы Жол недвижимость"
 ]
 _QUERIES_L4_HYPE = [
     # позитив
-    "старт продаж ЖК Астана", "очередь с ночи ЖК Астана", "раскупили новостройку Астана",
-    "котлован цена ЖК Астана", "сдача ЖК Астана 2026", "ключи выдача ЖК Астана",
+    "старт продаж ЖК Астана", "сдача ЖК Астана 2026", "ключи выдача ЖК Астана",
     # негатив
     "долгострой Астана", "задержка сдачи ЖК Астана", "обманутые дольщики Астана",
     "ЖК не стоит покупать Астана", "проблемный застройщик Астана",
     # инвест
-    "ЖК для инвестиций Астана", "перепродажа новостройки Астана", "флиппинг квартиры Астана",
+    "ЖК для инвестиций Астана", "перепродажа новостройки Астана", "флиппинг квартиры Астана"
 ]
 
 QUERIES = [
     "Астана недвижимость",
-    "Астана новостройки ЖК",
-    "ипотека Казахстан жильё",
-    "рынок недвижимости Астана",
+    "Астана новостройки ЖК", "рынок недвижимости Астана",
     *_QUERIES_L1_MONEY,
     *_QUERIES_L2_DISTRICTS,
     *COMPLEX_NAMES,
-    *_QUERIES_L4_HYPE,
+    *_QUERIES_L4_HYPE
 ]
 
 
@@ -101,7 +110,9 @@ def load_queries() -> list[str]:
         """)
         rows = cur.fetchall()
         db.close()
-        top = sorted(rows, key=lambda r: r[1] or 0, reverse=True)[:30]
+        # Топ-60 ЖК по объявлениям (было 30) — новые ЖК из парсера сами
+        # подхватываются, старые с нулём объявлений отсеиваются запросом ниже.
+        top = sorted(rows, key=lambda r: r[1] or 0, reverse=True)[:60]
         seen_lower = {q.lower() for q in out}
         for name, _cnt in top:
             q = f"{name} ЖК Астана"
@@ -172,6 +183,10 @@ SOURCE_BLOCK = {
     "krisha.kz", "korter.kz", "homsters.kz", "noz.kz", "etagi.com",
     "olx.kz", "slando.kz", "market.kz", "satu.kz", "avito.kz", "2gis.kz",
 }
+# Google News возвращает страницы фильтров Крыши («Астана · Есильский р-н -
+# Krisha») как «новости» по запросам ЖК — URL у них news.google.com, поэтому
+# SOURCE_BLOCK их не ловит. Режем по маркеру названия Крыши в заголовке.
+KRISHA_TITLE = re.compile(r"\b(?:krisha|крыша)\b", re.I)
 # явные маркеры объявлений в заголовке
 AD_TITLE = re.compile(r"без комиссии|горячая цена|срочно продам|срочно сдам|продам квартиру|сдам квартиру|торг уместен", re.I)
 
@@ -284,6 +299,20 @@ def enrich_images_playwright(items: list[dict], limit: int = 12) -> None:
 def main() -> None:
     db = conn()
     cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # Телеметрия запросов: кто что даёт (для еженедельного ИИ-ревью словаря).
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS news_query_stats (
+            id BIGSERIAL PRIMARY KEY,
+            query TEXT NOT NULL,
+            run_at TIMESTAMP NOT NULL DEFAULT now(),
+            total INT NOT NULL DEFAULT 0,
+            new_items INT NOT NULL DEFAULT 0,
+            duplicates INT NOT NULL DEFAULT 0,
+            blocked INT NOT NULL DEFAULT 0,
+            errors INT NOT NULL DEFAULT 0
+        )
+    """)
+    db.commit()
     cur.execute("SELECT url FROM news WHERE ts > now() - interval '30 days'")
     seen_urls = {r["url"] for r in cur.fetchall()}
 
@@ -294,15 +323,31 @@ def main() -> None:
     # (источник удалён по решению 07.08.2026; см. SOURCE_BLOCK выше).
 
     for q in load_queries():
+        q_stats = {"total": 0, "new": 0, "dup": 0, "blocked": 0, "err": 0}
         try:
             for it in parse_rss(get_rss(q)):
+                q_stats["total"] += 1
                 if it["url"] in seen_urls or it["url"] in seen_this_run:
+                    q_stats["dup"] += 1
                     continue
+                if KRISHA_TITLE.search(it.get("title") or ""):
+                    q_stats["blocked"] += 1
+                    continue  # страница Крыши из Google News — не СМИ
                 items.append(it)
+                q_stats["new"] += 1
                 seen_this_run.add(it["url"])
             time.sleep(2)
         except Exception as e:
+            q_stats["err"] = 1
             print(f"# rss error {q}: {e}", file=sys.stderr)
+        try:
+            cur.execute(
+                "INSERT INTO news_query_stats (query, total, new_items, duplicates, blocked, errors) "
+                "VALUES (%s,%s,%s,%s,%s,%s)",
+                (q, q_stats["total"], q_stats["new"], q_stats["dup"], q_stats["blocked"], q_stats["err"]))
+        except Exception as e:
+            print(f"# stats insert error: {e}", file=sys.stderr)
+    db.commit()
 
     # Лимит подняли с 15 до 100 — со старыми 4 общими запросами 15/день
     # хватало с запасом, но с поимёнными запросами по ~50-80 ЖК (см.

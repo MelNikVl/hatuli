@@ -244,10 +244,20 @@ async def is_favorite_zone_ids(user_id: int, zone_ids: list[int]) -> set[int]:
 
 # ── Админ: управление пользователями сайта (отдельно от admin_users) ───────
 
+async def _ensure_full_access_column() -> None:
+    # Задача "общий доступ" (2026-08-12): раньше вход через Telegram сам по
+    # себе давал tier="subscriber" (весь сайт кроме админки, см.
+    # get_user_tier() в terminal_extras.py). Теперь регистрация даёт только
+    # tier="public", как у анонима — расширенный доступ выдаёт администратор
+    # вручную через /admin/site-users, этим флагом.
+    await execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_access BOOLEAN DEFAULT FALSE")
+
+
 async def list_site_users() -> list[dict]:
+    await _ensure_full_access_column()
     rows = await fetch("""
         SELECT user_id, username, full_name, email, notify_frequency,
-               channel_subscribed, is_blocked, created_at,
+               channel_subscribed, is_blocked, full_access, created_at,
                (SELECT COUNT(*) FROM favorites f WHERE f.user_id = users.user_id) AS favorites_count
         FROM users
         ORDER BY created_at DESC NULLS LAST
@@ -257,6 +267,11 @@ async def list_site_users() -> list[dict]:
 
 async def set_user_blocked(user_id: int, blocked: bool) -> None:
     await execute("UPDATE users SET is_blocked = $2 WHERE user_id = $1", user_id, 1 if blocked else 0)
+
+
+async def set_user_full_access(user_id: int, full_access: bool) -> None:
+    await _ensure_full_access_column()
+    await execute("UPDATE users SET full_access = $2 WHERE user_id = $1", user_id, full_access)
 
 
 async def delete_site_user(user_id: int) -> None:
