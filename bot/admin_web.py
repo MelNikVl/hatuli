@@ -1810,6 +1810,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         return JSONResponse({"lines": lines})
 
 
+    @app.get("/complexes", response_class=HTMLResponse)
     @app.get("/admin/complexes", response_class=HTMLResponse)
     async def complexes_page(
         request: Request,

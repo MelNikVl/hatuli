@@ -426,6 +426,7 @@ def make_extras_router(templates) -> APIRouter:
         """)
         return JSONResponse({"programs": [dict(r) for r in rows]})
 
+    @router.get("/banks", response_class=HTMLResponse)
     @router.get("/admin/banks", response_class=HTMLResponse)
     async def banks_page(request: Request):
         # Публичная страница (см. паттерн ЖК/застройщиков) — банки/ставки
@@ -441,6 +442,7 @@ def make_extras_router(templates) -> APIRouter:
             b["programs"] = by_bank.get(b["id"], [])
         return templates.TemplateResponse("banks.html", {"request": request, "banks": banks})
 
+    @router.get("/banks/{slug}", response_class=HTMLResponse)
     @router.get("/admin/banks/{slug}", response_class=HTMLResponse)
     async def bank_detail(request: Request, slug: str):
         from bot.db.pg import fetch, fetchrow
@@ -450,6 +452,7 @@ def make_extras_router(templates) -> APIRouter:
         programs = await fetch("SELECT * FROM mortgage_programs WHERE bank_id = $1 ORDER BY id", bank["id"])
         return templates.TemplateResponse("bank_detail.html", {"request": request, "bank": bank, "programs": programs})
 
+    @router.get("/mortgage-calculator", response_class=HTMLResponse)
     @router.get("/admin/mortgage-calculator", response_class=HTMLResponse)
     async def mortgage_calculator_page(request: Request):
         # Публичная страница (тот же паттерн, что /admin/banks) — расчёт
@@ -457,6 +460,7 @@ def make_extras_router(templates) -> APIRouter:
         # считается на клиенте (та же JSON-ручка, что и попап на карте).
         return templates.TemplateResponse("mortgage_calculator.html", {"request": request})
 
+    @router.get("/news", response_class=HTMLResponse)
     @router.get("/admin/news", response_class=HTMLResponse)
     async def news_page(request: Request):
         from bot.db.pg import fetch as pg_fetch
@@ -464,6 +468,7 @@ def make_extras_router(templates) -> APIRouter:
             "SELECT id, ts, title, source, url, image_url FROM news ORDER BY ts DESC LIMIT 30")]
         return templates.TemplateResponse("news.html", {"request": request, "news": news})
 
+    @router.get("/news/{nid}", response_class=HTMLResponse)
     @router.get("/admin/news/{nid}", response_class=HTMLResponse)
     async def news_detail(request: Request, nid: int):
         from bot.db.pg import fetchrow
@@ -2229,53 +2234,37 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY c.newbuild_units_count DESC NULLS LAST LIMIT 100
         """, developer_id)
 
-        # График "спарсено во времени": новых юнитов (first_seen_at) и ушедших
-        # в продажу (sold_at) по бакетам — два разных timestamp-столбца одной
-        # таблицы, поэтому не подходит общий _activity_over_time (он на один
-        # столбец), считаем отдельным запросом с UNION ALL.
-        bucket = "hour" if days <= 3 else "day"
-        fmt = "%d.%m %H:00" if bucket == "hour" else "%d.%m"
-        rows = await pg_fetch(f"""
-            SELECT date_trunc('{bucket}', ts) AS b, kind, COUNT(*) AS cnt FROM (
-                SELECT first_seen_at AS ts, 'new' AS kind FROM newbuild_units
-                WHERE first_seen_at > now() - ($2 || ' days')::interval
-                  AND ($1::int = 0 OR developer_id = $1)
-                UNION ALL
-                SELECT sold_at AS ts, 'sold' AS kind FROM newbuild_units
-                WHERE sold_at IS NOT NULL AND sold_at > now() - ($2 || ' days')::interval
-                  AND ($1::int = 0 OR developer_id = $1)
-            ) x GROUP BY 1, 2 ORDER BY 1
-        """, developer_id, str(days))
-        buckets = sorted({r["b"] for r in rows})
-        by_bucket_kind = {(r["b"], r["kind"]): r["cnt"] for r in rows}
-        chart_nb = {
-            "bucket": bucket,
-            "labels": [b.strftime(fmt) for b in buckets],
-            "new": [by_bucket_kind.get((b, "new"), 0) for b in buckets],
-            "sold": [by_bucket_kind.get((b, "sold"), 0) for b in buckets],
-        }
+        # График «юнитов в базе по застройщикам» — линейный, линия на каждого
+        # застройщика: кумулятивный прирост по дням first_seen_at (юниты не
+        # удаляются, только помечаются sold, поэтому кумулята = сколько
+        # объектов по застройщику у нас в БД на дату).
+        rows = await pg_fetch("""
+            SELECT d.name AS dev, date_trunc('day', u.first_seen_at)::date AS d,
+                   COUNT(*)::int AS cnt
+            FROM newbuild_units u
+            JOIN complexes c ON c.id = u.complex_id
+            JOIN developers d ON d.id = c.developer_id
+            WHERE ($1::int = 0 OR c.developer_id = $1)
+            GROUP BY 1, 2 ORDER BY 2
+        """, developer_id)
+        by_dev: dict = {}
+        dates = []
+        for r in rows:
+            by_dev.setdefault(r["dev"], {})[r["d"]] = r["cnt"]
+            if r["d"] not in dates:
+                dates.append(r["d"])
+        dates.sort()
+        series = {}
+        for dev, m in by_dev.items():
+            cum = 0
+            series[dev] = []
+            for d in dates:
+                cum += m.get(d, 0)
+                series[dev].append(cum)
+        chart_nb = {"labels": [d.strftime("%d.%m") for d in dates], "series": series}
 
         return {"by_developer": by_developer, "by_complex": by_complex,
                 "all_developers": all_developers, "chart_nb": chart_nb}
-
-    @router.post("/admin/parsers/novostroyki/run")
-    async def novostroyki_run_now(request: Request):
-        """Ручной запуск полного обхода новостроек (пока только BI Group —
-        см. bi_group_import.py) прямо из админки, не дожидаясь cron. Не
-        ждём завершения (весь каталог Астаны ~3-4 минуты) — фронт покажет
-        "запущено", свежие цифры появятся на странице при следующем заходе."""
-        if not is_authed(request):
-            return JSONResponse({"error": "auth"}, status_code=401)
-        import asyncio as _aio
-        import sys as _sys
-        project_root = os.path.dirname(os.path.abspath(__file__))
-        await _aio.create_subprocess_exec(
-            _sys.executable, os.path.join(project_root, "bi_group_import.py"),
-            cwd=project_root,
-            stdout=_aio.subprocess.DEVNULL, stderr=_aio.subprocess.DEVNULL,
-        )
-        logger.info("novostroyki: ручной запуск bi_group_import.py")
-        return JSONResponse({"ok": True, "started": True})
 
     @router.get("/admin/parsers", response_class=HTMLResponse)
     async def parsers_page(request: Request, tab: str = "general", days: int = 1, developer: int = 0):
@@ -2389,6 +2378,7 @@ def make_extras_router(templates) -> APIRouter:
 
     # ── Инфо-страница: объяснения метрик ─────────────────────────────────
 
+    @router.get("/info", response_class=HTMLResponse)
     @router.get("/admin/info", response_class=HTMLResponse)
     async def info_page(request: Request):
         # Публичная страница ("Инфо" в верхнем паб-нав) — объяснения метрик
@@ -2521,6 +2511,7 @@ def make_extras_router(templates) -> APIRouter:
         } for r in rows if r["lat"] is not None]
         return JSONResponse({"points": pts, "count": len(pts)})
 
+    @router.get("/investments", response_class=HTMLResponse)
     @router.get("/admin/investments", response_class=HTMLResponse)
     async def investments_page(request: Request):
         # Публичная, как /admin/info рядом (та же вкладочная группа
@@ -2540,6 +2531,7 @@ def make_extras_router(templates) -> APIRouter:
             "median_yield": round(row["median_yield"], 1) if row and row["median_yield"] else None,
         })
 
+    @router.get("/krisha-lookup", response_class=HTMLResponse)
     @router.get("/admin/krisha-lookup", response_class=HTMLResponse)
     async def krisha_lookup_page(request: Request):
         # Та же вкладочная группа "Аналитика", что /admin/info и
@@ -3609,6 +3601,7 @@ def make_extras_router(templates) -> APIRouter:
             "last_ts": last_ts,
         })
 
+    @router.get("/admin-panel", response_class=HTMLResponse)
     @router.get("/admin/panel", response_class=HTMLResponse)
     async def admin_panel_page(request: Request):
         if not is_authed(request):
@@ -3859,6 +3852,7 @@ def make_extras_router(templates) -> APIRouter:
             return material, cleaned
         return None, text
 
+    @router.get("/complex/{complex_id}", response_class=HTMLResponse)
     @router.get("/admin/complex/{complex_id}", response_class=HTMLResponse)
     async def complex_detail(request: Request, complex_id: int, nb_rooms: int = -1, nb_all: int = 0):
         # Публичная страница (задача "общий доступ", уточнено 2026-08-12:
@@ -4560,6 +4554,7 @@ def make_extras_router(templates) -> APIRouter:
 
     # ── Застройщики: список и карточка ────────────────────────────────────
 
+    @router.get("/developers", response_class=HTMLResponse)
     @router.get("/admin/developers", response_class=HTMLResponse)
     async def developers_page(request: Request):
         """Список застройщиков: крупные (>6 ЖК) — карточками с фото сверху,
@@ -4608,6 +4603,7 @@ def make_extras_router(templates) -> APIRouter:
             "total": len(rows),
         })
 
+    @router.get("/developer/{dev_id}", response_class=HTMLResponse)
     @router.get("/admin/developer/{dev_id}", response_class=HTMLResponse)
     async def developer_detail(request: Request, dev_id: int):
         from bot.db.pg import fetch, fetchrow
