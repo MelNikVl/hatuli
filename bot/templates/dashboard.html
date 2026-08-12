@@ -1300,6 +1300,13 @@ async function ensureNewbuildDevPanel() {
       ${d.logo ? `<img src="${d.logo}" style="width:16px;height:16px;object-fit:contain;flex-shrink:0;">` : ''}
       <span>${escapeHtml(d.name)}</span>
     </label>`).join('') || '<div style="color:#888;">нет данных</div>';
+  // Панель застройщиков грузит список асинхронно и вырастает уже ПОСЛЕ
+  // того, как resizeHeatControlsBox() в applyFilters() успел один раз
+  // измерить её высоту (тогда список ещё был пуст) — настройки тепловой
+  // карты оставались позиционированы под маленькую панель и "наезжали" на
+  // выросшую (задача "блок управления гексами наезжает", 2026-08-13).
+  // Перемеряем ещё раз, когда список реально заполнился.
+  resizeHeatControlsBox();
 }
 function onDevCheckboxChange() {
   const boxes = Array.from(document.querySelectorAll('.nb-dev-cb'));
@@ -3023,10 +3030,10 @@ function drawTransportHeat(hexes) {
   // "гексагоны" (это не гексы сетки, а просто фигуры-маркеры). Бакетируем в
   // настоящую осевую сетку (hexBucket/hexCorners, та же, что у шума/цен) —
   // несколько точек в одной ячейке схлопываются в одну ячейку без наложений.
-  const buckets = hexBucket(hexes || [], h => [h.lat, h.lon], 100);
+  const buckets = hexBucket(hexes || [], h => [h.lat, h.lon], HEAT_EDGE_M);
   buckets.forEach(b => {
     const score = b.items.reduce((s, h) => s + (h.score || 0), 0) / b.items.length;
-    L.polygon(hexCorners(b.q, b.r, 100), {
+    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
       color: 'transparent', weight: 0, fillColor: transportColor(score), fillOpacity: 0.4,
     }).addTo(heatTargetLayer);
   });
@@ -3099,12 +3106,12 @@ function drawHypeNewsHeat(hexes) {
   // транспорт) — несколько хайп-точек в одной клетке схлопываются в одну
   // ячейку по построению без наложений, берём максимум как значение клетки
   // и имя самой хайповой точки для тултипа.
-  const buckets = hexBucket(hexes || [], h => [h.lat, h.lon], 100);
+  const buckets = hexBucket(hexes || [], h => [h.lat, h.lon], HEAT_EDGE_M);
   buckets.forEach(b => {
     const top = b.items.reduce((a, h) => (h.value || 0) > (a.value || 0) ? h : a, b.items[0]);
     const s = Math.max(0.05, Math.min(1, (top.value || 0) / 100));
     const label = b.items.length > 1 ? `${top.name || ''} +${b.items.length - 1}` : (top.name || '');
-    L.polygon(hexCorners(b.q, b.r, 100), {
+    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
       // Непрозрачность тоже растёт с силой хайпа (не фикс. 0.5) — от
       // прозрачно-жёлтого (низкий хайп) до плотного тёмно-золотого (высокий).
       color: 'transparent', weight: 0, fillColor: hypeNewsColor(s), fillOpacity: 0.2 + s * 0.55,
@@ -3145,7 +3152,7 @@ function drawPopulationHeat(hexes) {
   (hexes || []).forEach(h => {
     const t = Math.min(1, h.population / hi);
     const tGamma = Math.pow(t, POP_GAMMA);
-    L.polygon(transportHexCorners(h.lat, h.lon, 100), {
+    L.polygon(transportHexCorners(h.lat, h.lon, HEAT_EDGE_M), {
       color: 'transparent', weight: 0, fillColor: popDensityColor(t), fillOpacity: 0.35 + tGamma * 0.45,
     }).bindTooltip(`${h.name || ''} · население: ~${Math.round(h.population).toLocaleString('ru-RU')} чел. (${h.complexes} ЖК)`, {sticky:true})
       .addTo(heatTargetLayer);
@@ -3157,15 +3164,26 @@ function drawPopulationHeat(hexes) {
 // значение = сумма просмотров (views_count) объявлений в гексе. Палитра и
 // гамма переиспользуются (POP_STOPS/POP_GAMMA/popDensityColor) — визуал
 // ровно «как у плотности населения», как просил пользователь.
+// «Интерес» — палитра 12 цветов от серого (мало просмотров) до ярко-зелёного
+// (большой интерес), дискретные ступени без интерполяции (задача 2026-08-13).
+const INTEREST_STOPS = [
+  [138,148,158],[129,153,152],[119,157,146],[110,162,141],[100,166,135],[91,171,129],
+  [81,175,123],[72,180,117],[62,184,111],[53,189,106],[44,193,100],[34,197,94],
+];
+function interestColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const i = Math.min(11, Math.floor(t * 12));
+  const c = INTEREST_STOPS[i];
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
 function drawInterestHeat(hexes) {
   const vals = (hexes || []).map(h => h.views).filter(v => v > 0);
   if (!vals.length) return;
   const hi = percentile(vals, 0.92) || Math.max(...vals) || 1;
   (hexes || []).forEach(h => {
     const t = Math.min(1, h.views / hi);
-    const tGamma = Math.pow(t, POP_GAMMA);
-    L.polygon(transportHexCorners(h.lat, h.lon, 100), {
-      color: 'transparent', weight: 0, fillColor: popDensityColor(t), fillOpacity: 0.35 + tGamma * 0.45,
+    L.polygon(transportHexCorners(h.lat, h.lon, HEAT_EDGE_M), {
+      color: 'transparent', weight: 0, fillColor: interestColor(t), fillOpacity: 0.35 + t * 0.45,
     }).bindTooltip(`${h.name || ''} · просмотров: ${h.views.toLocaleString('ru-RU')} · в среднем ${h.avg} на объявление`, {sticky:true})
       .addTo(heatTargetLayer);
   });
@@ -3225,7 +3243,7 @@ function drawCrimeHeat(hexes) {
     const countT = Math.max(0, Math.min(1, h.count_norm ?? h.score));
     const tGamma = Math.pow(countT, CRIME_GAMMA);
     const sevIdx = Math.min(4, Math.round((h.avg_severity ?? 0)));
-    L.polygon(transportHexCorners(h.lat, h.lon, 150), {
+    L.polygon(transportHexCorners(h.lat, h.lon, HEAT_EDGE_M), {
       color: 'transparent', weight: 0, fillColor: crimeSeverityColor(h.avg_severity ?? 0),
       fillOpacity: 0.2 + tGamma * 0.65,
     }).bindTooltip(`🚨 происшествий: ${h.count} · тяжесть: ${(h.avg_severity ?? 0).toFixed(1)}/4 (${CRIME_SEVERITY_LABELS[sevIdx]})`, {sticky:true})
@@ -3500,10 +3518,15 @@ function setHeatEdge(v) {
   HEAT_EDGE_M = edge;
   NOISE_BG_EDGE_M = edge;
   NOISE_EDGE_M = edge;
-  if (heatMode) { heatLayer.clearLayers(); loadHeatData(heatMode).then(data => {
-    if (heatMode === 'sale' || heatMode === 'rental') drawPriceHeat(data, heatMode === 'sale' ? heatCache.saleArchived : null);
-    else if (heatMode === 'noise') { drawRoadHeatBackground(data); drawRoadHeat(data); }
-  }); }
+  if (heatMode) {
+    heatLayer.clearLayers();
+    // Все режимы тепловых карт пересчитываются под новую сторону гекса
+    // (задача 2026-08-13): раньше перерисовывались только цены/аренда/шум.
+    // Серверные гексы (плотность/интерес/преступность) перезапрашиваются
+    // с ?edge=, остальные перерисовываются из кэша на клиентской сетке.
+    heatCache.population = heatCache.interest = heatCache.crime = null;
+    loadHeatData(heatMode).then(data => renderHeatMode(heatMode, data));
+  }
 }
 const NOISE_BG_FLOOR = 4;   // минимальный фон вдали от дорог
 const NOISE_BG_RINGS = 3;   // радиус поиска ближайших дорог, в кольцах гекса
@@ -3684,10 +3707,10 @@ async function loadHeatData(mode) {
     const d = await fetch('/admin/api/hype-locations').then(r => r.json());
     heatCache.hype = (d.locations || []).map(l => ({lat: l.lat, lon: l.lon, value: l.rating || 0, name: l.name, reason: l.reason}));
   } else if (mode === 'population') {
-    const d = await fetch('/admin/api/population-hexes').then(r => r.json());
+    const d = await fetch('/admin/api/population-hexes?edge=' + HEAT_EDGE_M).then(r => r.json());
     heatCache.population = d.hexes || [];
   } else if (mode === 'interest') {
-    const d = await fetch('/admin/api/views-hexes').then(r => r.json());
+    const d = await fetch('/admin/api/views-hexes?edge=' + HEAT_EDGE_M).then(r => r.json());
     heatCache.interest = d.hexes || [];
   } else if (mode === 'count') {
     // "Кол-во объявлений" раньше был чистым снимком текущего момента —
@@ -3711,7 +3734,7 @@ async function loadHeatData(mode) {
     const d = await fetch('/admin/api/demolition-points').then(r => r.json());
     heatCache.demolition = d.points || [];
   } else if (mode === 'crime') {
-    const d = await fetch('/admin/api/crime-hexes?days=' + crimePeriodDays).then(r => r.json());
+    const d = await fetch('/admin/api/crime-hexes?days=' + crimePeriodDays + '&edge=' + HEAT_EDGE_M).then(r => r.json());
     heatCache.crime = d.hexes || [];
   } else if (mode === 'price_m2' || mode === 'yield') {
     // Цена за м² и доходность — те же точки продажи (heat-points теперь
@@ -3748,7 +3771,8 @@ function setHeatDdBtnActive(on) {
   const b = document.getElementById('heat-dd-btn');
   if (!b) return;
   b.style.boxShadow = on ? 'inset 0 0 0 1.5px #60a5fa' : 'none';
-  b.style.background = on ? 'rgba(96,165,250,.12)' : '';
+  b.style.background = on ? 'linear-gradient(135deg,#2563eb 0%,#2563eb 31%,transparent 31.5%),rgba(96,165,250,.12)'
+                          : 'linear-gradient(135deg,#2563eb 0%,#2563eb 31%,transparent 31.5%),var(--bg)';
 }
 async function toggleHeat(mode) {
   const btn = document.querySelector(`.heat-btn[data-mode="${mode}"]`);
@@ -4051,7 +4075,7 @@ async function loadModalPriceHeat(kind) {
     buckets.forEach(b => {
       const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
       const priceTxt = b.value >= 1e6 ? (b.value/1e6).toFixed(1) + ' М' : (b.value/1e3).toFixed(0) + 'K';
-      L.polygon(hexCorners(b.q, b.r, 100), {
+      L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
         color: '#fff', weight: 0.5, fillColor: priceHeatColor(t), fillOpacity: 0.62,
       }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.`, {sticky: true}).addTo(modalHeatLayer);
     });

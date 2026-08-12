@@ -375,7 +375,13 @@ _applySidebarTheme(localStorage.getItem('hatuli-theme') === 'dark' ? 'dark' : 'l
       });
       order.forEach(b => {
         const id = b.dataset.chartId;
-        let span = layout.spans[id] || 1; span = Math.max(1, Math.min(COLS, span));
+        // data-default-span в разметке — стартовая ширина блока ДО того,
+        // как пользователь сам её потрогал (перетащил span-кнопку) —
+        // раньше любой новый блок всегда начинал с 1 колонки, даже если
+        // по смыслу ему сразу нужна вся ширина (задача "на всю ширину
+        // страницы", 2026-08-13, страница ЖК — графики цены/скорости ухода).
+        let span = layout.spans[id] || parseInt(b.dataset.defaultSpan, 10) || 1;
+        span = Math.max(1, Math.min(COLS, span));
         let desired = layout.cells[id];
         if (desired !== undefined && !fits(desired, span, occ)) {
           const rowStart = Math.floor(desired / COLS) * COLS;
