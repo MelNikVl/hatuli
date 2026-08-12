@@ -182,15 +182,23 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # тот же контент без "admin" в адресе.
         return await _render_dashboard(request)
 
-    @app.get("/admin/listing/{listing_id}", response_class=HTMLResponse)
+    @app.get("/admin/listing/{listing_id}")
+    async def listing_page_admin_redirect(listing_id: str):
+        # Задача "при чём тут admin" (2026-08-12): объявление — публичная
+        # страница, "admin" в адресе только путал посетителей. Канонический
+        # адрес теперь /listing/{id} (см. ниже); этот путь оставлен 301-редиректом
+        # — не ломаем уже расшаренные/проиндексированные ссылки на старый вид.
+        return RedirectResponse(url=f"/listing/{listing_id}", status_code=301)
+
+    @app.get("/listing/{listing_id}", response_class=HTMLResponse)
     async def listing_page(request: Request, listing_id: str):
-        # Единственная страница объявления — та же карта, что и /admin, с
+        # Единственная страница объявления — та же карта, что и /, с
         # автоматически открытым попапом (см. dashboard.html: {% if listing_id %}
         # openDetailModal(...) на DOMContentLoaded, plus history.pushState при
         # открытии/закрытии попапа с карты — делает эту ссылку копируемой и
         # попадаемой сюда напрямую). Раньше было два разных представления
         # объявления (этот попап и отдельная /admin/analytics/{id}) — теперь
-        # только это, старый роут ниже редиректит сюда.
+        # только это, старый роут выше редиректит сюда.
         from bot.db.pg import fetchrow as pg_fetchrow
 
         # Вариант новостройки (см. миграцию 041_newbuild.sql) — отдельная
@@ -220,8 +228,21 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             return await _render_dashboard(request, listing_id=listing_id, listing_meta=listing_meta)
 
         row = await pg_fetchrow(
-            "SELECT id, title, price, rooms, area, district, complex_name, photos "
+            "SELECT id, title, price, rooms, area, district, complex_name, photos, market_type "
             "FROM apartment_listings WHERE id = $1", listing_id)
+        if row and row.get("market_type") != "primary":
+            # Задача "общий доступ" (2026-08-12): прямая ссылка на объявление
+            # вторички публичному тиру раньше рендерила карту с полностью
+            # раскрытым попапом (и OG-превью с реальной ценой/фото в
+            # мета-тегах для шаринга) — теперь страница-заглушка, попап и
+            # так вернёт {"error":"restricted"} с /admin/api/listing/{id}.
+            from bot.core.site_auth import get_user_tier
+            if await get_user_tier(request) == "public":
+                return templates.TemplateResponse("access_locked.html", {
+                    "request": request,
+                    "title": "Объявление доступно по запросу",
+                    "message": "Это объявление вторичного рынка. Публично открыты только новостройки — войдите через Telegram и запросите расширенный доступ.",
+                })
         listing_meta = None
         if row:
             r = dict(row)

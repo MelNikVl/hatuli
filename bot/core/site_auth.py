@@ -18,9 +18,41 @@ from __future__ import annotations
 import secrets
 from datetime import datetime, timezone, timedelta
 
+from fastapi import Request
+
 from bot.db.pg import execute, fetch, fetchrow
 
 TOKEN_TTL_MIN = 10
+
+_full_access_col_ready = False
+
+
+async def get_user_tier(request: Request) -> str:
+    """3 уровня доступа (задача "3 уровня доступа", 2026-08-07;
+    переформулировано "общий доступ", 2026-08-12) — общая для admin_web.py
+    (/, /admin, /listing/{id}) и terminal_extras.py (map-points и т.д.),
+    раньше была задублирована в terminal_extras.py как локальная функция.
+
+    admin — admin_auth cookie (пароль в /admin/login, отдельная система от
+    этой). subscriber — залогинен через Telegram И вручную выдан
+    full_access администратором (/admin/site-users) — весь сайт открыт,
+    кроме админки. public — аноним ИЛИ залогинен через Telegram, но
+    full_access ещё не выдан (регистрация сама по себе доступ не даёт):
+    видит только новостройки (market_type='primary') + тепловые карты +
+    разделы главного меню (ЖК/застройщики/банки/новости) как каталог —
+    но не карточки отдельных объявлений вторички."""
+    global _full_access_col_ready
+    if request.cookies.get("admin_auth") == "1":
+        return "admin"
+    session = request.cookies.get("site_session")
+    if session:
+        if not _full_access_col_ready:
+            await _ensure_full_access_column()
+            _full_access_col_ready = True
+        user = await get_user_by_session(session)
+        if user and user.get("full_access"):
+            return "subscriber"
+    return "public"
 
 
 async def create_login_token() -> str:

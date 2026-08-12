@@ -308,35 +308,11 @@ def make_extras_router(templates) -> APIRouter:
     # админ-элементов на публичных страницах
     templates.env.globals["is_admin"] = is_authed
 
-    # 3 уровня доступа (задача "надо разделить доступ к сайту на 3 уровня",
-    # 2026-08-07, переформулировано 2026-08-12): admin — admin_auth cookie
-    # (как раньше, без изменений). subscriber — залогинен через Telegram И
-    # вручную выдан full_access администратором (/admin/site-users) — все
-    # объявления открыты, недоступна только админка. public — аноним ИЛИ
-    # залогинен через Telegram, но full_access ещё не выдан (регистрация
-    # сама по себе доступ больше не открывает): на карте — только
-    # новостройки (market_type='primary') СО ВСЕМИ фильтрами + тепловые
-    # карты (те отдельные роуты, ничем не гейтятся); аренда/вторичка на
-    # карте не показываются вовсе; в попапе объявления скрыт блок "похожие
-    # рядом"; страницы ЖК (/admin/complex/{id}) — заглушка с призывом
-    # получить доступ.
-
-    _full_access_col_ready = False
-
-    async def get_user_tier(request: Request) -> str:
-        nonlocal _full_access_col_ready
-        if is_authed(request):
-            return "admin"
-        session = request.cookies.get("site_session")
-        if session:
-            from bot.core.site_auth import get_user_by_session, _ensure_full_access_column
-            if not _full_access_col_ready:
-                await _ensure_full_access_column()
-                _full_access_col_ready = True
-            user = await get_user_by_session(session)
-            if user and user.get("full_access"):
-                return "subscriber"
-        return "public"
+    # 3 уровня доступа — общая get_user_tier() теперь в bot/core/site_auth.py
+    # (задача "при чём тут admin"/"общий доступ", 2026-08-12: та же функция
+    # нужна и в admin_web.py, для /listing/{id} — раньше была задублирована
+    # тут как локальная), см. её докстринг.
+    from bot.core.site_auth import get_user_tier
     @router.get("/admin/analytics/hype", response_class=HTMLResponse)
     async def hype_page(request: Request):
         if not is_authed(request):
@@ -914,6 +890,15 @@ def make_extras_router(templates) -> APIRouter:
         # (Task 5 в дашборде): датасет, обрезанный вокруг конкретного ЖК, а не весь
         # город, чтобы Kepler автоматически центрировался/зумился на нужный район.
         from bot.db.pg import fetch as pg_fetch
+        from bot.core.site_auth import get_user_tier
+        tier = await get_user_tier(request)
+        if tier == "public":
+            # "Похожие рядом" публичному тиру и так не показываются (см.
+            # api_listing_detail) — этот отдельный эндпоинт для Kepler-мини-
+            # панели раньше не был гейтирован вовсе (задача "общий доступ",
+            # 2026-08-12).
+            return JSONResponse(content={"type": "FeatureCollection", "features": []},
+                                 headers={"Access-Control-Allow-Origin": "*"})
         bbox_sql = ""
         params = []
         if lat is not None and lon is not None:
@@ -1124,6 +1109,12 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/geo-sales")
     async def geo_sales_api(request: Request):
+        # Источник данных для /admin/analytics/heatmaps?tab=geo — сама
+        # страница уже за is_authed, но сам JSON-эндпоинт раньше не был
+        # (задача "общий доступ", 2026-08-12) — прямой запрос по URL отдавал
+        # все объявления кому угодно.
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT id, lat, lon, price, area, rooms, district, complex_name
@@ -3067,8 +3058,16 @@ def make_extras_router(templates) -> APIRouter:
         есть объявления (кластерами-кружками с числом), а не тянуть полные
         карточки, которые пока никто не увидит по отдельности."""
         from bot.db.pg import fetch as pg_fetch
+        from bot.core.site_auth import get_user_tier
 
+        tier = await get_user_tier(request)
         if type == "rental":
+            # Как и в map_points — аренда публичному тиру не показывается
+            # вовсе (задача "общий доступ", 2026-08-12: пины отдалённого
+            # вида раньше были не гейтированы вообще — вот откуда "вижу все
+            # объявления" даже с чистого браузера).
+            if tier == "public":
+                return JSONResponse({"points": []})
             rows = await pg_fetch("""
                 SELECT lat, lon FROM rental_listings
                 WHERE lat IS NOT NULL AND lon IS NOT NULL
@@ -3079,6 +3078,8 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse({"points": [[float(r["lat"]), float(r["lon"])] for r in rows]})
 
         conds, params, i = [], [], 1
+        if tier == "public":
+            conds.append("AND market_type = 'primary'")
         if rooms:
             # UI отдаёт список через запятую при выборе нескольких чекбоксов
             # комнатности ("1,2") — int(rooms) на такой строке падал с
@@ -3852,18 +3853,12 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/complex/{complex_id}", response_class=HTMLResponse)
     async def complex_detail(request: Request, complex_id: int, nb_rooms: int = -1, nb_all: int = 0):
-        # Задача "общий доступ" (2026-08-12): страницы ЖК больше не публичны
-        # целиком — всем открыты только новостройки + фильтры + тепловые
-        # карты на главной. Админ-элементы (редактирование фото/контактов)
-        # для тех, у кого доступ есть, по-прежнему скрываются в шаблоне
-        # через is_admin(request).
-        tier = await get_user_tier(request)
-        if tier == "public":
-            return templates.TemplateResponse("access_locked.html", {
-                "request": request,
-                "title": "Страница ЖК доступна по запросу",
-                "message": "Подробная информация по жилым комплексам (описание, удобства, варианты квартир, динамика цен) открыта пользователям с расширенным доступом.",
-            })
+        # Публичная страница (задача "общий доступ", уточнено 2026-08-12:
+        # разделы главного меню — ЖК, застройщики и т.д. — открыты всем,
+        # закрыта именно вторичка/отдельные объявления, не ЖК-карточка как
+        # целое — она не показывает отдельных объявлений вторички, только
+        # агрегаты). Админ-элементы (редактирование фото/контактов)
+        # скрываются в шаблоне через is_admin(request).
         from bot.db.pg import fetchrow
         cx = await fetchrow("""
             SELECT c.*, d.name AS developer_name
@@ -4688,9 +4683,13 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/api/listing/{listing_id}")
     async def api_listing_detail(request: Request, listing_id: str):
         """Полные данные объявления для модалки (фото, адрес, торг).
-        Публичный (как и сама карта) — ничего чувствительного тут нет."""
+        Публичному тиру — только новостройки (market_type='primary'),
+        вторичка отдаётся ограниченным ответом (задача "общий доступ",
+        2026-08-12: это и есть точка реальной утечки, из-за которой заход
+        по прямой ссылке на объявление вторички показывал всё)."""
         from bot.db.pg import fetchrow as pg_fetchrow, fetch as pg_fetch
         from bot.core.bargain import get_comparables, analyze_bargain
+        from bot.core.site_auth import get_user_tier
         from datetime import datetime as _dt, timezone as _tz
         import json as _json_ld
 
@@ -4698,6 +4697,13 @@ def make_extras_router(templates) -> APIRouter:
         if not row:
             return JSONResponse({"error": "not_found"}, status_code=404)
         l = dict(row)
+
+        tier = await get_user_tier(request)
+        if tier == "public" and l.get("market_type") != "primary":
+            return JSONResponse({
+                "error": "restricted",
+                "message": "Это объявление вторичного рынка. Полный доступ открывает администратор — войдите через Telegram (Личный кабинет) и запросите доступ.",
+            }, status_code=403)
 
         photos = l.get("photos")
         if isinstance(photos, str):
@@ -4718,7 +4724,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.core.listing_intel import build_negotiation_points, build_seller_questions, compute_similar_listings
         negotiation_points = build_negotiation_points(l, bargain, len(comps))
         seller_questions = build_seller_questions(l)
-        tier = await get_user_tier(request)
+        # tier уже посчитан выше (гейт вторички) — переиспользуем.
         # Публичному тиру не показываем "похожие рядом" (карта+список) —
         # ни в попапе с карты, ни в попапе, открытом через "вставить ссылку
         # с Крыши" (задача "3 уровня доступа", 2026-08-07). Не считаем

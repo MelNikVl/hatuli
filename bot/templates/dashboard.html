@@ -3952,12 +3952,12 @@ function openDetailModal(id, ev, scrollToScore) {
   modalPhotoIdx = 0;
   const root = ensureModalRoot();
   root.style.display = 'flex';
-  // Попап = единственная страница объявления (см. /admin/listing/{id}) —
+  // Попап = единственная страница объявления (см. /listing/{id}) —
   // открытие меняет URL на копируемую/шарабельную ссылку, не только
   // визуально открывает оверлей. history.state.hatuliModal различает наши
   // же pushState-переходы от обычной навигации в обработчике popstate ниже.
   if (String(id) !== String(modalIdFromPath())) {
-    history.pushState({hatuliModal: id}, '', '/admin/listing/' + encodeURIComponent(id));
+    history.pushState({hatuliModal: id}, '', '/listing/' + encodeURIComponent(id));
   }
   const content = document.getElementById('detail-modal-content');
   content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Загрузка…</div>';
@@ -3967,6 +3967,12 @@ function openDetailModal(id, ev, scrollToScore) {
   if (String(id).startsWith('nb-')) { renderNewbuildDetail(String(id).slice(3), content); return; }
 
   fetch('/admin/api/listing/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
+    if (d.error === 'restricted') {
+      content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">'
+        + '<div style="font-size:15px;margin-bottom:10px;">🔒 ' + (d.message || 'Доступно по запросу') + '</div>'
+        + '<a href="/cabinet" style="color:#2563eb;">Войти через Telegram</a></div>';
+      return;
+    }
     if (d.error) { content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Не найдено</div>'; return; }
     modalPhotos = d.photos || [];
     modalPhotos.forEach(url => { const im = new Image(); im.src = proxyImg(url); });
@@ -4272,14 +4278,14 @@ ${krishaSourceFooterHtml}
   });
 }
 
-// Поделиться объявлением — ссылка на /admin/listing/{id} (та же
+// Поделиться объявлением — ссылка на /listing/{id} (та же
 // адресуемая "страница" объявления, что открывает попап напрямую, см.
 // комментарий про history.pushState ниже). Instagram/Threads не поддерживают
 // прямые share-ссылки по URL — для них (и для всего остального на мобиле)
 // используем нативный navigator.share(), с копированием ссылки как
 // универсальным фолбэком на десктопе.
 function shareListingUrl(id) {
-  return location.origin + '/admin/listing/' + encodeURIComponent(id);
+  return location.origin + '/listing/' + encodeURIComponent(id);
 }
 function toggleShareMenu(ev, id) {
   ev.stopPropagation();
@@ -4322,21 +4328,23 @@ function closeDetailModal() {
   const root = document.getElementById('detail-modal-overlay');
   if (root) root.style.display = 'none';
   modalListingId = null;
-  if (modalIdFromPath()) history.pushState({}, '', '/admin');
+  if (modalIdFromPath()) history.pushState({}, '', '/');
 }
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && modalListingId) closeDetailModal();
 });
 
-// URL <-> попап объявления (см. /admin/listing/{id} на бэкенде и
+// URL <-> попап объявления (см. /listing/{id} на бэкенде и
 // history.pushState в openDetailModal/closeDetailModal выше) — делает
 // попап единственной, полноценно адресуемой "страницей" объявления вместо
 // прежней отдельной /admin/analytics/{id}: ссылку можно скопировать,
 // кнопки назад/вперёд браузера открывают/закрывают попап как обычную
-// навигацию, а прямой заход на /admin/listing/{id} открывает карту с уже
+// навигацию, а прямой заход на /listing/{id} открывает карту с уже
 // раскрытым попапом (см. блок автооткрытия по listing_id ниже).
+// Старый /admin/listing/{id} тоже матчим (сервер уже 301-редиректит, но
+// клиент может держать в истории/кэше старую ссылку).
 function modalIdFromPath() {
-  const m = location.pathname.match(/^\/admin\/listing\/([^/]+)\/?$/);
+  const m = location.pathname.match(/^\/(?:admin\/)?listing\/([^/]+)\/?$/);
   return m ? m[1] : null;
 }
 window.addEventListener('popstate', () => {
