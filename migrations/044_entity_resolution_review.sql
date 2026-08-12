@@ -41,3 +41,12 @@ CREATE TABLE IF NOT EXISTS complex_source_link_rejections (
     rejected_by  TEXT,
     UNIQUE (source, source_id, complex_id)
 );
+
+-- Без этого приложение (роль krisha, не postgres) падает 500 при первом
+-- же обращении — миграции сами по себе создают таблицы с владельцем
+-- postgres, права на них не наследуются автоматически (найдено при живой
+-- проверке /admin/entity-ids сразу после деплоя).
+GRANT SELECT, INSERT, UPDATE, DELETE ON complex_source_link_candidates TO krisha;
+GRANT SELECT, INSERT, UPDATE, DELETE ON complex_source_link_rejections TO krisha;
+GRANT USAGE, SELECT ON SEQUENCE complex_source_link_candidates_id_seq TO krisha;
+GRANT USAGE, SELECT ON SEQUENCE complex_source_link_rejections_id_seq TO krisha;
