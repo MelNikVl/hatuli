@@ -1344,6 +1344,16 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             hype_news_last = await pg_fv("SELECT MAX(ts) FROM news")
         except Exception:
             pass
+        # Преступность — источник сменили на официальный gis.kgp.kz (задача
+        # 2026-08-13, было krisha.kz/ms/geodata/crime); crime_collect.py
+        # запускается по расписанию раз в день (см. крон/systemd-таймер) —
+        # 30ч порог, а не 24, чтобы разовая задержка запуска не красила
+        # канал красным раньше времени.
+        crime_last = None
+        try:
+            crime_last = await pg_fv("SELECT MAX(fetched_at) FROM crime_incidents")
+        except Exception:
+            pass
 
         channels = [
             await _channel("Крыша — продажа", sale_last, 6),
@@ -1353,6 +1363,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             await _channel("Homeportal.kz", homeportal_last, 72),
             await _channel("Рыночные данные (НБРК/КДИФ/Отбасы/stat.gov.kz)", market_last, 24 * 10),
             await _channel("Новости (хайп-трекер)", hype_news_last, 30),
+            await _channel("Преступность (gis.kgp.kz)", crime_last, 30),
         ]
 
         # ── 24ч графики: сколько объявлений спаршено, по часам ─────────────
@@ -1401,14 +1412,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
         # ── Бекап — последние 5 (было LIMIT 1/одна строка) ─────────────────
         backup_rows = await pg_fetch("""
-            SELECT ts, status, kind FROM backup_history ORDER BY ts DESC LIMIT 5
+            SELECT ts, status, kind, note FROM backup_history ORDER BY ts DESC LIMIT 5
         """)
         backup_list = []
         for row in backup_rows:
             age_h = (now_ts - row["ts"]).total_seconds() / 3600.0
             backup_list.append({
                 "ts": row["ts"].strftime("%d.%m %H:%M"), "status": row["status"],
-                "kind": row["kind"], "age_h": round(age_h, 1),
+                "kind": row["kind"], "age_h": round(age_h, 1), "note": row.get("note"),
                 "ok": row["status"] == "ok" and age_h <= 48,
             })
 
@@ -1810,7 +1821,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # в шаблоне через is_admin(request)
         from bot.db.pg import fetch as pg_fetch
 
-        conditions = []
+        conditions = ["COALESCE(c.is_street, FALSE) = FALSE"]  # улицы не показываем в таблице ЖК
         params = []
         i = 1
 

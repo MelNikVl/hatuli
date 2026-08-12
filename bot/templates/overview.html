@@ -86,7 +86,7 @@
   <div class="ov-row">
     <div>
       <div class="ov-name">{{ b.ts }} ({{ b.kind }})</div>
-      <div class="ov-detail">статус: {{ b.status }} · {{ b.age_h }}ч назад</div>
+      <div class="ov-detail">статус: {{ b.status }} · {{ b.age_h }}ч назад{% if b.note %} · {{ b.note }}{% endif %}</div>
     </div>
     <span class="ov-badge {{ 'ov-ok' if b.ok else 'ov-bad' }}">{{ 'ок' if b.ok else 'не ок' }}</span>
   </div>

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+{% include "_analytics_tabs.html" with context %}
 <div class="page-title">Пользователи <small>{{ users|length }} записей</small></div>
 
 <div class="tbl-wrap" style="overflow-x:auto">

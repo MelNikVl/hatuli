@@ -88,7 +88,12 @@ html, body { overflow: hidden !important; }
    Комнатность/Цена/Метраж/Тепловые карты — ничего не появляется".
    На узких экранах ряд просто визуально переполняется (как было и до
    центрирования) — это лучше, чем невидимые фильтры. */
-.filterbar-inner { display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:nowrap; max-width:1450px; margin:0 auto; }
+/* Раньше центрировался сам по себе (margin:0 auto + justify-content:center)
+   независимо от логотипа в шапке — визуально "плавал" по центру страницы,
+   а не начинался там же, где логотип. Задача 2026-08-13: левый край меню
+   фильтров = левый край логотипа (оба в итоге упираются в те же 36px
+   .pub-row1/.main padding, см. .filterbar margin/padding компенсацию выше). */
+.filterbar-inner { display:flex; align-items:center; justify-content:flex-start; gap:6px; flex-wrap:nowrap; max-width:1450px; }
 .filterbar select, .filterbar input[type=number] { padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; }
 .rooms-dd { position:relative; flex-shrink:0; }
 .rooms-dd-btn { padding:7px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; cursor:pointer; white-space:nowrap; }
@@ -190,10 +195,15 @@ html, body { overflow: hidden !important; }
   </select></div>
 
   <div id="f-heat-wrap" class="rooms-dd">
+    <!-- Подсветка кнопки, пока включена тепловая карта — аккуратно, не
+       кислотно (задача 2026-08-13: "подсвети немного и аккуратно"), просто
+       тонкая рамка + мягкий фон, без смены цвета текста/иконки. -->
     <button type="button" class="rooms-dd-btn" id="heat-dd-btn" onclick="toggleFbarDropdown(event,'heat-dd-btn')">🌡 Тепловые карты</button>
-    <div class="rooms-dd-panel" id="heat-dd-panel">
+    <!-- Открывается вниз-влево (right:0, не left:0 из общего .rooms-dd-panel)
+         — задача 2026-08-13, раньше уходила вправо и обрезалась/налезала. -->
+    <div class="rooms-dd-panel" id="heat-dd-panel" style="left:auto;right:0;">
       <span class="fb-group-label" style="font-size:10px;color:#888;display:block;margin-bottom:4px;">Тепловые карты</span>
-      <div class="heat-btn-grid" style="display:grid;grid-template-rows:repeat(3,auto);grid-auto-flow:column;gap:5px;width:fit-content;">
+      <div class="heat-btn-grid" style="display:grid;grid-template-rows:repeat(4,auto);grid-auto-flow:column;gap:5px;width:fit-content;">
         <button type="button" class="heat-btn" data-mode="sale" onclick="toggleHeat('sale')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Цены продажи</button>
         <button type="button" class="heat-btn" data-mode="rental" onclick="toggleHeat('rental')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Цены аренды</button>
         <button type="button" class="heat-btn" data-mode="noise" onclick="toggleHeat('noise')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Внешний шум</button>
@@ -215,7 +225,9 @@ html, body { overflow: hidden !important; }
     </div>
   </div>
 
-  <button type="button" class="more-filters-btn" onclick="openMoreFilters()">Ещё фильтры ▾</button>
+  <!-- Кнопка "Ещё фильтры" убрана из фильтров на главной (задача 2026-08-13) —
+       модалка/JS оставлены нетронутыми, просто нет видимой точки входа. -->
+  <button type="button" class="more-filters-btn" onclick="openMoreFilters()" style="display:none;">Ещё фильтры ▾</button>
 
   <!-- "N на карте"/"Загружаем…" убрано с публичной карты (см. задачу —
        "сколько объявлений на карте" переехало в /admin/analytics/overview,
@@ -1600,7 +1612,7 @@ function newbuildComplexPopupHtml(p, photoIdx) {
   const i = photoIdx || 0;
   const idx = Math.min(i, Math.max(0, photos.length - 1));
   const img = photos.length
-    ? `<img src="${proxyImg(photos[idx])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:10px 10px 0 0;display:block;" onerror="this.parentNode.style.display='none'">`
+    ? `<div style="position:relative;width:100%;aspect-ratio:16/10;overflow:hidden;border-radius:10px 10px 0 0;"><img src="${proxyImg(photos[idx])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;" onerror="this.parentNode.style.display='none'"></div>`
     : `<div style="width:100%;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:#f3f4f6;color:#999;font-size:13px;border-radius:10px 10px 0 0;">пока нет фото</div>`;
   const nav = photos.length > 1 ? `
     <button onclick="event.stopPropagation();nbPopupNav(${p.id},-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.4);color:#fff;border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:17px;line-height:1;">‹</button>
@@ -1643,7 +1655,7 @@ let selectedNewbuildComplex = null;  // id выбранного ЖК (null = р�
 function newbuildComplexCardHtml(pt) {
   const photos = (pt.photos || []).filter(Boolean);
   const img = photos.length
-    ? `<img src="${proxyImg(photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;display:block;border:none;" onerror="carImgError('nb-cx-${pt.id}')">`
+    ? `<img src="${proxyImg(photos[0])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border:none;" onerror="carImgError('nb-cx-${pt.id}')">`
     : `<div style="width:100%;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:var(--bg);color:#999;font-size:13px;">пока нет фото</div>`;
   const devHtml = pt.logo
     ? `<img src="${pt.logo}" style="width:18px;height:18px;border-radius:4px;object-fit:contain;background:#fff;vertical-align:-4px;margin-right:5px;padding:1px;">${escapeHtml(pt.developer || '')}`
@@ -1653,7 +1665,7 @@ function newbuildComplexCardHtml(pt) {
     : '';
   return `
 <div class="side-card-inner" style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="selectNewbuildFromCard(${pt.id}, event)">
-  <div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;">
+  <div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);aspect-ratio:16/10;border-radius:11px 11px 0 0;overflow:hidden;">
     ${img}
     <span style="position:absolute;top:8px;right:8px;background:#16a34a;color:#fff;border-radius:9px;padding:2px 8px;font-size:11.5px;font-weight:800;">${pt.units_count} кв.</span>
   </div>
@@ -1728,11 +1740,15 @@ async function drawNewbuildLayer() {
     NEWBUILD_PIN_DATA[pt.id] = pt;
     nbPopupIdx[pt.id] = 0;
     marker.bindPopup(newbuildComplexPopupHtml(pt, 0), {minWidth: 280, maxWidth: 280, className: 'nb-cx-popup'});
-    marker.on('click', () => {
+    marker.on('click', async () => {
       nbPopupIdx[pt.id] = 0; marker.setPopupContent(newbuildComplexPopupHtml(pt, 0)); marker.openPopup();
       // Клик по ЖК на карте = выбор ЖК: панель показывает только его предложения.
       selectedNewbuildComplex = pt.id;
-      refreshNewbuildSidePanelList();
+      await refreshNewbuildSidePanelList();
+      // После перерисовки панели — скролл к первому варианту ЖК + подсветка
+      // (scrollToNewbuildComplex; вызов потерялся при реворке режимов и
+      // вернулся 2026-08-12 — без него карточка не центрировалась и не мигала).
+      scrollToNewbuildComplex(pt.id);
     });
   });
   // Персистентная панель — новый набор видимых ЖК-пинов может менять
@@ -1751,8 +1767,8 @@ function buildNewbuildUnitCardHtml(d, u) {
   const carHtml = photos.length ? (() => {
     ptPhotos[cardId] = photos; carIdx[cardId] = 0;
     return `
-<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;background:#f7f7f7;">
-  <img id="car-${cardId}" src="${proxyImg(photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:contain;background:#f7f7f7;display:block;border:none;" onerror="carImgError('${cardId}')">
+<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);aspect-ratio:16/10;border-radius:11px 11px 0 0;overflow:hidden;background:#f7f7f7;">
+  <img id="car-${cardId}" src="${proxyImg(photos[0])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f7f7f7;display:block;border:none;" onerror="carImgError('${cardId}')">
   ${photos.length > 1 ? `
   <button onclick="carNav('${cardId}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
   <button onclick="carNav('${cardId}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">›</button>
@@ -2483,8 +2499,8 @@ function renderSaleBatch(d, opts) {
       // остальной карточке (см. задачу); стрелки/точки — только листалка,
       // сами по себе клик не пробрасывают дальше (stopPropagation внутри carNav).
       const carHtml = pt.photos && pt.photos.length ? `
-<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);border-radius:11px 11px 0 0;overflow:hidden;">
-  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="width:100%;aspect-ratio:16/10;object-fit:cover;display:block;border:none;" onerror="carImgError('${pt.id}')">
+<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);aspect-ratio:16/10;border-radius:11px 11px 0 0;overflow:hidden;">
+  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border:none;" onerror="carImgError('${pt.id}')">
   ${favStarHtml}
   ${pt.photos.length > 1 ? `
   <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
@@ -3402,11 +3418,25 @@ function drawCountHeat(items, latLonFn, label) {
   }
   const hi = Math.max(...cells.map(c => c.value)) || 1;
   cells.forEach(c => {
-    const t = 1 - Math.min(1, c.value / hi);  // инверсия: мало рядом -> t~1 -> красный/бордовый
+    const t = 1 - Math.min(1, c.value / hi);  // инверсия: мало рядом -> t~1 -> плохо
     L.polygon(hexCorners(c.q, c.r, HEAT_EDGE_M), {
-      color: 'transparent', weight: 0, fillColor: heatColor(t), fillOpacity: 0.4,
+      color: 'transparent', weight: 0, fillColor: infraColor(t), fillOpacity: 0.4,
     }).bindTooltip(`${label} рядом: ${c.value.toFixed(1)}`, {sticky:true}).addTo(heatTargetLayer);
   });
+}
+// Единственный вызывающий drawCountHeat — карта инфраструктуры (задача
+// 2026-08-13: "от яркозелёной где всё хорошо, до розовой где плохая
+// инфраструктура"), отдельная от общего heatColor (тот красный->зелёный,
+// перепутать легко с ценой/шумом).
+const INFRA_STOPS = [[16,163,74],[132,204,22],[250,204,21],[249,115,141],[236,72,153]];
+function infraColor(t) {
+  const x = Math.max(0, Math.min(1, t));
+  const n = INFRA_STOPS.length - 1;
+  const pos = x * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const f = pos - i;
+  const a = INFRA_STOPS[i], b = INFRA_STOPS[i + 1];
+  return `rgb(${Math.round(a[0] + (b[0]-a[0])*f)},${Math.round(a[1] + (b[1]-a[1])*f)},${Math.round(a[2] + (b[2]-a[2])*f)})`;
 }
 
 // Базовый рейтинг шума участка дороги: магистраль (motorway/trunk) — 30
@@ -3682,6 +3712,15 @@ async function loadHeatData(mode) {
   return heatCache[mode];
 }
 
+// Аккуратная подсветка кнопки "Тепловые карты" в фильтрах, пока активна
+// хоть одна тепловая карта — тонкая рамка + мягкий фон, не смена цвета
+// (задача 2026-08-13: "подсвети немного и аккуратно").
+function setHeatDdBtnActive(on) {
+  const b = document.getElementById('heat-dd-btn');
+  if (!b) return;
+  b.style.boxShadow = on ? 'inset 0 0 0 1.5px #60a5fa' : 'none';
+  b.style.background = on ? 'rgba(96,165,250,.12)' : '';
+}
 async function toggleHeat(mode) {
   const btn = document.querySelector(`.heat-btn[data-mode="${mode}"]`);
   if (heatMode === mode) {
@@ -3698,10 +3737,12 @@ async function toggleHeat(mode) {
     document.querySelectorAll('.heat-btn').forEach(b => { b.style.boxShadow = 'none'; });
     const hc = document.getElementById('heat-controls-box'); if (hc) hc.style.display = 'none';
     const prHide = document.getElementById('f-heat-period-row'); if (prHide) prHide.style.display = 'none';
+    setHeatDdBtnActive(false);
     return;
   }
   document.querySelectorAll('.heat-btn').forEach(b => { b.style.boxShadow = 'none'; });
   if (btn) { btn.style.boxShadow = '0 0 0 3px #93c5fd'; }
+  setHeatDdBtnActive(true);
   { const hc = document.getElementById('heat-controls-box'); if (hc) hc.style.display = 'flex'; resizeHeatControlsBox(); }
   const periodRow = document.getElementById('f-heat-period-row');
   if (periodRow) {

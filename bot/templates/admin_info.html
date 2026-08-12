@@ -1,6 +1,24 @@
 {% extends "base.html" %}
 {% block content %}
+{% include "_analytics_tabs.html" with context %}
 <div class="page-title">🛠 ИНФО для админа</div>
+
+<div class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:16px;">
+  <b style="font-size:14px;">💰 Реальная цена / скоринг — фикс 2026-08-13</b>
+  <p style="font-size:13px;color:var(--text);line-height:1.6;margin-top:6px;">
+    Баг: у большинства ЖК <code>housing_class</code> не задан вручную — поиск
+    аналогов (<code>bot/core/bargain.py get_comparables()</code>) падал в
+    гексагон+соседей и мешал квартиру с домами любого качества рядом,
+    независимо от реального уровня цены ЖК.<br>
+    Фикс: сначала проверяются собственные объявления ЖК (порог
+    <code>MIN_SAME_COMPLEX = 3</code>) — если их достаточно, аналоги берутся
+    оттуда (<code>method: 'same_complex'</code>), гекс+соседи — только фолбэк,
+    если своих данных мало.<br>
+    Проверено на объявлении <a href="/listing/1013167579" style="color:#2563eb;">1013167579</a>
+    (ЖК La Vie): было — сравнение со случайными соседями; стало — 14 реальных
+    аналогов внутри самого ЖК, объявление корректно помечено переоценённым на 38%.
+  </p>
+</div>
 
 <div class="admin-block" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:16px;">
   <div>
