@@ -52,6 +52,11 @@
     <div class="lbl">Авто-связей за 7 дней</div>
     <div class="sub">скорость роста spine прямо сейчас (парсеры новостроек)</div>
   </div>
+  <div class="eid-tile">
+    <div class="n">{{ totals.queue_inflow_7d or 0 }} / {{ totals.queue_resolved_7d or 0 }}</div>
+    <div class="lbl">Приток / разбор очереди за 7 дней</div>
+    <div class="sub">приток — новые кандидаты (review+conflict); разбор — подтверждено или отклонено руками. Еженедельный ритуал: приток стабильно &gt; разбора — очередь копится, надо разбирать чаще</div>
+  </div>
 </div>
 
 <div class="eid-card">
@@ -117,14 +122,24 @@
 
 <div class="eid-card" id="eid-candidates">
   <b style="font-size:14.5px;">🔍 Очередь на проверку и конфликты ({{ candidates|length }})</b>
+  <p style="font-size:12px;color:#888;line-height:1.6;margin-top:6px;">
+    Еженедельный ритуал: разбирать очередь, а не только смотреть на неё — приток стабильно &gt; разбора
+    (тайл выше) значит, что она копится. Строки с <span style="color:#d97706;font-weight:600;">🔢 фаза</span> —
+    номерованная карточка источника («… - 2», «(3 очередь)») против безномерной «базовой» записи в
+    <code>complexes</code>. <b>Политика:</b> линкуй к базе, только если отдельной строки-очереди с этим
+    номером НЕТ и заводить её не нужно (реально одна фаза одного дома); если у застройщика уже есть
+    (или должна быть) отдельная запись под этот номер — отклоняй здесь и заводи/находи её, а не сливай в базу
+    (см. <code>docs/entity_resolution_plan.md</code> — Дармен и sibling-sweep 2026-08-12).
+  </p>
   <table class="eid-table" style="margin-top:8px;">
     <tr><th>Тип</th><th>ЖК</th><th>Источник</th><th>Метод</th><th>Confidence</th><th>Конфликт с</th><th></th></tr>
     {% for c in candidates %}
+    {% set is_phase = 'phase_mismatch' in c.match_method or '1~implicit' in c.match_method %}
     <tr id="eid-cand-{{ c.id }}">
       <td>{{ '⚠️ конфликт' if c.kind == 'conflict' else '⏳ проверка' }}</td>
       <td><a href="/complex/{{ c.complex_id }}" style="color:var(--text);">{{ c.complex_name }}</a></td>
       <td>{{ c.source }} · {{ c.source_id }}</td>
-      <td>{{ c.match_method }}</td>
+      <td>{% if is_phase %}<span title="номерованная карточка vs безномерная база — см. подсказку выше" style="color:#d97706;font-weight:600;">🔢 фаза</span> {% endif %}{{ c.match_method }}</td>
       <td>{{ c.confidence }}</td>
       <td>{% if c.conflict_with_name %}<a href="/complex/{{ c.conflict_with_complex_id }}" style="color:var(--text);">{{ c.conflict_with_name }}</a>{% else %}—{% endif %}</td>
       <td style="white-space:nowrap;">

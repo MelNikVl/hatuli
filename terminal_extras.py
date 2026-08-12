@@ -1532,7 +1532,21 @@ def make_extras_router(templates) -> APIRouter:
                     SELECT complex_id FROM complex_source_links GROUP BY complex_id HAVING COUNT(*) >= 2
                 ) x) AS resolved_multi_source,
                 (SELECT COUNT(*) FROM complex_source_links
-                    WHERE matched_by = 'auto' AND matched_at >= now() - interval '7 days') AS auto_links_7d
+                    WHERE matched_by = 'auto' AND matched_at >= now() - interval '7 days') AS auto_links_7d,
+                -- Приток/разбор очереди за 7 дней (задача 2026-08-12, еженедельный
+                -- ритуал разборки) — приток по created_at кандидата (ON CONFLICT
+                -- DO UPDATE не трогает created_at, значит это правда "впервые
+                -- увиден", не "последний раз пересчитан"); разбор — approve
+                -- (matched_by='admin', так approve_candidate() пишет по
+                -- умолчанию из этого роута) + reject (rejected_at).
+                (SELECT COUNT(*) FROM complex_source_link_candidates
+                    WHERE created_at >= now() - interval '7 days') AS queue_inflow_7d,
+                (SELECT
+                    (SELECT COUNT(*) FROM complex_source_links
+                        WHERE matched_by = 'admin' AND matched_at >= now() - interval '7 days')
+                    + (SELECT COUNT(*) FROM complex_source_link_rejections
+                        WHERE rejected_at >= now() - interval '7 days')
+                ) AS queue_resolved_7d
         """)
         by_source = await pg_fetch("""
             SELECT source, COUNT(*) AS n, ROUND(AVG(confidence)::numeric, 2) AS avg_conf
