@@ -246,3 +246,77 @@ async def test_different_letter_blocks_never_auto(db):
     )
     assert _verdict(conf) != "auto", f"conf={conf} method={method} — WOULD-MERGE"
     assert "phase_mismatch(block:f!=block:a)" in method, method
+
+
+# ── Транслитерация: Tandau (id=2217, латиница) / Тандау (id=2563,
+#    кириллица, слит в 2217 merge_tandau_dups.py, но is_garbage — строка
+#    ещё жива для регрессии) — то же имя в двух алфавитах, реальные
+#    координаты из БД (~25 м друг от друга, тот же дом). Калибровка
+#    гейта 2, п.5.
+# ── "Highvill-пенальти" (продуктовый токен): Highvill Ishim D vs
+#    Highvill Gold Ishim — реальная находка калибровки 2026-08-12
+#    (sibling-sweep, docs/entity_resolution_plan.md), раньше 0.84 auto
+#    без единого сигнала фазы/блока (никакого phase_* в methods).
+# ────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_tandau_translit_matches_auto(db):
+    """Tandau (id=2217) vs Тандау (id=2563, до слияния) — прямой pg_trgm
+    similarity(0)=0 (разные алфавиты), без транслита сигнал имени гаснет
+    полностью (no_match). С транслитом — name_exact_translit + гео (те
+    же ~25 м) должно дать auto."""
+    from bot.db.pg import fetchrow
+
+    tandau = await fetchrow("SELECT name, lat, lon FROM complexes WHERE id = 2217")
+    assert tandau, "фикстура предполагает id=2217 'Tandau' в БД"
+
+    conf, method = await score_match(
+        "тандау", tandau["name"],
+        existing_lat=tandau["lat"], existing_lon=tandau["lon"],
+        candidate_lat=51.12179, candidate_lon=71.40573,  # реальные координаты id=2563 до merge
+        name_a_full="Тандау", name_b_full=tandau["name"],
+    )
+    assert _verdict(conf) == "auto", f"conf={conf} method={method}"
+    assert "_translit" in method, method
+
+
+@pytest.mark.asyncio
+async def test_translit_noop_on_unrelated_names(db):
+    """Транслит не должен создавать ложных совпадений на реально разных
+    именах — двусторонний no-op на паре без общего звучания."""
+    conf, method = await score_match("Tandau", "Highvill", name_a_full="Tandau", name_b_full="Highvill")
+    assert conf == 0.0 and method == "no_match", f"conf={conf} method={method}"
+
+
+@pytest.mark.asyncio
+async def test_highvill_product_token_capped_to_review(db):
+    """Highvill Ishim D (нет продуктового токена) vs Highvill Gold Ishim
+    ('Gold' — линейка продукта, не фаза) — гео ~150м, тот же застройщик:
+    ДО фикса 0.84 auto (name_fuzzy+geo+developer, ни одного phase_* в
+    methods). После фикса — потолок 0.79, review."""
+    conf, method = await score_match(
+        "highvill ishim d", "highvill gold ishim",
+        existing_lat=51.130, existing_lon=71.400,
+        candidate_lat=51.1305, candidate_lon=71.4005,
+        developer_match=True,
+        name_a_full="ЖК Highvill Ishim D", name_b_full="ЖК Highvill Gold Ishim",
+    )
+    assert _verdict(conf) != "auto", f"conf={conf} method={method} — WOULD-MERGE"
+    assert "product_mismatch(None!=gold)" in method, method
+
+
+@pytest.mark.asyncio
+async def test_same_product_token_bonus(db):
+    """Обе стороны — одна и та же продуктовая линейка ('Gold') у одного
+    застройщика/адреса — совпадающий токен, не расхождение, бонус
+    (в отличие от расхождения — но всё ещё не гарантирует auto, если
+    другие сигналы слабее)."""
+    conf, method = await score_match(
+        "highvill gold ishim", "highvill gold ishim",
+        existing_lat=51.130, existing_lon=71.400,
+        candidate_lat=51.1301, candidate_lon=71.4001,
+        developer_match=True,
+        name_a_full="ЖК Highvill Gold Ishim", name_b_full="Highvill Gold Ishim",
+    )
+    assert _verdict(conf) == "auto", f"conf={conf} method={method}"
+    assert "product(gold)" in method, method

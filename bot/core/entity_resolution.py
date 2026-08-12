@@ -111,6 +111,31 @@ async def name_similarity(name_a: str, name_b: str) -> float:
     return float(val or 0.0)
 
 
+# Транслитерация кириллица->латиница (задача гейта 2, п.5 — калибровка
+# 2026-08-12 нашла Tandau/Тандау: то же имя в двух алфавитах, pg_trgm
+# сравнивает буквы посимвольно и не видит их похожими вовсе (0.0),
+# сигнал имени гас бы даже при идентичном произношении). Приближённая,
+# не ГОСТ-таблица — практическая транслитерация, как она реально
+# встречается в названиях ЖК (рус. + казахские буквы). Латинские буквы
+# в исходной строке проходят маппинг без изменений (identity), так что
+# применение к уже латинскому имени — no-op, безопасно гонять на обеих
+# сторонах без предварительной детекции алфавита.
+_CYR_TO_LAT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "ж": "zh", "з": "z", "и": "i", "й": "i", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    # казахские буквы
+    "і": "i", "ә": "a", "ғ": "g", "қ": "q", "ң": "n", "ө": "o", "ұ": "u",
+    "ү": "u", "һ": "h",
+}
+
+
+def transliterate(s: str) -> str:
+    return "".join(_CYR_TO_LAT.get(ch, ch) for ch in (s or "").lower())
+
+
 _ADDR_NOISE = [
     "рк,", "г. астана", "г.астана", "астана г.", "астана,", "район ", "р-н ",
     "жилой массив", "ж/м", "мкр", "мкр.", "проспект", "пр.", "улица", "ул.",
@@ -300,6 +325,35 @@ def _phase_token(name: str) -> tuple[str | None, str]:
     return None, _clean_base(tail)
 
 
+# Продуктовый токен ("Highvill-пенальти", задача гейта 2, п.5 — открытая
+# находка калибровки 2026-08-12: "Highvill Ishim D" vs "Highvill Gold
+# Ishim" — 0.84 auto от name_fuzzy+geo+developer, без единого сигнала
+# фазы/блока, потому что "Gold" не токен фазы вообще, а маркетинговая
+# линейка продукта у ОДНОГО застройщика на ОДНОЙ площадке; подтверждено
+# 2026-08-12 вторым живым случаем — "Comfort Tandau" (id=2315) при
+# слиянии транслит-дубля Tandau/Тандау (id=2217/2563) оказался НЕ тем же
+# домом (несколько км в стороне), 'Comfort' — та же категория токена.
+#
+# В отличие от _phase_token: тут НЕТ implicit-дефолта ни для какого
+# случая — продуктовая линейка не имеет "неявной первой линейки" (в
+# отличие от "неявной первой очереди/фазы" у номеров), токен на ОДНОЙ
+# стороне при отсутствии на другой — это уже потенциальный признак
+# другого продукта у того же проекта/района, не нейтрален. Симметрично с
+# кодом фазы: совпадают -> небольшой бонус; не совпадают (в т.ч. один
+# None) -> потолок confidence, решение уходит человеку.
+_PRODUCT_TOKENS = (
+    "gold", "premium", "comfort", "lux", "luxe", "deluxe", "business",
+    "smart", "standard", "plus", "elite", "vip", "prime", "grand",
+)
+_PRODUCT_TOKEN_RE = re.compile(
+    r"\b(" + "|".join(_PRODUCT_TOKENS) + r")\b", re.I)
+
+
+def _product_token(name: str) -> str | None:
+    m = _PRODUCT_TOKEN_RE.search((name or "").lower())
+    return m.group(1).lower() if m else None
+
+
 async def score_match(
     name_a: str, name_b: str, *,
     existing_lat: float | None = None, existing_lon: float | None = None,
@@ -322,13 +376,23 @@ async def score_match(
     так передают сырые имена без предварительной чистки, см.
     newbuild_common.ensure_complex)."""
     sim = await name_similarity(name_a, name_b)
+    translit_note = ""
+    if sim < FUZZY_NAME_THRESHOLD:
+        # Транслит — только когда прямое сравнение уже не дотягивает до
+        # fuzzy-порога (дешёвая подстраховка, не лишний DB round-trip на
+        # каждой паре): Tandau/Тандау калибровка 2026-08-12. transliterate()
+        # — no-op на уже латинском тексте, гонять на обеих сторонах
+        # безопасно без предварительной детекции алфавита.
+        t_sim = await name_similarity(transliterate(name_a), transliterate(name_b))
+        if t_sim > sim:
+            sim, translit_note = t_sim, "_translit"
     if sim >= 1.0:
-        score, parts = _W_NAME_EXACT, ["name_exact"]
+        score, parts = _W_NAME_EXACT, [f"name_exact{translit_note}"]
     elif sim >= FUZZY_NAME_THRESHOLD:
         # линейная интерполяция веса между порогом (min) и точным (exact)
         t = (sim - FUZZY_NAME_THRESHOLD) / (1.0 - FUZZY_NAME_THRESHOLD)
         score = _W_NAME_FUZZY_MIN + t * (_W_NAME_EXACT - _W_NAME_FUZZY_MIN)
-        parts = [f"name_fuzzy({sim:.2f})"]
+        parts = [f"name_fuzzy({sim:.2f}){translit_note}"]
     else:
         return 0.0, "no_match"
 
@@ -385,6 +449,21 @@ async def score_match(
                 cap = PHASE_MISMATCH_CAP
                 parts.append(f"phase_mismatch({implicit_label}!={numbered_token})")
         # иначе — нейтрально, не трогаем score (цифра, похоже, не про фазу)
+
+    # Продуктовый токен ("Highvill-пенальти", калибровка 2026-08-12: Gold/
+    # Comfort/... — маркетинговая линейка продукта, не фаза/блок) — см.
+    # _product_token(). В отличие от фазы, implicit-ветки НЕТ вовсе: токен
+    # на одной стороне при отсутствии на другой — тоже потолок, не
+    # нейтрально (нет "неявной базовой линейки продукта").
+    product_a = _product_token(name_a_full or name_a)
+    product_b = _product_token(name_b_full or name_b)
+    if product_a is not None or product_b is not None:
+        if product_a == product_b:
+            score = min(score + _W_PHASE_BONUS, 1.0)
+            parts.append(f"product({product_a})")
+        else:
+            cap = PHASE_MISMATCH_CAP if cap is None else min(cap, PHASE_MISMATCH_CAP)
+            parts.append(f"product_mismatch({product_a}!={product_b})")
 
     if cap is not None:
         score = min(score, cap)
