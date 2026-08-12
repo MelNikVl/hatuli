@@ -314,7 +314,7 @@ html, body { overflow: hidden !important; }
 </style>
 <div id="map-wrap" style="background:var(--surface);margin:0 -24px -32px -24px;position:relative;display:flex;">
   <div id="objects-map"></div>
-  <div id="split-map-pane" style="display:none;width:50%;min-width:0;border-left:2px solid var(--accent);position:relative;">
+  <div id="split-map-pane" style="display:none;flex:1;min-width:0;border-left:2px solid var(--accent);position:relative;">
     <button type="button" onclick="closeSplitView()" title="Закрыть сравнение"
             style="position:absolute;top:10px;right:10px;z-index:1000;width:32px;height:32px;border:none;border-radius:50%;background:#fff;color:#111;font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.3);">✕</button>
     <div id="split-map-label" style="position:absolute;top:10px;left:10px;z-index:1000;background:#fff;color:#111;padding:5px 10px;border-radius:8px;font-size:12px;font-weight:700;box-shadow:0 1px 4px rgba(0,0,0,.3);"></div>
@@ -1241,6 +1241,7 @@ const HeatControls = L.Control.extend({
           <button type="button" class="heat-period-btn" data-days="365" onclick="setCrimePeriod(365)" style="flex:1;height:22px;border:none;border-radius:6px;background:#e2e8f0;color:#1e293b;font-weight:700;font-size:9.5px;cursor:pointer;white-space:nowrap;">Год</button>
         </div>
       </div>
+      <button type="button" onclick="toggleSplitViewBtn()" style="margin-top:4px;height:24px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:9.5px;cursor:pointer;">⬛⬜ Разделить карту</button>
       <button type="button" onclick="turnOffHeat()" style="margin-top:2px;height:24px;border:none;border-radius:8px;background:#ef4444;color:#fff;font-weight:700;font-size:9.5px;cursor:pointer;">Убрать карту</button>
     `;
     L.DomEvent.disableClickPropagation(box);
@@ -3028,12 +3029,20 @@ function median(arr) {
   return s.length % 2 ? s[mid] : (s[mid-1]+s[mid])/2;
 }
 
+// 10 ступеней вместо прежних 4 (жаловались "буквально 3-4 цвета") — от
+// прозрачно-жёлтого до тёмно-золотого, задача "хайп 10 цветов", 2026-08-13.
+const HYPE_STOPS = [
+  [255,253,235], [255,247,176], [254,235,120], [253,211,74],
+  [252,187,46], [245,158,11], [217,119,6], [180,83,9],
+  [146,64,14], [120,53,15],
+];
 function hypeNewsColor(t) {
-  const c = [[254,240,138],[250,204,21],[245,158,11],[180,83,9]];
   const x = Math.max(0, Math.min(1, t));
-  const i = Math.min(3, Math.floor(x * 4));
-  const f = x * 4 - i;
-  const a = c[Math.min(3, i)], b = c[Math.min(3, i + 1)];
+  const n = HYPE_STOPS.length - 1;
+  const pos = x * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const f = pos - i;
+  const a = HYPE_STOPS[i], b = HYPE_STOPS[i + 1];
   return `rgb(${Math.round(a[0] + (b[0]-a[0])*f)},${Math.round(a[1] + (b[1]-a[1])*f)},${Math.round(a[2] + (b[2]-a[2])*f)})`;
 }
 // Снос/реновация (см. /admin/analytics/demolition, задача "Снос кнопкой в
@@ -3073,7 +3082,9 @@ function drawHypeNewsHeat(hexes) {
     const s = Math.max(0.05, Math.min(1, (top.value || 0) / 100));
     const label = b.items.length > 1 ? `${top.name || ''} +${b.items.length - 1}` : (top.name || '');
     L.polygon(hexCorners(b.q, b.r, 100), {
-      color: 'transparent', weight: 0, fillColor: hypeNewsColor(s), fillOpacity: 0.5,
+      // Непрозрачность тоже растёт с силой хайпа (не фикс. 0.5) — от
+      // прозрачно-жёлтого (низкий хайп) до плотного тёмно-золотого (высокий).
+      color: 'transparent', weight: 0, fillColor: hypeNewsColor(s), fillOpacity: 0.2 + s * 0.55,
     }).bindTooltip(`${label} · хайп ${Math.round(top.value || 0)}`, {sticky:true})
       .addTo(heatTargetLayer);
   });
@@ -3242,7 +3253,6 @@ function drawPriceHeat(points, archivedPoints) {
     L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
       color: b.isArchived ? '#8b5cf6' : '#fff',
       weight: b.isArchived ? 1.2 : 0.5,
-      dashArray: b.isArchived ? '3,3' : null,
       fillColor: priceHeatColor(t), fillOpacity: 0.4 + tGamma * 0.4,
     }).bindTooltip(`медиана: ${priceTxt} ₸ · ${b.items.length} объявл.${archNote}${roomsTxt ? '<br>' + roomsTxt : ''}`, {sticky:true}).addTo(heatTargetLayer);
   });
@@ -3275,7 +3285,6 @@ function drawPriceM2Heat(points, archivedPoints) {
     L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
       color: b.isArchived ? '#8b5cf6' : '#fff',
       weight: b.isArchived ? 1.2 : 0.5,
-      dashArray: b.isArchived ? '3,3' : null,
       fillColor: priceHeatColor(t), fillOpacity: 0.4 + tGamma * 0.4,
     }).bindTooltip(`медиана: ${txt} · ${b.items.length} объявл.${archNote}`, {sticky:true}).addTo(heatTargetLayer);
   });
@@ -3337,9 +3346,13 @@ function drawNoveltyHeat(points) {
     const years = b.items.map(i => i.y).filter(y => y != null);
     const med = years.length ? median(years) : null;
     const cnt = b.items.length;
+    // ID гекса (q,r — осевые координаты сетки) в тултипе — задача "дай ID
+    // каждому гексу" (2026-08-13): чтобы репортить неточности конкретной
+    // ячейкой, а не "вон там примерно". Стабилен, пока не меняется HEAT_EDGE_M.
+    const hexId = `${b.q},${b.r}`;
     L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
       color: 'transparent', weight: 0, fillColor: noveltyColor(med), fillOpacity: 0.62,
-    }).bindTooltip(`домов: ${cnt}<br>${med != null ? 'год: ~' + med : 'год не известен'}<br>${b.items.some(i => i.old) ? 'есть старый фонд' : ''}`, {sticky:true})
+    }).bindTooltip(`гекс ${hexId}<br>домов: ${cnt}<br>${med != null ? 'год: ~' + med : 'год не известен'}<br>${b.items.some(i => i.old) ? 'есть старый фонд' : ''}`, {sticky:true})
       .addTo(heatTargetLayer);
   });
 }
@@ -3618,11 +3631,23 @@ async function loadHeatData(mode) {
     const d = await fetch('/admin/api/population-hexes').then(r => r.json());
     heatCache.population = d.hexes || [];
   } else if (mode === 'count') {
-    const [s, r] = await Promise.all([
+    // "Кол-во объявлений" раньше был чистым снимком текущего момента —
+    // только то, что активно прямо сейчас. По задаче (2026-08-13):
+    // окно месяц + учитывать ушедшее в архив — иначе гекс, где рынок
+    // реально живой (объявления появляются и быстро продаются/сдаются),
+    // выглядит "пустым" рядом с гексом, где то же число объявлений висит
+    // месяцами без движения. Добавляем archived-*-points (те же 30 дней,
+    // что уже используются как фолбэк для тепловых карт цены).
+    const [s, r, sa, ra] = await Promise.all([
       fetch('/admin/api/heat-points').then(r => r.json()),
       cachedFetchJson('/admin/api/map-points?type=rental'),
+      fetch('/admin/api/archived-sale-points').then(r => r.json()),
+      fetch('/admin/api/archived-rental-points').then(r => r.json()),
     ]);
-    heatCache.count = [...(s.points || []), ...(r.points || [])].filter(p => p.lat != null && p.lon != null);
+    heatCache.count = [
+      ...(s.points || []), ...(r.points || []),
+      ...(sa.points || []), ...(ra.points || []),
+    ].filter(p => p.lat != null && p.lon != null);
   } else if (mode === 'demolition') {
     const d = await fetch('/admin/api/demolition-points').then(r => r.json());
     heatCache.demolition = d.points || [];
@@ -3691,20 +3716,19 @@ async function toggleHeat(mode) {
   map.removeLayer(fineNoiseLayer);
   fineNoiseLayer.clearLayers();
   heatMode = mode;
-  // Внешний шум по умолчанию — гекс 40м и прозрачность 25%, в отличие от
-  // цен/аренды (60м/30%) — мелкий шум сильнее размазывается по соседним
-  // домам, крупный гекс его прячет. Применяем один раз при первом включении
-  // шума за сессию, не трогаем ползунки повторно, если пользователь уже сам
-  // их подвинул. (Раньше прозрачность шума по умолчанию стояла на потолке
-  // ползунка 50% — по просьбе снижена до 25%, чтобы не забивать карту.)
+  // Внешний шум по умолчанию — гекс 30м (задача 2026-08-13, было 40) и
+  // прозрачность 25%, в отличие от цен/аренды/доходности (80м/30%) —
+  // мелкий шум сильнее размазывается по соседним домам, крупный гекс его
+  // прячет. Применяем один раз при первом включении шума за сессию, не
+  // трогаем ползунки повторно, если пользователь уже сам их подвинул.
   const applyingNoiseDefaults = mode === 'noise' && !noiseDefaultsApplied;
   if (applyingNoiseDefaults) {
     noiseDefaultsApplied = true;
     const edgeInput = document.getElementById('f-heat-edge'), edgeVal = document.getElementById('f-heat-edge-val');
     const opInput = document.getElementById('f-heat-opacity'), opVal = document.getElementById('f-heat-opacity-val');
-    if (edgeInput) { edgeInput.value = 40; if (edgeVal) edgeVal.textContent = '40'; }
+    if (edgeInput) { edgeInput.value = 30; if (edgeVal) edgeVal.textContent = '30'; }
     if (opInput) { opInput.value = 25; if (opVal) opVal.textContent = '25'; }
-    HEAT_EDGE_M = 40; NOISE_BG_EDGE_M = 40; NOISE_EDGE_M = 40;
+    HEAT_EDGE_M = 30; NOISE_BG_EDGE_M = 30; NOISE_EDGE_M = 30;
   }
   heatLayer.clearLayers();
   if (!map.hasLayer(heatLayer)) heatLayer.addTo(map);
@@ -3795,6 +3819,12 @@ function openSplitView() {
   if (!heatMode || splitMap) return;
   const pane = document.getElementById('split-map-pane');
   pane.style.display = 'block';
+  // Список объявлений справа (#side-panel, ширина фиксирована в px) иначе
+  // отъедает кусок ширины неравно между двумя картами — карта и её копия
+  // должны делиться РОВНО пополам (задача 2026-08-13), а не "почти
+  // половина минус список". Оба flex:1 (см. CSS #objects-map/#split-map-pane).
+  const sp = document.getElementById('side-panel');
+  if (sp) sp.style.display = 'none';
   document.getElementById('split-map-label').textContent = HEAT_MODE_LABELS[heatMode] || heatMode;
   splitMap = L.map('split-map', {preferCanvas: true}).setView(map.getCenter(), map.getZoom());
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(splitMap);
@@ -3833,7 +3863,16 @@ function closeSplitView() {
   splitMap.remove();
   splitMap = null; splitHeatLayer = null;
   document.getElementById('split-map-pane').style.display = 'none';
+  const sp = document.getElementById('side-panel');
+  if (sp) sp.style.display = '';
   setTimeout(() => map.invalidateSize(), 50);
+}
+// Кнопка "Разделить карту" в панели управления тепловой картой (задача
+// 2026-08-13) — раньше единственный способ был кликнуть по самой карте,
+// не очевидно и легко нажималось случайно. Кнопка — просто toggle
+// open/close, клик по карте оставлен как есть (не мешает).
+function toggleSplitViewBtn() {
+  if (splitMap) closeSplitView(); else openSplitView();
 }
 map.on('click', () => { if (heatMode && !splitMap) openSplitView(); });
 
