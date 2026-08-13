@@ -104,12 +104,20 @@
     :root:not([data-theme="light"]) .pub-nav a,
     :root:not([data-theme="light"]) .pub-nav a:hover,
     :root:not([data-theme="light"]) .pub-nav a.active,
+    :root:not([data-theme="light"]) .pub-dd-menu a,
     :root:not([data-theme="light"]) .atabs a,
     :root:not([data-theme="light"]) .atabs a:hover,
     :root:not([data-theme="light"]) .atabs a.active { color: #e8eaf6; }
     .pub-nav .sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
     .pub-nav .spacer { flex: 1; }
     .pub-nav a.admin-panel-link { background: rgba(88,101,242,.12); border-radius: 8px; margin: 6px 0; padding: 7px 14px; }
+    /* Дропдаун "Аналитика" (задача 2026-08-13, см. base.html) — Воздух
+       перенесён сюда из главного ряда меню. */
+    .pub-dd { position: relative; }
+    .pub-dd-menu { display: none; position: absolute; top: 100%; left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px; min-width: 160px; box-shadow: 0 8px 24px rgba(0,0,0,.18); z-index: 600; }
+    .pub-dd:hover .pub-dd-menu, .pub-dd:focus-within .pub-dd-menu { display: block; }
+    .pub-dd-menu a { display: block; padding: 8px 10px; border-radius: 6px; border-bottom: none; }
+    .pub-dd-menu a:hover { background: rgba(88,101,242,.12); }
     /* "Новостройки" — отдельный пункт меню (раньше был просто значением
        в селекте типа объектов на карте), салатовый фон, чтобы выделялся
        среди остальных ссылок; !important на цвете текста — иначе тёмная
@@ -160,7 +168,12 @@
       <a href="/mortgage-calculator" class="{% if 'mortgage-calculator' in request.url.path %}active{% endif %}">Калькулятор ипотеки</a>
       <a href="/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
       {% if admin %}
-      <a href="/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path or 'investments' in request.url.path %}active{% endif %}">Аналитика</a>
+      <div class="pub-dd" tabindex="0">
+        <a href="/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path or 'investments' in request.url.path %}active{% endif %}">Аналитика</a>
+        <div class="pub-dd-menu">
+          <a href="/air" class="{% if 'air' in request.url.path %}active{% endif %}">🌬 Воздух</a>
+        </div>
+      </div>
             <a href="/admin-panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Админка</a>
       {% endif %}
     </nav>
