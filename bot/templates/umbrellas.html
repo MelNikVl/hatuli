@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+{% include "_entity_modals.html" %}
+<div class="page-title">🏘 Зонтики
+  <small style="font-size:13px;color:#888;font-weight:400;">Модель зонтик/дом (2026-08-13) — обратная операция к "добавить дом к ЖК". См. <code>docs/entity_resolution_plan.md</code>.</small>
+</div>
+
+<div class="eid-card">
+  <b style="font-size:14.5px;">🔎 Найти ЖК, чтобы управлять как зонтиком</b>
+  <p style="font-size:12px;color:#888;line-height:1.6;margin-top:4px;">
+    Любой ЖК может стать зонтиком — просто добавь ему первый дом. Не нужен отдельный флаг "это зонтик":
+    "зонтик" — это просто ЖК, у которого есть хотя бы один дом (<code>parent_complex_id</code> у другой строки).
+  </p>
+  <input type="text" id="umb-search-input" class="eid-ac-input" style="margin-top:8px;" placeholder="Начните вводить имя ЖК…" oninput="umbSearch()" autocomplete="off">
+  <div id="umb-search-dropdown" class="eid-ac-dropdown" style="display:none;"></div>
+</div>
+
+<div class="eid-card">
+  <b style="font-size:14.5px;">🏘 Существующие зонтики ({{ umbrellas|length }})</b>
+  {% for u in umbrellas %}
+  <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <div>
+        <a href="/complex/{{ u.id }}" style="color:var(--text);font-weight:700;font-size:14px;">#{{ u.id }} {{ u.name }}</a>
+        <span style="font-size:11px;color:#888;"> · {{ u.address or 'адреса нет' }} · {{ u.listings_count }} объявл. · {{ u.children|length }} домов</span>
+      </div>
+      <a href="javascript:void(0)" onclick="eidOpenAcModal({{ u.id }}, 'add-child-to', '🏠 Добавить дом в зонтик #{{ u.id }} {{ u.name }}')" style="color:#2563eb;font-size:12.5px;font-weight:600;">+ добавить дом</a>
+    </div>
+    <table class="eid-table" style="margin-top:8px;">
+      <tr><th>Дом</th><th>Объявл.</th><th></th></tr>
+      {% for c in u.children %}
+      <tr id="umb-child-{{ c.id }}">
+        <td><a href="{{ c.krisha_url or ('/complex/' ~ c.id) }}" target="_blank" rel="noopener" style="color:var(--text);">#{{ c.id }} {{ c.name }}</a></td>
+        <td>{{ c.listings_count }}</td>
+        <td><a href="javascript:void(0)" onclick="umbUnsetParent({{ c.id }})" style="color:#ef4444;font-size:12px;">открепить</a></td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% else %}
+  <p style="color:#888;font-size:13px;margin-top:8px;">Пока нет ни одного зонтика — найди ЖК выше и добавь ему первый дом.</p>
+  {% endfor %}
+</div>
+
+<script>
+let _umbSearchTimer = null;
+function umbSearch() {
+  clearTimeout(_umbSearchTimer);
+  const q = document.getElementById('umb-search-input').value.trim();
+  const dd = document.getElementById('umb-search-dropdown');
+  if (q.length < 2) { dd.style.display = 'none'; return; }
+  _umbSearchTimer = setTimeout(async () => {
+    const r = await fetch(`/admin/api/entity-ids/complex-search?q=${encodeURIComponent(q)}`);
+    const d = await r.json();
+    if (!d.results || !d.results.length) { dd.innerHTML = '<div class="eid-ac-item" style="color:#888;">ничего не найдено</div>'; dd.style.display = 'block'; return; }
+    dd.innerHTML = d.results.map(c => `
+      <div class="eid-ac-item" onclick="umbPickAsUmbrella(${c.id}, ${JSON.stringify(c.name)})">
+        #${c.id} ${c.name.replace(/</g, '&lt;')}
+        ${c.address ? `<div class="addr">${c.address.replace(/</g, '&lt;')}</div>` : ''}
+      </div>
+    `).join('');
+    dd.style.display = 'block';
+  }, 250);
+}
+function umbPickAsUmbrella(id, name) {
+  document.getElementById('umb-search-dropdown').style.display = 'none';
+  document.getElementById('umb-search-input').value = '';
+  eidOpenAcModal(id, 'add-child-to', `🏠 Добавить первый дом в "${name}" (#${id})`);
+}
+async function umbUnsetParent(childId) {
+  if (!confirm('Открепить этот дом от зонтика?')) return;
+  const r = await fetch('/admin/api/entity-ids/unset-parent', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({complex_id: childId})});
+  if (r.ok) location.reload();
+  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+}
+</script>
+{% endblock %}

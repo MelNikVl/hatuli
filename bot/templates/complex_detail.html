@@ -35,43 +35,17 @@
   {% endif %}
 
   {% if is_admin(request) %}
+  {% include "_entity_modals.html" %}
   <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
-    <!-- UX-фикс 2026-08-13 ("стена -> мост"): если на этот ЖК уже есть
-         неразрешённая пометка — кнопка ведёт прямо на неё (якорь
-         eid-split-{id} есть у каждой строки очереди), не открывает
-         повторный prompt поверх уже существующей заметки. -->
-    {% if pending_split_candidate %}
-    <a href="/admin/entity-ids#eid-split-{{ pending_split_candidate }}"
-       style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;text-decoration:none;display:inline-block;">📋 Открыть пометку</a>
-    {% else %}
-    <button type="button" onclick="cxFlagSplit({{ cx.id }})" title="Подозрение, что этот ЖК на самом деле несколько разных зданий/очередей под одним именем — см. docs/entity_resolution_plan.md, 'расшивка как review-очередь'"
-            style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">✂️ Пометить на расшивку</button>
-    {% endif %}
-    <button type="button" onclick="cxSetParent({{ cx.id }})" title="Привязать этот ЖК как дом к другому ЖК-зонтику (модель зонтик/дом)"
+    <!-- UX-фикс 2026-08-13 ("убрать якоря/редиректы"): всё — модалка на
+         этой же странице, не переход на /admin/entity-ids. Кнопка всегда
+         "Открыть пометку" — модалка сама покажет историю (пусто, если
+         никогда не помечали) и поле для новой/дополнительной заметки. -->
+    <button type="button" onclick="eidOpenNoteModal({{ cx.id }}, {{ cx.name|tojson }})" title="Пометки на расшивку этого ЖК — вся история, можно дописать"
+            style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">📋 Пометки на расшивку{% if pending_split_candidate %} (есть неразрешённая){% endif %}</button>
+    <button type="button" onclick="eidOpenAcModal({{ cx.id }}, 'set-parent-for', '🏠 Добавить дом к ЖК #{{ cx.id }}')" title="Привязать этот ЖК как дом к другому ЖК-зонтику (модель зонтик/дом)"
             style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">🏠 Добавить дом к ЖК</button>
   </div>
-  <script>
-  async function cxFlagSplit(complexId) {
-    const comment = prompt('Почему этот ЖК похож на "блоб" (несколько зданий под одним именем)? Комментарий обязателен.');
-    if (!comment || !comment.trim()) return;
-    const r = await fetch('/admin/api/entity-ids/split/flag', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({complex_id: complexId, comment: comment.trim()})});
-    if (r.ok) { const d = await r.json(); location.href = '/admin/entity-ids#eid-split-' + d.id; }
-    else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
-  }
-  async function cxSetParent(complexId) {
-    const parentIdRaw = prompt(`ID ЖК-зонтика, к которому привязать #${complexId} как дом:`);
-    if (!parentIdRaw || !parentIdRaw.trim()) return;
-    const parent_complex_id = parseInt(parentIdRaw.trim(), 10);
-    if (!parent_complex_id) { alert('Нужен числовой ID'); return; }
-    const r = await fetch('/admin/api/entity-ids/set-parent', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({complex_id: complexId, parent_complex_id})});
-    if (r.ok) location.reload();
-    else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
-  }
-  </script>
   {% endif %}
   </div>
 

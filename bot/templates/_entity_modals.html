@@ -1,0 +1,125 @@
+<!-- Общие модалки "зонтик/дом" (задача 2026-08-13, "убрать якоря/редиректы")
+     — include-партиал на любой странице, которой нужны попапы
+     "Открыть/дописать пометку" и "Добавить дом к ЖК".
+     Оба работают через уже существующие /admin/api/entity-ids/* роуты
+     (flag, complex-search, set-parent, split/by-complex), без переходов
+     на другую страницу — ТОЛЬКО add-house сознательно делает
+     location.reload() после успеха (parent_complex_id меняет много
+     разного на странице — проще перезагрузить текущую же страницу, чем
+     обновлять DOM руками; редиректа на другой URL нет). -->
+<style>
+.eid-modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:2000; align-items:center; justify-content:center; padding:20px; }
+.eid-modal-overlay.open { display:flex; }
+.eid-modal { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px 20px; width:100%; max-width:520px; max-height:80vh; overflow-y:auto; }
+.eid-modal h3 { font-size:15px; margin-bottom:10px; }
+.eid-modal .eid-modal-close { float:right; cursor:pointer; color:#888; font-size:18px; line-height:1; }
+.eid-modal-comment { border-left:2px solid var(--border); padding:6px 10px; margin-bottom:8px; font-size:12.5px; }
+.eid-modal-comment .meta { color:#888; font-size:11px; margin-bottom:2px; }
+.eid-ac-input { width:100%; padding:8px 10px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); font-size:13px; box-sizing:border-box; }
+.eid-ac-dropdown { border:1px solid var(--border); border-radius:8px; margin-top:4px; max-height:260px; overflow-y:auto; background:var(--surface); }
+.eid-ac-item { padding:8px 10px; cursor:pointer; font-size:13px; border-bottom:1px solid var(--border); }
+.eid-ac-item:last-child { border-bottom:none; }
+.eid-ac-item:hover { background:var(--bg); }
+.eid-ac-item .addr { font-size:11px; color:#888; }
+</style>
+
+<div class="eid-modal-overlay" id="eid-note-modal-overlay" onclick="if(event.target===this) eidCloseNoteModal()">
+  <div class="eid-modal">
+    <span class="eid-modal-close" onclick="eidCloseNoteModal()">✕</span>
+    <h3>📋 Пометки на расшивку — <span id="eid-note-modal-title"></span></h3>
+    <div id="eid-note-modal-list" style="margin:10px 0;">загрузка…</div>
+    <textarea id="eid-note-modal-text" placeholder="Новый комментарий…" rows="3"
+              style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;"></textarea>
+    <button type="button" onclick="eidNoteModalSubmit()"
+            style="margin-top:8px;padding:7px 16px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:13px;font-weight:600;cursor:pointer;">Добавить</button>
+  </div>
+</div>
+
+<div class="eid-modal-overlay" id="eid-ac-modal-overlay" onclick="if(event.target===this) eidCloseAcModal()">
+  <div class="eid-modal">
+    <span class="eid-modal-close" onclick="eidCloseAcModal()">✕</span>
+    <h3 id="eid-ac-modal-title">🏠 Добавить дом к ЖК</h3>
+    <input type="text" id="eid-ac-input" class="eid-ac-input" placeholder="Начните вводить имя ЖК…" oninput="eidAcSearch()" autocomplete="off">
+    <div id="eid-ac-dropdown" class="eid-ac-dropdown" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+// ── "Открыть/дописать пометку" ──────────────────────────────────────────
+let _eidNoteComplexId = null;
+async function eidOpenNoteModal(complexId, complexName) {
+  _eidNoteComplexId = complexId;
+  document.getElementById('eid-note-modal-title').textContent = complexName || ('#' + complexId);
+  document.getElementById('eid-note-modal-list').textContent = 'загрузка…';
+  document.getElementById('eid-note-modal-overlay').classList.add('open');
+  const r = await fetch(`/admin/api/entity-ids/split/by-complex/${complexId}`);
+  const d = await r.json();
+  const list = document.getElementById('eid-note-modal-list');
+  if (!d.candidates || !d.candidates.length) { list.innerHTML = '<span style="color:#888;font-size:12.5px;">пока пусто</span>'; return; }
+  list.innerHTML = d.candidates.map(c => `
+    <div class="eid-modal-comment">
+      <div class="meta">${c.status} · ${c.reason} · ${c.matched_by} · ${(c.created_at || '').slice(0, 16).replace('T', ' ')}</div>
+      <div style="white-space:pre-wrap;">${(c.comment || '(без комментария)').replace(/</g, '&lt;')}</div>
+    </div>
+  `).join('');
+}
+function eidCloseNoteModal() {
+  document.getElementById('eid-note-modal-overlay').classList.remove('open');
+  document.getElementById('eid-note-modal-text').value = '';
+}
+async function eidNoteModalSubmit() {
+  const comment = document.getElementById('eid-note-modal-text').value.trim();
+  if (!comment) return;
+  const r = await fetch('/admin/api/entity-ids/split/flag', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({complex_id: _eidNoteComplexId, comment})});
+  if (r.ok) { document.getElementById('eid-note-modal-text').value = ''; await eidOpenNoteModal(_eidNoteComplexId); }
+  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+}
+
+// ── "Добавить дом к ЖК" — autocomplete (fuzzy: транслит + база без
+// продуктового токена, bot.core.entity_resolution.search_complexes_for_parent) ──
+let _eidAcFixedId = null, _eidAcMode = null, _eidAcTimer = null;
+// mode='set-parent-for' — fixedId это ДОМ, ищем РОДИТЕЛЯ (обычный кейс)
+// mode='add-child-to'   — fixedId это ЗОНТИК, ищем ДОМ (страница /admin/umbrellas)
+function eidOpenAcModal(fixedId, mode, title) {
+  _eidAcFixedId = fixedId; _eidAcMode = mode || 'set-parent-for';
+  document.getElementById('eid-ac-modal-title').textContent = title || (
+    _eidAcMode === 'add-child-to' ? '🏠 Добавить дом в зонтик' : '🏠 Добавить дом к ЖК');
+  document.getElementById('eid-ac-input').value = '';
+  document.getElementById('eid-ac-dropdown').style.display = 'none';
+  document.getElementById('eid-ac-modal-overlay').classList.add('open');
+  document.getElementById('eid-ac-input').focus();
+}
+function eidCloseAcModal() {
+  document.getElementById('eid-ac-modal-overlay').classList.remove('open');
+}
+function eidAcSearch() {
+  clearTimeout(_eidAcTimer);
+  const q = document.getElementById('eid-ac-input').value.trim();
+  const dd = document.getElementById('eid-ac-dropdown');
+  if (q.length < 2) { dd.style.display = 'none'; return; }
+  _eidAcTimer = setTimeout(async () => {
+    const excludeParam = _eidAcMode === 'set-parent-for' ? `&exclude=${_eidAcFixedId}` : '';
+    const r = await fetch(`/admin/api/entity-ids/complex-search?q=${encodeURIComponent(q)}${excludeParam}`);
+    const d = await r.json();
+    if (!d.results || !d.results.length) { dd.innerHTML = '<div class="eid-ac-item" style="color:#888;">ничего не найдено</div>'; dd.style.display = 'block'; return; }
+    dd.innerHTML = d.results.map(c => `
+      <div class="eid-ac-item" onclick="eidAcPick(${c.id})">
+        #${c.id} ${c.name.replace(/</g, '&lt;')}
+        ${c.address ? `<div class="addr">${c.address.replace(/</g, '&lt;')}</div>` : ''}
+      </div>
+    `).join('');
+    dd.style.display = 'block';
+  }, 250);
+}
+async function eidAcPick(pickedId) {
+  const complex_id = _eidAcMode === 'add-child-to' ? pickedId : _eidAcFixedId;
+  const parent_complex_id = _eidAcMode === 'add-child-to' ? _eidAcFixedId : pickedId;
+  const r = await fetch('/admin/api/entity-ids/set-parent', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({complex_id, parent_complex_id})});
+  if (r.ok) { location.reload(); }
+  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+}
+</script>

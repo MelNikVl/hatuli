@@ -75,29 +75,34 @@ async def test_umbrella_page_lists_houses(client, umbrella_and_house):
 
 
 @pytest.mark.asyncio
-async def test_plain_complex_shows_flag_button_not_open_note(client, umbrella_and_house):
+async def test_plain_complex_shows_note_button_without_pending_marker(client, umbrella_and_house):
+    """Задача 2026-08-13 ("убрать якоря/редиректы"): кнопка теперь одна
+    и та же всегда — "📋 Пометки на расшивку" — открывает модалку (не
+    ссылка на другую страницу). Без неразрешённой пометки — без
+    маркера "(есть неразрешённая)"."""
     umbrella_id, _ = umbrella_and_house
     r = await client.get(f"/complex/{umbrella_id}")
-    assert "Пометить на расшивку" in r.text
-    assert "Открыть пометку" not in r.text
+    assert "Пометки на расшивку" in r.text
+    assert "(есть неразрешённая)" not in r.text
+    assert "/admin/entity-ids#" not in r.text  # якорей на другую страницу больше нет
 
 
 @pytest.mark.asyncio
-async def test_complex_with_pending_candidate_shows_open_note(client, umbrella_and_house):
-    """UX-фикс 2026-08-13: если уже есть неразрешённая пометка — кнопка
-    меняет ярлык на "Открыть пометку" со ссылкой-якорем, не показывает
-    исходную кнопку заново."""
+async def test_complex_with_pending_candidate_shows_marker_and_modal_data(client, umbrella_and_house):
+    """С неразрешённой пометкой — та же кнопка получает маркер, модалка
+    (eidOpenNoteModal, из _entity_modals.html) есть на странице —
+    ничего не редиректит на /admin/entity-ids."""
     from bot.db.pg import fetchval
     umbrella_id, _ = umbrella_and_house
-    cid = await fetchval("""
+    await fetchval("""
         INSERT INTO split_candidates (complex_id, reason, comment, evidence, matched_by)
         VALUES ($1, 'manual', 'заметка', '{}'::jsonb, 'pytest') RETURNING id
     """, umbrella_id)
 
     r = await client.get(f"/complex/{umbrella_id}")
-    assert "Открыть пометку" in r.text
-    assert f"eid-split-{cid}" in r.text
-    assert "Пометить на расшивку" not in r.text
+    assert "Пометки на расшивку (есть неразрешённая)" in r.text
+    assert "eidOpenNoteModal" in r.text
+    assert "/admin/entity-ids#" not in r.text
 
 
 @pytest.mark.asyncio
