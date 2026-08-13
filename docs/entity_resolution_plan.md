@@ -1116,3 +1116,69 @@ test_phase2_unit_match.py`, 9 тестов — auto/reject/ambiguous/no_confirma
 
 Provenance — штатный (`unit_source_links.evidence`/`matched_by`/
 `matched_at`, тот же паттерн, что `complex_source_links`).
+
+## 2026-08-13: review-UX для unit_duplicate_candidates + gold labels
+
+Заказчик: Фаза 2 переходит в "review-driven режим" — 73 живые пары
+(69 ambiguous_floorplan + 4 no_confirmation, см. "Фаза 2, гейт п.Б"
+выше) разбираются человеком через UI, не разовым скриптом. Каждое
+решение (approve/reject/**skip**) должно писаться как gold label —
+разметка для будущей перекалибровки score/весов unit-matching, той же
+природы, что решил бы рескор (`rescore_review_queue.py`) на complex-
+уровне, но здесь ещё не было живой калибровки вообще (0 живых
+unit-примеров auto по номеру квартиры при 4% покрытии Крыша-стороны).
+
+**Схема** (`migrations/051_unit_match_gold_labels.sql`):
+`unit_match_gold_labels` — append-only, НЕ операционное состояние
+очереди (то остаётся в `unit_duplicate_candidates.status`), снимок
+evidence на МОМЕНТ решения + `decision` ('approve'|'reject'|'skip') +
+`decided_by`/`decided_at`. `skip` не резолвит кандидата (`status`
+остаётся `'review'` — вернётся в очередь), но САМ факт "человек не
+смог решить по этому evidence" — тоже сигнал для калибровки, поэтому
+пишется gold label наравне с approve/reject.
+
+**Живой инфраструктурный баг, найденный по ходу** (миграция 051
+ссылается на `unit_duplicate_candidates` через FK): попытка применить
+файл через обычного пользователя `krisha` упала `permission denied`
+— `unit_duplicate_candidates` (как и другие таблицы гейта Фазы 2)
+оказалась создана с владельцем `postgres` (миграция была применена
+вручную через `sudo -u postgres psql`, а не через штатный автозапуск
+`bot/db/pg.py::_apply_migrations()`, который каждый сервис вызывает
+при `init_pool()` под пользователем `krisha`). Применил 051 тем же
+способом (`sudo -u postgres`) — но это оставило НОВУЮ таблицу тоже
+без прав `krisha` на неё, и следующий `init_pool()` (под `krisha`,
+как в проде) упал бы на `GRANT` того же файла при повторной попытке
+автопримения (файл ещё не отмечен в `schema_migrations`) —
+**словил ДО того, как это стало проблемой в проде** (мой же тестовый
+`init_pool()` упал первым) — `ALTER TABLE/SEQUENCE ... OWNER TO
+krisha` почитал таблицу и последовательность владельцем `krisha`,
+дальше автопримение прошло чисто. **Не в объёме этой задачи**, но
+стоит на будущее: `unit_duplicate_candidates`/`unit_source_links`
+(migrations/049/050) тоже потенциально owned-by-`postgres` —
+не проверял остальные, только то, что затронул сейчас.
+
+**UI** (`/admin/entity-ids`, `bot/templates/entity_ids.html`, секция
+"🧱 Юниты — дубли-кандидаты"): тот же паттерн, что 🪞 Дубли-кандидаты
+(complex-уровень) — evidence инлайн (этаж/дельта метража/цена-ok/
+дата-ok/номер квартиры если есть/зеркальный счёт), кликабельная
+ссылка на объявление Крыши (`apartment_listings.url` — есть прямо в
+таблице, отдельный конструктор URL не понадобился) и на карточку ЖК
+(`newbuild_units` не имеет собственной публичной detail-страницы —
+у каждого источника закрытый API шахматки, не HTML-карточка юнита;
+это структурное ограничение данных, не недоделка UI — ссылка на
+юнит ведёт на ЖК, `layout_photo_url` отдельной ссылкой "план", где
+есть), фильтр "только зеркало", 3 действия в клик (approve/reject/
+skip) — без bulk (в отличие от complex-уровня: здесь approve/reject
+на unit-паре несёт больше специфики по паре, bulk не запрашивался).
+
+**Роуты** (`terminal_extras.py`): `POST /admin/api/entity-ids/units/
+{id}/approve|reject|skip` → `bot.core.entity_resolution.
+approve_unit_candidate()/reject_unit_candidate()/skip_unit_candidate()`
+— approve реально мержит (`unit_source_links`, `match_method=
+'manual_review'`), все три пишут gold label.
+
+**Тесты**: `tests/test_unit_duplicate_review.py` (4 теста — approve/
+reject/skip + not_found). Полный repo — 158/158.
+
+73 пары будут разобраны человеком через этот UI отдельно, не в этой
+сессии.
