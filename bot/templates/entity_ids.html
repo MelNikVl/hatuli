@@ -398,7 +398,7 @@ function eidUnitFilter() {
     <button type="submit" style="padding:6px 14px;border-radius:6px;border:none;background:var(--accent);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;">✂️ пометить на расшивку</button>
   </form>
   <table class="eid-table">
-    <tr><th></th><th>Причина</th><th>ЖК</th><th>Evidence / комментарий</th><th></th></tr>
+    <tr><th></th><th>Причина</th><th>ЖК</th><th title="apartment_listings по имени ЖК — триаж: крупные приоритетнее">Объявл. в БД</th><th>Evidence / комментарий</th><th></th></tr>
     {% for s in split_candidates %}
     {% set ev = s.evidence %}
     <tr id="eid-split-{{ s.id }}">
@@ -412,6 +412,7 @@ function eidUnitFilter() {
         <a href="{{ s.complex_krisha_url or ('/complex/' ~ s.complex_id) }}" target="_blank" rel="noopener" style="color:var(--text);font-weight:600;">#{{ s.complex_id }} {{ s.complex_name }}</a>
         <div style="font-size:11px;color:#888;">{{ s.complex_address or '— адреса нет' }} · {{ s.matched_by }}</div>
       </td>
+      <td style="text-align:right;font-weight:{{ '700' if s.listings_count and s.listings_count >= 20 else '400' }};">{{ s.listings_count }}</td>
       <td style="font-size:12px;max-width:420px;">
         {% if s.comment %}<div style="margin-bottom:4px;">💬 {{ s.comment }}</div>{% endif %}
         {% set al_clusters = ev.apartment_listings_geo_clusters or ev.clusters %}
@@ -437,11 +438,12 @@ function eidUnitFilter() {
       </td>
       <td style="white-space:nowrap;">
         <a href="javascript:void(0)" onclick="eidSplitResolve({{ s.id }}, 'approve')" style="color:#16a34a;font-size:12px;margin-right:8px;">подтвердить</a>
-        <a href="javascript:void(0)" onclick="eidSplitResolve({{ s.id }}, 'reject')" style="color:#ef4444;font-size:12px;">отклонить</a>
+        <a href="javascript:void(0)" onclick="eidSplitResolve({{ s.id }}, 'reject')" style="color:#ef4444;font-size:12px;margin-right:8px;">отклонить</a>
+        <a href="javascript:void(0)" onclick="eidSetParent({{ s.complex_id }})" style="color:#2563eb;font-size:12px;">🏠 добавить дом к ЖК</a>
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="4" style="color:#888;text-align:center;">пусто</td></tr>
+    <tr><td colspan="6" style="color:#888;text-align:center;">пусто</td></tr>
     {% endfor %}
   </table>
 </div>
@@ -452,13 +454,34 @@ async function eidSplitFlag(event) {
   const comment = document.getElementById('eid-split-flag-comment').value;
   const r = await fetch('/admin/api/entity-ids/split/flag', {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({complex_id, comment})});
-  if (r.ok) { location.reload(); }
-  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+  if (r.ok) {
+    const d = await r.json();
+    // UX-фикс 2026-08-13: повторная пометка — не ошибка, комментарий
+    // дописан к уже существующей записи. Переходим на неё якорем
+    // (id="eid-split-{id}" уже есть у каждой строки) — reload сначала,
+    // чтобы якорь реально попал на свежерендеренную (с дописанным
+    // комментарием) строку.
+    location.hash = 'eid-split-' + d.id;
+    location.reload();
+  } else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
   return false;
 }
 async function eidSplitResolve(id, action) {
   const r = await fetch(`/admin/api/entity-ids/split/${id}/${action}`, {method: 'POST'});
   if (r.ok) { const row = document.getElementById('eid-split-' + id); if (row) row.remove(); }
+  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+}
+// "Добавить дом к ЖК" (задача 2026-08-13, "модель зонтик/дом") — ручная
+// привязка parent_complex_id, не завязана на конкретный split_candidate.
+async function eidSetParent(complexId) {
+  const parentIdRaw = prompt(`ID ЖК-зонтика, к которому привязать #${complexId} как дом:`);
+  if (!parentIdRaw || !parentIdRaw.trim()) return;
+  const parent_complex_id = parseInt(parentIdRaw.trim(), 10);
+  if (!parent_complex_id) { alert('Нужен числовой ID'); return; }
+  const r = await fetch('/admin/api/entity-ids/set-parent', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({complex_id: complexId, parent_complex_id})});
+  if (r.ok) alert(`Готово — #${complexId} теперь дом ЖК #${parent_complex_id}`);
   else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
 }
 </script>

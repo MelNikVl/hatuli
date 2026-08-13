@@ -11,10 +11,44 @@
     <div style="margin-top:4px;">{{ cx.description }}</div>
   </div>
   {% endif %}
+
+  <!-- Зонтик/дом (задача 2026-08-13, "модель зонтик/дом") — публичная
+       сторона: дом ссылается на зонтик, зонтик перечисляет дома. -->
+  {% if parent_complex %}
+  <div style="margin-top:10px;font-size:13px;color:var(--text);">
+    🏠 Часть комплекса: <a href="/complex/{{ parent_complex.id }}" style="color:#2563eb;font-weight:600;">{{ parent_complex.name }}</a>
+  </div>
+  {% endif %}
+  {% if child_complexes %}
+  <div style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+    <b style="font-size:13.5px;">🏘 Дома в составе комплекса ({{ child_complexes|length }})</b>
+    <table style="font-size:13px;border-collapse:collapse;width:100%;margin-top:6px;">
+      {% for c in child_complexes %}
+      <tr style="border-top:1px solid var(--border);">
+        <td style="padding:6px 10px 6px 0;"><a href="/complex/{{ c.id }}" style="color:var(--text);font-weight:600;">{{ c.name }}</a></td>
+        <td style="padding:6px 10px;color:#888;">{{ c.listings_count }} объявл.</td>
+        <td style="padding:6px 0;color:#888;">{{ c.deadline or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
   {% if is_admin(request) %}
-  <div style="margin-top:10px;">
+  <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+    <!-- UX-фикс 2026-08-13 ("стена -> мост"): если на этот ЖК уже есть
+         неразрешённая пометка — кнопка ведёт прямо на неё (якорь
+         eid-split-{id} есть у каждой строки очереди), не открывает
+         повторный prompt поверх уже существующей заметки. -->
+    {% if pending_split_candidate %}
+    <a href="/admin/entity-ids#eid-split-{{ pending_split_candidate }}"
+       style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;text-decoration:none;display:inline-block;">📋 Открыть пометку</a>
+    {% else %}
     <button type="button" onclick="cxFlagSplit({{ cx.id }})" title="Подозрение, что этот ЖК на самом деле несколько разных зданий/очередей под одним именем — см. docs/entity_resolution_plan.md, 'расшивка как review-очередь'"
             style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">✂️ Пометить на расшивку</button>
+    {% endif %}
+    <button type="button" onclick="cxSetParent({{ cx.id }})" title="Привязать этот ЖК как дом к другому ЖК-зонтику (модель зонтик/дом)"
+            style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">🏠 Добавить дом к ЖК</button>
   </div>
   <script>
   async function cxFlagSplit(complexId) {
@@ -23,7 +57,18 @@
     const r = await fetch('/admin/api/entity-ids/split/flag', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({complex_id: complexId, comment: comment.trim()})});
-    if (r.ok) alert('Помечено — см. очередь на /admin/entity-ids');
+    if (r.ok) { const d = await r.json(); location.href = '/admin/entity-ids#eid-split-' + d.id; }
+    else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+  }
+  async function cxSetParent(complexId) {
+    const parentIdRaw = prompt(`ID ЖК-зонтика, к которому привязать #${complexId} как дом:`);
+    if (!parentIdRaw || !parentIdRaw.trim()) return;
+    const parent_complex_id = parseInt(parentIdRaw.trim(), 10);
+    if (!parent_complex_id) { alert('Нужен числовой ID'); return; }
+    const r = await fetch('/admin/api/entity-ids/set-parent', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({complex_id: complexId, parent_complex_id})});
+    if (r.ok) location.reload();
     else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
   }
   </script>
@@ -128,8 +173,12 @@ async function toggleFavComplex() {
      третий — варианты квартир (ниже, уже была). Карта — убрана совсем. -->
 <style>
 .cx-col-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
-.cx-row2 { display:grid; grid-template-columns:1.3fr 1fr 1fr; gap:16px; margin-bottom:16px; align-items:start; }
-@media (max-width:1000px) { .cx-row2 { grid-template-columns:1fr; } }
+/* .cx-row2 теперь только "Описание" (задача 2026-08-13 — Удобства/Что
+   рядом переехали под него в .cx-row3) — минимальный диф, тот же класс,
+   1 колонка вместо 3. */
+.cx-row2 { display:grid; grid-template-columns:1fr; gap:16px; margin-bottom:16px; align-items:start; }
+.cx-row3 { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
+@media (max-width:1000px) { .cx-row3 { grid-template-columns:1fr; } }
 .chart-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; }
 .bar-row { display:flex; align-items:flex-end; gap:6px; flex:1; min-height:170px; margin-top:8px; }
 .bar-col { flex:1; display:flex; flex-direction:column; justify-content:flex-end; align-items:center; height:100%; }
@@ -270,21 +319,9 @@ async function toggleFavComplex() {
         <b style="font-size:13.5px;">🏛 Официальные данные (homeportal.kz)</b>
         <span style="font-size:11px;color:#888;">реестр КЖК{% if hp.count > 1 %} · {{ hp.count }} очередей объединено{% endif %}</span>
       </div>
-      {% if hp.images %}
-      <div style="display:flex;gap:6px;overflow-x:auto;margin:8px 0;padding-bottom:2px;">
-        {% for img in hp.images %}
-        <img src="{{ img }}" loading="lazy" onclick="cxOpenLightboxByUrl('{{ img }}')" onerror="this.style.display='none';"
-             style="width:110px;height:82px;object-fit:cover;border-radius:7px;cursor:zoom-in;flex-shrink:0;">
-        {% endfor %}
-      </div>
-      <script>
-      if (typeof CX_PHOTOS !== 'undefined') { {{ hp.images | tojson }}.forEach(u => { if (!CX_PHOTOS.includes(u)) CX_PHOTOS.push(u); }); }
-      function cxOpenLightboxByUrl(url) {
-        const idx = (typeof CX_PHOTOS !== 'undefined') ? CX_PHOTOS.indexOf(url) : -1;
-        cxOpenLightbox(idx >= 0 ? idx : 0);
-      }
-      </script>
-      {% endif %}
+      <!-- Фото homeportal.kz убраны из этого блока (задача 2026-08-13) —
+           дублировали основную галерею ЖК (#cx-card-photo выше), этот
+           блок теперь чисто табличные данные реестра КЖК. -->
       {% if hp.is_orda_plus_bool %}
       <div style="display:inline-block;background:rgba(34,197,94,.12);color:#16a34a;border-radius:8px;padding:3px 10px;font-size:12px;font-weight:700;margin:6px 0;">✅ Orda Plus{% if hp.orda_plus_percent %} · {{ hp.orda_plus_percent }}%{% endif %}</div>
       {% endif %}
@@ -316,7 +353,12 @@ async function toggleFavComplex() {
     </div>
     {% endif %}
   </div>
+</div>
 
+<!-- Удобства/Что рядом (задача 2026-08-13) — под описанием, не рядом
+     с ним: половина ширины каждая, одинаковая высота (grid stretch по
+     умолчанию, в отличие от .cx-row2 выше — там align-items:start). -->
+<div class="cx-row3">
   <div id="cx-card-amenities" class="cx-col-card">
     <b style="font-size:15px;">🛎 Удобства</b>
     <div style="margin-top:6px;">
