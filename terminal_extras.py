@@ -1564,15 +1564,21 @@ def make_extras_router(templates) -> APIRouter:
             SELECT width_bucket(confidence, 0, 1, 10) AS bucket, COUNT(*) AS n
             FROM complex_source_links GROUP BY 1 ORDER BY 1
         """)
-        candidates = await pg_fetch("""
+        candidates_rows = await pg_fetch("""
             SELECT cslc.id, cslc.complex_id, c.name AS complex_name, cslc.source, cslc.source_id,
-                   cslc.match_method, cslc.confidence, cslc.kind, cslc.conflict_with_complex_id,
-                   c2.name AS conflict_with_name, cslc.created_at
+                   cslc.url, cslc.match_method, cslc.confidence, cslc.kind, cslc.conflict_with_complex_id,
+                   c2.name AS conflict_with_name, cslc.evidence, cslc.created_at
             FROM complex_source_link_candidates cslc
             JOIN complexes c ON c.id = cslc.complex_id
             LEFT JOIN complexes c2 ON c2.id = cslc.conflict_with_complex_id
             ORDER BY cslc.kind, cslc.confidence DESC LIMIT 100
         """)
+        candidates = []
+        for row in candidates_rows:
+            d = dict(row)
+            ev = d.get("evidence")
+            d["evidence"] = json.loads(ev) if isinstance(ev, str) else (ev or {})
+            candidates.append(d)
 
         # Дубли-кандидаты (задача гейта 2, п.5 — транслит-мердж,
         # migrations/047_complex_duplicate_candidates.sql): review-очередь
@@ -1661,7 +1667,7 @@ def make_extras_router(templates) -> APIRouter:
             "by_source": [dict(r) for r in by_source],
             "by_method": [dict(r) for r in by_method],
             "conf_hist": {r["bucket"]: r["n"] for r in conf_hist},
-            "candidates": [dict(r) for r in candidates],
+            "candidates": candidates,
             "dup_candidates": dup_candidates,
             "breakdown": {
                 "unresolved_total": len(unresolved_rows),

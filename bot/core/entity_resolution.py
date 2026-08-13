@@ -43,6 +43,7 @@ newbuild_units.id) зафиксирована в плане, но НЕ реал�
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 
@@ -479,7 +480,7 @@ async def score_match(
 async def record_source_link(
     complex_id: int, source: str, source_id: str, *,
     confidence: float, method: str, url: str | None = None,
-    matched_by: str = "auto",
+    matched_by: str = "auto", evidence: dict | None = None,
 ) -> str:
     """Пишет связь — auto (>= AUTO_MATCH_THRESHOLD) сразу в spine
     (complex_source_links); review (>= REVIEW_QUEUE_THRESHOLD, < auto) —
@@ -501,11 +502,18 @@ async def record_source_link(
     complex_id, что уже в spine на confidence 1.0, approve только
     понизил бы доверие. На ДРУГОЙ complex_id — по-прежнему conflict.
 
+    evidence — задача "очередь кандидатов" 2026-08-13 (docs/entity_
+    resolution_plan.md): численные дельты сигналов (geo_m, same_developer,
+    address_match, name_sim), не только их имена в match_method — для
+    review-UI ("evidence инлайн"). Опционально — старые вызовы без него
+    продолжают работать, просто без деталей на дашборде.
+
     Возвращает: 'auto' | 'review' | 'conflict' | 'already_linked' |
     'rejected' | 'skipped'."""
     if confidence < REVIEW_QUEUE_THRESHOLD:
         return "skipped"
     from bot.db.pg import fetchrow, execute
+    evidence_json = json.dumps(evidence) if evidence is not None else None
 
     rejected = await fetchrow(
         "SELECT 1 FROM complex_source_link_rejections WHERE source=$1 AND source_id=$2 AND complex_id=$3",
@@ -521,28 +529,29 @@ async def record_source_link(
     if existing and existing["complex_id"] != complex_id:
         await execute("""
             INSERT INTO complex_source_link_candidates
-                (complex_id, source, source_id, url, match_method, confidence, kind, conflict_with_complex_id)
-            VALUES ($1, $2, $3, $4, $5, $6, 'conflict', $7)
+                (complex_id, source, source_id, url, match_method, confidence, kind, conflict_with_complex_id, evidence)
+            VALUES ($1, $2, $3, $4, $5, $6, 'conflict', $7, $8)
             ON CONFLICT (source, source_id, complex_id) DO UPDATE SET
-                confidence = EXCLUDED.confidence, match_method = EXCLUDED.match_method
-        """, complex_id, source, str(source_id), url, method, confidence, existing["complex_id"])
+                confidence = EXCLUDED.confidence, match_method = EXCLUDED.match_method, evidence = EXCLUDED.evidence
+        """, complex_id, source, str(source_id), url, method, confidence, existing["complex_id"], evidence_json)
         return "conflict"
 
     if is_auto_match(confidence):
         await execute("""
             INSERT INTO complex_source_links
-                (complex_id, source, source_id, url, match_method, confidence, matched_by)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (complex_id, source, source_id, url, match_method, confidence, matched_by, evidence)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT (source, source_id) DO NOTHING
-        """, complex_id, source, str(source_id), url, method, confidence, matched_by)
+        """, complex_id, source, str(source_id), url, method, confidence, matched_by, evidence_json)
         return "auto"
 
     await execute("""
         INSERT INTO complex_source_link_candidates
-            (complex_id, source, source_id, url, match_method, confidence, kind)
-        VALUES ($1, $2, $3, $4, $5, $6, 'review')
-        ON CONFLICT (source, source_id, complex_id) DO UPDATE SET confidence = EXCLUDED.confidence
-    """, complex_id, source, str(source_id), url, method, confidence)
+            (complex_id, source, source_id, url, match_method, confidence, kind, evidence)
+        VALUES ($1, $2, $3, $4, $5, $6, 'review', $7)
+        ON CONFLICT (source, source_id, complex_id) DO UPDATE SET
+            confidence = EXCLUDED.confidence, evidence = EXCLUDED.evidence
+    """, complex_id, source, str(source_id), url, method, confidence, evidence_json)
     return "review"
 
 

@@ -137,14 +137,26 @@
     (см. <code>docs/entity_resolution_plan.md</code> — Дармен и sibling-sweep 2026-08-12).
   </p>
   <table class="eid-table" style="margin-top:8px;">
-    <tr><th>Тип</th><th>ЖК</th><th>Источник</th><th>Метод</th><th>Confidence</th><th>Конфликт с</th><th></th></tr>
+    <tr><th>Тип</th><th>ЖК</th><th>Источник</th><th>Метод</th><th>Evidence</th><th>Confidence</th><th>Конфликт с</th><th></th></tr>
     {% for c in candidates %}
     {% set is_phase = 'phase_mismatch' in c.match_method or '1~implicit' in c.match_method %}
+    {% set ev = c.evidence %}
     <tr id="eid-cand-{{ c.id }}">
       <td>{{ '⚠️ конфликт' if c.kind == 'conflict' else '⏳ проверка' }}</td>
       <td><a href="/complex/{{ c.complex_id }}" style="color:var(--text);">{{ c.complex_name }}</a></td>
-      <td>{{ c.source }} · {{ c.source_id }}</td>
+      <td>{{ c.source }} ·
+        {% if c.url %}<a href="{{ c.url }}" target="_blank" rel="noopener" style="color:#2563eb;">{{ c.source_id }} ↗</a>{% else %}{{ c.source_id }}{% endif %}
+      </td>
       <td>{% if is_phase %}<span title="номерованная карточка vs безномерная база — см. подсказку выше" style="color:#d97706;font-weight:600;">🔢 фаза</span> {% endif %}{{ c.match_method }}</td>
+      <td style="font-size:11px;white-space:nowrap;">
+        {% if ev %}
+          {% if ev.candidate_name %}<div style="color:#888;max-width:180px;overflow:hidden;text-overflow:ellipsis;" title="{{ ev.candidate_name }}">« {{ ev.candidate_name }}»</div>{% endif %}
+          {% if ev.name_sim is not none %}<span title="pg_trgm similarity">🔤{{ ev.name_sim }}</span>{% endif %}
+          {% if ev.geo_m is not none %}<span title="гео-дельта" style="color:{{ '#16a34a' if ev.geo_m <= 150 else '#888' }};">📍{{ ev.geo_m }}м</span>{% endif %}
+          <span title="застройщик" style="color:{{ '#16a34a' if ev.same_developer else '#888' }};">🏗{{ 'да' if ev.same_developer else '—' }}</span>
+          <span title="address_match" style="color:{{ '#16a34a' if ev.address_match else '#888' }};">🏠{{ 'да' if ev.address_match else '—' }}</span>
+        {% else %}<span style="color:#888;">— (до перескора)</span>{% endif %}
+      </td>
       <td>{{ c.confidence }}</td>
       <td>{% if c.conflict_with_name %}<a href="/complex/{{ c.conflict_with_complex_id }}" style="color:var(--text);">{{ c.conflict_with_name }}</a>{% else %}—{% endif %}</td>
       <td style="white-space:nowrap;">
@@ -153,7 +165,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="7" style="color:#888;text-align:center;">пусто</td></tr>
+    <tr><td colspan="8" style="color:#888;text-align:center;">пусто</td></tr>
     {% endfor %}
   </table>
 </div>
