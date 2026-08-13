@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from merge_translit_dups import phase_conflict, split_provenance_conflict
+from merge_translit_dups import phase_conflict, split_provenance_conflict, developer_conflict
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
 
@@ -101,3 +101,35 @@ def test_split_provenance_conflict_blocks_siblings_of_same_split():
 def test_split_provenance_conflict_false_for_unrelated_pair():
     parent_of = {200: 999}
     assert split_provenance_conflict(100, 200, parent_of) is False
+
+
+# ── developer_conflict(): явное расхождение застройщика — минус-сигнал,
+#    не просто "не участвует". Живой случай: 'samruk towers' (#230,
+#    developer_id=210) / 'Самрук Towers' (#435, developer_id=11) — 93 м
+#    друг от друга, проходили в auto чисто по гео, хотя застройщик
+#    известен с обеих сторон и разный.
+
+def test_samruk_towers_developer_conflict_blocks_geo_only_match():
+    a = {"developer_id": 210, "developer": None}
+    b = {"developer_id": 11, "developer": None}
+    assert developer_conflict(a, b) is True
+
+
+def test_developer_conflict_false_when_missing_on_one_side():
+    """Нет данных с одной стороны — не конфликт, просто сигнал не
+    участвует (тот же принцип, что address_match/остальные сигналы)."""
+    a = {"developer_id": 210, "developer": None}
+    b = {"developer_id": None, "developer": None}
+    assert developer_conflict(a, b) is False
+
+
+def test_developer_conflict_false_when_equal():
+    a = {"developer_id": 210, "developer": None}
+    b = {"developer_id": 210, "developer": None}
+    assert developer_conflict(a, b) is False
+
+
+def test_developer_conflict_falls_back_to_text_field():
+    a = {"developer_id": None, "developer": "BI Group"}
+    b = {"developer_id": None, "developer": "NAK"}
+    assert developer_conflict(a, b) is True

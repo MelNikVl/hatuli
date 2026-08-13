@@ -148,6 +148,24 @@ def split_provenance_conflict(a_id: int, b_id: int, parent_of: dict[int, int]) -
     return bool(_split_ancestors(a_id, parent_of) & _split_ancestors(b_id, parent_of))
 
 
+def developer_conflict(a: dict, b: dict) -> bool:
+    """Явное расхождение застройщика — сигнал в минус, не просто
+    "не участвует". Найдено спот-чеком гейта: 'samruk towers' (#230,
+    developer_id=210) / 'Самрук Towers' (#435, developer_id=11) — 93 м
+    друг от друга, проходили в auto ЧИСТО по гео (правило "гео ИЛИ
+    developer ИЛИ address" — geo одного достаточно), хотя застройщик у
+    ОБЕИХ сторон известен и РАЗНЫЙ. Отсутствие данных с одной/обеих
+    сторон — не конфликт (см. остальные сигналы этого модуля: сигнал
+    без данных просто не участвует); явное несовпадение ПРИ НАЛИЧИИ
+    данных с обеих сторон — даунгрейд в review, даже если гео/адрес
+    сами по себе достаточны."""
+    if a["developer_id"] is not None and b["developer_id"] is not None:
+        return a["developer_id"] != b["developer_id"]
+    if a["developer"] and b["developer"]:
+        return a["developer"].strip().lower() != b["developer"].strip().lower()
+    return False
+
+
 async def build_groups(fetch, transliterate, norm_name):
     rows = await fetch("""
         SELECT id, name, lat, lon, developer_id, developer, address FROM complexes
@@ -245,13 +263,17 @@ async def main():
                 phase_bad = await phase_conflict(a["name"], b["name"])
                 split_bad = (split_provenance_conflict(a["id"], b["id"], parent_of)
                              or a["id"] in involved or b["id"] in involved)
+                dev_bad = developer_conflict(a, b)
                 evidence = {"geo_m": round(_haversine_m(a["lat"], a["lon"], b["lat"], b["lon"]), 1)
                             if (a["lat"] and a["lon"] and b["lat"] and b["lon"]) else None,
                             "same_developer": bool(dev_ok), "address_match": bool(addr_ok),
+                            "developer_a": a["developer_id"], "developer_b": b["developer_id"],
                             "product_a": product_a, "product_b": product_b,
-                            "phase_conflict": bool(phase_bad), "split_provenance_conflict": bool(split_bad)}
+                            "phase_conflict": bool(phase_bad), "split_provenance_conflict": bool(split_bad),
+                            "developer_conflict": bool(dev_bad)}
                 edge_evidence[pair] = evidence
-                if (not phase_bad and not split_bad and product_a is None and product_b is None
+                if (not phase_bad and not split_bad and not dev_bad
+                        and product_a is None and product_b is None
                         and (geo_ok or dev_ok or addr_ok)):
                     uf.union(a["id"], b["id"])
 
@@ -292,6 +314,22 @@ async def main():
                         await execute("UPDATE complex_source_links SET complex_id = $2 WHERE source=$1 AND source_id=$3",
                                       l["source"], canon_id, l["source_id"])
                         moved += 1
+                    # complex_favorites: PK (user_id, complex_id) — если пользователь
+                    # УЖЕ добавил канон в избранное, перенос дубликатной строки того
+                    # же user_id упал бы на UNIQUE; просто удаляем дубль-строку в
+                    # этом случае (не теряем сам факт "в избранном", он уже есть).
+                    fav_users = await fetch("SELECT user_id FROM complex_favorites WHERE complex_id = $1", dup_id)
+                    fav_moved = 0
+                    for f in fav_users:
+                        exists = await fetchval(
+                            "SELECT 1 FROM complex_favorites WHERE user_id=$1 AND complex_id=$2", f["user_id"], canon_id)
+                        if exists:
+                            await execute("DELETE FROM complex_favorites WHERE user_id=$1 AND complex_id=$2",
+                                          f["user_id"], dup_id)
+                        else:
+                            await execute("UPDATE complex_favorites SET complex_id=$2 WHERE user_id=$1 AND complex_id=$3",
+                                          f["user_id"], canon_id, dup_id)
+                            fav_moved += 1
                     now_iso = datetime.now(timezone.utc).isoformat()
                     await execute("""
                         UPDATE complexes SET is_garbage = TRUE,
@@ -306,7 +344,8 @@ async def main():
                                     COALESCE(provenance->'merged_from', '[]'::jsonb) || to_jsonb($2::int))
                         WHERE id = $1
                     """, canon_id, dup_id)
-                    print(f"    #{dup_id} -> #{canon_id}: объявлений перенесено={n_listings}, links перенесено={moved}")
+                    print(f"    #{dup_id} -> #{canon_id}: объявлений перенесено={n_listings}, "
+                          f"links перенесено={moved}, избранное перенесено={fav_moved}")
             n_merge_clusters += 1
             n_merged_ids += len(dup_ids)
             merges_done += 1
@@ -323,6 +362,8 @@ async def main():
                     reason = "split_provenance_conflict"
                 elif ev.get("phase_conflict"):
                     reason = "phase_conflict"
+                elif ev.get("developer_conflict"):
+                    reason = "developer_conflict"
                 elif ev["product_a"] or ev["product_b"]:
                     reason = "product_token_mismatch"
                 else:
