@@ -164,6 +164,90 @@ async function eidResolve(id, action) {
 }
 </script>
 
+<div class="eid-card" id="eid-duplicates">
+  <b style="font-size:14.5px;">🪞 Дубли-кандидаты ({{ dup_candidates|length }})</b>
+  <p style="font-size:12px;color:#888;line-height:1.6;margin-top:6px;">
+    Транслит-дубли (то же имя ЖК в двух алфавитах — Tandau/Тандау и подобные, см. <code>merge_translit_dups.py</code>,
+    <code>docs/entity_resolution_plan.md</code>), не смёрженные автоматически. <b>bulk-eligible</b> — 2+ независимых
+    подтверждающих сигнала (гео≤150м / тот же застройщик / address_match) И ни один блокирующий гвард не сработал
+    (явный номер очереди/блока, продуктовый токен вроде Gold/Comfort, расхождение застройщика, участие в сегодняшней
+    расшивке unravel_blobs.py) — для остальных сигналов не хватает, решай руками по evidence.
+  </p>
+  <div style="display:flex;align-items:center;gap:14px;margin:10px 0;">
+    <label style="font-size:12.5px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+      <input type="checkbox" id="eid-dup-filter" onchange="eidDupFilter()"> только bulk-eligible
+    </label>
+    <a href="javascript:void(0)" onclick="eidDupBulkApprove()" style="color:#16a34a;font-size:12.5px;font-weight:600;">
+      ✅ массово подтвердить выбранные (<span id="eid-dup-selcount">0</span>)
+    </a>
+  </div>
+  <table class="eid-table">
+    <tr><th></th><th>Причина</th><th>ЖК A</th><th>ЖК B</th><th>Сигналы</th><th></th></tr>
+    {% for d in dup_candidates %}
+    {% set ev = d.evidence %}
+    <tr id="eid-dup-{{ d.id }}" data-bulk-eligible="{{ 'y' if d.bulk_eligible else 'n' }}">
+      <td><input type="checkbox" class="eid-dup-cb" data-id="{{ d.id }}" {{ 'checked' if d.bulk_eligible }} onchange="eidDupCount()"></td>
+      <td>
+        {% if d.reason == 'no_confirming_signal' %}<span style="color:#888;">нет сигнала</span>
+        {% elif d.reason == 'product_token_mismatch' %}<span style="color:#7c3aed;font-weight:600;">🏷 продукт.токен</span>
+        {% elif d.reason == 'phase_conflict' %}<span style="color:#d97706;font-weight:600;">🔢 фаза</span>
+        {% elif d.reason == 'developer_conflict' %}<span style="color:#dc2626;font-weight:600;">🏗 застройщик≠</span>
+        {% elif d.reason == 'split_provenance_conflict' %}<span style="color:#0891b2;font-weight:600;">✂️ расшивка</span>
+        {% else %}{{ d.reason }}{% endif %}
+      </td>
+      <td>
+        <a href="/complex/{{ d.complex_id_a }}" style="color:var(--text);font-weight:600;">#{{ d.complex_id_a }} {{ d.name_a }}</a>
+        <div style="font-size:11px;color:#888;">{{ d.address_a or '— адреса нет' }}{% if d.developer_name_a %} · {{ d.developer_name_a }}{% endif %}</div>
+      </td>
+      <td>
+        <a href="/complex/{{ d.complex_id_b }}" style="color:var(--text);font-weight:600;">#{{ d.complex_id_b }} {{ d.name_b }}</a>
+        <div style="font-size:11px;color:#888;">{{ d.address_b or '— адреса нет' }}{% if d.developer_name_b %} · {{ d.developer_name_b }}{% endif %}</div>
+      </td>
+      <td style="white-space:nowrap;font-size:11.5px;">
+        {% if ev.geo_m is not none %}<span title="гео-дельта" style="color:{{ '#16a34a' if ev.geo_m <= 150 else '#888' }};">📍{{ ev.geo_m }}м</span><br>{% endif %}
+        <span title="застройщик" style="color:{{ '#16a34a' if ev.same_developer else ('#dc2626' if ev.developer_conflict else '#888') }};">🏗{{ 'да' if ev.same_developer else ('≠' if ev.developer_conflict else '—') }}</span>
+        <span title="address_match" style="color:{{ '#16a34a' if ev.address_match else '#888' }};">🏠{{ 'да' if ev.address_match else '—' }}</span>
+      </td>
+      <td style="white-space:nowrap;">
+        <a href="javascript:void(0)" onclick="eidDupResolve({{ d.id }}, 'approve')" style="color:#16a34a;font-size:12px;margin-right:8px;">слить</a>
+        <a href="javascript:void(0)" onclick="eidDupResolve({{ d.id }}, 'reject')" style="color:#ef4444;font-size:12px;">отклонить</a>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="color:#888;text-align:center;">пусто</td></tr>
+    {% endfor %}
+  </table>
+</div>
+<script>
+async function eidDupResolve(id, action) {
+  const r = await fetch(`/admin/api/entity-ids/duplicates/${id}/${action}`, {method: 'POST'});
+  if (r.ok) { const row = document.getElementById('eid-dup-' + id); if (row) row.remove(); eidDupCount(); }
+  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+}
+function eidDupFilter() {
+  const onlyEligible = document.getElementById('eid-dup-filter').checked;
+  document.querySelectorAll('#eid-duplicates tbody tr[data-bulk-eligible], #eid-duplicates tr[data-bulk-eligible]').forEach(row => {
+    row.style.display = (!onlyEligible || row.dataset.bulkEligible === 'y') ? '' : 'none';
+  });
+}
+function eidDupCount() {
+  const n = document.querySelectorAll('.eid-dup-cb:checked').length;
+  document.getElementById('eid-dup-selcount').textContent = n;
+}
+async function eidDupBulkApprove() {
+  const ids = [...document.querySelectorAll('.eid-dup-cb:checked')].map(cb => cb.dataset.id);
+  if (!ids.length) return;
+  if (!confirm(`Слить ${ids.length} пар? Действие пишет в БД (canon = у кого больше данных).`)) return;
+  const r = await fetch('/admin/api/entity-ids/duplicates/bulk-approve', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ids})});
+  const d = await r.json();
+  ids.forEach(id => { const row = document.getElementById('eid-dup-' + id); if (row) row.remove(); });
+  eidDupCount();
+  if (d.errors && d.errors.length) alert(`Слито: ${d.merged}. Ошибок: ${d.errors.length} — см. консоль.`);
+}
+document.addEventListener('DOMContentLoaded', eidDupCount);
+</script>
+
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
   <div class="eid-card">
     <b style="font-size:14px;">По источникам</b>

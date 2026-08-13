@@ -38,7 +38,6 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import datetime, timezone
 
 sys.path.insert(0, ".")
 from dotenv import load_dotenv
@@ -72,28 +71,6 @@ class UnionFind:
         ra, rb = self.find(a), self.find(b)
         if ra != rb:
             self.parent[ra] = rb
-
-
-async def data_score(cid: int, fetchval) -> int:
-    """links*2 + listings + enrichment (тех.специфика/материалы/отзывы/
-    фото/описание/конструктив) — тот же дух, что merge_family_nest_dups.py/
-    merge_tandau_dups.py, только шире (те смотрели только links+listings)."""
-    name = await fetchval("SELECT name FROM complexes WHERE id = $1", cid)
-    links = await fetchval("SELECT count(*) FROM complex_source_links WHERE complex_id = $1", cid)
-    listings = await fetchval(
-        "SELECT count(*) FROM apartment_listings WHERE lower(trim(complex_name)) = lower(trim($1))", name)
-    tech = await fetchval("SELECT count(*) FROM complex_tech_specs WHERE complex_id = $1", cid)
-    materials = await fetchval("SELECT count(*) FROM complex_materials WHERE complex_id = $1", cid)
-    reviews = await fetchval("SELECT count(*) FROM complex_reviews WHERE complex_id = $1", cid)
-    constructive = await fetchval("""
-        SELECT (SELECT count(*) FROM complex_windows WHERE complex_id=$1)
-             + (SELECT count(*) FROM complex_doors WHERE complex_id=$1)
-             + (SELECT count(*) FROM complex_walls WHERE complex_id=$1)
-             + (SELECT count(*) FROM complex_concrete_rebar WHERE complex_id=$1)
-    """, cid)
-    has_desc_photo = await fetchval(
-        "SELECT (description IS NOT NULL)::int + (photo_url IS NOT NULL)::int FROM complexes WHERE id = $1", cid)
-    return int(links) * 2 + int(listings) + int(tech) + int(materials) + int(reviews) + int(constructive) + int(has_desc_photo)
 
 
 async def build_split_lineage(fetch) -> dict[int, int]:
@@ -225,7 +202,8 @@ async def main():
     args = ap.parse_args()
 
     from bot.db.pg import init_pool, close_pool, fetch, fetchval, execute
-    from bot.core.entity_resolution import transliterate, address_match, _product_token
+    from bot.core.entity_resolution import (
+        transliterate, address_match, _product_token, complex_data_score, merge_complex_pair)
     from hype_tracker.homeportal_scan import norm_name
 
     await init_pool(DATABASE_URL)
@@ -287,65 +265,17 @@ async def main():
             if merges_done >= args.limit and args.limit > 0:
                 stopped_early = True
                 break
-            scores = {cid: await data_score(cid, fetchval) for cid in comp_ids}
+            scores = {cid: await complex_data_score(cid) for cid in comp_ids}
             canon_id = max(scores, key=scores.get)
             dup_ids = [cid for cid in comp_ids if cid != canon_id]
             names = {cid: by_id[cid]["name"] for cid in comp_ids}
             print(f"\n[MERGE] {key!r}: канон #{canon_id} {names[canon_id]!r} (score={scores[canon_id]}) <- "
                   + ", ".join(f"#{d} {names[d]!r} (score={scores[d]})" for d in dup_ids))
             if not args.dry:
-                canon_name = names[canon_id]
                 for dup_id in dup_ids:
-                    dup_name = names[dup_id]
-                    n_listings = await fetchval(
-                        "SELECT count(*) FROM apartment_listings WHERE lower(trim(complex_name)) = lower(trim($1))", dup_name)
-                    await execute(
-                        "UPDATE apartment_listings SET complex_name = $2 WHERE lower(trim(complex_name)) = lower(trim($1))",
-                        dup_name, canon_name)
-                    links = await fetch("SELECT source, source_id FROM complex_source_links WHERE complex_id = $1", dup_id)
-                    moved = 0
-                    for l in links:
-                        exists = await fetchval(
-                            "SELECT 1 FROM complex_source_links WHERE source=$1 AND source_id=$2 AND complex_id != $3",
-                            l["source"], l["source_id"], dup_id)
-                        if exists:
-                            print(f"    ! source_link {l['source']}/{l['source_id']} уже есть у другого complex_id — не трогаю")
-                            continue
-                        await execute("UPDATE complex_source_links SET complex_id = $2 WHERE source=$1 AND source_id=$3",
-                                      l["source"], canon_id, l["source_id"])
-                        moved += 1
-                    # complex_favorites: PK (user_id, complex_id) — если пользователь
-                    # УЖЕ добавил канон в избранное, перенос дубликатной строки того
-                    # же user_id упал бы на UNIQUE; просто удаляем дубль-строку в
-                    # этом случае (не теряем сам факт "в избранном", он уже есть).
-                    fav_users = await fetch("SELECT user_id FROM complex_favorites WHERE complex_id = $1", dup_id)
-                    fav_moved = 0
-                    for f in fav_users:
-                        exists = await fetchval(
-                            "SELECT 1 FROM complex_favorites WHERE user_id=$1 AND complex_id=$2", f["user_id"], canon_id)
-                        if exists:
-                            await execute("DELETE FROM complex_favorites WHERE user_id=$1 AND complex_id=$2",
-                                          f["user_id"], dup_id)
-                        else:
-                            await execute("UPDATE complex_favorites SET complex_id=$2 WHERE user_id=$1 AND complex_id=$3",
-                                          f["user_id"], canon_id, dup_id)
-                            fav_moved += 1
-                    now_iso = datetime.now(timezone.utc).isoformat()
-                    await execute("""
-                        UPDATE complexes SET is_garbage = TRUE,
-                            provenance = COALESCE(provenance, '{}'::jsonb) || $2::jsonb
-                        WHERE id = $1
-                    """, dup_id, json.dumps({"merged_into": canon_id, "method": "translit_sweep_2026-08-12",
-                                              "matched_by": "auto", "merged_at": now_iso}))
-                    await execute("""
-                        UPDATE complexes SET
-                            provenance = COALESCE(provenance, '{}'::jsonb) ||
-                                jsonb_build_object('merged_from',
-                                    COALESCE(provenance->'merged_from', '[]'::jsonb) || to_jsonb($2::int))
-                        WHERE id = $1
-                    """, canon_id, dup_id)
-                    print(f"    #{dup_id} -> #{canon_id}: объявлений перенесено={n_listings}, "
-                          f"links перенесено={moved}, избранное перенесено={fav_moved}")
+                    r = await merge_complex_pair(dup_id, canon_id, method="translit_sweep_2026-08-12", matched_by="auto")
+                    print(f"    #{dup_id} -> #{canon_id}: объявлений перенесено={r['listings_moved']}, "
+                          f"links перенесено={r['links_moved']}, избранное перенесено={r['favorites_moved']}")
             n_merge_clusters += 1
             n_merged_ids += len(dup_ids)
             merges_done += 1

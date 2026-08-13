@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
@@ -1573,6 +1574,47 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY cslc.kind, cslc.confidence DESC LIMIT 100
         """)
 
+        # Дубли-кандидаты (задача гейта 2, п.5 — транслит-мердж,
+        # migrations/047_complex_duplicate_candidates.sql): review-очередь
+        # для пар complex_id<->complex_id, только status='review' (уже
+        # решённые — merged/rejected — не должны маячить в очереди снова).
+        # evidence — jsonb, asyncpg без кодека отдаёт TEXT, парсим руками
+        # (тот же паттерн, что merge_translit_dups.py::build_groups).
+        dup_rows = await pg_fetch("""
+            SELECT dc.id, dc.complex_id_a, dc.complex_id_b, dc.translit_key, dc.reason, dc.evidence, dc.created_at,
+                   ca.name AS name_a, ca.address AS address_a, ca.lat AS lat_a, ca.lon AS lon_a,
+                   da.name AS developer_name_a,
+                   cb.name AS name_b, cb.address AS address_b, cb.lat AS lat_b, cb.lon AS lon_b,
+                   db.name AS developer_name_b
+            FROM complex_duplicate_candidates dc
+            JOIN complexes ca ON ca.id = dc.complex_id_a
+            JOIN complexes cb ON cb.id = dc.complex_id_b
+            LEFT JOIN developers da ON da.id = ca.developer_id
+            LEFT JOIN developers db ON db.id = cb.developer_id
+            WHERE dc.status = 'review'
+            ORDER BY dc.reason, dc.created_at DESC
+        """)
+        dup_candidates = []
+        for r in dup_rows:
+            d = dict(r)
+            ev = d.get("evidence")
+            ev = json.loads(ev) if isinstance(ev, str) else (ev or {})
+            d["evidence"] = ev
+            # bulk-eligible: 2+ независимых подтверждающих сигнала — гео<=150,
+            # тот же застройщик, address_match — при no_confirming_signal/
+            # product_token_mismatch/phase_conflict/split_provenance_conflict
+            # это всегда 0 или мало (сама причина ухода в review — сигналов не
+            # хватило либо есть блокирующий гвард); честный подсчёт, не
+            # выдумываем "eligible" для того, что движок сам отказался мерджить
+            # по гварду (phase/split/product/developer-конфликт).
+            blocked = ev.get("phase_conflict") or ev.get("split_provenance_conflict") \
+                or ev.get("developer_conflict") or ev.get("product_a") or ev.get("product_b")
+            signals = int(bool(ev.get("geo_m") is not None and ev["geo_m"] <= 150)) \
+                + int(bool(ev.get("same_developer"))) + int(bool(ev.get("address_match")))
+            d["signal_count"] = signals
+            d["bulk_eligible"] = bool(signals >= 2 and not blocked)
+            dup_candidates.append(d)
+
         # ── Разбивка нерезолвнутых ЖК (задача 2026-08-13) — без правок кода
         # в алгоритме матчинга, чистая диагностика: (а) мусор/дубли — сверка
         # с bot.core.complex_audit (та же эвристика street/junk, что уже
@@ -1620,6 +1662,7 @@ def make_extras_router(templates) -> APIRouter:
             "by_method": [dict(r) for r in by_method],
             "conf_hist": {r["bucket"]: r["n"] for r in conf_hist},
             "candidates": [dict(r) for r in candidates],
+            "dup_candidates": dup_candidates,
             "breakdown": {
                 "unresolved_total": len(unresolved_rows),
                 "junk": breakdown_junk,
@@ -1651,6 +1694,48 @@ def make_extras_router(templates) -> APIRouter:
         from bot.core.entity_resolution import reject_candidate
         await reject_candidate(candidate_id, rejected_by="admin")
         return JSONResponse({"ok": True})
+
+    # Дубли-кандидаты (задача гейта 2, п.5 — review-UX для
+    # complex_duplicate_candidates, чтобы 137 пар не были "полдня грайнда"
+    # руками через psql). approve реально мерджит (bot.core.entity_
+    # resolution.merge_complex_pair — та же реализация, что massовый
+    # merge_translit_dups.py, не вторая копия логики).
+    @router.post("/admin/api/entity-ids/duplicates/{candidate_id}/approve")
+    async def entity_ids_dup_approve(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import approve_duplicate_candidate
+        r = await approve_duplicate_candidate(candidate_id, approved_by="admin")
+        if r is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({"ok": True, **r})
+
+    @router.post("/admin/api/entity-ids/duplicates/{candidate_id}/reject")
+    async def entity_ids_dup_reject(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import reject_duplicate_candidate
+        await reject_duplicate_candidate(candidate_id, rejected_by="admin")
+        return JSONResponse({"ok": True})
+
+    @router.post("/admin/api/entity-ids/duplicates/bulk-approve")
+    async def entity_ids_dup_bulk_approve(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import approve_duplicate_candidate
+        body = await request.json()
+        ids = body.get("ids") or []
+        results, errors = [], []
+        for cid in ids:
+            try:
+                r = await approve_duplicate_candidate(int(cid), approved_by="admin")
+                if r is not None:
+                    results.append({"id": cid, **r})
+                else:
+                    errors.append({"id": cid, "error": "not_found"})
+            except Exception as e:
+                errors.append({"id": cid, "error": str(e)[:200]})
+        return JSONResponse({"ok": True, "merged": len(results), "errors": errors})
 
     @router.get("/admin/api/entity-ids/timeline")
     async def entity_ids_timeline(request: Request):
