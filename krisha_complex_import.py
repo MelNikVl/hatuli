@@ -236,19 +236,32 @@ async def save_to_db(found: dict[int, dict]) -> int:
 
             # Координаты с официальной карточки Крыши — приоритетнее
             # вычисленных: перезаписываем, если расходятся > ~250 м
+            #
+            # Живой баг, найденный 2026-08-13 при полном backfill-прогоне
+            # (1241 ЖК, 0 сохранено — ВСЕ запросы падали одинаково):
+            # PostgreSQL не может вывести тип $5/$6 без явного каста,
+            # когда ПЕРВОЕ упоминание параметра — внутри "$5 IS NOT NULL"
+            # (булев тест типа не требует) внутри CASE — "could not
+            # determine data type of parameter $5", ПОДГОТОВКА ВСЕГО
+            # STATEMENT падает целиком (не только координатная часть —
+            # ни address/developer_id/year_built ТОЖЕ никогда не
+            # записывались этим прогоном). Баг введён коммитом 60c81da
+            # (координаты ЖК), не связан с сегодняшними правками —
+            # просто впервые прогнали на масштабе, где заметили 0/1241.
+            # Фикс — явный ::float8 на первом же упоминании $5/$6.
             await execute("""
                 UPDATE complexes SET
                     developer_id = COALESCE(developer_id, $2),
                     address      = COALESCE(address, $3),
                     year_built   = COALESCE(year_built, $4),
-                    lat          = CASE WHEN $5 IS NOT NULL AND (
+                    lat          = CASE WHEN $5::float8 IS NOT NULL AND (
                                         lat IS NULL OR
-                                        (lat - $5)^2 + (lon - $6)^2 > 8.0e-6)
-                                   THEN $5 ELSE lat END,
-                    lon          = CASE WHEN $5 IS NOT NULL AND (
+                                        (lat - $5::float8)^2 + (lon - $6::float8)^2 > 8.0e-6)
+                                   THEN $5::float8 ELSE lat END,
+                    lon          = CASE WHEN $5::float8 IS NOT NULL AND (
                                         lat IS NULL OR
-                                        (lat - $5)^2 + (lon - $6)^2 > 8.0e-6)
-                                   THEN $6 ELSE lon END,
+                                        (lat - $5::float8)^2 + (lon - $6::float8)^2 > 8.0e-6)
+                                   THEN $6::float8 ELSE lon END,
                     photo_url    = COALESCE(photo_url, $7),
                     krisha_url   = COALESCE(krisha_url, $8),
                     source_info  = $9::jsonb,
