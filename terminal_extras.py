@@ -2269,6 +2269,54 @@ def make_extras_router(templates) -> APIRouter:
             GROUP BY 1 ORDER BY 1
         """)
 
+        # ── Adaptive recheck: факт-метрики по пулам (задача 2026-08-13,
+        # см. docs/adaptive_recheck_plan.md, п.7 — "факт-метрики: холодный
+        # круг <=24ч, hot<=6-12ч, лаг детекта медианой по пулам, запросы/
+        # сутки <= текущих"). HOT_SCORE_THRESHOLD дублирует archive_check.py
+        # намеренно — тут только чтение для отображения, не логика решений.
+        HOT_SCORE_THRESHOLD = 90
+        hot_row = await pg_fetch("""
+            SELECT count(*) AS n,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM now() - archive_checked_at)) AS median_lag_sec
+            FROM apartment_listings
+            WHERE is_active IS NOT FALSE AND score_total >= $1
+        """, HOT_SCORE_THRESHOLD)
+        hot_pool_size = hot_row[0]["n"] if hot_row else 0
+        hot_median_lag_h = round(hot_row[0]["median_lag_sec"] / 3600, 1) \
+            if hot_row and hot_row[0]["median_lag_sec"] is not None else None
+        # Триггер пересмотра порога (docs/adaptive_recheck_plan.md, п.7):
+        # медианный лаг в hot систематически >12ч — сигнал, что порог
+        # score_total>=90 надо сузить (пул слишком большой для бюджета)
+        # или бюджет archive-check пересмотреть, не молчаливая деградация.
+        hot_recalibrate = hot_median_lag_h is not None and hot_median_lag_h > 12
+
+        # requests/сутки — из parser_cycle_history за последние 24ч
+        # (включая archive_check_requests, раньше вообще не считался —
+        # свой httpx.AsyncClient, отдельный от apartment_parser/details).
+        req_row = await pg_fetch("""
+            SELECT COALESCE(sum(search_requests),0) AS search,
+                   COALESCE(sum(detail_requests),0) AS detail,
+                   COALESCE(sum(archive_check_requests),0) AS archive
+            FROM parser_cycle_history WHERE at > now() - interval '24 hours'
+        """)
+        req = req_row[0] if req_row else {}
+        requests_per_day = {
+            "search": req.get("search", 0) or 0, "detail": req.get("detail", 0) or 0,
+            "archive": req.get("archive", 0) or 0,
+            "total": (req.get("search", 0) or 0) + (req.get("detail", 0) or 0) + (req.get("archive", 0) or 0),
+        }
+
+        # Разбивка archive-check по пулам за 24ч — "куда реально идёт бюджет".
+        pool_row = await pg_fetch("""
+            SELECT COALESCE(sum(archive_hot_checked),0) AS hot,
+                   COALESCE(sum(archive_cold_confirm_checked),0) AS cold_confirm,
+                   COALESCE(sum(archive_backlog_checked),0) AS backlog
+            FROM parser_cycle_history WHERE at > now() - interval '24 hours'
+        """)
+        pr = pool_row[0] if pool_row else {}
+        pool_checks_24h = {"hot": pr.get("hot", 0) or 0, "cold_confirm": pr.get("cold_confirm", 0) or 0,
+                            "backlog": pr.get("backlog", 0) or 0}
+
         return {
             "days": days,
             "total_active": total_active,
@@ -2278,6 +2326,12 @@ def make_extras_router(templates) -> APIRouter:
             "deep_sweep_batch": deep_sweep_batch,
             "absorption_labels": [r["d"].strftime("%d.%m") for r in absorption],
             "absorption_values": [r["cnt"] for r in absorption],
+            "hot_pool_size": hot_pool_size,
+            "hot_median_lag_h": hot_median_lag_h,
+            "hot_recalibrate": hot_recalibrate,
+            "hot_score_threshold": HOT_SCORE_THRESHOLD,
+            "requests_per_day": requests_per_day,
+            "pool_checks_24h": pool_checks_24h,
         }
 
     async def _general_parser_stats(days: int):

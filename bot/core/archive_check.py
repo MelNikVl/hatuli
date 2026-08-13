@@ -4,8 +4,24 @@
 Проблема: парсер видит только первые страницы выдачи, поэтому проданные /
 снятые объявления навсегда остаются "живыми" в БД и висят в топах.
 
-Решение: каждый цикл проверяем страницы N лучших активных объявлений
-(давно не проверявшихся) и помечаем архивные is_active=FALSE.
+Решение (задача "adaptive recheck", 2026-08-13, см. docs/adaptive_recheck_plan.md):
+раньше — единая FIFO-очередь по archive_checked_at на ВСЕ активные
+объявления (~42к) — на текущем бюджете (~40/цикл) круг занимал ~48
+суток, несовместимо с целью "круг <24ч". Круг <24ч для ВСЕХ физически
+не влезает в детальную точечную проверку (1 запрос = 1 объявление) без
+роста темпа — расчёт в docs/adaptive_recheck_plan.md. Теперь — два
+уровня:
+  - **hot** (score_total >= HOT_SCORE_THRESHOLD, ~0.4% активных) —
+    дорогая точечная проверка на регулярной основе (цель 6-12ч, факт
+    ~5.4ч при текущем размере hot-пула и ARCHIVE_CHECK_BATCH).
+  - **cold** — дешёвый сигнал "пропало из каталога" (deep sweep,
+    service_apartments.py, круг <24ч, отдельная метрика
+    DEEP_SWEEP_CIRCLE_*): `last_seen` не обновлялся с начала текущего
+    круга = кандидат. Точечная проверка тут — только ПОДТВЕРЖДЕНИЕ
+    (защита от шума ре-ранжирования Крыши — "не попал в срез страниц
+    в этом круге" не значит "точно архив"), не основной метод.
+  - **backlog** — страховка на случай, если круга каталога ещё не было
+    (первый запуск) или hot+cold-confirm не выбрали весь бюджет цикла.
 
 Признаки архива на странице krisha: бейдж "В архиве" / "Объявление может
 быть неактуальным", либо 404/410.
@@ -21,6 +37,29 @@ import httpx
 from bot.db.pg import execute, fetch
 
 logger = logging.getLogger(__name__)
+
+# Реальные HTTP-запросы archive_check к Крыше за цикл — тот же паттерн,
+# что apartment_parser.REQUEST_COUNTS/apartment_details.REQUEST_COUNTS,
+# нужен для честного "запросы/сутки" в parser_cycle_history (раньше эта
+# нагрузка не считалась вовсе — свой httpx.AsyncClient, отдельный от
+# apartment_parser/apartment_details).
+REQUEST_COUNTS = {"archive_check": 0}
+
+# Последний результат check_archived() (пулы hot/cold_confirm/backlog) —
+# check_archived() зовётся ИЗНУТРИ service_apartments.run_cycle(), его
+# возврат туда же и остаётся; _run_cycle_timed() снимает parser_cycle_
+# history ПОСЛЕ run_cycle() целиком и не видит промежуточный return —
+# тот же паттерн, что REQUEST_COUNTS (модульная переменная, читается
+# снаружи после вызова).
+LAST_CHECK_RESULT: dict = {}
+
+# Порог "hot" — score_total, выше которого объявление проверяется часто
+# (см. docs/adaptive_recheck_plan.md, п.3 — score_total, не новизна:
+# гипотеза "hot=новое" проверена на факте и отвергнута, 58% архиваций
+# случается у объявлений старше 14 дней). Триггер пересмотра порога:
+# медианный лаг детекта в hot-пуле систематически >12ч — см. дашборд
+# /admin/parsers?tab=recheck.
+HOT_SCORE_THRESHOLD = 90
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -44,6 +83,7 @@ async def _check_one(client: httpx.AsyncClient, url: str) -> str | None:
     except Exception as exc:
         logger.warning("archive check failed %s: %s", url, exc)
         return None
+    REQUEST_COUNTS["archive_check"] += 1
     if resp.status_code in (404, 410):
         return "deleted"
     if resp.status_code in (403, 429):
@@ -55,28 +95,75 @@ async def _check_one(client: httpx.AsyncClient, url: str) -> str | None:
     return "archived" if any(m in text for m in ARCHIVE_MARKERS) else "alive"
 
 
+async def _select_candidates(limit: int) -> list[dict]:
+    """Приоритет hot -> cold-confirm -> backlog (см. докстринг модуля).
+    Три отдельных запроса вместо одного ORDER BY с CASE — читается и
+    логируется по пулам отдельно, что и нужно для дашборда/лаг-метрик.
+    ИСТОРИЯ: до 2026-08-13 тут была одна FIFO-очередь по всем активным
+    (archive_checked_at ASC NULLS FIRST, score_total как вторичный
+    тай-брейк) — на бюджете ~40/цикл круг занимал ~48 суток на 42к
+    активных, несовместимо с целью "круг <24ч" (см.
+    docs/adaptive_recheck_plan.md). Убрана целиком, не расширена —
+    рудимент архитектуры "проверяем всех одинаково часто", не
+    совместимый с hot/cold-разделением."""
+    hot = await fetch("""
+        SELECT id, url, 'hot' AS pool FROM apartment_listings
+        WHERE is_active IS NOT FALSE AND url IS NOT NULL AND score_total >= $2
+        ORDER BY archive_checked_at ASC NULLS FIRST
+        LIMIT $1
+    """, limit, HOT_SCORE_THRESHOLD)
+    candidates = list(hot)
+
+    remaining = limit - len(candidates)
+    if remaining > 0:
+        from datetime import datetime
+        from bot.db import settings as app_settings
+        await app_settings.load()
+        circle_started_raw = app_settings.get("DEEP_SWEEP_CIRCLE_STARTED_AT")
+        circle_started_at = None
+        if circle_started_raw:
+            try:
+                circle_started_at = datetime.fromisoformat(circle_started_raw)
+            except ValueError:
+                logger.warning("DEEP_SWEEP_CIRCLE_STARTED_AT не парсится: %r", circle_started_raw)
+        if circle_started_at:
+            cold_confirm = await fetch("""
+                SELECT id, url, 'cold_confirm' AS pool FROM apartment_listings
+                WHERE is_active IS NOT FALSE AND url IS NOT NULL AND score_total < $3
+                  AND last_seen < $2
+                  AND (archive_checked_at IS NULL OR archive_checked_at < $2)
+                ORDER BY last_seen ASC NULLS FIRST
+                LIMIT $1
+            """, remaining, circle_started_at, HOT_SCORE_THRESHOLD)
+            candidates += list(cold_confirm)
+
+    remaining = limit - len(candidates)
+    if remaining > 0:
+        # Страховка: круга каталога ещё не было (первый запуск после
+        # деплоя) ИЛИ hot+cold-confirm не выбрали весь бюджет цикла —
+        # добираем никогда не проверенных (старый бэклог, 34983 на
+        # момент расчёта), чтобы бюджет не простаивал впустую.
+        backlog = await fetch("""
+            SELECT id, url, 'backlog' AS pool FROM apartment_listings
+            WHERE is_active IS NOT FALSE AND url IS NOT NULL AND score_total < $2
+              AND archive_checked_at IS NULL
+            ORDER BY first_seen ASC NULLS FIRST
+            LIMIT $1
+        """, remaining, HOT_SCORE_THRESHOLD)
+        candidates += list(backlog)
+
+    return candidates
+
+
 async def check_archived(limit: int = 20) -> dict:
     """
-    Проверить limit лучших активных объявлений, которые давно не проверялись.
-    Возвращает {"checked": n, "archived": n}.
+    Проверить до limit объявлений по приоритету hot -> cold-confirm ->
+    backlog (см. докстринг модуля, _select_candidates).
+    Возвращает {"checked", "archived", "hot_checked", "cold_confirm_checked",
+    "backlog_checked"}.
     """
-    # БАГ (найден): сортировка по score_total DESC ставила уже проверенные
-    # вчера высокобалльные объявления впереди НИКОГДА не проверенных с чуть
-    # меньшим скором — при том, что новых объявлений в базу приходит больше,
-    # чем ARCHIVE_CHECK_BATCH способен обработать за цикл (единичные секунды
-    # на объявление, намеренно медленно), очередь никогда не догоняла саму
-    # себя: часть базы (десятки тысяч активных) годами оставалась вообще
-    # непроверенной. Теперь сперва ВСЕГДА добираем никогда не проверенные
-    # (archive_checked_at IS NULL), и только когда таких не осталось —
-    # самые старые по последней проверке; скор — уже вторичный тай-брейк.
-    rows = await fetch("""
-        SELECT id, url FROM apartment_listings
-        WHERE is_active IS NOT FALSE
-          AND url IS NOT NULL
-          AND (archive_checked_at IS NULL OR archive_checked_at < now() - interval '24 hours')
-        ORDER BY archive_checked_at ASC NULLS FIRST, score_total DESC NULLS LAST
-        LIMIT $1
-    """, limit)
+    rows = await _select_candidates(limit)
+    pool_counts = {"hot": 0, "cold_confirm": 0, "backlog": 0}
 
     checked = archived = 0
     async with httpx.AsyncClient(headers=HEADERS, timeout=25.0, follow_redirects=True) as client:
@@ -89,12 +176,13 @@ async def check_archived(limit: int = 20) -> dict:
             if result is None:
                 continue
             checked += 1
+            pool_counts[r["pool"]] = pool_counts.get(r["pool"], 0) + 1
             if result == "deleted":
                 # Страницы больше нет — удаляем и из нашей базы (правило:
                 # архив = остаётся в БД / скрыт из Sheets; удалено = удаляем везде)
                 archived += 1
                 await execute("DELETE FROM apartment_listings WHERE id = $1", r["id"])
-                logger.info("deleted (страница удалена): %s", r["url"])
+                logger.info("deleted (страница удалена, pool=%s): %s", r["pool"], r["url"])
             elif result == "archived":
                 archived += 1
                 await execute("""
@@ -102,14 +190,20 @@ async def check_archived(limit: int = 20) -> dict:
                     SET is_active = FALSE, archived_at = now(), archive_checked_at = now()
                     WHERE id = $1
                 """, r["id"])
-                logger.info("archived: %s", r["url"])
+                logger.info("archived (pool=%s): %s", r["pool"], r["url"])
             else:
                 await execute(
                     "UPDATE apartment_listings SET archive_checked_at = now() WHERE id = $1",
                     r["id"],
                 )
-    logger.info("archive check: %d checked, %d archived/deleted", checked, archived)
-    return {"checked": checked, "archived": archived}
+    logger.info("archive check: %d checked, %d archived/deleted (hot=%d cold_confirm=%d backlog=%d)",
+                checked, archived, pool_counts["hot"], pool_counts["cold_confirm"], pool_counts["backlog"])
+    result = {"checked": checked, "archived": archived,
+              "hot_checked": pool_counts["hot"], "cold_confirm_checked": pool_counts["cold_confirm"],
+              "backlog_checked": pool_counts["backlog"]}
+    LAST_CHECK_RESULT.clear()
+    LAST_CHECK_RESULT.update(result)
+    return result
 
 
 async def check_archived_rentals(limit: int = 20) -> dict:

@@ -92,6 +92,42 @@
   </div>
 </div>
 
+{# ── Adaptive recheck: факт-метрики по пулам (задача 2026-08-13, см.
+   docs/adaptive_recheck_plan.md, п.7) — цель "круг холодного обхода
+   <=24ч, hot<=6-12ч, запросы/сутки <= текущих", проверяем по факту, не
+   по теории. Триггер пересмотра порога — hot_recalibrate из route. #}
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:18px;">
+  <div style="font-size:13px;font-weight:600;margin-bottom:10px;">🎯 Adaptive recheck — факт vs цель</div>
+  <div style="display:flex;flex-wrap:wrap;gap:12px;">
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 16px;min-width:170px;">
+      <div style="font-size:20px;font-weight:800;{{ 'color:#ef4444;' if hot_recalibrate else 'color:#16a34a;' }}">
+        {{ hot_median_lag_h if hot_median_lag_h is not none else '—' }}{% if hot_median_lag_h is not none %} ч{% endif %}
+      </div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">
+        hot-лаг (медиана), score≥{{ hot_score_threshold }} · {{ hot_pool_size }} объявл. · цель ≤6-12ч
+        {% if hot_recalibrate %}<br><span style="color:#ef4444;font-weight:600;">⚠ триггер пересмотра порога</span>{% endif %}
+      </div>
+    </div>
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 16px;min-width:170px;">
+      <div style="font-size:20px;font-weight:800;{{ 'color:#16a34a;' if full_cycle_hours and full_cycle_hours <= 24 else ('color:#ef4444;' if full_cycle_hours else '') }}">
+        {{ full_cycle_hours if full_cycle_hours else '—' }}{% if full_cycle_hours %} ч{% endif %}
+      </div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">холодный круг (каталог) · цель ≤24ч</div>
+    </div>
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 16px;min-width:170px;">
+      <div style="font-size:20px;font-weight:800;">{{ "{:,}".format(requests_per_day.total).replace(",", " ") }}</div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">
+        запросов/сутки к Крыше (поиск {{ requests_per_day.search }} + детали {{ requests_per_day.detail }} +
+        archive-check {{ requests_per_day.archive }})
+      </div>
+    </div>
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 16px;min-width:170px;">
+      <div style="font-size:20px;font-weight:800;">{{ pool_checks_24h.hot }}/{{ pool_checks_24h.cold_confirm }}/{{ pool_checks_24h.backlog }}</div>
+      <div style="font-size:11px;color:#888;margin-top:2px;">archive-check за 24ч: hot / cold-confirm / backlog</div>
+    </div>
+  </div>
+</div>
+
 <div style="display:flex;flex-wrap:wrap;gap:16px;">
   <div class="chart-block">
     <b style="font-size:1em;">Market absorption — уходит в архив по дням</b>

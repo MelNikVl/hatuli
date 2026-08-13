@@ -20,11 +20,19 @@ import random
 from dotenv import load_dotenv
 load_dotenv()
 
+# Только FileHandler — StreamHandler(stderr) дублировал КАЖДУЮ строку
+# лога (найдено 2026-08-13 при разборе adaptive recheck, apartments.log
+# показывал идентичные строки с точностью до миллисекунды): systemd-юнит
+# уже делает StandardError=append:apartments.log/StandardOutput=append:
+# apartments.log (тот же файл), так что stderr и без StreamHandler
+# попадает в лог через сам systemd — с ним получалось дважды. Тот же
+# паттерн, вероятно, у других сервисов с идентичной парой (StreamHandler
+# + systemd StandardOutput/Error=append:тот же .log) — не трогал, вне
+# объёма этой задачи.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     handlers=[
-        logging.StreamHandler(),
         logging.FileHandler("apartments.log", encoding="utf-8", errors="replace"),
     ],
 )
@@ -50,27 +58,41 @@ async def run_cycle():
     log.info("Parsed %d fresh listings (pages 1-%d)", len(results), max_pages)
 
     # ── ГЛУБОКИЙ ОБХОД: идём до конца выдачи, запоминая позицию ───────────
-    # Крыша по Астане ≤80млн — это ~100-200 страниц. Свежий парс покрывает
-    # только первые 5, дальше живут объявления, которые никто не «поднимает»
-    # — они никогда не попадут в базу без сквозного обхода. Каждый цикл
-    # дочитываем DEEP_SWEEP_BATCH страниц с сохранённой позиции; дойдя до
-    # конца выдачи (пустая страница) — начинаем заново с 6-й. Полный круг
-    # при 5 стр/цикл и ~70-100 циклах в сутки занимает меньше суток,
-    # при этом нагрузка на Крышу не растёт скачком.
-    # Реальный размер выдачи с Крыши -> детерминированный конец круга.
-    # (Прежний детектор "в батче нет новых id" после первого круга ломался:
-    # известные страницы попадаются уже в начале, курсор вечно сбрасывался
-    # и глубокие страницы не перечитывались.)
+    # Крыша по Астане ≤80млн — это ~800+ страниц. Свежий парс покрывает
+    # только первые max_pages, дальше живут объявления, которые никто не
+    # «поднимает» — они никогда не попадут в базу без сквозного обхода.
+    # Каждый цикл дочитываем DEEP_SWEEP_BATCH страниц с сохранённой позиции;
+    # дойдя до конца выдачи — начинаем заново.
+    #
+    # ФИКС (задача "adaptive recheck", 2026-08-13, предусловие — см.
+    # docs/adaptive_recheck_plan.md, п.4/7): max_deep_page раньше
+    # ПЕРЕСЧИТЫВАЛСЯ каждый цикл из живого KRISHA_TOTAL_FOUND — тот
+    # оказался нестабильным (наблюдали разброс ~830 vs ~1642 страниц за
+    # несколько дней между реальными "круг завершён" событиями в
+    # apartments.log), из-за чего конец круга был движущейся целью:
+    # реальный круг (75.4ч) оказался втрое дольше теоретического (~25ч
+    # при DEEP_SWEEP_BATCH=36). Теперь снимок max_deep_page берётся ОДИН
+    # РАЗ на весь круг (DEEP_SWEEP_CIRCLE_MAX_PAGE, лениво — на первом
+    # цикле после того, как предыдущий круг завершился и обнулил снимок)
+    # и не меняется, пока круг не завершится — конец круга детерминирован
+    # на весь круг вперёд, не пересчитывается на лету. DEEP_SWEEP_CIRCLE_
+    # STARTED_AT — начало ТЕКУЩЕГО круга, используется bot.core.
+    # archive_check._select_candidates() как порог "пропало из каталога"
+    # (cold-confirm пул).
     from bot.core import apartment_parser as _ap
     if _ap.LAST_TOTAL_FOUND:
         await app_settings.set("KRISHA_TOTAL_FOUND", str(_ap.LAST_TOTAL_FOUND))
-    krisha_total = app_settings.get_int("KRISHA_TOTAL_FOUND", 0)
-    # Крыша отдаёт 40 объявлений/страницу (проверено вживую 2026-08-07 —
-    # было захардкожено 20, из-за чего круг глубокого обхода "заканчивался"
-    # вдвое позже реального конца выдачи и лишние ~krisha_total/40 запросов
-    # уходили на страницы за пределами реальных данных, где Крыша просто
-    # повторяет последнюю страницу).
-    max_deep_page = (krisha_total // 40 + 2) if krisha_total else 0
+
+    max_deep_page = app_settings.get_int("DEEP_SWEEP_CIRCLE_MAX_PAGE", 0)
+    if max_deep_page == 0:
+        krisha_total = app_settings.get_int("KRISHA_TOTAL_FOUND", 0)
+        # Крыша отдаёт 40 объявлений/страницу (проверено вживую 2026-08-07).
+        max_deep_page = (krisha_total // 40 + 2) if krisha_total else 0
+        if max_deep_page:
+            await app_settings.set("DEEP_SWEEP_CIRCLE_MAX_PAGE", str(max_deep_page))
+            await app_settings.set("DEEP_SWEEP_CIRCLE_STARTED_AT",
+                                   datetime.now(timezone.utc).isoformat())
+            log.info("Deep sweep: новый круг, снимок max_deep_page=%d", max_deep_page)
 
     deep_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
     if deep_batch > 0:
@@ -81,24 +103,14 @@ async def run_cycle():
             deep_results = await analyze_apartments(
                 "astana", max_pages=deep_batch, start_page=cursor)
             # Крыша на несуществующие страницы отдаёт последнюю (НЕ пустую!),
-            # поэтому "пустая страница" как признак конца не работает — курсор
-            # улетал на страницу 900+. Новый детект: если в батче нет ни
-            # одного объявления, которого ещё нет в БД, — выдача исчерпана.
-            new_ids = 0
-            if deep_results:
-                from bot.db.pg import fetchval as _pg_fv
-                for _r in deep_results:
-                    known = await _pg_fv(
-                        "SELECT 1 FROM apartment_listings WHERE id=$1", _r["id"])
-                    if not known:
-                        new_ids += 1
+            # поэтому "пустая страница" как признак конца не работает —
+            # только позиция курсора относительно снимка max_deep_page.
             past_end = max_deep_page and cursor > max_deep_page
-            if deep_results and (new_ids > 0 or not past_end) and not past_end:
+            if deep_results and not past_end:
                 results.extend(deep_results)
                 next_cursor = cursor + deep_batch
-                log.info("Deep sweep: pages %d-%d → %d listings (%d новых), cursor → %d",
-                         cursor, cursor + deep_batch - 1, len(deep_results),
-                         new_ids, next_cursor)
+                log.info("Deep sweep: pages %d-%d → %d listings, cursor → %d",
+                         cursor, cursor + deep_batch - 1, len(deep_results), next_cursor)
             else:
                 results.extend(deep_results or [])
                 next_cursor = max_pages + 1
@@ -118,6 +130,9 @@ async def run_cycle():
                     except Exception as e:
                         log.warning("circle duration calc failed: %s", e)
                 await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_AT", now_iso)
+                # Обнуляем снимок — следующий цикл (курсор снова на первой
+                # deep-странице) снимет новый max_deep_page на СЛЕДУЮЩИЙ круг.
+                await app_settings.set("DEEP_SWEEP_CIRCLE_MAX_PAGE", "0")
             await app_settings.set("DEEP_SWEEP_PAGE", str(next_cursor))
             await app_settings.set("DEEP_SWEEP_LAST_AT",
                                    datetime.now(timezone.utc).isoformat())
@@ -842,11 +857,14 @@ async def _run_cycle_timed():
     from bot.core.apartment_parser import (
         REQUEST_COUNTS as _search_counts, DETAIL_FETCH_STATS as _df_stats)
     from bot.core.apartment_details import REQUEST_COUNTS as _detail_counts
+    from bot.core.archive_check import REQUEST_COUNTS as _archive_counts, LAST_CHECK_RESULT as _archive_result
     _search_counts["search"] = 0
     _detail_counts["detail"] = 0
     _df_stats["total_seen"] = 0
     _df_stats["needs_fetch"] = 0
     _df_stats["skipped"] = 0
+    _archive_counts["archive_check"] = 0
+    _archive_result.clear()
     started = _time.monotonic()
     try:
         await run_cycle()
@@ -857,10 +875,14 @@ async def _run_cycle_timed():
             await _pg_exec_cycle(
                 "INSERT INTO parser_cycle_history "
                 "(duration_sec, search_requests, detail_requests, "
-                " total_seen, needs_detail_fetch, skipped_no_change) "
-                "VALUES ($1, $2, $3, $4, $5, $6)",
+                " total_seen, needs_detail_fetch, skipped_no_change, "
+                " archive_check_requests, archive_hot_checked, "
+                " archive_cold_confirm_checked, archive_backlog_checked) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
                 round(duration_sec), _search_counts["search"], _detail_counts["detail"],
-                _df_stats["total_seen"], _df_stats["needs_fetch"], _df_stats["skipped"])
+                _df_stats["total_seen"], _df_stats["needs_fetch"], _df_stats["skipped"],
+                _archive_counts["archive_check"], _archive_result.get("hot_checked", 0),
+                _archive_result.get("cold_confirm_checked", 0), _archive_result.get("backlog_checked", 0))
         except Exception as e:
             log.warning("parser_cycle_history snapshot failed: %s", e)
 
@@ -882,7 +904,13 @@ async def main():
     """)
     # Бэкфилл колонок для инсталляций, где таблица уже существовала до
     # оптимизации detail-fetch (см. migrations/034_parser_cycle_detail_fetch.sql).
-    for _col in ("total_seen", "needs_detail_fetch", "skipped_no_change"):
+    # archive_check_* — задача "adaptive recheck", 2026-08-13 (см.
+    # docs/adaptive_recheck_plan.md): раньше archive_check.py вообще не
+    # учитывался в "запросы/сутки" — свой httpx.AsyncClient, отдельный от
+    # apartment_parser/apartment_details, чей REQUEST_COUNTS уже снимался.
+    for _col in ("total_seen", "needs_detail_fetch", "skipped_no_change",
+                 "archive_check_requests", "archive_hot_checked",
+                 "archive_cold_confirm_checked", "archive_backlog_checked"):
         try:
             await _pg_exec_init(f"ALTER TABLE parser_cycle_history ADD COLUMN IF NOT EXISTS {_col} INT")
         except Exception as e:
