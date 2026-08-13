@@ -1659,3 +1659,70 @@ unset-parent, set-parent, и целиком /admin/entity-ids с объедин�
 секцией). `tests/test_complex_detail_route.py` — 2 теста переписаны
 под новый контракт кнопки (не два разных лейбла со ссылкой, одна
 кнопка с модалкой). Полный репо — 211/211.
+
+
+## 2026-08-13/14: complexes.address backfill — покрытие до/после + рескор
+
+Второй (исправленный) прогон `krisha_complex_import.py` — запущен
+14:16 после фикса AmbiguousParameterError (первый прогон, 11:52-14:09,
+записал 0/1241 — тот баг, не COALESCE и не "никогда не фетчился",
+см. записи выше). `saved=1244` в этот раз — реально записал.
+
+Покрытие `complexes.address` (krisha-привязанные, не мусор/не улица):
+**до** 53/1154 (4.6%, ПОСЛЕ первого
+неудачного прогона — актуальный baseline для ЭТОГО сравнения) →
+**после** 1142/1157 (98.7%).
+
+Разовый рескор `complex_source_link_candidates` (`rescore_review_queue.py`,
+реальный прогон, не --dry) — адрес-сигнал впервые получил данные на
+krisha-стороне:
+
+```
+P/1.1 200 OK"
+2026-08-13 18:23:41,228 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/senator/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:41,551 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/altynsaulet/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:41,864 INFO HTTP Request: GET https://krisha.kz/complex/show/po-tlendieva/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:42,132 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/modstandart/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:42,815 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/smart-city/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:43,603 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/qaiyndy/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:43,818 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/baskaru2/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:44,101 INFO HTTP Request: GET https://krisha.kz/complex/show/nur-sultan/asylmurajubanov/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:44,438 INFO HTTP Request: GET https://krisha.kz/complex/show/nur-sultan/araiapartments/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:44,674 INFO HTTP Request: GET https://krisha.kz/complex/show/komsomolskiy-nak/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:45,442 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/uiadaryn/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:46,569 INFO HTTP Request: GET https://krisha.kz/complex/show/pioneer/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:47,388 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/zhanaomir/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:47,695 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/Manhattan/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:48,381 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/bereke/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:49,083 INFO HTTP Request: GET https://krisha.kz/complex/show/nur-sultan/shygys/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:49,331 INFO HTTP Request: GET https://krisha.kz/complex/show/nur-sultan/jetisulepsi/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:50,123 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/modurban/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:50,376 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/namys/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:50,641 INFO HTTP Request: GET https://krisha.kz/complex/show/nur-sultan/mechta/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:50,903 INFO HTTP Request: GET https://krisha.kz/complex/show/kamal-2/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:51,651 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/qobyz/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:51,867 INFO HTTP Request: GET https://krisha.kz/complex/show/nur-sultan/rio-de-janeiro/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:52,097 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/akerke-pr/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:52,350 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/uiabirlik/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:52,609 INFO HTTP Request: GET https://krisha.kz/complex/show/aydidar/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:53,390 INFO HTTP Request: GET https://krisha.kz/complex/show/nur-sultan/zhagalau3/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:53,632 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/altynshar2/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:55,100 INFO HTTP Request: GET https://krisha.kz/complex/show/nur-sultan/technikum2/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:55,375 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/altynshar2/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:55,606 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/altynsaulet/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:55,874 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/eleven/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:56,679 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/parkcityforum/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:56,877 INFO HTTP Request: GET https://krisha.kz/complex/show/astana/otau/ "HTTP/1.1 200 OK"
+2026-08-13 18:23:57,087 INFO HTTP Request: GET https://krisha.kz/complex/show/po-tlendieva/ "HTTP/1.1 200 OK"
+```
+
+Регресс: `pytest tests/ -q` —
+
+```
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+211 passed, 7 warnings in 12.71s
+/home/nik/krisha_bot/venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py:208: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+```
