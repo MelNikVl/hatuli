@@ -10,7 +10,25 @@
     <span style="font-weight:700;color:#eab308;">📝 Описание ЖК</span>
     <div style="margin-top:4px;">{{ cx.description }}</div>
   </div>
-  {% endif %}</div>
+  {% endif %}
+  {% if is_admin(request) %}
+  <div style="margin-top:10px;">
+    <button type="button" onclick="cxFlagSplit({{ cx.id }})" title="Подозрение, что этот ЖК на самом деле несколько разных зданий/очередей под одним именем — см. docs/entity_resolution_plan.md, 'расшивка как review-очередь'"
+            style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">✂️ Пометить на расшивку</button>
+  </div>
+  <script>
+  async function cxFlagSplit(complexId) {
+    const comment = prompt('Почему этот ЖК похож на "блоб" (несколько зданий под одним именем)? Комментарий обязателен.');
+    if (!comment || !comment.trim()) return;
+    const r = await fetch('/admin/api/entity-ids/split/flag', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({complex_id: complexId, comment: comment.trim()})});
+    if (r.ok) alert('Помечено — см. очередь на /admin/entity-ids');
+    else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+  }
+  </script>
+  {% endif %}
+  </div>
 
 {% if cx.lat and cx.lon %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>

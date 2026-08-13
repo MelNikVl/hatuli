@@ -370,6 +370,76 @@ function eidUnitFilter() {
 }
 </script>
 
+<div class="eid-card" id="eid-split">
+  <b style="font-size:14.5px;">✂️ Кандидаты на расшивку ({{ split_candidates|length }})</b>
+  <p style="font-size:12px;color:#888;line-height:1.6;margin-top:6px;">
+    Обратная задача дублям — один <code>complex_id</code> на самом деле описывает несколько разных зданий/очередей
+    (см. <code>docs/entity_resolution_plan.md</code>, "политика гранулярности ЖК" и "расшивка как review-очередь").
+    <b>explicit_token_address</b> — явный маркер очереди/блока/литеры на объявлениях + гео-кластеры &gt;1км друг от
+    друга. <b>address_diverge_no_token</b> — гео расходится, но явного маркера нет — <b>решает человек</b> (тот же
+    случай, что AUSTRIA в granularity policy: один адрес сам по себе не решает). <b>manual</b> — кнопка ниже/на
+    карточке ЖК. Подтверждение исполняет playbook (создаёт/находит дочерний <code>complex_id</code> по имени,
+    provenance <code>split_from</code>/<code>matched_by='unravel'</code>) — для <b>manual</b> без структурированных
+    кластеров подтверждение просто фиксирует статус, разнесение — руками.
+  </p>
+  <form id="eid-split-flag-form" style="display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap;"
+        onsubmit="return eidSplitFlag(event)">
+    <input type="number" id="eid-split-flag-cid" placeholder="ID ЖК" required
+           style="width:90px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);">
+    <input type="text" id="eid-split-flag-comment" placeholder="комментарий — почему это похоже на блоб" required
+           style="flex:1;min-width:220px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);">
+    <button type="submit" style="padding:6px 14px;border-radius:6px;border:none;background:var(--accent);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;">✂️ пометить на расшивку</button>
+  </form>
+  <table class="eid-table">
+    <tr><th></th><th>Причина</th><th>ЖК</th><th>Evidence / комментарий</th><th></th></tr>
+    {% for s in split_candidates %}
+    {% set ev = s.evidence %}
+    <tr id="eid-split-{{ s.id }}">
+      <td>
+        {% if s.reason == 'explicit_token_address' %}<span style="color:#16a34a;font-weight:600;" title="явный маркер + гео">🔖 явный маркер</span>
+        {% elif s.reason == 'address_diverge_no_token' %}<span style="color:#d97706;font-weight:600;" title="AUSTRIA-кейс — решает человек">❓ без маркера</span>
+        {% else %}<span style="color:#888;">✋ ручная</span>{% endif %}
+      </td>
+      <td>
+        <a href="{{ s.complex_krisha_url or ('/complex/' ~ s.complex_id) }}" target="_blank" rel="noopener" style="color:var(--text);font-weight:600;">#{{ s.complex_id }} {{ s.complex_name }}</a>
+        <div style="font-size:11px;color:#888;">{{ s.complex_address or '— адреса нет' }} · {{ s.matched_by }}</div>
+      </td>
+      <td style="font-size:12px;">
+        {% if s.comment %}<div style="margin-bottom:4px;">💬 {{ s.comment }}</div>{% endif %}
+        {% if ev.clusters %}
+        {% for cl in ev.clusters %}
+        <div>{{ 'паспорт' if loop.first else '➡ кластер' }}: {{ cl.n }} объяв.{% if cl.address %}, {{ cl.address }}{% endif %}{% if cl.suggested_name %} → <b>{{ cl.suggested_name }}</b>{% endif %}{% if cl.tokens %} (токены: {{ cl.tokens|join(', ') }}){% endif %}</div>
+        {% endfor %}
+        {% endif %}
+      </td>
+      <td style="white-space:nowrap;">
+        <a href="javascript:void(0)" onclick="eidSplitResolve({{ s.id }}, 'approve')" style="color:#16a34a;font-size:12px;margin-right:8px;">подтвердить</a>
+        <a href="javascript:void(0)" onclick="eidSplitResolve({{ s.id }}, 'reject')" style="color:#ef4444;font-size:12px;">отклонить</a>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" style="color:#888;text-align:center;">пусто</td></tr>
+    {% endfor %}
+  </table>
+</div>
+<script>
+async function eidSplitFlag(event) {
+  event.preventDefault();
+  const complex_id = document.getElementById('eid-split-flag-cid').value;
+  const comment = document.getElementById('eid-split-flag-comment').value;
+  const r = await fetch('/admin/api/entity-ids/split/flag', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({complex_id, comment})});
+  if (r.ok) { location.reload(); }
+  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+  return false;
+}
+async function eidSplitResolve(id, action) {
+  const r = await fetch(`/admin/api/entity-ids/split/${id}/${action}`, {method: 'POST'});
+  if (r.ok) { const row = document.getElementById('eid-split-' + id); if (row) row.remove(); }
+  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+}
+</script>
+
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
   <div class="eid-card">
     <b style="font-size:14px;">По источникам</b>

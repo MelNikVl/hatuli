@@ -784,3 +784,121 @@ async def skip_unit_candidate(candidate_id: int, skipped_by: str = "admin") -> d
         return None
     await _write_unit_gold_label(c, "skip", skipped_by)
     return {"unit_id": c["unit_id"], "listing_id": c["listing_id"]}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# "Расшивка" (unravel) как review-очередь — задача 2026-08-13, зеркало
+# unravel_blobs.py (тот работает на homeportal_objects), но источник
+# сигнала другой: apartment_listings (Крыша), геокластеризация ВНУТРИ
+# одного complex_id + явный маркер очереди/блока в title/description
+# отдельных объявлений (не в имени ЖК — то для unravel_blobs.py/
+# _phase_token). migrations/053_split_candidates.sql,
+# split_detect.py — сам детектор.
+SPLIT_AUTO_GATE_MIN_DECIDED = 10
+SPLIT_AUTO_GATE_MIN_PRECISION = 0.95
+
+
+async def flag_split_candidate(complex_id: int, comment: str, flagged_by: str) -> int | None:
+    """Ручная пометка "на расшивку" — кнопка на /admin/entity-ids и в
+    карточке ЖК (комментарий человека — сам сигнал, evidence пустой:
+    решателю искать причину руками на карточке, не то, что нашёл бы
+    детектор). None, если уже есть неразрешённая пометка на этот ЖК
+    (не плодим дубли в очереди)."""
+    from bot.db.pg import fetchval
+    exists = await fetchval(
+        "SELECT 1 FROM split_candidates WHERE complex_id=$1 AND status='review'", complex_id)
+    if exists:
+        return None
+    return await fetchval("""
+        INSERT INTO split_candidates (complex_id, reason, comment, evidence, matched_by)
+        VALUES ($1, 'manual', $2, '{}'::jsonb, $3) RETURNING id
+    """, complex_id, comment, flagged_by)
+
+
+async def _execute_split_cluster(parent_id: int, name: str, cluster: dict, matched_by: str) -> dict:
+    """Один дочерний кластер -> один complex_id. apartment_listings
+    привязаны к complexes ИМЕНЕМ (lower/trim), не FK — в отличие от
+    unravel_blobs.py (переносит complex_source_links руками), тут для
+    большинства кейсов ничего переносить не нужно: как только строка
+    complexes с нужным именем существует, уже существующие объявления
+    сами приджойнятся по имени на следующий рендер. Если такая строка
+    УЖЕ существует (живой кейс: Rio De Janeiro 3, #4008 — создана
+    вручную до этой системы) — не дублируем, только доливаем
+    provenance (split_from/matched_by='unravel', тот же формат, что
+    unravel_blobs.py, чтобы оба пути расшивки были неотличимы по
+    provenance)."""
+    from datetime import datetime, timezone
+    from bot.db.pg import fetchval, fetchrow, execute
+    existing = await fetchrow("SELECT id FROM complexes WHERE lower(trim(name))=lower(trim($1))", name)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    prov = {"split_from": parent_id, "matched_by": "unravel", "split_at": now_iso, "method": "split_detect"}
+    if existing:
+        child_id = existing["id"]
+        await execute(
+            "UPDATE complexes SET provenance = COALESCE(provenance,'{}'::jsonb) || $2::jsonb WHERE id=$1",
+            child_id, json.dumps(prov))
+        action = "provenance_backfilled"
+    else:
+        child_id = await fetchval("""
+            INSERT INTO complexes (name, lat, lon, address, provenance)
+            VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id
+        """, name, cluster.get("lat"), cluster.get("lon"), cluster.get("address"), json.dumps(prov))
+        action = "created"
+    await execute(
+        "UPDATE complexes SET provenance = COALESCE(provenance,'{}'::jsonb) || "
+        "jsonb_build_object('split_children', COALESCE(provenance->'split_children','[]'::jsonb) || to_jsonb($2::int)) "
+        "WHERE id=$1", parent_id, child_id)
+    return {"child_id": child_id, "name": name, "action": action}
+
+
+async def approve_split_candidate(candidate_id: int, approved_by: str) -> dict | None:
+    """Исполняет "unravel playbook" по evidence-кластерам (см.
+    split_detect.py::build_evidence — только НЕ-паспортные кластеры с
+    suggested_name несут действие). Для ручных пометок (reason='manual',
+    evidence без кластеров) — реального разнесения тут нет, только
+    подтверждение статуса: решатель уже посмотрел карточку и согласен,
+    что это split, но evidence искать/структурировать руками (кнопка
+    сигнализирует подозрение, не считает кластеры)."""
+    from bot.db.pg import fetchrow, execute
+    c = await fetchrow("SELECT * FROM split_candidates WHERE id=$1", candidate_id)
+    if not c:
+        return None
+    ev = c["evidence"]
+    ev = json.loads(ev) if isinstance(ev, str) and ev else (ev or {})
+    created = []
+    for cluster in ev.get("clusters", []):
+        name = cluster.get("suggested_name")
+        if not name:
+            continue
+        created.append(await _execute_split_cluster(c["complex_id"], name, cluster, approved_by))
+    await execute(
+        "UPDATE split_candidates SET status='approved', resolved_at=now(), resolved_by=$2 WHERE id=$1",
+        candidate_id, approved_by)
+    return {"complex_id": c["complex_id"], "children": created}
+
+
+async def reject_split_candidate(candidate_id: int, rejected_by: str) -> None:
+    from bot.db.pg import execute
+    await execute(
+        "UPDATE split_candidates SET status='rejected', resolved_at=now(), resolved_by=$2 WHERE id=$1",
+        candidate_id, rejected_by)
+
+
+async def split_auto_execution_allowed(reason: str) -> bool:
+    """Гейт авто-исполнения явного правила (токен+адрес+тот же
+    застройщик) — решение заказчика 2026-08-13: доверять детектору без
+    человека можно только после 10 решённых вручную (approve+reject) с
+    точностью approved/decided >=95% на ТОЙ ЖЕ reason-корзине. 0 решений
+    сейчас -> всегда False, весь трафик идёт в review — режим накопления
+    gold labels, не авто-исполнение."""
+    from bot.db.pg import fetchrow
+    row = await fetchrow("""
+        SELECT count(*) FILTER (WHERE status='approved') AS approved,
+               count(*) FILTER (WHERE status IN ('approved','rejected')) AS decided
+        FROM split_candidates WHERE reason=$1
+    """, reason)
+    decided = row["decided"] if row else 0
+    if decided < SPLIT_AUTO_GATE_MIN_DECIDED:
+        return False
+    approved = row["approved"] if row else 0
+    return (approved / decided) >= SPLIT_AUTO_GATE_MIN_PRECISION

@@ -1684,6 +1684,26 @@ def make_extras_router(templates) -> APIRouter:
             d["is_mirror"] = d["reason"] == "ambiguous_floorplan"
             unit_candidates.append(d)
 
+        # "Расшивка" (unravel) как review-очередь (задача 2026-08-13, см.
+        # docs/entity_resolution_plan.md, "расшивка как review-очередь") —
+        # split_candidates: ручная пометка (кнопка на этой странице и в
+        # карточке ЖК) + авто-детектор (split_detect.py, гео-кластеры
+        # apartment_listings внутри одного complex_id).
+        split_rows = await pg_fetch("""
+            SELECT sc.id, sc.complex_id, sc.reason, sc.comment, sc.evidence, sc.matched_by, sc.created_at,
+                   c.name AS complex_name, c.address AS complex_address, c.krisha_url AS complex_krisha_url
+            FROM split_candidates sc
+            JOIN complexes c ON c.id = sc.complex_id
+            WHERE sc.status = 'review'
+            ORDER BY sc.reason, sc.created_at DESC
+        """)
+        split_candidates = []
+        for r in split_rows:
+            d = dict(r)
+            ev = d.get("evidence")
+            d["evidence"] = json.loads(ev) if isinstance(ev, str) else (ev or {})
+            split_candidates.append(d)
+
         # ── Разбивка нерезолвнутых ЖК (задача 2026-08-13) — без правок кода
         # в алгоритме матчинга, чистая диагностика: (а) мусор/дубли — сверка
         # с bot.core.complex_audit (та же эвристика street/junk, что уже
@@ -1735,6 +1755,7 @@ def make_extras_router(templates) -> APIRouter:
             "candidates": candidates,
             "dup_candidates": dup_candidates,
             "unit_candidates": unit_candidates,
+            "split_candidates": split_candidates,
             "breakdown": {
                 "unresolved_total": len(unresolved_rows),
                 "junk": breakdown_junk,
@@ -1843,6 +1864,42 @@ def make_extras_router(templates) -> APIRouter:
         if r is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
         return JSONResponse({"ok": True, **r})
+
+    # "Расшивка" (unravel) как review-очередь (задача 2026-08-13).
+    # flag — общая точка входа и для кнопки на /admin/entity-ids, и для
+    # кнопки на карточке ЖК (/complex/{id}) — оба шлют {complex_id, comment}.
+    @router.post("/admin/api/entity-ids/split/flag")
+    async def entity_ids_split_flag(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import flag_split_candidate
+        body = await request.json()
+        complex_id = body.get("complex_id")
+        comment = (body.get("comment") or "").strip()
+        if not complex_id:
+            return JSONResponse({"error": "complex_id обязателен"}, status_code=400)
+        cid = await flag_split_candidate(int(complex_id), comment, flagged_by="admin")
+        if cid is None:
+            return JSONResponse({"error": "уже есть неразрешённая пометка на этот ЖК"}, status_code=409)
+        return JSONResponse({"ok": True, "id": cid})
+
+    @router.post("/admin/api/entity-ids/split/{candidate_id}/approve")
+    async def entity_ids_split_approve(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import approve_split_candidate
+        r = await approve_split_candidate(candidate_id, approved_by="admin")
+        if r is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({"ok": True, **r})
+
+    @router.post("/admin/api/entity-ids/split/{candidate_id}/reject")
+    async def entity_ids_split_reject(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import reject_split_candidate
+        await reject_split_candidate(candidate_id, rejected_by="admin")
+        return JSONResponse({"ok": True})
 
     @router.get("/admin/api/entity-ids/timeline")
     async def entity_ids_timeline(request: Request):

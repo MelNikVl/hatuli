@@ -56,6 +56,38 @@ _RATING_RE = re.compile(
     r'"aggregateRating"\s*:\s*\{[^}]*"ratingValue"\s*:\s*"([\d,\.]+)"[^}]*'
     r'"ratingCount"\s*:\s*"(\d+)"', re.S)
 
+# Пер-очередной срок сдачи — обогащение (задача 2026-08-13, "расшивка
+# как review-очередь"), НЕ сигнал для split_detect.py: живая проверка
+# (Rio de Janeiro) показала, что "Расположение" отдаёт ОДНУ строку
+# адреса на весь ЖК без привязки дома к очереди — сопоставить
+# "очередь N" с конкретным домом из этого текста нельзя надёжно, разбор
+# только срока сдачи (тот САМ по себе размечен по очередям текстом,
+# см. живой пример: "Первая очередь - IV квартал 2020 г. Вторая
+# очередь - ...").
+_QUEUE_LABEL_RE = re.compile(
+    r"(\d+-я\s+очеред[ьи]|Перв(?:ая|ое)\s+очеред[ьи]|Втор(?:ая|ое)\s+очеред[ьи]|"
+    r"Трет(?:ья|ье)\s+очеред[ьи]|Четверт(?:ая|ое)\s+очеред[ьи]|Пят(?:ая|ое)\s+очеред[ьи]|"
+    r"Шест(?:ая|ое)\s+очеред[ьи]|Седьм(?:ая|ое)\s+очеред[ьи]|Восьм(?:ая|ое)\s+очеред[ьи])",
+    re.I)
+
+
+def parse_deadlines_by_queue(deadline_text: str | None) -> list[dict] | None:
+    """[{"label": "Первая очередь", "deadline": "IV квартал 2020 г."}, ...]
+    или None, если в тексте нет 2+ явных меток очереди (одна очередь —
+    разбивать нечего, это и есть весь deadline)."""
+    if not deadline_text:
+        return None
+    parts = _QUEUE_LABEL_RE.split(deadline_text)
+    if len(parts) < 5:  # меньше 2 меток (pre, label1, text1, label2, text2)
+        return None
+    out = []
+    for i in range(1, len(parts), 2):
+        label = parts[i].strip()
+        text = parts[i + 1].strip(" -—:;.") if i + 1 < len(parts) else ""
+        if text:
+            out.append({"label": label, "deadline": text})
+    return out or None
+
 
 def parse_complex_page(html: str, url: str) -> dict:
     """Вытаскивает все доступные поля со страницы ЖК krisha."""
@@ -73,6 +105,7 @@ def parse_complex_page(html: str, url: str) -> dict:
     out["status"] = sidebar.get("Статус строительства") or None
     deadline = sidebar.get("Срок сдачи") or ""
     out["deadline"] = deadline[:300] if deadline else None
+    out["deadlines_by_queue"] = parse_deadlines_by_queue(deadline)
     addr = sidebar.get("Расположение") or ""
     addr = re.sub(r"\s*Показать на карте.*$", "", addr).strip(" ,")
     out["address"] = addr or None
@@ -185,6 +218,7 @@ async def save_to_db(found: dict[int, dict]) -> int:
                 "developer": d.get("developer"),
                 "status": d.get("status"),
                 "deadline": d.get("deadline"),
+                "deadlines_by_queue": d.get("deadlines_by_queue"),
                 "address": d.get("address"),
                 "rating": d.get("rating"),
                 "reviews_cnt": d.get("reviews_cnt"),
