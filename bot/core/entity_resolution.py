@@ -863,6 +863,17 @@ async def set_parent_complex(complex_id: int, parent_complex_id: int, set_by: st
     return {"complex_id": complex_id, "parent_complex_id": parent_complex_id}
 
 
+async def unset_parent_complex(complex_id: int) -> dict | None:
+    """"Открепить" — обратная операция к set_parent_complex, страница
+    /admin/umbrellas (задача 2026-08-13)."""
+    from bot.db.pg import fetchval, execute
+    exists = await fetchval("SELECT 1 FROM complexes WHERE id=$1", complex_id)
+    if not exists:
+        return None
+    await execute("UPDATE complexes SET parent_complex_id=NULL WHERE id=$1", complex_id)
+    return {"complex_id": complex_id}
+
+
 async def _execute_split_cluster(parent_id: int, name: str, cluster: dict, matched_by: str) -> dict:
     """Один дочерний кластер -> один complex_id. apartment_listings
     привязаны к complexes ИМЕНЕМ (lower/trim), не FK — в отличие от
@@ -1026,3 +1037,53 @@ async def split_auto_execution_allowed(reason: str) -> bool:
         return False
     approved = row["approved"] if row else 0
     return (approved / decided) >= SPLIT_AUTO_GATE_MIN_PRECISION
+
+
+def _search_key(name: str) -> str:
+    """Нормализация для fuzzy-поиска ЖК (задача 2026-08-13, autocomplete
+    "добавить дом к ЖК") — транслитерация (см. Tandau/Тандау, гейт 2)
+    + отдельно "голая база" без продуктового токена (Comfort/Gold/
+    Premium... не должны мешать совпадению по базовому имени, тот же
+    список _PRODUCT_TOKENS, что product_token-сигнал в score_match)."""
+    key = transliterate(name or "").strip()
+    key = re.sub(r"\s+", " ", key)
+    return key
+
+
+def _search_base_key(name: str) -> str:
+    return _PRODUCT_TOKEN_RE.sub("", _search_key(name)).strip()
+
+
+async def search_complexes_for_parent(query: str, limit: int = 10, exclude_id: int | None = None) -> list[dict]:
+    """Fuzzy-поиск ЖК для autocomplete (кнопка "добавить дом к ЖК" /
+    страница /admin/umbrellas) — транслит + префикс-матч + суффиксы
+    продукта не мешают базовому имени. В Python, не SQL trgm: список
+    ЖК (~2-4 тыс. активных) целиком в память дешевле, чем городить
+    транслитерацию внутри SQL (той нет как функции БД, только в
+    Python — _CYR_TO_LAT), поиск редкий (admin UI, не горячий путь)."""
+    from difflib import SequenceMatcher
+    from bot.db.pg import fetch
+    q = _search_key(query)
+    q_base = _search_base_key(query)
+    if len(q) < 2:
+        return []
+    rows = await fetch("""
+        SELECT id, name, address FROM complexes
+        WHERE COALESCE(is_garbage, FALSE) = FALSE AND COALESCE(is_street, FALSE) = FALSE
+    """)
+    scored = []
+    for r in rows:
+        if exclude_id is not None and r["id"] == exclude_id:
+            continue
+        key = _search_key(r["name"])
+        base = _search_base_key(r["name"])
+        if key.startswith(q) or base.startswith(q_base):
+            score = 1.0
+        elif q in key or q_base in base:
+            score = 0.8
+        else:
+            score = max(SequenceMatcher(None, q, key).ratio(), SequenceMatcher(None, q_base, base).ratio())
+        if score >= 0.5:
+            scored.append((score, r))
+    scored.sort(key=lambda x: (-x[0], x[1]["name"]))
+    return [{"id": r["id"], "name": r["name"], "address": r["address"]} for _, r in scored[:limit]]

@@ -1527,6 +1527,36 @@ def make_extras_router(templates) -> APIRouter:
             out.append({"label": label, "html": html})
         return out
 
+    @router.get("/admin/umbrellas", response_class=HTMLResponse)
+    async def umbrellas_page(request: Request):
+        """Зонтики (задача 2026-08-13, "модель зонтик/дом") — обратная
+        операция к "добавить дом к ЖК": все complexes, у которых ЕСТЬ
+        дети (parent_complex_id других строк указывает на них), с
+        возможностью открепить дом или добавить ещё один (тот же
+        autocomplete, что на карточке ЖК — _entity_modals.html)."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        umbrella_rows = await fetch("""
+            SELECT c.id, c.name, c.address,
+                   (SELECT count(*) FROM apartment_listings al
+                     WHERE lower(trim(al.complex_name)) = lower(trim(c.name))) AS listings_count
+            FROM complexes c
+            WHERE EXISTS (SELECT 1 FROM complexes h WHERE h.parent_complex_id = c.id)
+            ORDER BY c.name
+        """)
+        umbrellas = []
+        for u in umbrella_rows:
+            children = await fetch("""
+                SELECT id, name, krisha_url,
+                       (SELECT count(*) FROM apartment_listings al
+                         WHERE lower(trim(al.complex_name)) = lower(trim(complexes.name))) AS listings_count
+                FROM complexes WHERE parent_complex_id = $1 ORDER BY name
+            """, u["id"])
+            umbrellas.append({**dict(u), "children": [dict(c) for c in children]})
+        return templates.TemplateResponse("umbrellas.html", {
+            "request": request, "atab": "umbrellas", "umbrellas": umbrellas,
+        })
+
     @router.get("/admin/entity-ids", response_class=HTMLResponse)
     async def entity_ids_page(request: Request):
         """АЙДИ — обзор entity resolution, фаза 1 (docs/entity_resolution_plan.md):
@@ -1906,6 +1936,49 @@ def make_extras_router(templates) -> APIRouter:
         if result is None:
             return JSONResponse({"error": "не найден родитель, попытка назначить себя, или цикл"}, status_code=400)
         return JSONResponse({"ok": True, **result})
+
+    @router.post("/admin/api/entity-ids/unset-parent")
+    async def entity_ids_unset_parent(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import unset_parent_complex
+        body = await request.json()
+        complex_id = body.get("complex_id")
+        if not complex_id:
+            return JSONResponse({"error": "complex_id обязателен"}, status_code=400)
+        result = await unset_parent_complex(int(complex_id))
+        if result is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({"ok": True, **result})
+
+    # Autocomplete "добавить дом к ЖК" (задача 2026-08-13, "Зонтики") —
+    # fuzzy-поиск транслит+база без продуктового токена, см.
+    # bot.core.entity_resolution.search_complexes_for_parent.
+    @router.get("/admin/api/entity-ids/complex-search")
+    async def entity_ids_complex_search(request: Request, q: str = "", exclude: int = 0):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import search_complexes_for_parent
+        results = await search_complexes_for_parent(q, exclude_id=exclude or None)
+        return JSONResponse({"results": results})
+
+    # Модалка "Открыть пометку" на карточке ЖК (задача 2026-08-13,
+    # "убрать якоря") — вся история split_candidates этого ЖК (не
+    # только текущая review-строка), чтобы решателю был виден контекст
+    # прошлых approve/reject, не только последняя заметка.
+    @router.get("/admin/api/entity-ids/split/by-complex/{complex_id}")
+    async def entity_ids_split_by_complex(request: Request, complex_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        rows = await fetch("""
+            SELECT id, reason, comment, matched_by, status, created_at, resolved_at, resolved_by
+            FROM split_candidates WHERE complex_id = $1 ORDER BY created_at DESC
+        """, complex_id)
+        return JSONResponse({"candidates": [
+            {**dict(r), "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+             "resolved_at": r["resolved_at"].isoformat() if r["resolved_at"] else None}
+            for r in rows
+        ]})
 
     @router.post("/admin/api/entity-ids/split/{candidate_id}/approve")
     async def entity_ids_split_approve(request: Request, candidate_id: int):
