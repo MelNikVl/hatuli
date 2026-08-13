@@ -15,7 +15,37 @@
 .eid-table { width:100%; border-collapse:collapse; font-size:13px; }
 .eid-table th { text-align:left; color:#888; font-weight:600; padding:6px 10px; border-bottom:1px solid var(--border); font-size:11.5px; text-transform:uppercase; }
 .eid-table td { padding:7px 10px; border-bottom:1px solid var(--border); }
+
+/* Рендер .md-доков (задача 2026-08-13) — свёрнуто по умолчанию
+   (<details>, без JS): entity_resolution_plan.md один под 100 КБ,
+   разворачивать его на каждый визит было бы неюзабельно. */
+.eid-docs { margin-bottom:16px; }
+.eid-doc { background:var(--surface); border:1px solid var(--border); border-radius:12px; margin-bottom:8px; overflow:hidden; }
+.eid-doc summary { cursor:pointer; padding:12px 16px; font-size:13.5px; font-weight:700; list-style:none; }
+.eid-doc summary::-webkit-details-marker { display:none; }
+.eid-doc summary::before { content:"▸ "; color:#888; }
+.eid-doc[open] summary::before { content:"▾ "; }
+.eid-doc-body { padding:4px 20px 18px; font-size:13px; line-height:1.6; max-height:70vh; overflow-y:auto; }
+.eid-doc-body h1, .eid-doc-body h2, .eid-doc-body h3 { margin:18px 0 8px; }
+.eid-doc-body h1 { font-size:18px; } .eid-doc-body h2 { font-size:16px; } .eid-doc-body h3 { font-size:14px; }
+.eid-doc-body p { margin:8px 0; }
+.eid-doc-body code { background:var(--surface2,rgba(128,128,128,.15)); padding:1px 5px; border-radius:4px; font-size:12px; }
+.eid-doc-body pre { background:var(--surface2,rgba(128,128,128,.15)); padding:10px 12px; border-radius:8px; overflow-x:auto; }
+.eid-doc-body pre code { background:none; padding:0; }
+.eid-doc-body table { width:100%; border-collapse:collapse; margin:10px 0; font-size:12.5px; }
+.eid-doc-body th, .eid-doc-body td { border:1px solid var(--border); padding:5px 8px; text-align:left; }
+.eid-doc-body ul, .eid-doc-body ol { margin:8px 0 8px 22px; }
+.eid-doc-body a { color:var(--accent2,#2563eb); }
 </style>
+
+<div class="eid-docs">
+  {% for d in docs %}
+  <details class="eid-doc">
+    <summary>{{ d.label }}</summary>
+    <div class="eid-doc-body">{{ d.html | safe }}</div>
+  </details>
+  {% endfor %}
+</div>
 
 {% set complexes_total = totals.complexes_total or 0 %}
 {% set complexes_resolved = totals.complexes_resolved or 0 %}
@@ -258,6 +288,86 @@ async function eidDupBulkApprove() {
   if (d.errors && d.errors.length) alert(`Слито: ${d.merged}. Ошибок: ${d.errors.length} — см. консоль.`);
 }
 document.addEventListener('DOMContentLoaded', eidDupCount);
+</script>
+
+<div class="eid-card" id="eid-units">
+  <b style="font-size:14.5px;">🧱 Юниты — дубли-кандидаты ({{ unit_candidates|length }})</b>
+  <p style="font-size:12px;color:#888;line-height:1.6;margin-top:6px;">
+    Пары newbuild_units (застройщик) ↔ apartment_listings (Крыша) на одном ЖК, не разрешённые автоматически —
+    Фаза 2, гейт п.Б (<code>phase2_unit_match.py</code>, <code>docs/entity_resolution_plan.md</code>).
+    <b>зеркало</b> — 2+ юнита с тем же этаж+метраж на какой-то из сторон блока (планировка повторяется, номер
+    квартиры не подтверждён ни у одной стороны) — большинство очереди, решается только руками по evidence.
+    У newbuild_units нет собственной публичной страницы юнита (закрытый API шахматки застройщика) — ссылка
+    "юнит" ведёт на карточку ЖК, где искать этот юнит по этажу/площади/цене ниже. Каждое решение (включая
+    «пропустить») пишется в <code>unit_match_gold_labels</code> — журнал для будущей перекалибровки, не только
+    операционный статус очереди.
+  </p>
+  <div style="display:flex;align-items:center;gap:14px;margin:10px 0;">
+    <label style="font-size:12.5px;display:flex;align-items:center;gap:6px;cursor:pointer;">
+      <input type="checkbox" id="eid-unit-filter" onchange="eidUnitFilter()"> только зеркало
+    </label>
+  </div>
+  <table class="eid-table">
+    <tr><th></th><th>Крыша</th><th>Юнит застройщика</th><th>Evidence</th><th></th></tr>
+    {% for u in unit_candidates %}
+    {% set ev = u.evidence %}
+    <tr id="eid-unit-{{ u.id }}" data-mirror="{{ 'y' if u.is_mirror else 'n' }}">
+      <td>
+        {% if u.is_mirror %}<span style="color:#d97706;font-weight:600;" title="зеркальный кап">🪟 зеркало</span>
+        {% else %}<span style="color:#888;" title="ни цена, ни даты не подтвердили">❓ нет подтв.</span>{% endif %}
+      </td>
+      <td>
+        <a href="{{ u.al_url }}" target="_blank" rel="noopener" style="color:var(--text);font-weight:600;">{{ u.al_title or u.listing_id }}</a>
+        <div style="font-size:11px;color:#888;">
+          эт.{{ u.al_floor if u.al_floor is not none else '—' }} ·
+          {{ u.al_area if u.al_area is not none else '—' }}м² ·
+          {{ u.al_rooms if u.al_rooms is not none else '—' }}к ·
+          {{ '{:,}'.format(u.al_price)|replace(',', ' ') if u.al_price else '—' }}₸
+        </div>
+      </td>
+      <td>
+        <a href="{{ u.complex_krisha_url or ('/complex/' ~ u.complex_id) }}" target="_blank" rel="noopener" style="color:var(--text);font-weight:600;">{{ u.complex_name }}</a>
+        <span style="font-size:10.5px;color:#888;">({{ u.nu_source }})</span>
+        {% if u.nu_photo %}<a href="{{ u.nu_photo }}" target="_blank" rel="noopener" style="font-size:11px;">план</a>{% endif %}
+        <div style="font-size:11px;color:#888;">
+          {% if u.nu_building %}корп.{{ u.nu_building }}{% endif %}{% if u.nu_section %}/{{ u.nu_section }}{% endif %}
+          эт.{{ u.nu_floor if u.nu_floor is not none else '—' }} ·
+          {{ u.nu_area if u.nu_area is not none else '—' }}м² ·
+          {{ u.nu_rooms if u.nu_rooms is not none else '—' }}к ·
+          {{ '{:,}'.format(u.nu_price)|replace(',', ' ') if u.nu_price else '—' }}₸
+        </div>
+      </td>
+      <td style="white-space:nowrap;font-size:11px;">
+        <span title="этаж совпадает">🏢{{ 'да' if ev.floor_nb == ev.floor_al else '≠' }}</span>
+        <span title="дельта метража">📐{{ '%.2f'|format(ev.area_nb - ev.area_al) if ev.area_nb is not none and ev.area_al is not none else '—' }}м²</span><br>
+        <span title="цена в допуске" style="color:{{ '#16a34a' if ev.price_ok else '#888' }};">💰{{ 'да' if ev.price_ok else '—' }}</span>
+        <span title="периоды пересекаются" style="color:{{ '#16a34a' if ev.date_ok else '#888' }};">📅{{ 'да' if ev.date_ok else '—' }}</span><br>
+        {% if ev.unit_number_nb or ev.unit_number_al %}<span title="номер квартиры">№{{ ev.unit_number_nb or '?' }}/{{ ev.unit_number_al or '?' }}</span><br>{% endif %}
+        <span title="зеркальный счёт (застройщик/Крыша)" style="color:{{ '#d97706' if (ev.mirror_count_nb or 0) > 1 or (ev.mirror_count_al or 0) > 1 else '#888' }};">🪞{{ ev.mirror_count_nb }}/{{ ev.mirror_count_al }}</span>
+      </td>
+      <td style="white-space:nowrap;">
+        <a href="javascript:void(0)" onclick="eidUnitResolve({{ u.id }}, 'approve')" style="color:#16a34a;font-size:12px;margin-right:6px;">подтвердить</a>
+        <a href="javascript:void(0)" onclick="eidUnitResolve({{ u.id }}, 'reject')" style="color:#ef4444;font-size:12px;margin-right:6px;">отклонить</a>
+        <a href="javascript:void(0)" onclick="eidUnitResolve({{ u.id }}, 'skip')" style="color:#888;font-size:12px;">пропустить</a>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="color:#888;text-align:center;">пусто</td></tr>
+    {% endfor %}
+  </table>
+</div>
+<script>
+async function eidUnitResolve(id, action) {
+  const r = await fetch(`/admin/api/entity-ids/units/${id}/${action}`, {method: 'POST'});
+  if (r.ok) { const row = document.getElementById('eid-unit-' + id); if (row) row.remove(); }
+  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+}
+function eidUnitFilter() {
+  const onlyMirror = document.getElementById('eid-unit-filter').checked;
+  document.querySelectorAll('#eid-units tr[data-mirror]').forEach(row => {
+    row.style.display = (!onlyMirror || row.dataset.mirror === 'y') ? '' : 'none';
+  });
+}
 </script>
 
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">

@@ -45,3 +45,4 @@ curl_cffi==0.7.1
 psutil==7.2.2
 playwright-stealth
 yt-dlp
+markdown==3.10.3

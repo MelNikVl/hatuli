@@ -716,3 +716,71 @@ def is_auto_match(confidence: float) -> bool:
 
 def is_review_queue(confidence: float) -> bool:
     return REVIEW_QUEUE_THRESHOLD <= confidence < AUTO_MATCH_THRESHOLD
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Фаза 2 (юниты) — review-UX для unit_duplicate_candidates (задача
+# 2026-08-13, "review-driven режим" по прямому решению заказчика).
+# Тот же паттерн, что approve/reject_duplicate_candidate выше (complex-
+# уровень), плюс gold-label журнал (migrations/051) — каждое решение
+# человека, ВКЛЮЧАЯ skip, пишется отдельной append-only строкой с
+# evidence-снимком на момент решения, для будущей перекалибровки
+# unit-matching (не операционное состояние очереди — то остаётся в
+# unit_duplicate_candidates.status).
+async def _write_unit_gold_label(c, decision: str, decided_by: str) -> None:
+    from bot.db.pg import execute
+    # c["evidence"] — jsonb-колонка без codec'а в bot/db/pg.py, asyncpg
+    # отдаёт её текстом (JSON-строка), поэтому явный ::jsonb на вход.
+    await execute("""
+        INSERT INTO unit_match_gold_labels
+            (candidate_id, unit_id, listing_id, complex_id, reason, decision, evidence, decided_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+    """, c["id"], c["unit_id"], c["listing_id"], c["complex_id"], c["reason"], decision, c["evidence"], decided_by)
+
+
+async def approve_unit_candidate(candidate_id: int, approved_by: str = "admin") -> dict | None:
+    """Подтвердить кандидата на дубль юнита — переносит связь в
+    unit_source_links (spine, тот же принцип, что complex_source_links:
+    apartment_listings НЕ гарбейджится, живёт своей жизнью), помечает
+    кандидата status='merged', пишет gold label."""
+    from bot.db.pg import fetchrow, execute
+    c = await fetchrow("SELECT * FROM unit_duplicate_candidates WHERE id = $1", candidate_id)
+    if not c:
+        return None
+    await execute("""
+        INSERT INTO unit_source_links (unit_id, source, source_id, match_method, confidence, evidence, matched_by)
+        VALUES ($1, 'krisha', $2, 'manual_review', 1.0, $3::jsonb, $4)
+        ON CONFLICT (source, source_id) DO NOTHING
+    """, c["unit_id"], c["listing_id"], c["evidence"], approved_by)
+    await execute("""
+        UPDATE unit_duplicate_candidates SET status = 'merged', resolved_at = now(), resolved_by = $2
+        WHERE id = $1
+    """, candidate_id, approved_by)
+    await _write_unit_gold_label(c, "approve", approved_by)
+    return {"unit_id": c["unit_id"], "listing_id": c["listing_id"]}
+
+
+async def reject_unit_candidate(candidate_id: int, rejected_by: str = "admin") -> dict | None:
+    from bot.db.pg import fetchrow, execute
+    c = await fetchrow("SELECT * FROM unit_duplicate_candidates WHERE id = $1", candidate_id)
+    if not c:
+        return None
+    await execute("""
+        UPDATE unit_duplicate_candidates SET status = 'rejected', resolved_at = now(), resolved_by = $2
+        WHERE id = $1
+    """, candidate_id, rejected_by)
+    await _write_unit_gold_label(c, "reject", rejected_by)
+    return {"unit_id": c["unit_id"], "listing_id": c["listing_id"]}
+
+
+async def skip_unit_candidate(candidate_id: int, skipped_by: str = "admin") -> dict | None:
+    """Skip — "посмотрел, не уверен, вернусь позже": статус кандидата
+    НЕ трогаем (остаётся 'review', всплывёт в очереди снова), только
+    gold label decision='skip' — само по себе сигнал для калибровки
+    ("человек не смог решить по этому evidence")."""
+    from bot.db.pg import fetchrow
+    c = await fetchrow("SELECT * FROM unit_duplicate_candidates WHERE id = $1", candidate_id)
+    if not c:
+        return None
+    await _write_unit_gold_label(c, "skip", skipped_by)
+    return {"unit_id": c["unit_id"], "listing_id": c["listing_id"]}

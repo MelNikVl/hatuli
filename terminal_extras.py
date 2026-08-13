@@ -1498,6 +1498,35 @@ def make_extras_router(templates) -> APIRouter:
         await delete_site_user(user_id)
         return JSONResponse({"ok": True})
 
+    # .md-доки Фазы 1/2 — задача 2026-08-13 "разместить на странице
+    # /admin/entity-ids сверху": сами доки лежат в docs/ и растут (
+    # entity_resolution_plan.md — 90+ КБ), ритуал раньше требовал
+    # открывать их отдельно (редактор/git); рендерим в HTML прямо на
+    # странице (свёрнуто по умолчанию — <details>, без JS), чтобы
+    # контекст решения был рядом с самой очередью. Читаем и рендерим
+    # заново на каждый запрос (не кэшируем) — страница внутренняя,
+    # редкий трафик, доки меняются в течение дня по ходу работы.
+    _ENTITY_DOCS = [
+        ("docs/entity_resolution_plan.md", "📐 entity_resolution_plan.md"),
+        ("docs/adaptive_recheck_plan.md", "🔁 adaptive_recheck_plan.md"),
+        ("docs/process.md", "🧭 process.md"),
+    ]
+
+    def _render_entity_docs() -> list[dict]:
+        import markdown
+        root = os.path.dirname(os.path.abspath(__file__))
+        out = []
+        for rel_path, label in _ENTITY_DOCS:
+            full_path = os.path.join(root, rel_path)
+            try:
+                with open(full_path, encoding="utf-8") as f:
+                    text = f.read()
+                html = markdown.markdown(text, extensions=["tables", "fenced_code", "toc"])
+            except OSError as e:
+                html = f"<p style='color:#888;'>не удалось прочитать {rel_path}: {e}</p>"
+            out.append({"label": label, "html": html})
+        return out
+
     @router.get("/admin/entity-ids", response_class=HTMLResponse)
     async def entity_ids_page(request: Request):
         """АЙДИ — обзор entity resolution, фаза 1 (docs/entity_resolution_plan.md):
@@ -1621,6 +1650,40 @@ def make_extras_router(templates) -> APIRouter:
             d["bulk_eligible"] = bool(signals >= 2 and not blocked)
             dup_candidates.append(d)
 
+        # Фаза 2 (юниты) — review-очередь unit_duplicate_candidates
+        # (задача 2026-08-13, "review-driven режим", см.
+        # docs/entity_resolution_plan.md, "гейт п.Б"). 73 живых пары на
+        # момент внедрения: 69 ambiguous_floorplan (зеркальный кап —
+        # 2+ юнита с тем же этаж+метраж на какой-то стороне блока) +
+        # 4 no_confirmation. newbuild_units не имеет собственной
+        # публичной detail-страницы (у каждого source — свой закрытый
+        # API шахматки, не HTML-карточка юнита) — кликабельная ссылка
+        # на "юнит застройщика" ведёт на страницу ЖК (общий контекст +
+        # layout_photo_url отдельно, если есть), это структурное
+        # ограничение данных, не недоделка UI.
+        unit_rows = await pg_fetch("""
+            SELECT udc.id, udc.unit_id, udc.listing_id, udc.complex_id, udc.reason, udc.evidence, udc.created_at,
+                   nu.source AS nu_source, nu.building AS nu_building, nu.section AS nu_section,
+                   nu.floor AS nu_floor, nu.area AS nu_area, nu.rooms AS nu_rooms, nu.price AS nu_price,
+                   nu.layout_photo_url AS nu_photo,
+                   al.url AS al_url, al.title AS al_title, al.price AS al_price, al.area AS al_area,
+                   al.rooms AS al_rooms, al.floor AS al_floor,
+                   c.name AS complex_name, c.krisha_url AS complex_krisha_url
+            FROM unit_duplicate_candidates udc
+            JOIN newbuild_units nu ON nu.id = udc.unit_id
+            JOIN apartment_listings al ON al.id = udc.listing_id
+            JOIN complexes c ON c.id = udc.complex_id
+            WHERE udc.status = 'review'
+            ORDER BY udc.reason, udc.created_at DESC
+        """)
+        unit_candidates = []
+        for r in unit_rows:
+            d = dict(r)
+            ev = d.get("evidence")
+            d["evidence"] = json.loads(ev) if isinstance(ev, str) else (ev or {})
+            d["is_mirror"] = d["reason"] == "ambiguous_floorplan"
+            unit_candidates.append(d)
+
         # ── Разбивка нерезолвнутых ЖК (задача 2026-08-13) — без правок кода
         # в алгоритме матчинга, чистая диагностика: (а) мусор/дубли — сверка
         # с bot.core.complex_audit (та же эвристика street/junk, что уже
@@ -1663,12 +1726,15 @@ def make_extras_router(templates) -> APIRouter:
 
         return templates.TemplateResponse("entity_ids.html", {
             "request": request,
+            "atab": "entity_ids",
+            "docs": _render_entity_docs(),
             "totals": dict(totals) if totals else {},
             "by_source": [dict(r) for r in by_source],
             "by_method": [dict(r) for r in by_method],
             "conf_hist": {r["bucket"]: r["n"] for r in conf_hist},
             "candidates": candidates,
             "dup_candidates": dup_candidates,
+            "unit_candidates": unit_candidates,
             "breakdown": {
                 "unresolved_total": len(unresolved_rows),
                 "junk": breakdown_junk,
@@ -1742,6 +1808,41 @@ def make_extras_router(templates) -> APIRouter:
             except Exception as e:
                 errors.append({"id": cid, "error": str(e)[:200]})
         return JSONResponse({"ok": True, "merged": len(results), "errors": errors})
+
+    # Фаза 2 (юниты) — review-действия для unit_duplicate_candidates
+    # (задача 2026-08-13). approve/reject/skip — bot.core.entity_
+    # resolution.*_unit_candidate, каждое пишет gold label
+    # (unit_match_gold_labels, migrations/051) вместе с операционным
+    # эффектом (approve мержит в unit_source_links, reject/skip — нет).
+    @router.post("/admin/api/entity-ids/units/{candidate_id}/approve")
+    async def entity_ids_unit_approve(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import approve_unit_candidate
+        r = await approve_unit_candidate(candidate_id, approved_by="admin")
+        if r is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({"ok": True, **r})
+
+    @router.post("/admin/api/entity-ids/units/{candidate_id}/reject")
+    async def entity_ids_unit_reject(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import reject_unit_candidate
+        r = await reject_unit_candidate(candidate_id, rejected_by="admin")
+        if r is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({"ok": True, **r})
+
+    @router.post("/admin/api/entity-ids/units/{candidate_id}/skip")
+    async def entity_ids_unit_skip(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import skip_unit_candidate
+        r = await skip_unit_candidate(candidate_id, skipped_by="admin")
+        if r is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({"ok": True, **r})
 
     @router.get("/admin/api/entity-ids/timeline")
     async def entity_ids_timeline(request: Request):
