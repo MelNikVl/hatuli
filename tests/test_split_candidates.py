@@ -45,20 +45,29 @@ async def blob_complex(db):
 
 
 @pytest.mark.asyncio
-async def test_flag_creates_review_row_and_blocks_duplicate(blob_complex):
+async def test_flag_creates_review_row_and_appends_on_repeat(blob_complex):
+    """UX-фикс 2026-08-13: повторная пометка того же ЖК больше не
+    блокируется (было — None/409, "стена") — дописывает комментарий к
+    существующей записи и возвращает её id с existing=True ("мост")."""
     from bot.core.entity_resolution import flag_split_candidate
     from bot.db.pg import fetchrow
 
-    cid = await flag_split_candidate(blob_complex, "похоже на два разных дома", "pytest")
-    assert cid is not None
+    result = await flag_split_candidate(blob_complex, "похоже на два разных дома", "pytest")
+    cid = result["id"]
+    assert result["existing"] is False
     row = await fetchrow("SELECT * FROM split_candidates WHERE id=$1", cid)
     assert row["reason"] == "manual"
     assert row["status"] == "review"
     assert row["comment"] == "похоже на два разных дома"
 
-    # повторная пометка того же ЖК, пока первая не разрешена — блокируется
-    cid2 = await flag_split_candidate(blob_complex, "ещё раз", "pytest")
-    assert cid2 is None
+    result2 = await flag_split_candidate(blob_complex, "ещё раз, с деталями", "pytest")
+    assert result2["id"] == cid
+    assert result2["existing"] is True
+    row2 = await fetchrow("SELECT * FROM split_candidates WHERE id=$1", cid)
+    assert "похоже на два разных дома" in row2["comment"]
+    assert "ещё раз, с деталями" in row2["comment"]
+    n = await fetchrow("SELECT count(*) AS n FROM split_candidates WHERE complex_id=$1", blob_complex)
+    assert n["n"] == 1  # не создал вторую строку
 
 
 @pytest.mark.asyncio
@@ -66,7 +75,7 @@ async def test_approve_manual_marks_status_without_executing(blob_complex):
     from bot.core.entity_resolution import flag_split_candidate, approve_split_candidate
     from bot.db.pg import fetchval
 
-    cid = await flag_split_candidate(blob_complex, "подозрение", "pytest")
+    cid = (await flag_split_candidate(blob_complex, "подозрение", "pytest"))["id"]
     result = await approve_split_candidate(cid, "pytest")
     assert result == {"complex_id": blob_complex, "children": []}
 
@@ -224,7 +233,7 @@ async def test_reject_marks_status(blob_complex):
     from bot.core.entity_resolution import flag_split_candidate, reject_split_candidate
     from bot.db.pg import fetchval
 
-    cid = await flag_split_candidate(blob_complex, "ложное срабатывание", "pytest")
+    cid = (await flag_split_candidate(blob_complex, "ложное срабатывание", "pytest"))["id"]
     await reject_split_candidate(cid, "pytest")
     status = await fetchval("SELECT status FROM split_candidates WHERE id=$1", cid)
     assert status == "rejected"
@@ -235,6 +244,59 @@ async def test_auto_gate_false_below_threshold(db):
     from bot.core.entity_resolution import split_auto_execution_allowed
     # уникальная reason-корзина, чтобы не зависеть от реальных данных БД
     assert await split_auto_execution_allowed("__test_reason_never_seen__") is False
+
+
+@pytest_asyncio.fixture
+async def parent_child_complexes(db):
+    """Родитель (зонтик) + ребёнок (дом), без parent_complex_id —
+    для теста set_parent_complex()."""
+    from bot.db.pg import fetchval, execute
+    parent_id = await fetchval(
+        "INSERT INTO complexes (name) VALUES ('__test_umbrella__') RETURNING id")
+    child_id = await fetchval(
+        "INSERT INTO complexes (name) VALUES ('__test_house__') RETURNING id")
+    try:
+        yield parent_id, child_id
+    finally:
+        await execute("DELETE FROM complexes WHERE id IN ($1, $2)", parent_id, child_id)
+
+
+@pytest.mark.asyncio
+async def test_set_parent_complex_links(parent_child_complexes):
+    from bot.core.entity_resolution import set_parent_complex
+    from bot.db.pg import fetchval
+
+    parent_id, child_id = parent_child_complexes
+    result = await set_parent_complex(child_id, parent_id, "pytest")
+    assert result == {"complex_id": child_id, "parent_complex_id": parent_id}
+    got = await fetchval("SELECT parent_complex_id FROM complexes WHERE id=$1", child_id)
+    assert got == parent_id
+
+
+@pytest.mark.asyncio
+async def test_set_parent_complex_rejects_self(parent_child_complexes):
+    from bot.core.entity_resolution import set_parent_complex
+    parent_id, child_id = parent_child_complexes
+    assert await set_parent_complex(child_id, child_id, "pytest") is None
+
+
+@pytest.mark.asyncio
+async def test_set_parent_complex_rejects_cycle(parent_child_complexes):
+    from bot.core.entity_resolution import set_parent_complex
+    parent_id, child_id = parent_child_complexes
+    # parent_id -> child_id (валидно)
+    ok = await set_parent_complex(parent_id, child_id, "pytest")
+    assert ok is not None
+    # child_id -> parent_id теперь создало бы цикл (parent_id уже -> child_id)
+    cycle = await set_parent_complex(child_id, parent_id, "pytest")
+    assert cycle is None
+
+
+@pytest.mark.asyncio
+async def test_set_parent_complex_missing_parent_returns_none(parent_child_complexes):
+    from bot.core.entity_resolution import set_parent_complex
+    _, child_id = parent_child_complexes
+    assert await set_parent_complex(child_id, -1, "pytest") is None
 
 
 @pytest.mark.asyncio

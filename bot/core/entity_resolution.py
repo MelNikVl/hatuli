@@ -798,21 +798,69 @@ SPLIT_AUTO_GATE_MIN_DECIDED = 10
 SPLIT_AUTO_GATE_MIN_PRECISION = 0.95
 
 
-async def flag_split_candidate(complex_id: int, comment: str, flagged_by: str) -> int | None:
+async def flag_split_candidate(complex_id: int, comment: str, flagged_by: str) -> dict:
     """Ручная пометка "на расшивку" — кнопка на /admin/entity-ids и в
     карточке ЖК (комментарий человека — сам сигнал, evidence пустой:
     решателю искать причину руками на карточке, не то, что нашёл бы
-    детектор). None, если уже есть неразрешённая пометка на этот ЖК
-    (не плодим дубли в очереди)."""
-    from bot.db.pg import fetchval
-    exists = await fetchval(
-        "SELECT 1 FROM split_candidates WHERE complex_id=$1 AND status='review'", complex_id)
-    if exists:
-        return None
-    return await fetchval("""
+    детектор).
+
+    UX-фикс 2026-08-13 ("стена -> мост", живая находка: пользователь
+    пометил #4267 повторно после того, как за ним уже была
+    неразрешённая пометка — старый код отвечал 409, комментарий
+    терялся). Теперь: если уже есть неразрешённая пометка на этот ЖК —
+    НЕ создаём вторую строку, а ДОПИСЫВАЕМ комментарий к существующей
+    (с разделителем/автором/временем — append-журнал, не перезапись) и
+    возвращаем ту же запись с `existing=True`. Всегда успех (200 на
+    уровне роута) — 409 для человека, честно пытающегося оставить
+    вторую заметку по факту, был стеной, не сигналом об ошибке."""
+    from datetime import datetime, timezone
+    from bot.db.pg import fetchrow, fetchval, execute
+    existing = await fetchrow(
+        "SELECT id, comment FROM split_candidates WHERE complex_id=$1 AND status='review'", complex_id)
+    if existing:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        prior = existing["comment"] or ""
+        appended = f"{prior}\n---\n[{ts}, {flagged_by}]: {comment}" if prior else comment
+        await execute("UPDATE split_candidates SET comment=$2 WHERE id=$1", existing["id"], appended)
+        return {"id": existing["id"], "existing": True}
+    cid = await fetchval("""
         INSERT INTO split_candidates (complex_id, reason, comment, evidence, matched_by)
         VALUES ($1, 'manual', $2, '{}'::jsonb, $3) RETURNING id
     """, complex_id, comment, flagged_by)
+    return {"id": cid, "existing": False}
+
+
+async def set_parent_complex(complex_id: int, parent_complex_id: int, set_by: str) -> dict | None:
+    """"Добавить дом к ЖК" — ручная привязка дом -> зонтик (кнопка на
+    каждой строке очереди расшивки и на карточке любого ЖК, задача
+    2026-08-13, "модель зонтик/дом"). Не автоматика детектора — прямое
+    решение человека, потому и без гейта/evidence. Защиты: нельзя
+    назначить самого себя родителем; нельзя создать цикл (пройти вверх
+    по цепочке parent_complex_id от предполагаемого родителя и
+    убедиться, что среди предков не окажется сам complex_id) —
+    2-уровневая модель зонтик/дом не подразумевает цепочек длиннее
+    одного шага, но дешёвая защита от порчи данных лишней не бывает."""
+    from bot.db.pg import fetchval, fetchrow, execute
+    if complex_id == parent_complex_id:
+        return None
+    target = await fetchrow("SELECT id, parent_complex_id FROM complexes WHERE id=$1", parent_complex_id)
+    if not target:
+        return None
+    seen = {parent_complex_id}
+    cursor = target["parent_complex_id"]
+    while cursor is not None:
+        if cursor == complex_id:
+            return None  # цикл
+        if cursor in seen:
+            break  # уже существующий цикл выше по цепочке — не наша забота здесь, не зацикливаемся сами
+        seen.add(cursor)
+        row = await fetchrow("SELECT parent_complex_id FROM complexes WHERE id=$1", cursor)
+        cursor = row["parent_complex_id"] if row else None
+    exists = await fetchval("SELECT 1 FROM complexes WHERE id=$1", complex_id)
+    if not exists:
+        return None
+    await execute("UPDATE complexes SET parent_complex_id=$2 WHERE id=$1", complex_id, parent_complex_id)
+    return {"complex_id": complex_id, "parent_complex_id": parent_complex_id}
 
 
 async def _execute_split_cluster(parent_id: int, name: str, cluster: dict, matched_by: str) -> dict:
@@ -835,14 +883,15 @@ async def _execute_split_cluster(parent_id: int, name: str, cluster: dict, match
     if existing:
         child_id = existing["id"]
         await execute(
-            "UPDATE complexes SET provenance = COALESCE(provenance,'{}'::jsonb) || $2::jsonb WHERE id=$1",
-            child_id, json.dumps(prov))
+            "UPDATE complexes SET provenance = COALESCE(provenance,'{}'::jsonb) || $2::jsonb, "
+            "parent_complex_id = COALESCE(parent_complex_id, $3) WHERE id=$1",
+            child_id, json.dumps(prov), parent_id)
         action = "provenance_backfilled"
     else:
         child_id = await fetchval("""
-            INSERT INTO complexes (name, lat, lon, address, provenance)
-            VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id
-        """, name, cluster.get("lat"), cluster.get("lon"), cluster.get("address"), json.dumps(prov))
+            INSERT INTO complexes (name, lat, lon, address, provenance, parent_complex_id)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING id
+        """, name, cluster.get("lat"), cluster.get("lon"), cluster.get("address"), json.dumps(prov), parent_id)
         action = "created"
     await execute(
         "UPDATE complexes SET provenance = COALESCE(provenance,'{}'::jsonb) || "
@@ -891,14 +940,15 @@ async def _execute_split_homeportal_blocks(parent_id: int, parent_name: str,
         if existing:
             child_id = existing["id"]
             await execute(
-                "UPDATE complexes SET provenance = COALESCE(provenance,'{}'::jsonb) || $2::jsonb WHERE id=$1",
-                child_id, json.dumps(prov))
+                "UPDATE complexes SET provenance = COALESCE(provenance,'{}'::jsonb) || $2::jsonb, "
+                "parent_complex_id = COALESCE(parent_complex_id, $3) WHERE id=$1",
+                child_id, json.dumps(prov), parent_id)
             action = "provenance_backfilled"
         else:
             child_id = await fetchval("""
-                INSERT INTO complexes (name, lat, lon, address, provenance)
-                VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id
-            """, name, objs[0].get("lat"), objs[0].get("lon"), objs[0].get("address"), json.dumps(prov))
+                INSERT INTO complexes (name, lat, lon, address, provenance, parent_complex_id)
+                VALUES ($1, $2, $3, $4, $5::jsonb, $6) RETURNING id
+            """, name, objs[0].get("lat"), objs[0].get("lon"), objs[0].get("address"), json.dumps(prov), parent_id)
             action = "created"
 
         relinked = 0

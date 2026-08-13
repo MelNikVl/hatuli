@@ -77,6 +77,31 @@ async def test_split_flag_route_registered_and_writes_comment(client, blob_compl
 
 
 @pytest.mark.asyncio
+async def test_split_flag_route_repeat_flag_appends_not_4xx(client, blob_complex):
+    """UX-фикс 2026-08-13: повторная пометка того же ЖК (пока первая
+    не разрешена) — НЕ 4xx (было 409, "стена"), а 200 с id той же
+    записи ("мост") + комментарий дописан, не потерян."""
+    r1 = await client.post("/admin/api/entity-ids/split/flag",
+                           json={"complex_id": blob_complex, "comment": "первая заметка"})
+    assert r1.status_code == 200
+    first_id = r1.json()["id"]
+    assert r1.json()["existing"] is False
+
+    r2 = await client.post("/admin/api/entity-ids/split/flag",
+                           json={"complex_id": blob_complex, "comment": "вторая заметка"})
+    assert r2.status_code == 200
+    assert r2.status_code < 400
+    body2 = r2.json()
+    assert body2["id"] == first_id
+    assert body2["existing"] is True
+
+    from bot.db.pg import fetchrow
+    row = await fetchrow("SELECT comment FROM split_candidates WHERE id=$1", first_id)
+    assert "первая заметка" in row["comment"]
+    assert "вторая заметка" in row["comment"]
+
+
+@pytest.mark.asyncio
 async def test_split_flag_route_requires_auth():
     import httpx
     from bot.db.pg import init_pool, close_pool

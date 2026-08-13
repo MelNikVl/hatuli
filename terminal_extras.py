@@ -1689,9 +1689,14 @@ def make_extras_router(templates) -> APIRouter:
         # split_candidates: ручная пометка (кнопка на этой странице и в
         # карточке ЖК) + авто-детектор (split_detect.py, гео-кластеры
         # apartment_listings внутри одного complex_id).
+        # "объявлений в БД" (задача 2026-08-13, триаж — крупные ЖК
+        # приоритетнее мелких) — apartment_listings привязаны ИМЕНЕМ
+        # (lower/trim), не FK, тот же джойн, что везде в этом файле.
         split_rows = await pg_fetch("""
             SELECT sc.id, sc.complex_id, sc.reason, sc.comment, sc.evidence, sc.matched_by, sc.created_at,
-                   c.name AS complex_name, c.address AS complex_address, c.krisha_url AS complex_krisha_url
+                   c.name AS complex_name, c.address AS complex_address, c.krisha_url AS complex_krisha_url,
+                   (SELECT count(*) FROM apartment_listings al
+                     WHERE lower(trim(al.complex_name)) = lower(trim(c.name))) AS listings_count
             FROM split_candidates sc
             JOIN complexes c ON c.id = sc.complex_id
             WHERE sc.status = 'review'
@@ -1868,6 +1873,9 @@ def make_extras_router(templates) -> APIRouter:
     # "Расшивка" (unravel) как review-очередь (задача 2026-08-13).
     # flag — общая точка входа и для кнопки на /admin/entity-ids, и для
     # кнопки на карточке ЖК (/complex/{id}) — оба шлют {complex_id, comment}.
+    # UX-фикс: повторная пометка уже помеченного ЖК больше не 409 —
+    # flag_split_candidate() сам решает append vs новая запись, роут
+    # всегда 200 (см. docstring flag_split_candidate).
     @router.post("/admin/api/entity-ids/split/flag")
     async def entity_ids_split_flag(request: Request):
         if not is_authed(request):
@@ -1878,10 +1886,26 @@ def make_extras_router(templates) -> APIRouter:
         comment = (body.get("comment") or "").strip()
         if not complex_id:
             return JSONResponse({"error": "complex_id обязателен"}, status_code=400)
-        cid = await flag_split_candidate(int(complex_id), comment, flagged_by="admin")
-        if cid is None:
-            return JSONResponse({"error": "уже есть неразрешённая пометка на этот ЖК"}, status_code=409)
-        return JSONResponse({"ok": True, "id": cid})
+        result = await flag_split_candidate(int(complex_id), comment, flagged_by="admin")
+        return JSONResponse({"ok": True, **result})
+
+    # "Добавить дом к ЖК" (задача 2026-08-13, "модель зонтик/дом") —
+    # ручная привязка parent_complex_id, кнопка на строке очереди
+    # расшивки и на карточке любого ЖК.
+    @router.post("/admin/api/entity-ids/set-parent")
+    async def entity_ids_set_parent(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import set_parent_complex
+        body = await request.json()
+        complex_id = body.get("complex_id")
+        parent_complex_id = body.get("parent_complex_id")
+        if not complex_id or not parent_complex_id:
+            return JSONResponse({"error": "complex_id и parent_complex_id обязательны"}, status_code=400)
+        result = await set_parent_complex(int(complex_id), int(parent_complex_id), set_by="admin")
+        if result is None:
+            return JSONResponse({"error": "не найден родитель, попытка назначить себя, или цикл"}, status_code=400)
+        return JSONResponse({"ok": True, **result})
 
     @router.post("/admin/api/entity-ids/split/{candidate_id}/approve")
     async def entity_ids_split_approve(request: Request, candidate_id: int):
@@ -4627,9 +4651,32 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY rooms
         """, complex_id)
 
+        # Зонтик/дом (задача 2026-08-13, "модель зонтик/дом") — публичная
+        # сторона: дом показывает ссылку "часть комплекса X", зонтик —
+        # список домов. UX-фикс кнопки расшивки — нужно знать, есть ли
+        # уже неразрешённая пометка на ЭТОТ ЖК (не общий список, точечно).
+        from bot.db.pg import fetchval
+        parent_complex = None
+        if cx.get("parent_complex_id"):
+            parent_complex = await fetchrow(
+                "SELECT id, name FROM complexes WHERE id = $1", cx["parent_complex_id"])
+        child_complexes = await fetch("""
+            SELECT c2.id, c2.name, c2.krisha_url,
+                   (SELECT count(*) FROM apartment_listings al
+                     WHERE lower(trim(al.complex_name)) = lower(trim(c2.name))) AS listings_count,
+                   c2.source_info->'krisha'->>'deadline' AS deadline
+            FROM complexes c2 WHERE c2.parent_complex_id = $1
+            ORDER BY c2.name
+        """, complex_id)
+        pending_split_candidate = await fetchval(
+            "SELECT id FROM split_candidates WHERE complex_id = $1 AND status = 'review'", complex_id)
+
         return templates.TemplateResponse("complex_detail.html", {
             "request": request,
             "cx": dict(cx),
+            "parent_complex": dict(parent_complex) if parent_complex else None,
+            "child_complexes": [dict(c) for c in child_complexes],
+            "pending_split_candidate": pending_split_candidate,
             "cx_sources": cx_sources,
             "geo": {"lat": float(geo["lat"]), "lon": float(geo["lon"])} if geo and geo["lat"] else None,
             "cx_address": addr_row["address"] if addr_row else None,

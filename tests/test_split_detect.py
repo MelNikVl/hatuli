@@ -130,15 +130,40 @@ async def db():
 
 
 @pytest.mark.asyncio
-async def test_gather_homeportal_blocks_real_multi_queue_complex(db):
-    """Живой кейс из проверки 2026-08-13: complex_id=1193 (UIA.DARYN) —
-    9 homeportal-объектов, каждый со своим буквенным токеном (A-H,M)."""
-    from bot.db.pg import fetch
-    from split_detect import gather_homeportal_blocks
-    blocks, tokens = await gather_homeportal_blocks(1193, fetch)
-    assert blocks is not None
-    assert len(blocks) >= 2
-    assert len(set(tokens)) >= 2
+async def test_gather_homeportal_blocks_multi_token_complex(db):
+    """Раньше проверялось на живом complex_id=1193 (UIA.DARYN, 9
+    homeportal-объектов A-H,M) — но именно ЭТОТ живой кейс стал первым
+    umbrella-split (задача 2026-08-13, "модель зонтик/дом"): #1193
+    сузился до одного объекта (блок B), 8 остальных разъехались по
+    новым complex_id. Тест на мутирующие живые данные — хрупкость,
+    какую сам этот прогон и продемонстрировал; переведён на
+    самодостаточную фикстуру."""
+    from bot.db.pg import fetch, fetchval, execute
+    cid = await fetchval(
+        "INSERT INTO complexes (name, lat, lon) VALUES ('__test_hp_multi_token__', 51.1, 71.4) RETURNING id")
+    obj_a, obj_b = 999990101, 999990102
+    try:
+        await execute("""
+            INSERT INTO homeportal_objects (object_id, name, address, latitude, longitude)
+            VALUES ($1, '__test_hp_multi_token__ A', 'ул. Тест, 1', '51.1', '71.4'),
+                   ($2, '__test_hp_multi_token__ B', 'ул. Тест, 2', '51.2', '71.5')
+        """, obj_a, obj_b)
+        await execute("""
+            INSERT INTO complex_source_links (complex_id, source, source_id, match_method, confidence, matched_by)
+            VALUES ($1, 'homeportal', $2, 'manual', 1.0, 'pytest'),
+                   ($1, 'homeportal', $3, 'manual', 1.0, 'pytest')
+        """, cid, str(obj_a), str(obj_b))
+
+        from split_detect import gather_homeportal_blocks
+        blocks, tokens = await gather_homeportal_blocks(cid, fetch)
+        assert blocks is not None
+        assert len(blocks) == 2
+        assert len(set(tokens)) == 2
+    finally:
+        await execute("DELETE FROM complex_source_links WHERE source='homeportal' AND source_id IN ($1, $2)",
+                      str(obj_a), str(obj_b))
+        await execute("DELETE FROM homeportal_objects WHERE object_id IN ($1, $2)", obj_a, obj_b)
+        await execute("DELETE FROM complexes WHERE id=$1", cid)
 
 
 @pytest.mark.asyncio
