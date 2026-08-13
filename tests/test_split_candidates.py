@@ -140,6 +140,85 @@ async def test_approve_existing_name_backfills_provenance_not_duplicate(blob_com
     await execute("DELETE FROM complexes WHERE id=$1", existing_child_id)
 
 
+@pytest_asyncio.fixture
+async def homeportal_blob(db):
+    """Родитель с токеном "4" в имени (как #4267 "Коркем III (блок 4)")
+    + 2 homeportal-объекта: один совпадает с токеном родителя (должен
+    остаться), другой — "чужой" токен "7" (должен переехать). Тестовые
+    object_id — из высокого диапазона, не пересекается с реальными."""
+    from bot.db.pg import fetchval, execute
+    parent_id = await fetchval(
+        "INSERT INTO complexes (name, lat, lon) VALUES ('__test_hp_parent__ (блок 4)', 51.1, 71.4) RETURNING id")
+    own_obj, foreign_obj = 999990001, 999990002
+    await execute("""
+        INSERT INTO homeportal_objects (object_id, name, address, latitude, longitude)
+        VALUES ($1, '__test_hp_parent__ (блок 4)', 'ул. Тест, 1', '51.1', '71.4')
+    """, own_obj)
+    await execute("""
+        INSERT INTO homeportal_objects (object_id, name, address, latitude, longitude)
+        VALUES ($1, '__test_hp_parent__ (блок 7)', 'ул. Тест, 1', '51.1', '71.4')
+    """, foreign_obj)
+    await execute("""
+        INSERT INTO complex_source_links (complex_id, source, source_id, match_method, confidence, matched_by)
+        VALUES ($1, 'homeportal', $2, 'manual', 1.0, 'unravel'), ($1, 'homeportal', $3, 'manual', 1.0, 'unravel')
+    """, parent_id, str(own_obj), str(foreign_obj))
+    try:
+        yield parent_id, own_obj, foreign_obj
+    finally:
+        await execute("DELETE FROM complex_source_links WHERE source='homeportal' AND source_id IN ($1, $2)",
+                      str(own_obj), str(foreign_obj))
+        await execute("DELETE FROM homeportal_objects WHERE object_id IN ($1, $2)", own_obj, foreign_obj)
+        await execute("DELETE FROM split_candidates WHERE complex_id = $1", parent_id)
+        await execute(
+            "DELETE FROM complexes WHERE lower(trim(name)) LIKE lower(trim('__test_hp_parent__%'))")
+
+
+@pytest.mark.asyncio
+async def test_approve_homeportal_blocks_relinks_foreign_object_only(homeportal_blob):
+    """Живой прототип — #4267 "Коркем III (блок 4)": объект с ТЕМ ЖЕ
+    токеном, что имя родителя, остаётся на месте; объект с ДРУГИМ
+    токеном перелинковывается на новый child (создан по имени объекта),
+    не только "создать строку" — сам complex_source_links должен
+    физически поменять complex_id (в отличие от apartment_listings,
+    homeportal не приджойнивается по имени сам)."""
+    from bot.core.entity_resolution import approve_split_candidate
+    from bot.db.pg import fetchval, fetchrow, execute
+
+    parent_id, own_obj, foreign_obj = homeportal_blob
+    evidence = {
+        "parent_name": "__test_hp_parent__ (блок 4)",
+        "homeportal_blocks": [
+            {"object_id": own_obj, "name": "__test_hp_parent__ (блок 4)", "address": "ул. Тест, 1",
+             "lat": 51.1, "lon": 71.4, "token": "4", "spot_number": None},
+            {"object_id": foreign_obj, "name": "__test_hp_parent__ (блок 7)", "address": "ул. Тест, 1",
+             "lat": 51.1, "lon": 71.4, "token": "7", "spot_number": None},
+        ],
+    }
+    cid = await fetchval("""
+        INSERT INTO split_candidates (complex_id, reason, evidence, matched_by)
+        VALUES ($1, 'multi_source_evidence', $2::jsonb, 'pytest_detector') RETURNING id
+    """, parent_id, json.dumps(evidence))
+
+    result = await approve_split_candidate(cid, "pytest")
+    assert len(result["children"]) == 1
+    child = result["children"][0]
+    assert child["name"] == "__test_hp_parent__ (блок 7)"
+    assert child["action"] == "created"
+    assert child["objects_relinked"] == 1
+
+    own_link = await fetchrow(
+        "SELECT complex_id FROM complex_source_links WHERE source='homeportal' AND source_id=$1", str(own_obj))
+    assert own_link["complex_id"] == parent_id  # "свой" токен — не тронут
+
+    foreign_link = await fetchrow(
+        "SELECT complex_id, match_method FROM complex_source_links WHERE source='homeportal' AND source_id=$1",
+        str(foreign_obj))
+    assert foreign_link["complex_id"] == child["child_id"]  # "чужой" — перелинкован
+    assert foreign_link["match_method"] == "split_detect_relink"
+
+    await execute("DELETE FROM complexes WHERE id=$1", child["child_id"])
+
+
 @pytest.mark.asyncio
 async def test_reject_marks_status(blob_complex):
     from bot.core.entity_resolution import flag_split_candidate, reject_split_candidate

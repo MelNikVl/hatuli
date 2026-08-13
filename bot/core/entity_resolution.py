@@ -851,14 +851,84 @@ async def _execute_split_cluster(parent_id: int, name: str, cluster: dict, match
     return {"child_id": child_id, "name": name, "action": action}
 
 
+async def _execute_split_homeportal_blocks(parent_id: int, parent_name: str,
+                                            blocks: list[dict], matched_by: str) -> list[dict]:
+    """Расшивка по homeportal_blocks-evidence (задача 2026-08-13, живой
+    приоритетный кейс — #4267 "Коркем III (блок 4)"): в отличие от
+    apartment_listings (привязка ИМЕНЕМ, ничего переносить не надо),
+    homeportal-объекты привязаны через complex_source_links (source_id
+    = object_id) — расшивка тут ОБЯЗАНА явно перелинковать
+    complex_source_links на новый child_id, иначе объект просто
+    физически останется на родителе (в отличие от _execute_split_
+    cluster, где новая complexes-строка сама "притягивает" объявления
+    по имени на следующий рендер).
+
+    "Паспорт" — объекты, чей токен СОВПАДАЕТ с токеном самого имени
+    родителя (_phase_token(parent_name)) — остаются, не трогаем.
+    "Чужие" (токен есть и отличается от паспортного) — группируются по
+    своему токену, каждая группа -> свой child (имя берём у самого
+    homeportal-объекта, уже человекочитаемо промаркировано источником,
+    "ЖК \"Коркем III\" (блок 7)" — лучше не переизобретать формат)."""
+    from datetime import datetime, timezone
+    from bot.db.pg import fetchval, fetchrow, execute
+
+    parent_token, _ = _phase_token(parent_name or "")
+    foreign = [b for b in blocks if b.get("token") and b["token"] != parent_token]
+    if not foreign:
+        return []
+
+    by_token: dict[str, list[dict]] = {}
+    for b in foreign:
+        by_token.setdefault(b["token"], []).append(b)
+
+    results = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for token, objs in by_token.items():
+        name = objs[0]["name"]
+        existing = await fetchrow("SELECT id FROM complexes WHERE lower(trim(name))=lower(trim($1))", name)
+        prov = {"split_from": parent_id, "matched_by": "unravel", "split_at": now_iso,
+                "method": "split_detect_homeportal"}
+        if existing:
+            child_id = existing["id"]
+            await execute(
+                "UPDATE complexes SET provenance = COALESCE(provenance,'{}'::jsonb) || $2::jsonb WHERE id=$1",
+                child_id, json.dumps(prov))
+            action = "provenance_backfilled"
+        else:
+            child_id = await fetchval("""
+                INSERT INTO complexes (name, lat, lon, address, provenance)
+                VALUES ($1, $2, $3, $4, $5::jsonb) RETURNING id
+            """, name, objs[0].get("lat"), objs[0].get("lon"), objs[0].get("address"), json.dumps(prov))
+            action = "created"
+
+        relinked = 0
+        for o in objs:
+            relink_evidence = {"relinked_from": parent_id, "reason": "split_detect_homeportal"}
+            r = await execute("""
+                UPDATE complex_source_links
+                SET complex_id = $2, matched_by = $3, match_method = 'split_detect_relink',
+                    matched_at = now(), evidence = $4::jsonb
+                WHERE source = 'homeportal' AND source_id = $1
+            """, str(o["object_id"]), child_id, matched_by, json.dumps(relink_evidence))
+            relinked += 1
+        await execute(
+            "UPDATE complexes SET provenance = COALESCE(provenance,'{}'::jsonb) || "
+            "jsonb_build_object('split_children', COALESCE(provenance->'split_children','[]'::jsonb) || to_jsonb($2::int)) "
+            "WHERE id=$1", parent_id, child_id)
+        results.append({"child_id": child_id, "name": name, "action": action, "objects_relinked": relinked})
+    return results
+
+
 async def approve_split_candidate(candidate_id: int, approved_by: str) -> dict | None:
-    """Исполняет "unravel playbook" по evidence-кластерам (см.
-    split_detect.py::build_evidence — только НЕ-паспортные кластеры с
-    suggested_name несут действие). Для ручных пометок (reason='manual',
-    evidence без кластеров) — реального разнесения тут нет, только
-    подтверждение статуса: решатель уже посмотрел карточку и согласен,
-    что это split, но evidence искать/структурировать руками (кнопка
-    сигнализирует подозрение, не считает кластеры)."""
+    """Исполняет "unravel playbook" по evidence: apartment_listings-
+    кластеры (ключ `apartment_listings_geo_clusters`, старые записи
+    первого прохода — `clusters`) — только НЕ-паспортные с
+    suggested_name несут действие; homeportal_blocks — через
+    _execute_split_homeportal_blocks (там своя, обязательная
+    перелинковка). Для ручных пометок (reason='manual', evidence без
+    структуры) — реального разнесения тут нет, только подтверждение
+    статуса: решатель уже посмотрел карточку и согласен, что это
+    split, но evidence искать/структурировать руками."""
     from bot.db.pg import fetchrow, execute
     c = await fetchrow("SELECT * FROM split_candidates WHERE id=$1", candidate_id)
     if not c:
@@ -866,11 +936,15 @@ async def approve_split_candidate(candidate_id: int, approved_by: str) -> dict |
     ev = c["evidence"]
     ev = json.loads(ev) if isinstance(ev, str) and ev else (ev or {})
     created = []
-    for cluster in ev.get("clusters", []):
+    al_clusters = ev.get("apartment_listings_geo_clusters") or ev.get("clusters") or []
+    for cluster in al_clusters:
         name = cluster.get("suggested_name")
         if not name:
             continue
         created.append(await _execute_split_cluster(c["complex_id"], name, cluster, approved_by))
+    if ev.get("homeportal_blocks"):
+        created.extend(await _execute_split_homeportal_blocks(
+            c["complex_id"], ev.get("parent_name") or "", ev["homeportal_blocks"], approved_by))
     await execute(
         "UPDATE split_candidates SET status='approved', resolved_at=now(), resolved_by=$2 WHERE id=$1",
         candidate_id, approved_by)
