@@ -115,13 +115,24 @@ async def fetch_all(limit: int = 0, delay: tuple = (4.0, 8.0)) -> dict[int, dict
     await execute("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS is_street BOOLEAN DEFAULT FALSE")
     await execute("ALTER TABLE complexes ADD COLUMN IF NOT EXISTS krisha_url TEXT")
 
+    # Живой баг (найден 2026-08-13 при backfill-проходе адреса,
+    # см. docs/entity_resolution_plan.md): коррелированный подзапрос
+    # на каждую из ~2350 строк complexes сканировал все 45827
+    # apartment_listings (ни один индекс не покрывает
+    # lower(trim(complex_name)) БЕЗ доп. условия lat IS NOT NULL) —
+    # command_timeout=30с (bot/db/pg.py) не хватало. CTE с DISTINCT ON
+    # — один проход по apartment_listings + hash join, не N сканов.
     rows = await fetch("""
-        SELECT DISTINCT c.id, c.name,
-               COALESCE(c.krisha_url,
-                   (SELECT al.complex_url FROM apartment_listings al
-                     WHERE lower(trim(al.complex_name)) = lower(trim(c.name))
-                       AND al.complex_url IS NOT NULL LIMIT 1)) AS url
+        WITH al_url AS (
+            SELECT DISTINCT ON (lower(trim(complex_name)))
+                   lower(trim(complex_name)) AS key, complex_url
+            FROM apartment_listings
+            WHERE complex_url IS NOT NULL
+            ORDER BY lower(trim(complex_name))
+        )
+        SELECT c.id, c.name, COALESCE(c.krisha_url, al_url.complex_url) AS url
         FROM complexes c
+        LEFT JOIN al_url ON al_url.key = lower(trim(c.name))
         WHERE COALESCE(c.is_street, FALSE) = FALSE
         ORDER BY c.id
     """)
