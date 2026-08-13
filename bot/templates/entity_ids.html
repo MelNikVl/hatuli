@@ -375,12 +375,19 @@ function eidUnitFilter() {
   <p style="font-size:12px;color:#888;line-height:1.6;margin-top:6px;">
     Обратная задача дублям — один <code>complex_id</code> на самом деле описывает несколько разных зданий/очередей
     (см. <code>docs/entity_resolution_plan.md</code>, "политика гранулярности ЖК" и "расшивка как review-очередь").
-    <b>explicit_token_address</b> — явный маркер очереди/блока/литеры на объявлениях + гео-кластеры &gt;1км друг от
-    друга. <b>address_diverge_no_token</b> — гео расходится, но явного маркера нет — <b>решает человек</b> (тот же
-    случай, что AUSTRIA в granularity policy: один адрес сам по себе не решает). <b>manual</b> — кнопка ниже/на
-    карточке ЖК. Подтверждение исполняет playbook (создаёт/находит дочерний <code>complex_id</code> по имени,
-    provenance <code>split_from</code>/<code>matched_by='unravel'</code>) — для <b>manual</b> без структурированных
-    кластеров подтверждение просто фиксирует статус, разнесение — руками.
+    Многоуровневый детектор (<code>split_detect.py</code>) собирает evidence из нескольких источников разом —
+    <code>krisha_deadlines</code> (срок сдачи по очередям), <code>homeportal_blocks</code> (объекты Госстройконтроля
+    того же ЖК), <code>apartment_listings_geo_clusters</code> (гео-кластеры объявлений Крыши + явный маркер в
+    тексте); Korter/Homsters проверены живьём (2026-08-13) — обе площадки не отдают пер-блочных данных на карточке
+    ЖК структурно, поля в evidence останутся пустыми. <b>explicit_token_address</b> — самый уверенный путь, БЕЗ
+    изменений с первого прохода (явный маркер + гео-кластер объявлений Крыши). <b>multi_source_evidence</b> — любой
+    другой сигнал (даже явный токен из homeportal/krisha-очередей не поднимает выше этой reason) — <b>решает
+    человек</b> (тот же случай, что AUSTRIA в granularity policy — она и в этой очереди по homeportal-сигналу,
+    ожидаемо). <b>address_diverge_no_token</b> — reason первого прохода (до многоуровневости), остался у старых
+    записей, поведение то же, что multi_source_evidence. <b>manual</b> — кнопка ниже/на карточке ЖК. Подтверждение
+    исполняет playbook (создаёт/находит дочерний <code>complex_id</code> по имени, provenance
+    <code>split_from</code>/<code>matched_by='unravel'</code>) — без структурированных кластеров объявлений
+    подтверждение просто фиксирует статус, разнесение — руками.
   </p>
   <form id="eid-split-flag-form" style="display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap;"
         onsubmit="return eidSplitFlag(event)">
@@ -396,21 +403,37 @@ function eidUnitFilter() {
     {% set ev = s.evidence %}
     <tr id="eid-split-{{ s.id }}">
       <td>
-        {% if s.reason == 'explicit_token_address' %}<span style="color:#16a34a;font-weight:600;" title="явный маркер + гео">🔖 явный маркер</span>
-        {% elif s.reason == 'address_diverge_no_token' %}<span style="color:#d97706;font-weight:600;" title="AUSTRIA-кейс — решает человек">❓ без маркера</span>
+        {% if s.reason == 'explicit_token_address' %}<span style="color:#16a34a;font-weight:600;" title="явный маркер + гео-кластер объявлений — самый уверенный путь">🔖 явный маркер</span>
+        {% elif s.reason == 'multi_source_evidence' %}<span style="color:#d97706;font-weight:600;" title="сборный сигнал из нескольких источников — решает человек">🧩 многоисточник.</span>
+        {% elif s.reason == 'address_diverge_no_token' %}<span style="color:#d97706;font-weight:600;" title="AUSTRIA-кейс, reason первого прохода — решает человек">❓ без маркера</span>
         {% else %}<span style="color:#888;">✋ ручная</span>{% endif %}
       </td>
       <td>
         <a href="{{ s.complex_krisha_url or ('/complex/' ~ s.complex_id) }}" target="_blank" rel="noopener" style="color:var(--text);font-weight:600;">#{{ s.complex_id }} {{ s.complex_name }}</a>
         <div style="font-size:11px;color:#888;">{{ s.complex_address or '— адреса нет' }} · {{ s.matched_by }}</div>
       </td>
-      <td style="font-size:12px;">
+      <td style="font-size:12px;max-width:420px;">
         {% if s.comment %}<div style="margin-bottom:4px;">💬 {{ s.comment }}</div>{% endif %}
-        {% if ev.clusters %}
-        {% for cl in ev.clusters %}
-        <div>{{ 'паспорт' if loop.first else '➡ кластер' }}: {{ cl.n }} объяв.{% if cl.address %}, {{ cl.address }}{% endif %}{% if cl.suggested_name %} → <b>{{ cl.suggested_name }}</b>{% endif %}{% if cl.tokens %} (токены: {{ cl.tokens|join(', ') }}){% endif %}</div>
+        {% set al_clusters = ev.apartment_listings_geo_clusters or ev.clusters %}
+        {% if al_clusters %}
+        <div style="margin-bottom:3px;"><b>📐 объявления Крыши:</b>
+        {% for cl in al_clusters %}
+        {{ 'паспорт' if loop.first else '➡ кластер' }} {{ cl.n }} объяв.{% if cl.address %}, {{ cl.address }}{% endif %}{% if cl.suggested_name %} → <b>{{ cl.suggested_name }}</b>{% endif %}{% if cl.tokens %} (токены: {{ cl.tokens|join(', ') }}){% endif %}{% if not loop.last %}; {% endif %}
         {% endfor %}
+        </div>
         {% endif %}
+        {% if ev.krisha_deadlines %}
+        <div style="margin-bottom:3px;"><b>🏗 срок сдачи (Крыша):</b>
+        {% for d in ev.krisha_deadlines %}{{ d.label }} — {{ d.deadline }}{% if not loop.last %}; {% endif %}{% endfor %}
+        </div>
+        {% endif %}
+        {% if ev.homeportal_blocks %}
+        <div style="margin-bottom:3px;"><b>🏛 homeportal ({{ ev.homeportal_blocks|length }} объектов):</b>
+        {% for b in ev.homeportal_blocks[:5] %}{{ b.name }}{% if b.address %} — {{ b.address }}{% endif %}{% if not loop.last %}; {% endif %}{% endfor %}{% if ev.homeportal_blocks|length > 5 %} …{% endif %}
+        </div>
+        {% endif %}
+        {% if ev.explicit_tokens %}<div style="color:#888;">токены: {{ ev.explicit_tokens|join(', ') }}</div>{% endif %}
+        {% if ev.note %}<div style="color:#888;margin-top:3px;">{{ ev.note }}</div>{% endif %}
       </td>
       <td style="white-space:nowrap;">
         <a href="javascript:void(0)" onclick="eidSplitResolve({{ s.id }}, 'approve')" style="color:#16a34a;font-size:12px;margin-right:8px;">подтвердить</a>
