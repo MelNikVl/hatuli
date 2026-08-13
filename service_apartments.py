@@ -41,6 +41,24 @@ log = logging.getLogger("apartment_service")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
 
 
+def _git_hash() -> str:
+    """Короткий git-хэш загруженного кода — логируется при старте
+    сервиса, чтобы "какой код реально запущен" был вопросом одной
+    строчки в логе, а не раскопкой journalctl+git log (см. живая
+    путаница 2026-08-13: adaptive recheck отчёт написан ДО рестарта,
+    рестарт случился отдельно и незаметно, доклад про "не развёрнуто"
+    устарел молча)."""
+    import subprocess
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)) or ".",
+            stderr=subprocess.DEVNULL, text=True, timeout=5,
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
 async def run_cycle():
     from bot.core.apartment_parser import analyze_apartments
     from bot.core.sheets_sync import sync_apartments_to_sheets_pg
@@ -915,7 +933,12 @@ async def main():
             await _pg_exec_init(f"ALTER TABLE parser_cycle_history ADD COLUMN IF NOT EXISTS {_col} INT")
         except Exception as e:
             log.warning("parser_cycle_history ALTER (%s) failed: %s", _col, e)
-    log.info("=== Apartment service started ===")
+    from bot.db import settings as app_settings
+    git_hash = _git_hash()
+    await app_settings.load()
+    await app_settings.set("APARTMENT_SERVICE_GIT_HASH", git_hash)
+    await app_settings.set("APARTMENT_SERVICE_STARTED_AT", datetime.now(timezone.utc).isoformat())
+    log.info("=== Apartment service started (git=%s) ===", git_hash)
 
     # Первый цикл сразу
     try:
