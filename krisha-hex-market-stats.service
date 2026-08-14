@@ -1,0 +1,11 @@
+[Unit]
+Description=Ежедневный снимок плотности предложения по гексагону (hex_market_stats) — Фаза L1 «Локация», задача 2026-08-14
+After=network.target postgresql.service krisha-complex-stats.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/hex_market_stats_snapshot.py
+StandardOutput=append:/home/nik/krisha_bot/hex_market_stats_snapshot.log
+StandardError=append:/home/nik/krisha_bot/hex_market_stats_snapshot.log

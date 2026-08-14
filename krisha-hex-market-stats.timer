@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежедневного снимка hex_market_stats — Фаза L1 «Локация», задача 2026-08-14
+
+[Timer]
+OnCalendar=*-*-* 08:20:00
+RandomizedDelaySec=5m
+Persistent=true
+Unit=krisha-hex-market-stats.service
+
+[Install]
+WantedBy=timers.target
