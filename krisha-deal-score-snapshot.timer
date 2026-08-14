@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежедневного снимка Deal Score (deal_score_snapshots) — Фаза A.5 п.2-3 вердикт-стратегии, задача 2026-08-14
+
+[Timer]
+OnCalendar=*-*-* 08:35:00
+RandomizedDelaySec=10m
+Persistent=true
+Unit=krisha-deal-score-snapshot.service
+
+[Install]
+WantedBy=timers.target
