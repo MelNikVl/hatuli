@@ -99,3 +99,19 @@ async def test_location_block_does_not_alter_existing_what_is_nearby_card(client
     assert "cx-card-location" in r.text
     assert "cx-loc-score-card" in r.text
     assert f"/admin/api/complex/{complex_with_geo}/location-score" in r.text
+
+
+@pytest.mark.asyncio
+async def test_location_block_map_layers_reuse_existing_leaflet_map(client, complex_with_geo):
+    """Коммит 3 плана L2: слои карты переиспользуют window.cxLocMap
+    (карта-точка .cx-row2), не создают второй Leaflet instance — сама
+    JS-логика (cxlBuildMapLayers) не выполняется в этом HTTP-смоуке
+    (нет браузера), проверяем, что нужная разметка/функция реально
+    отдаётся сервером."""
+    r = await client.get(f"/complex/{complex_with_geo}")
+    assert "window.cxLocMap" in r.text
+    assert "cxlBuildMapLayers" in r.text
+    # 3 тумблера ровно как в плане L2 п.3: POI / Снос / Плотность
+    assert "📍 POI" in r.text
+    assert "🚧 Снос" in r.text
+    assert "🌡 Плотность" in r.text

@@ -465,6 +465,15 @@ async function toggleFavComplex() {
     // Скролл-зум карты не должен воровать прокрутку страницы — включается
     // по клику по карте.
     map.on('click', function() { map.scrollWheelZoom.enable(); });
+    // Фаза L2 (docs/location_product_design.md, задача 2026-08-14) —
+    // блок «Локация» ниже переиспользует ЭТОТ instance для слоёв
+    // (POI/снос/плотность), не создаёт вторую карту. cx.lat/cx.lon (эта
+    // карта) и geo (централизованный resolve_complex_geo_centroid(),
+    // блок «Локация»/«Что рядом») могут в редких случаях расходиться
+    // (разные источники координат) — блок «Локация» проверяет наличие
+    // window.cxLocMap перед добавлением слоёв, не предполагает его
+    // существование.
+    window.cxLocMap = map;
   })();
   </script>
   {% endif %}
@@ -589,8 +598,10 @@ async function toggleFavComplex() {
      читает НОВЫЙ /admin/api/complex/{id}/location-detail (Фаза L2 п.1).
      Явно НЕ дублирует цену/DOM — те уже графиками ниже на странице
      (price-dynamics/turnover-dynamics), см. план L2. Группированный
-     скор + риск-бейджи здесь; карта со слоями и таймлайн — следующие
-     коммиты той же фазы, встраиваются в этот же контейнер. -->
+     скор + риск-бейджи + слои карты (переиспользует window.cxLocMap из
+     .cx-row2 выше, не создаёт вторую карту) — здесь; таймлайн
+     price_drop_share_30d — следующий коммит той же фазы, встраивается
+     в этот же контейнер. -->
 {% if geo %}
 <div id="cx-location-block" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
@@ -609,51 +620,115 @@ async function toggleFavComplex() {
   const GROUP_LABELS = {transport: '🚏 Транспорт', infra: '🏫 Инфраструктура', noise: '🔇 Шум', green: '🌳 Зелень', risk: '⚠️ Риски'};
   fetch('/admin/api/complex/{{ cx.id }}/location-detail').then(r => r.ok ? r.json() : null).then(d => {
     if (!d || !d.has_coords) return;
-    if (!d.has_score) {
+
+    // Группы + фактор-риски из breakdown — только когда строка в
+    // complex_location_scores реально есть (backfill Фазы L1 мог ещё не
+    // дойти до этого ЖК). Остальное ниже (тренд-бейдж, слои карты) НЕ
+    // зависит от has_score — density/poi/demolition из своих таблиц,
+    // существуют независимо от complex_location_scores.
+    if (d.has_score) {
+      const s = d.score;
+      document.getElementById('cxl-computed-at').textContent = 'расчёт на ' + s.computed_at + ' · уверенность ' + s.confidence + '%';
+
+      const groups = document.getElementById('cxl-groups');
+      ['transport', 'infra', 'noise', 'green', 'risk'].forEach(function(g) {
+        const val = s[g + '_score'];
+        if (val === null || val === undefined) return;
+        const color = val > 0 ? '#16a34a' : (val < 0 ? '#ef4444' : '#888');
+        const bg = val > 0 ? 'rgba(16,185,129,.12)' : (val < 0 ? 'rgba(239,68,68,.12)' : 'var(--bg)');
+        const factors = Object.values(s.breakdown[g] || {}).map(function(f) { return f.label + ': ' + f.reason; }).join('\n');
+        groups.insertAdjacentHTML('beforeend',
+          '<span title="' + factors.replace(/"/g, '&quot;') + '" style="font-size:12px;padding:4px 10px;border-radius:20px;background:' + bg + ';color:' + color + ';border:1px solid var(--border);cursor:help;display:inline-block;">' +
+          GROUP_LABELS[g] + ' ' + (val > 0 ? '+' : '') + val + '</span>');
+      });
+
+      // Риск-бейджи из факторов — только когда есть реальные основания
+      // (Unknown ≠ average — молчим, когда нечего сказать, не ставим
+      // зелёную галочку за неимением данных).
+      const badges = document.getElementById('cxl-risk-badges');
+      const riskFactors = (s.breakdown && s.breakdown.risk) || {};
+      Object.keys(riskFactors).forEach(function(key) {
+        const f = riskFactors[key];
+        if (f.adj < 0) {
+          badges.insertAdjacentHTML('beforeend',
+            '<span style="font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);">' + f.label + ': ' + f.reason + '</span>');
+        }
+      });
+    } else {
       document.getElementById('cxl-no-score').style.display = '';
-      return;
     }
-    const s = d.score;
-    document.getElementById('cxl-computed-at').textContent = 'расчёт на ' + s.computed_at + ' · уверенность ' + s.confidence + '%';
 
-    const groups = document.getElementById('cxl-groups');
-    ['transport', 'infra', 'noise', 'green', 'risk'].forEach(function(g) {
-      const val = s[g + '_score'];
-      if (val === null || val === undefined) return;
-      const color = val > 0 ? '#16a34a' : (val < 0 ? '#ef4444' : '#888');
-      const bg = val > 0 ? 'rgba(16,185,129,.12)' : (val < 0 ? 'rgba(239,68,68,.12)' : 'var(--bg)');
-      const factors = Object.values(s.breakdown[g] || {}).map(function(f) { return f.label + ': ' + f.reason; }).join('\n');
-      groups.insertAdjacentHTML('beforeend',
-        '<span title="' + factors.replace(/"/g, '&quot;') + '" style="font-size:12px;padding:4px 10px;border-radius:20px;background:' + bg + ';color:' + color + ';border:1px solid var(--border);cursor:help;display:inline-block;">' +
-        GROUP_LABELS[g] + ' ' + (val > 0 ? '+' : '') + val + '</span>');
-    });
-
-    // Риск-бейджи — только когда есть реальные основания (снос, заметная
-    // доля снижений цены за 30д), не пустая "рисков нет" (Unknown ≠
-    // average — молчим, когда нечего сказать, не ставим зелёную галочку
-    // за неимением данных).
-    const badges = document.getElementById('cxl-risk-badges');
-    const riskFactors = (s.breakdown && s.breakdown.risk) || {};
-    Object.keys(riskFactors).forEach(function(key) {
-      const f = riskFactors[key];
-      if (f.adj < 0) {
-        badges.insertAdjacentHTML('beforeend',
-          '<span style="font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);">' + f.label + ': ' + f.reason + '</span>');
-      }
-    });
-    // Доля снижений цены за 30д — последняя точка тренда (тот же
-    // источник, что таймлайн следующего коммита); порог 20% — заметно
-    // выше "нормального" фонового шума (наблюдалось ~8-19% на живой
-    // выборке комплексов при разработке Фазы L1).
+    // Доля снижений цены за 30д — последняя точка тренда; порог 20% —
+    // заметно выше "нормального" фонового шума (наблюдалось ~8-19% на
+    // живой выборке комплексов при разработке Фазы L1).
     if (d.price_drop_trend && d.price_drop_trend.length) {
       const last = d.price_drop_trend[d.price_drop_trend.length - 1];
       if (last.share >= 0.2) {
-        badges.insertAdjacentHTML('beforeend',
+        document.getElementById('cxl-risk-badges').insertAdjacentHTML('beforeend',
           '<span style="font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(245,158,11,.12);color:#f59e0b;border:1px solid rgba(245,158,11,.3);">📉 ' + Math.round(last.share * 100) + '% объявлений со снижением цены за 30д</span>');
       }
     }
+
+    // Слои карты — переиспользуют window.cxLocMap (карта-точка, .cx-row2
+    // выше), не создают вторую карту. Если её нет (cx.lat/cx.lon пусты,
+    // хотя geo есть — см. комментарий у window.cxLocMap) — слои просто
+    // не строятся, без ошибки.
+    if (window.cxLocMap) cxlBuildMapLayers(window.cxLocMap, d);
   }).catch(() => {});
 })();
+
+function cxlBuildMapLayers(map, d) {
+  const POI_LABELS = {bus_stop: '🚏 остановка', shop: '🛒 магазин', health: '💊 аптека/клиника',
+                       food: '🍽 кафе', service: '🏧 сервис', park: '🌳 парк', school: '🏫 школа/садик'};
+  const poiMarkers = [];
+  Object.keys(d.poi || {}).forEach(function(kind) {
+    (d.poi[kind] || []).forEach(function(p) {
+      poiMarkers.push(L.circleMarker([p.lat, p.lon], {radius: 5, color: '#2563eb', fillColor: '#2563eb', fillOpacity: .7, weight: 1})
+        .bindTooltip(POI_LABELS[kind] || kind, {sticky: true}));
+    });
+  });
+  const demolitionMarkers = (d.demolition || []).map(function(x) {
+    return L.circleMarker([x.lat, x.lon], {radius: 7, color: '#ef4444', fillColor: '#ef4444', fillOpacity: .8, weight: 1})
+      .bindTooltip('🚧 ' + x.address + (x.demolish_year ? ' · снос ' + x.demolish_year : '') + ' · ' + x.dist_m + 'м', {sticky: true});
+  });
+  const counts = (d.density || []).map(function(h) { return h.listings_count || 0; });
+  const maxCount = Math.max(1, Math.max.apply(null, counts.length ? counts : [0]));
+  const densityPolys = (d.density || []).map(function(h) {
+    const n = h.listings_count;
+    const intensity = (n || 0) / maxCount;
+    const color = intensity > 0.66 ? '#ef4444' : (intensity > 0.33 ? '#f59e0b' : '#16a34a');
+    return L.polygon(h.corners, {color: color, weight: h.is_center ? 2 : 1, fillOpacity: n ? 0.25 : 0.05})
+      .bindTooltip((n !== null && n !== undefined ? n + ' объявлений' : 'нет данных за сегодня') +
+                   (h.avg_price_m2 ? ' · ' + Math.round(h.avg_price_m2 / 1000) + 'к ₸/м²' : ''), {sticky: true});
+  });
+
+  const layers = {
+    poi: L.layerGroup(poiMarkers),
+    demolition: L.layerGroup(demolitionMarkers),
+    density: L.layerGroup(densityPolys),
+  };
+  // POI включён по умолчанию, остальные выключены (план L2 п.3).
+  layers.poi.addTo(map);
+
+  const toolbar = document.createElement('div');
+  toolbar.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;font-size:11.5px;color:var(--text);';
+  [['poi', '📍 POI', true], ['demolition', '🚧 Снос', false], ['density', '🌡 Плотность', false]].forEach(function(item) {
+    const key = item[0], label = item[1], defaultOn = item[2];
+    const wrap = document.createElement('label');
+    wrap.style.cssText = 'display:flex;align-items:center;gap:4px;cursor:pointer;';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = defaultOn;
+    input.addEventListener('change', function() {
+      if (input.checked) layers[key].addTo(map); else map.removeLayer(layers[key]);
+    });
+    wrap.appendChild(input);
+    wrap.appendChild(document.createTextNode(' ' + label));
+    toolbar.appendChild(wrap);
+  });
+  const mapCard = document.getElementById('cx-card-map');
+  if (mapCard) mapCard.appendChild(toolbar);
+}
 </script>
 {% endif %}
 
