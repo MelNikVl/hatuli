@@ -45,6 +45,31 @@ _OSM_LAYERS = [
 
 _LEFT_BANK_DISTRICTS = {"есиль", "есильский"}
 
+# Теоретический диапазон total = Σadj по ВСЕМ факторам ниже — используется
+# ТОЛЬКО complex_location_score_snapshot.py (Фаза L1, docs/location_
+# product_design.md §7, задача 2026-08-14) для нормализации в 0-100 при
+# записи в complex_location_scores. compute_complex_location_score() САМА
+# эту нормализацию не делает и возвращает total как есть (см. РЕШЕНИЕ 2
+# плана L1 — живой /admin/api/complex/{id}/location-score не меняется,
+# complex_detail.html:645 читает сырой total напрямую).
+#
+# Если диапазон отдельного слоя изменится (score_layers/*.py) — эти две
+# константы надо пересчитать вручную (тот же тип обязательства, что уже
+# несёт _CLASS_SCORE в hedonic_constants.py):
+#   noise            -6..0   (score_layers/noise.py)
+#   schools            0..5  (score_layers/schools.py)
+#   transit_stops      0..3  (score_layers/transit.py)
+#   amenities          0..4  (score_layers/amenities.py)
+#   parks              0..2  (score_layers/parks.py)
+#   lrt_access         0..4  (_transport_hex_factors)
+#   road_access        0..2  (_transport_hex_factors)
+#   route_connectivity 0..2  (_transport_hex_factors)
+#   building_age       0..2  (_building_age_factor)
+#   demolition        -2..0  (_demolition_factor)
+#   bank               0..0  (_bank_factor — всегда 0, информационный)
+_TOTAL_ADJ_MIN = -8
+_TOTAL_ADJ_MAX = 24
+
 
 async def _transport_hex_factors(lat: float, lon: float) -> dict:
     """3 доп. фактора из уже посчитанной transport_hexes (LRT/дороги/

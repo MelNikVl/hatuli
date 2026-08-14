@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежемесячного пересчёта complex_location_scores — Фаза L1 «Локация», задача 2026-08-14
+
+[Timer]
+OnCalendar=*-*-01 09:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=krisha-complex-location-score.service
+
+[Install]
+WantedBy=timers.target
