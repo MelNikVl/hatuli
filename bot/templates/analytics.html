@@ -64,8 +64,8 @@ tr:last-child td { border-bottom: none; }
 <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;">
   <div class="chart-block" style="flex:1 1 0;min-width:340px;width:auto;height:auto;">
     <div style="display:flex;align-items:baseline;gap:5px;flex-wrap:wrap;">
-      <b style="font-size:1em;">🎯 Уверенность Смарт рейтинга по гексам</b>
-      <span style="font-size:11px;color:#888;cursor:help;" title="% факторов, посчитанных на реальных данных (не риск сделки) — см. подсказку &quot;?&quot; у скора в превью">ⓘ подробнее</span>
+      <b style="font-size:1em;">🎯 Полнота данных Смарт рейтинга по гексам</b>
+      <span style="font-size:11px;color:#888;cursor:help;" title="% факторов, посчитанных на реальных данных (не риск сделки и не статистическая уверенность модели) — см. подсказку &quot;?&quot; у скора в превью">ⓘ подробнее</span>
     </div>
     <div id="conf-summary-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:6px;"></div>
     <div style="display:flex;gap:4px;margin:6px 0;flex-wrap:wrap;">
@@ -248,7 +248,7 @@ tr:last-child td { border-bottom: none; }
         const avg = b.items.reduce((s,v) => s+v, 0) / b.items.length;
         L.polygon(confHexCorners(b.q, b.r), {
           color: '#fff', weight: 0.5, fillColor: confColor(avg/100), fillOpacity: 0.65,
-        }).bindTooltip(`уверенность: ${Math.round(avg)}% · ${b.items.length} объявл.`, {sticky:true}).addTo(confHexLayer);
+        }).bindTooltip(`полнота данных: ${Math.round(avg)}% · ${b.items.length} объявл.`, {sticky:true}).addTo(confHexLayer);
       });
     }).catch(() => {});
   }

@@ -143,7 +143,7 @@ breakdown) — расползания термина сейчас нет, пра
 | Было / есть | Станет | Где именно | Когда |
 |---|---|---|---|
 | «справедливая цена» / fair price | «market reference» / «ожидаемая цена предложения» | 1 живое вхождение — `bot/admin_web.py:71` (`llms.txt`) | Не сейчас — freeze SEO (§6), правило действует для НОВОГО текста уже с этой задачи |
-| `deal_confidence`, показывается как «уверенность NN%» | Подпись «полнота данных NN%» — **имя поля/API не меняется** до калибровки | `bot/templates/analytics_detail.html:375`, `bot/templates/dashboard.html:4537` | Фаза A, п.5 (только видимый лейбл, не контракт API) |
+| `deal_confidence`, показывается как «уверенность NN%» | Подпись «полнота данных NN%» — **имя поля/API не меняется** до калибровки | `bot/templates/analytics_detail.html:375`, `bot/templates/dashboard.html:4537,4540`, `bot/templates/analytics.html:67,251` (найдено при исполнении Фазы A — исходный grep §3.2 не проверял `analytics.html`, честно дополнено) | ✅ Фаза A, п.5, сделано 2026-08-14 (только видимый лейбл, не контракт API — `deal_confidence`/`confidence` в JSON `/admin/api/score-confidence-points` не переименованы) |
 | `location_score` confidence, «уверенность NN%» | Не в скоупе Фазы A — тот же класс величины (доля посчитанных факторов), но не про сделку | `bot/templates/complex_detail.html:655` | Пересмотреть в Фазе D по аналогии, не раньше — не трогать сейчас, чтобы не размазывать Фазу A |
 
 Смена лейбла — не смена смысла: `deal_confidence` и сегодня честно

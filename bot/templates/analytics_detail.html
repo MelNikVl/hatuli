@@ -372,7 +372,7 @@
   {% if hexd and hexd.components %}
   {% set comp_meta = [('price', '💰 Цена vs ожидание'), ('location', '📍 Локация'), ('quality', '🏗 Качество'), ('market', '📈 Рынок/ликвидность'), ('risk', '⚠️ Риски')] %}
   <details class="tile full-width">
-    <summary>🎯 Deal Score: {{ hexd.deal }}/100 <span style="font-size:12px;font-weight:400;color:#888;">· уверенность {{ hexd.confidence }}%</span></summary>
+    <summary>🎯 Deal Score: {{ hexd.deal }}/100 <span style="font-size:12px;font-weight:400;color:#888;">· полнота данных {{ hexd.confidence }}%</span></summary>
     {% set pluses = [] %}{% set minuses = [] %}
     {% for key, label in comp_meta %}
       {% if hexd.components[key].score >= 65 %}{{ pluses.append(hexd.components[key].text) or '' }}{% endif %}

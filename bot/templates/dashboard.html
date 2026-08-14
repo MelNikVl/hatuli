@@ -4534,10 +4534,10 @@ function openDetailModal(id, ev, scrollToScore) {
     const dealScoreHtml = (d.deal_score && d.deal_score.deal != null) ? `
 <div style="font-size:12px;color:var(--text);font-weight:700;margin-bottom:2px;">Deal Score</div>
 ${dealScoreGaugeSvg(d.deal_score.deal)}
-<div style="font-size:13px;color:var(--text);margin-top:2px;text-align:center;">Уверенность: <b>${d.deal_score.confidence}%</b></div>
+<div style="font-size:13px;color:var(--text);margin-top:2px;text-align:center;">Полнота данных: <b>${d.deal_score.confidence}%</b></div>
 <div style="font-size:11.5px;color:var(--text);margin-top:10px;line-height:1.4;">
   Взвешенная сумма 5 факторов: цена vs локальный рынок (40%), локация (20%), качество ЖК (20%), доходность (15%), риск (5%).
-  Уверенность — доля факторов, посчитанных на реальных данных, а не риск сделки.
+  Полнота данных — доля факторов, посчитанных на реальных данных, а не риск сделки и не статистическая уверенность модели.
 </div>` : '';
 
     // Task 5: мини-панель Kepler.gl — тепловая карта цен по району вокруг
