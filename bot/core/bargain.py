@@ -40,35 +40,18 @@ from bot.core.hexgrid import hex_id, neighbors
 # см. живой инцидент #1014506231 "Landmark" в docstring этого модуля.
 # Локальные имена (MIN_COMPARABLES/MIN_SAME_COMPLEX) сохранены как алиасы
 # — используются по всему остальному файлу, переименовывать не было нужды.
-from bot.core.hedonic_constants import AREA_BAND_PCT, MIN_BLDG as MIN_SAME_COMPLEX, MIN_RING as MIN_COMPARABLES
+from bot.core.hedonic_constants import (
+    AREA_BAND_PCT, MIN_BLDG as MIN_SAME_COMPLEX, MIN_RING as MIN_COMPARABLES,
+    _activity_filter,
+)
 
 logger = logging.getLogger(__name__)
 
 _M_PER_DEG_LAT = 110_574.0
-
-
-def _activity_filter(as_of: datetime | None, param_idx: int, alias: str = "") -> tuple[str, list]:
-    """SQL-фрагмент фильтра активности для аналогов — задача 2026-08-14
-    (Фаза A.5 п.1 вердикт-стратегии, docs/verdict_strategy.md): раньше НИ
-    ОДИН из 4 запросов get_comparables() не фильтровал активность вовсе —
-    архивные (проданные/снятые) объявления тихо участвовали в медиане
-    "текущего рынка", искажая target_price/discount_pct тем сильнее, чем
-    старше и дешевле давно ушедшие аналоги.
-
-    as_of=None (по умолчанию — весь текущий вызов из попапа/парсера, живой
-    "сейчас"): текущий is_active, архив не участвует.
-    as_of=дата: точечная реконструкция "было активно НА ЭТУ ДАТУ"
-    (first_seen <= as_of И (ещё не архивировано ИЛИ архивировано позже
-    as_of)) — НЕ текущий is_active, для честного backtesting/снапшотов,
-    где текущее состояние БД (объявление могло уйти в архив уже после
-    интересующей даты) не совпадает с состоянием на момент, который
-    анализируется.
-    """
-    p = f"{alias}." if alias else ""
-    if as_of is None:
-        return f"AND {p}is_active IS NOT FALSE", []
-    return (f"AND {p}first_seen <= ${param_idx} "
-            f"AND ({p}archived_at IS NULL OR {p}archived_at > ${param_idx})", [as_of])
+# _activity_filter() перенесена в bot/core/hedonic_constants.py задачей
+# "as_of для score_total, минимальный план" (2026-08-14) — импортируется
+# оттуда (см. import выше), не определяется здесь: теперь одна функция на
+# bargain.py И deal_score.py, вместо двух копий, которые могли бы разойтись.
 
 
 async def get_comparables(

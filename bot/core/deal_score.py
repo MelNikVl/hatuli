@@ -45,10 +45,13 @@ from __future__ import annotations
 import bisect
 import json
 import logging
+from datetime import datetime
 from statistics import median
 
 from bot.core.hexgrid import hex_id, neighbors
-from bot.core.hedonic_constants import AREA_BAND_PCT, MIN_BLDG, MIN_HEX, MIN_RING, W0, W1, W2
+from bot.core.hedonic_constants import (
+    AREA_BAND_PCT, MIN_BLDG, MIN_HEX, MIN_RING, W0, W1, W2, _activity_filter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -199,12 +202,31 @@ def _poi_score(lat: float, lon: float, poi_idx: dict) -> tuple[int, int]:
 def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
                         edge_m: float, weights: dict | None = None,
                         poi_idx: dict | None = None,
-                        complexes_by_id: dict[int, dict] | None = None) -> dict[str, dict]:
+                        complexes_by_id: dict[int, dict] | None = None,
+                        as_of: datetime | None = None) -> dict[str, dict]:
     """
     listings: [{id, lat, lon, price, area, rooms, floor, floors_total,
                 year_built, complex_name, is_owner, first_seen_days, yield_pct,
                 same_complex_cnt, district, ceiling_height, resolved_house_id,
                 finish_level}]
+    as_of: задача 2026-08-14 ("as_of для score_total, минимальный план",
+           по итогам аудита перед Фазой B) — эта функция ЧИСТАЯ, сама в БД
+           не ходит, поэтому as_of здесь НИЧЕГО не фильтрует (фильтрация —
+           забота вызывающего кода, apply_deal_scores()/deal_score_
+           backtest.py, через _activity_filter из hedonic_constants.py, и
+           каждый listing['first_seen_days'] должен быть уже честно
+           посчитан ОТНОСИТЕЛЬНО as_of, не now(), до вызова). Параметр
+           используется только для тега — кладётся в каждую запись
+           результата (`"as_of"` ниже), чтобы потребитель (backtest-скрипт,
+           будущий анализ) видел, к какому моменту относится расчёт, не
+           предполагал молча "сейчас". None (по умолчанию) — прод-путь,
+           поведение не меняется.
+    ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ (не решено этой задачей, честно документируется,
+    см. hedonic_constants._activity_filter): price/area/rooms в listings
+    при as_of != None всё равно ТЕКУЩИЕ значения строк apartment_listings
+    (не значения на дату as_of) — price_history для реконструкции цены-
+    на-дату не джойнится. Для площади/комнат это не проблема (не меняются
+    после публикации), для цены — приближение, допустимое для старта.
     complexes: {lower(trim(name)): {housing_class, year_built, krisha_rating}}
     complexes_by_id: {complexes.id: то же самое} — задача 2026-08-14
              ("House-resolution в скоринге"): объявление зонтика, которое
@@ -503,14 +525,35 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
                 "supply": round(supply_sc / 100 * 7),
             },
             "version": 4,
+            # Задача 2026-08-14 ("as_of для score_total") — тег момента, к
+            # которому относится расчёт. None в проде (as_of не передан),
+            # ISO-дата в backtest-вызовах (deal_score_backtest.py) — не
+            # даёт потребителю молча предположить "это сегодняшний расчёт".
+            "as_of": as_of.isoformat() if as_of else None,
         }
     return out
 
 
-async def apply_deal_scores() -> int:
-    """Считает Deal Score v4 для всех активных вторичных объявлений и
-    записывает score_total (=deal), компоненты, confidence и legacy-breakdown
-    (score_yield/score_price_market/... — проекция, см. модуль docstring)."""
+async def apply_deal_scores(as_of: datetime | None = None) -> int | dict[str, dict]:
+    """Считает Deal Score v4 и, в прод-режиме, записывает score_total
+    (=deal), компоненты, confidence и legacy-breakdown (score_yield/
+    score_price_market/... — проекция, см. модуль docstring).
+
+    as_of: задача 2026-08-14 ("as_of для score_total, минимальный план",
+    по итогам аудита перед Фазой B). **None (по умолчанию) — прод-путь,
+    поведение НЕ меняется**: активность — текущий `is_active IS NOT
+    FALSE`, `first_seen_days` — от `now()`, пишет в БД, возвращает `int`
+    (число обновлённых строк), как и раньше.
+    **Дата — backtest-путь**: активность и `first_seen_days` считаются
+    честно НА ЭТУ ДАТУ через `_activity_filter()` (bot/core/
+    hedonic_constants.py, та же функция, что и bargain.py). **В БД
+    НИЧЕГО НЕ ПИШЕТСЯ** — UPDATE полностью пропускается (исторический
+    прогон не должен трогать текущее состояние прода) — возвращает
+    `dict{listing_id: {...}}`, тот же формат, что `compute_deal_scores()`.
+    См. `bot/jobs/deal_score_backtest.py` — единственный текущий
+    вызыватель backtest-пути. Известное ограничение (price/area — текущие
+    значения строки, не на дату as_of) — см. docstring `_activity_filter`.
+    """
     from bot.db.pg import fetch, execute
     from bot.db import settings as app_settings
 
@@ -536,29 +579,36 @@ async def apply_deal_scores() -> int:
     # уже был исправлен для /admin/api/map-points?type=rental (см. migrations/
     # 016_apt_complex_name_lower_idx.sql) — здесь применяем то же решение:
     # один GROUP BY вместо N подзапросов, дальше просто dict-lookup в Python.
-    complex_counts_rows = await fetch("""
+    cc_activity_sql, cc_activity_params = _activity_filter(as_of, 1)
+    complex_counts_rows = await fetch(f"""
         SELECT lower(trim(complex_name)) AS cx, COUNT(*) AS cnt
         FROM apartment_listings
-        WHERE is_active IS NOT FALSE AND complex_name IS NOT NULL
-          AND btrim(complex_name) != ''
+        WHERE complex_name IS NOT NULL AND btrim(complex_name) != ''
+          {cc_activity_sql}
         GROUP BY 1
-    """)
+    """, *cc_activity_params)
     complex_counts = {r["cx"]: r["cnt"] for r in complex_counts_rows}
 
-    rows = await fetch("""
+    # first_seen_days — от as_of (backtest) или now() (прод, как раньше).
+    # $1 переиспользуется в обоих местах (activity_sql + fs_days_expr) —
+    # тот же приём, что уже в _activity_filter (archived_at > $N дважды).
+    activity_sql, activity_params = _activity_filter(as_of, 1)
+    fs_days_expr = ("EXTRACT(EPOCH FROM ($1::timestamptz - first_seen)) / 86400" if as_of is not None
+                     else "EXTRACT(EPOCH FROM (now() - first_seen)) / 86400")
+    rows = await fetch(f"""
         SELECT id, lat, lon, price, area, rooms, floor, floors_total,
                year_built, complex_name, is_owner, district, yield_pct,
                ceiling_height, resolved_house_id, finish_level,
-               EXTRACT(EPOCH FROM (now() - first_seen)) / 86400 AS first_seen_days
+               {fs_days_expr} AS first_seen_days
         FROM apartment_listings a
-        WHERE is_active IS NOT FALSE
-          AND COALESCE(is_duplicate, FALSE) = FALSE
+        WHERE COALESCE(is_duplicate, FALSE) = FALSE
           AND market_type IS DISTINCT FROM 'primary'
           AND price > 0 AND area > 0
-    """)
+          {activity_sql}
+    """, *activity_params)
     listings = [dict(r) for r in rows]
     if not listings:
-        return 0
+        return {} if as_of is not None else 0
     for l in listings:
         cx_key = (l.get("complex_name") or "").strip().lower()
         l["same_complex_cnt"] = complex_counts.get(cx_key, 1)
@@ -590,7 +640,14 @@ async def apply_deal_scores() -> int:
     poi_rows = await fetch("SELECT kind, lat, lon FROM city_poi")
     poi_idx = _poi_index_from_rows(poi_rows)
 
-    result = compute_deal_scores(listings, complexes, edge, weights, poi_idx, complexes_by_id)
+    result = compute_deal_scores(listings, complexes, edge, weights, poi_idx, complexes_by_id, as_of=as_of)
+
+    if as_of is not None:
+        # Backtest-путь: НЕ пишем в БД — исторический прогон не должен
+        # трогать текущее состояние прода (см. docstring выше).
+        logger.info("deal score v4 BACKTEST as_of=%s: %d listings посчитано, в БД не записано",
+                    as_of.isoformat(), len(result))
+        return result
 
     updated = 0
     for lid, r in result.items():
