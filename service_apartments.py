@@ -41,6 +41,29 @@ log = logging.getLogger("apartment_service")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
 
 
+def extract_bargain(r: dict) -> dict:
+    """Задача 2026-08-14 ("Bargain — единый источник") — живой баг:
+    bot/core/apartment_parser.py считает торг через get_comparables()/
+    analyze_bargain() (bot/core/bargain.py — ТА ЖЕ пара функций, что и
+    попап /admin/api/listing/{id}) и кладёт результат ПЛОСКО на сам
+    объект листинга — r["bargain_target"]/r["bargain_discount_pct"]/
+    r["bargain_rec"] (см. apartment_parser.py, конец analyze_apartments).
+    Код ниже (INSERT/UPDATE) читал r["score_data"]["bargain"]["target_price"]
+    — ключ score_data парсер вообще не заполняет (это протухший путь от
+    старой apartment_score_v2, см. docs/scoring_audit.md §5.2), поэтому
+    bargain был всегда {} и три эти колонки не писались с 2026-07-25
+    (дата, когда v2-путь убрали) — сам расчёт торга при этом всё это
+    время оставался живым и правильным, просто терялся молча на записи
+    в БД. Единственный источник истины остаётся один — bot/core/
+    bargain.py; эта функция просто читает его результат оттуда, где
+    парсер его реально кладёт, вместо мёртвого пути."""
+    return {
+        "target_price": r.get("bargain_target"),
+        "discount_pct": r.get("bargain_discount_pct"),
+        "recommendation": r.get("bargain_rec"),
+    }
+
+
 async def run_cycle():
     from bot.core.apartment_parser import analyze_apartments
     from bot.core.sheets_sync import sync_apartments_to_sheets_pg
@@ -172,7 +195,7 @@ async def run_cycle():
     for r in results:
         sd = r.get("score_data", {})
         bd = sd.get("breakdown", {})
-        bargain = sd.get("bargain", {})
+        bargain = extract_bargain(r)
         reasons_json = json.dumps(sd.get("reasons", []), ensure_ascii=False)
 
         exists = await pg_get("SELECT id, price FROM apartment_listings WHERE id=$1", r["id"])
@@ -187,15 +210,16 @@ async def run_cycle():
                          score_apt_type, score_floor, score_complex, score_supply,
                          reasons, description, floor, floors_total,
                          year_built, building_type, renovation, furniture,
-                         is_new_build, developer_name, seller_type, is_owner,
+                         is_new_build, developer_name, seller_type, is_owner, trust_score,
                          rent_source, bargain_target, bargain_discount_pct, bargain_rec,
                          details_fetched, ceiling_height, kitchen_area, photo_url,
                          first_seen, last_seen, notified)
                     VALUES
                         ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                          $14,$15,$16,$17,$18,$19,$20,$21,
-                         $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,
-                         $32,$33,$34,$35,$36,$37,$38,$39,$40,$41,NOW(),NOW(),FALSE)
+                         $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,
+                         $35,$36,$37,$38,
+                         $39,$40,$41,$42,NOW(),NOW(),FALSE)
                     ON CONFLICT (id) DO NOTHING
                 """,
                     r["id"], r.get("url"), r.get("title"), r.get("price"), r.get("area"),
@@ -209,7 +233,7 @@ async def run_cycle():
                     r.get("year_built"), r.get("building_type"),
                     r.get("renovation"), r.get("furniture"),
                     r.get("is_new_build", False), r.get("developer_name"),
-                    r.get("seller_type"), r.get("is_owner"),
+                    r.get("seller_type"), r.get("is_owner"), r.get("trust_score"),
                     r.get("rent_source"), bargain.get("target_price"),
                     bargain.get("discount_pct"), bargain.get("recommendation"),
                     r.get("details_fetched", False), r.get("ceiling_height"),
@@ -267,7 +291,7 @@ async def run_cycle():
                         details_fetched=$17, ceiling_height=COALESCE($18, ceiling_height),
                         title=$19, rooms=$20, area=$21, address=$22, district=$23,
                         net_yield_pct=$24, kitchen_area=COALESCE($25, kitchen_area),
-                        photo_url=COALESCE(photo_url, $26),
+                        photo_url=COALESCE(photo_url, $26), trust_score=$27,
                         last_seen=NOW()
                     WHERE id=$1
                 """,
@@ -282,6 +306,7 @@ async def run_cycle():
                     r.get("title"), r.get("rooms"), r.get("area"),
                     r.get("address"), r.get("district"),
                     r.get("net_yield_pct", 0), r.get("kitchen_area"), r.get("photo_url"),
+                    r.get("trust_score"),
                 )
                 upd_cnt += 1
 
@@ -296,17 +321,68 @@ async def run_cycle():
 
     log.info("DB: +%d new, ~%d updated", new_cnt, upd_cnt)
 
-    # ── Отделка: определяем по тексту, правим скор ────────────────────────
+    # ── House-resolution (задача 2026-08-13, "применять и при первичном
+    # матчинге новых объявлений") — если ЖК объявления оказался зонтиком
+    # (есть дома), пробуем определить конкретный дом по адресу/токену/гео,
+    # см. bot/core/house_resolution.py. Кэш "имя ЖК -> дети" на батч —
+    # десятки объявлений часто на одном и том же ЖК, не долбим БД
+    # заново на каждое (умбрелл почти всегда 0 детей — самый частый путь
+    # дешёвый: один SELECT на уникальное имя, не на объявление).
+    try:
+        from bot.core.house_resolution import get_umbrella_children, resolve_house
+        _umbrella_cache: dict[str, tuple[int, list[dict]] | None] = {}
+        house_resolved = 0
+        for r in results:
+            cname = (r.get("complex_name") or "").strip()
+            if not cname:
+                continue
+            key = cname.lower()
+            if key not in _umbrella_cache:
+                cx = await pg_get("SELECT id FROM complexes WHERE lower(trim(name))=lower(trim($1))", cname)
+                if cx:
+                    children = await get_umbrella_children(cx["id"])
+                    _umbrella_cache[key] = (cx["id"], children) if children else None
+                else:
+                    _umbrella_cache[key] = None
+            cached = _umbrella_cache[key]
+            if not cached:
+                continue
+            umbrella_id, children = cached
+            res = await resolve_house(
+                umbrella_id=umbrella_id, umbrella_name=cname,
+                listing_address=r.get("address"), listing_title=r.get("title"),
+                listing_description=r.get("description"),
+                listing_lat=r.get("lat"), listing_lon=r.get("lon"), children=children)
+            if res:
+                await pg_exec(
+                    "UPDATE apartment_listings SET resolved_house_id=$2, house_attribution=$3, "
+                    "house_attribution_detail=$4 WHERE id=$1",
+                    r["id"], res["house_id"], res["method"], res["detail"])
+                house_resolved += 1
+        if house_resolved:
+            log.info("house-resolution: %d объявлений привязано к домам зонтиков", house_resolved)
+    except Exception as e:
+        log.warning("house-resolution pass failed: %s", e)
+
+    # ── Отделка: определяем по тексту, пишем finish_level ──────────────────
+    # Задача 2026-08-14 ("finish_level: убрать тихий инкремент") — раньше
+    # тут же правили score_total напрямую (+= adj), в обход весов модели
+    # и без всякого эффекта на деле: apply_deal_scores() в этом же цикле
+    # чуть ниже полностью перезаписывает score_total = deal, инкремент
+    # почти всегда стирался (см. docs/scoring_audit.md §5.2 — "живой код,
+    # мёртвый эффект"). Теперь finish_level — только классификация;
+    # реальный вклад в скор — небольшой субкомпонент quality в Deal Score
+    # v4 (см. bot/core/deal_score.py, _FINISH_QUALITY_SCORE), виден в
+    # breakdown вместо невидимой прибавки к total.
     from bot.core.listing_intel import detect_finish_level
     for r in results:
         code, adj, label = detect_finish_level(r.get("title"), r.get("description"))
         if code:
             try:
                 await pg_exec(
-                    "UPDATE apartment_listings SET finish_level=$2, "
-                    "score_total = LEAST(100, GREATEST(0, COALESCE(score_total,0) + $3)) "
+                    "UPDATE apartment_listings SET finish_level=$2 "
                     "WHERE id=$1 AND (finish_level IS DISTINCT FROM $2)",
-                    r["id"], code, adj,
+                    r["id"], code,
                 )
             except Exception as e:
                 log.warning("finish update failed %s: %s", r["id"], e)

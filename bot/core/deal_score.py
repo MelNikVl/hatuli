@@ -68,7 +68,40 @@ MIN_HEX, MIN_RING = 3, 5
 # Если таких аналогов достаточно — используем ТОЛЬКО их и не спускаемся до
 # гекс/кольцо/город; иначе (мало квартир в базе по этому ЖК) — обычный
 # hedonic-блендинг гекс+кольцо+город, как раньше.
-MIN_BLDG = 2
+# Живой баг (задача "неверный расчёт скора недооценки", 2026-08-13, живой
+# кейс #1014506231 "Landmark"): до фикса own_bldg не фильтровался по
+# площади — тот же комнатный сегмент ("3-комн") сравнивал 110м² квартиру
+# с 74-80м² квартирами того же ЖК (у них закономерно выше ₸/м² — площадь
+# большая почти всегда дешевле за м², не аномалия), badge показал
+# "Недооценено на 48%", а параллельный bargain.py (get_comparables, тот же
+# принцип "аналоги в своём ЖК", но С фильтром площади ±15% и порогом 3, не
+# 2 — см. его MIN_SAME_COMPLEX ниже) для ТОГО ЖЕ объявления честно нашёл
+# "переоценена на 43%" по 30 гекс+кольцо аналогам — эти два числа
+# одновременно попадали на одну и ту же страницу объявления, противореча
+# друг другу. AREA_BAND_PCT/MIN_BLDG=3 — синхронизировано с bargain.py.
+AREA_BAND_PCT = 0.15
+MIN_BLDG = 3
+
+# Отделка (finish_level, bot/core/listing_intel.detect_finish_level —
+# определяется по тексту объявления при парсинге) — задача 2026-08-14,
+# "finish_level: убрать тихий инкремент... отделку — входом в quality-
+# компонент v4 с небольшим весом". Раньше отделка ПРАВИЛА score_total
+# напрямую (service_apartments.py: score_total += adj), в обход всей
+# модели весов и БЕЗ учёта того, что apply_deal_scores() тут же следом
+# полностью перезаписывает score_total = deal — инкремент почти всегда
+# стирался в том же цикле (см. docs/scoring_audit.md §5.2, живой баг
+# "не имеет эффекта"). Теперь — небольшой (0.12 из quality, т.е. не
+# сильнее прокси-класса и заметно слабее года/рейтинга) полноправный
+# субкомпонент quality, виден в breakdown, не теряется при пересчёте.
+_FINISH_QUALITY_SCORE = {
+    "rough": 20, "prefinish": 35, "needs_repair": 25,
+    "finished": 60, "renovated": 75, "furnished": 80, "designer": 95,
+}
+_FINISH_LABEL = {
+    "rough": "черновая", "prefinish": "предчистовая", "needs_repair": "требует ремонта",
+    "finished": "чистовая", "renovated": "свежий ремонт", "furnished": "с мебелью", "designer": "дизайнерский ремонт",
+}
+_W_FINISH_IN_QUALITY = 0.12
 
 _CLASS_SCORE = {"элит": 100, "бизнес": 80, "комфорт": 60, "эконом": 35}
 # Ценовая надбавка/дисконт класса ЖК к ожидаемой цене — тот же порядок величин,
@@ -171,12 +204,26 @@ def _poi_score(lat: float, lon: float, poi_idx: dict) -> tuple[int, int]:
 
 def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
                         edge_m: float, weights: dict | None = None,
-                        poi_idx: dict | None = None) -> dict[str, dict]:
+                        poi_idx: dict | None = None,
+                        complexes_by_id: dict[int, dict] | None = None) -> dict[str, dict]:
     """
     listings: [{id, lat, lon, price, area, rooms, floor, floors_total,
                 year_built, complex_name, is_owner, first_seen_days, yield_pct,
-                same_complex_cnt, district, ceiling_height}]
+                same_complex_cnt, district, ceiling_height, resolved_house_id,
+                finish_level}]
     complexes: {lower(trim(name)): {housing_class, year_built, krisha_rating}}
+    complexes_by_id: {complexes.id: то же самое} — задача 2026-08-14
+             ("House-resolution в скоринге"): объявление зонтика, которое
+             house_resolution.py уже привязал К КОНКРЕТНОМУ ДОМУ по адресу/
+             токену/гео (resolved_house_id), может по-прежнему называть ЖК
+             именем зонтика в самом тексте (complex_name) — старый lookup
+             ТОЛЬКО по имени тогда брал housing_class/year_built зонтика
+             (агрегата), а не дома, к которому объявление реально
+             привязано. Если передан и у листинга есть resolved_house_id —
+             это приоритетный путь (тот же принцип, что _listing_id_match
+             в terminal_extras.py — resolved_house_id точнее текстового
+             имени); без него (None, старые вызовы) поведение не меняется —
+             только текстовый lookup, как раньше.
     weights: {"price","location","quality","market","risk"} — доли, сумма 1.0
              (если None — дефолт _DEFAULT_WEIGHTS)
     poi_idx: индекс city_poi по гексагонам (см. _poi_index_from_rows) —
@@ -191,7 +238,9 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
 
     # ── Гекс-агрегации (hedonic ядро) ────────────────────────────────────────
     seg_hex: dict[tuple[str, str], list[float]] = {}
-    seg_bldg: dict[tuple[str, str], list[float]] = {}
+    # (area, p_m2) — не просто p_m2 — чтобы own_bldg ниже мог отфильтровать
+    # по площади ±AREA_BAND_PCT перед медианой (см. MIN_BLDG docstring).
+    seg_bldg: dict[tuple[str, str], list[tuple[float, float]]] = {}
     seg_city: dict[str, list[float]] = {}
     enriched = []
     for l in listings:
@@ -206,7 +255,7 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         seg_hex.setdefault((seg, hid), []).append(p_m2)
         seg_city.setdefault(seg, []).append(p_m2)
         if bkey:
-            seg_bldg.setdefault((seg, bkey), []).append(p_m2)
+            seg_bldg.setdefault((seg, bkey), []).append((float(l["area"]), p_m2))
         enriched.append((l, seg, hid, bkey, p_m2))
     city_med = {s: median(v) for s, v in seg_city.items() if v}
     city_sorted = {s: sorted(v) for s, v in seg_city.items()}
@@ -226,7 +275,10 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         p_city = city_med.get(seg)
         if not p_city:
             continue
-        own_bldg = list(seg_bldg.get((seg, bkey), [])) if bkey else []
+        area = float(l["area"])
+        area_lo, area_hi = area * (1 - AREA_BAND_PCT), area * (1 + AREA_BAND_PCT)
+        own_bldg = [pm for a, pm in seg_bldg.get((seg, bkey), [])
+                    if area_lo <= a <= area_hi] if bkey else []
         try:
             own_bldg.remove(p_m2)
         except ValueError:
@@ -253,7 +305,9 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
 
         # ── Hedonic-корректировка P_expected: класс ЖК + высота потолков ────
         # (метраж уже учтён через сегментацию по комнатности; этаж — в Risk)
-        cx = complexes.get((l.get("complex_name") or "").strip().lower()) or {}
+        _house_id = l.get("resolved_house_id")
+        cx = ((complexes_by_id.get(_house_id) if complexes_by_id and _house_id else None)
+              or complexes.get((l.get("complex_name") or "").strip().lower()) or {})
         cls = (cx.get("housing_class") or "").lower()
         cls_key = _class_key(cls)
         class_adj = _CLASS_PRICE_ADJ.get(cls_key, 1.0)
@@ -309,6 +363,11 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         if rating:
             parts.append(rating / 5 * 100 * 0.20)
             wq += 0.20
+        finish_code = l.get("finish_level")
+        finish_score = _FINISH_QUALITY_SCORE.get(finish_code)
+        if finish_score is not None:
+            parts.append(finish_score * _W_FINISH_IN_QUALITY)
+            wq += _W_FINISH_IN_QUALITY
         if wq:
             quality_score = round(sum(parts) / wq)
             q_bits = []
@@ -320,6 +379,8 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
                 q_bits.append(f"{yr} г.")
             if rating:
                 q_bits.append(f"⭐ {rating}")
+            if finish_score is not None:
+                q_bits.append(f"отделка «{_FINISH_LABEL.get(finish_code, finish_code)}»")
             quality_txt = ", ".join(q_bits)
         else:
             quality_score, quality_txt = 50, "нет данных о ЖК (дефолт)"
@@ -438,7 +499,7 @@ async def apply_deal_scores() -> int:
     rows = await fetch("""
         SELECT id, lat, lon, price, area, rooms, floor, floors_total,
                year_built, complex_name, is_owner, district, yield_pct,
-               ceiling_height,
+               ceiling_height, resolved_house_id, finish_level,
                EXTRACT(EPOCH FROM (now() - first_seen)) / 86400 AS first_seen_days
         FROM apartment_listings a
         WHERE is_active IS NOT FALSE
@@ -453,9 +514,13 @@ async def apply_deal_scores() -> int:
         cx_key = (l.get("complex_name") or "").strip().lower()
         l["same_complex_cnt"] = complex_counts.get(cx_key, 1)
 
+    # complexes_by_id (задача 2026-08-14, "House-resolution в скоринге") —
+    # тот же набор строк, что и complexes ниже, просто дополнительно
+    # индексированный по id — см. docstring compute_deal_scores.
     cx_rows = await fetch(
-        "SELECT name, housing_class, year_built, source_info FROM complexes")
+        "SELECT id, name, housing_class, year_built, source_info FROM complexes")
     complexes: dict[str, dict] = {}
+    complexes_by_id: dict[int, dict] = {}
     for c in cx_rows:
         si = c["source_info"]
         if isinstance(si, str):
@@ -465,16 +530,18 @@ async def apply_deal_scores() -> int:
                 si = {}
         si = si or {}
         kr = si.get("krisha") or {}
-        complexes[(c["name"] or "").strip().lower()] = {
+        cx_data = {
             "housing_class": c["housing_class"],
             "year_built": c["year_built"],
             "krisha_rating": kr.get("rating"),
         }
+        complexes[(c["name"] or "").strip().lower()] = cx_data
+        complexes_by_id[c["id"]] = cx_data
 
     poi_rows = await fetch("SELECT kind, lat, lon FROM city_poi")
     poi_idx = _poi_index_from_rows(poi_rows)
 
-    result = compute_deal_scores(listings, complexes, edge, weights, poi_idx)
+    result = compute_deal_scores(listings, complexes, edge, weights, poi_idx, complexes_by_id)
 
     updated = 0
     for lid, r in result.items():
