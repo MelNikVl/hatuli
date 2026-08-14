@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежедневного пересчёта outcome_labels — Фаза A п.2 вердикт-стратегии, задача 2026-08-14
+
+[Timer]
+OnCalendar=*-*-* 08:45:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=krisha-outcome-labels.service
+
+[Install]
+WantedBy=timers.target
