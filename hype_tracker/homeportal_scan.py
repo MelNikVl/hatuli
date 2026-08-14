@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dotenv import load_dotenv
 load_dotenv()
 import os
+from complex_completion_year_backfill import _parse_commissioning_date
 
 FUZZY_THRESHOLD = 0.75
 MAX_AGE_DAYS = 7  # инкремент: деталки только для новых ЖК и старше 7 дней
@@ -295,6 +296,23 @@ async def main() -> int:
                          apartment_count_source = CASE WHEN housing_class_test.apartment_count IS NULL THEN 'homeportal' ELSE housing_class_test.apartment_count_source END,
                          updated_at = now()""")
                 psql(f"""UPDATE complexes SET description = COALESCE(description, '🏛 {ESC(o.get('name'))}: официальные данные КЖК (долевое строительство)') WHERE id = {cid} AND description IS NULL""")
+                # completion_year/quarter (задача 2026-08-14, "Часть 0 —
+                # быстрые победы": срок сдачи был известен только у 48%
+                # is_newbuild ЖК, единственный источник из трёх проверенных
+                # {homeportal, developer-direct, korter}, реально отдающий
+                # эти данные — см. complex_completion_year_backfill.py,
+                # тот же парсер даты, чтобы не дублировать формат DD.MM.YYYY
+                # -> год+квартал в двух местах). COALESCE-гейт — не
+                # перезаписывает уже заполненное (в т.ч. руками).
+                _commissioning = basic.get("commissioning_date")
+                if _commissioning:
+                    _parsed = _parse_commissioning_date(_commissioning)
+                    if _parsed:
+                        _year, _quarter = _parsed
+                        psql(f"""UPDATE complexes SET
+                                 completion_year = COALESCE(completion_year, {_year}),
+                                 completion_quarter = COALESCE(completion_quarter, {_quarter})
+                                 WHERE id = {cid}""")
                 # БИН застройщика → complex_tech_specs (если пусто)
                 if dev.get("bin"):
                     psql(f"""INSERT INTO complex_tech_specs (complex_id, developer_bin, updated_at)
