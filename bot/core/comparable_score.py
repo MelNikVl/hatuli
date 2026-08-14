@@ -162,7 +162,12 @@ def compute_comparable_score(listing_a: dict, listing_b: dict,
         ):
             return 0.0
 
-    w = {**_WEIGHTS, **(weights or {})}
+    # Задача 2026-08-14 (Фаза B п.2, интеграция в deal_score.py) — живой
+    # профайлинг на 30К объявлений показал, что {**_WEIGHTS, **(weights or
+    # {})} копировал весь словарь весов НА КАЖДЫЙ вызов (315К вызовов на
+    # прогон) даже когда weights=None (прод-путь всегда так вызывает) —
+    # чистые накладные расходы, копия не нужна, если нечего мёржить.
+    w = _WEIGHTS if not weights else {**_WEIGHTS, **weights}
 
     factors = {
         "same_building": _same_building(listing_a, listing_b),

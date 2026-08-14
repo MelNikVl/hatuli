@@ -42,7 +42,6 @@ v4 (см. _legacy_breakdown), т.е. всегда согласованы со sc
 """
 from __future__ import annotations
 
-import bisect
 import json
 import logging
 from datetime import datetime
@@ -53,6 +52,7 @@ from bot.core.hedonic_constants import (
     AREA_BAND_PCT, MIN_BLDG, MIN_HEX, MIN_RING, W0, W1, W2, _activity_filter,
     _CLASS_SCORE, _class_key, _FINISH_QUALITY_SCORE, _FINISH_LABEL,
 )
+from bot.core.comparable_score import compute_comparable_score
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,80 @@ def _rooms_bucket(rooms) -> str:
 
 def _clamp(v, lo=0, hi=100):
     return max(lo, min(hi, v))
+
+
+# Задача 2026-08-14 (Фаза B п.2, "comparable engine v2 — интеграция в
+# Deal Score v4", docs/verdict_strategy.md): P_expected внутри own_bldg/
+# own-гекс/кольцо теперь считается weighted median топ-N (веса =
+# comparable_score), не плоской медианой. AREA_BAND_PCT/MIN_BLDG/MIN_HEX/
+# MIN_RING ОСТАЮТСЯ порогами отсечения (кто вообще попадает в пул) —
+# comparable_score только ранжирует и взвешивает ВНУТРИ уже отсечённого
+# множества, ничего не добавляет и не убирает из порогов.
+TOP_N_COMPARABLES = 20
+
+# Защитный потолок на размер пула ДО скоринга comparable_score — живой
+# замер плотности гексагонов (2026-08-14, город, edge=50м): own-гекс p99
+# =18, max=97; кольцо (own+6 соседей) p99=42, max=114 — сегодня почти
+# никогда не сработает (comfortable запас над p99), но защищает от
+# худшего случая по мере роста датасета (тот же класс риска, что уже
+# дважды был в этом файле — same_complex_cnt O(n²) и /admin/api/
+# map-points, оба по 30с command_timeout на плотных данных). Обрезка ДО
+# скоринга, не после — не тратим время на кандидатов, которых и так не
+# возьмём: даже без обрезки пул ранжируется и берётся топ-N, обрезка
+# просто не даёт вырожденно большому пулу (сотни) заставлять считать
+# comparable_score для каждого при уже достаточной выборке.
+MAX_POOL_BEFORE_SCORING = 60
+
+
+def _weighted_median(values: list[float], weights: list[float]) -> float:
+    """Взвешенная медиана — точка, где кумулятивный вес слева впервые
+    достигает половины суммарного веса (стандартное определение).
+    Честный fallback на плоскую медиану, если веса выродились в 0 (не
+    должно случаться — вызывающий уже отфильтровал score>0 — но не
+    падаем на всякий случай)."""
+    pairs = sorted(zip(values, weights))
+    total = sum(w for _, w in pairs)
+    if total <= 0:
+        return median(values)
+    cum = 0.0
+    for v, w in pairs:
+        cum += w
+        if cum >= total / 2:
+            return v
+    return pairs[-1][0]
+
+
+def _weighted_median_topn(target_comp: dict, candidates: list[tuple[str, float, dict]],
+                           top_n: int = TOP_N_COMPARABLES) -> float | None:
+    """candidates: [(id, p_m2, comp_dict), ...] — уже отсечённый порогом
+    пул (own_bldg/own-гекс/кольцо, см. MIN_BLDG/MIN_HEX/MIN_RING). Считает
+    comparable_score(target_comp, comp_dict) для каждого кандидата, берёт
+    топ-N по убыванию (отбрасывая score=0 — не аналог вовсе, не просто
+    "слабый"), взвешенную медиану p_m2 по этим весам.
+
+    as_of здесь НЕ передаётся в compute_comparable_score: пул кандидатов
+    уже пришёл в compute_deal_scores() ПРЕДФИЛЬТРОВАННЫМ по активности на
+    as_of на уровне SQL-запроса вызывающего (apply_deal_scores(),
+    _activity_filter) — повторная проверка активности пары была бы
+    избыточна (все кандидаты уже гарантированно валидны на as_of) и
+    потребовала бы тащить first_seen/archived_at в каждый comp_dict без
+    выгоды.
+
+    None, если после отсечения score=0 кандидатов не осталось (весь пул
+    формально прошёл MIN_*-порог по количеству, но comparable_score не
+    нашёл в нём ничего похожего вообще — вырожденный, но не невозможный
+    случай) — вызывающий обязан честно откатиться на плоскую медиану, не
+    гадать.
+    """
+    if len(candidates) > MAX_POOL_BEFORE_SCORING:
+        candidates = candidates[:MAX_POOL_BEFORE_SCORING]
+    scored = [(compute_comparable_score(target_comp, cdict), pm) for _, pm, cdict in candidates]
+    scored = [(s, pm) for s, pm in scored if s > 0]
+    if not scored:
+        return None
+    scored.sort(key=lambda x: -x[0])
+    top = scored[:top_n]
+    return _weighted_median([pm for _, pm in top], [s for s, _ in top])
 
 
 def _year_score(y):
@@ -261,10 +335,16 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
     W_RISK = 0.0
 
     # ── Гекс-агрегации (hedonic ядро) ────────────────────────────────────────
-    seg_hex: dict[tuple[str, str], list[float]] = {}
-    # (area, p_m2) — не просто p_m2 — чтобы own_bldg ниже мог отфильтровать
-    # по площади ±AREA_BAND_PCT перед медианой (см. MIN_BLDG docstring).
-    seg_bldg: dict[tuple[str, str], list[tuple[float, float]]] = {}
+    # comp_dict на каждый listing строится ЗДЕСЬ (не во втором проходе,
+    # как housing_class/year_built резолвились раньше) — нужен и как
+    # КАНДИДАТ в чужих пулах (seg_hex/seg_bldg ниже), и как ЦЕЛЬ в своём
+    # собственном расчёте, один resolve на listing, не дважды.
+    seg_hex: dict[tuple[str, str], list[tuple[str, float, dict]]] = {}
+    # (id, area, p_m2, comp_dict) — area отдельно, чтобы own_bldg ниже мог
+    # отфильтровать по площади ±AREA_BAND_PCT ДО ранжирования (см. MIN_BLDG
+    # docstring) — тот же порог отсечения, что был, comparable_score его
+    # не заменяет.
+    seg_bldg: dict[tuple[str, str], list[tuple[str, float, float, dict]]] = {}
     seg_city: dict[str, list[float]] = {}
     enriched = []
     for l in listings:
@@ -276,24 +356,37 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         seg = _rooms_bucket(l.get("rooms"))
         hid = hex_id(float(l["lat"]), float(l["lon"]), edge_m)
         bkey = (l.get("complex_name") or "").strip().lower() or None
-        seg_hex.setdefault((seg, hid), []).append(p_m2)
+        _house_id = l.get("resolved_house_id")
+        cx = ((complexes_by_id.get(_house_id) if complexes_by_id and _house_id else None)
+              or complexes.get(bkey or "") or {})
+        comp_dict = {
+            "resolved_house_id": _house_id,
+            "complex_id": cx.get("id"),
+            "area": l.get("area"), "floor": l.get("floor"),
+            "year_built": l.get("year_built") or cx.get("year_built"),
+            "housing_class": cx.get("housing_class"),
+            "finish_level": l.get("finish_level"),
+            "lat": l.get("lat"), "lon": l.get("lon"),
+        }
+        seg_hex.setdefault((seg, hid), []).append((str(l["id"]), p_m2, comp_dict))
         seg_city.setdefault(seg, []).append(p_m2)
         if bkey:
-            seg_bldg.setdefault((seg, bkey), []).append((float(l["area"]), p_m2))
-        enriched.append((l, seg, hid, bkey, p_m2))
+            seg_bldg.setdefault((seg, bkey), []).append((str(l["id"]), float(l["area"]), p_m2, comp_dict))
+        enriched.append((l, seg, hid, bkey, p_m2, cx, comp_dict))
     city_med = {s: median(v) for s, v in seg_city.items() if v}
-    city_sorted = {s: sorted(v) for s, v in seg_city.items()}
+    # city_sorted (перцентиль по сегменту) был мёртв с Фазы A п.4 —
+    # единственный потребитель (price→quality proxy) убран тогда, сама
+    # переменная осталась висеть. Найдено и почищено попутно этой задачей
+    # (Фаза B п.2), не отдельным заходом — нулевой риск, тот же файл уже
+    # правится.
 
     out: dict[str, dict] = {}
-    for l, seg, hid, bkey, p_m2 in enriched:
-        own = list(seg_hex.get((seg, hid), []))
-        try:
-            own.remove(p_m2)
-        except ValueError:
-            pass
-        ring: list[float] = []
+    for l, seg, hid, bkey, p_m2, cx, comp_dict in enriched:
+        lid = str(l["id"])
+        own = [(i, pm, cd) for i, pm, cd in seg_hex.get((seg, hid), []) if i != lid]
+        ring: list[tuple[str, float, dict]] = []
         for nb in neighbors(hid):
-            ring.extend(seg_hex.get((seg, nb), []))
+            ring.extend((i, pm, cd) for i, pm, cd in seg_hex.get((seg, nb), []) if i != lid)
         d0 = len(own) >= MIN_HEX
         d1 = len(ring) >= MIN_RING
         p_city = city_med.get(seg)
@@ -301,25 +394,31 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
             continue
         area = float(l["area"])
         area_lo, area_hi = area * (1 - AREA_BAND_PCT), area * (1 + AREA_BAND_PCT)
-        own_bldg = [pm for a, pm in seg_bldg.get((seg, bkey), [])
-                    if area_lo <= a <= area_hi] if bkey else []
-        try:
-            own_bldg.remove(p_m2)
-        except ValueError:
-            pass
+        own_bldg = [(i, pm, cd) for i, a, pm, cd in seg_bldg.get((seg, bkey), [])
+                    if area_lo <= a <= area_hi and i != lid] if bkey else []
         db = len(own_bldg) >= MIN_BLDG
         if db:
             # Хватает аналогов в том же доме/ЖК — они точнее любого
             # геометрического гекса, дальше вниз по цепочке не спускаемся.
-            expected_raw = median(own_bldg)
+            # weighted median топ-N (Фаза B п.2) — честный fallback на
+            # плоскую медиану, если comparable_score вырожденно не нашёл
+            # НИ ОДНОГО похожего кандидата (score=0 у всех) в уже
+            # отсечённом MIN_BLDG-пуле — не должно случаться часто, но
+            # порог отсечения (MIN_BLDG) и ранжирование (comparable_score)
+            # — разные вещи, второе может выродиться там, где первое ещё
+            # формально выполнено.
+            wm = _weighted_median_topn(comp_dict, own_bldg)
+            expected_raw = wm if wm is not None else median([pm for _, pm, _ in own_bldg])
             sources_bldg = True
         else:
             num, den = W2 * p_city, W2
             if d0:
-                num += W0 * median(own)
+                wm_own = _weighted_median_topn(comp_dict, own)
+                num += W0 * (wm_own if wm_own is not None else median([pm for _, pm, _ in own]))
                 den += W0
             if d1:
-                num += W1 * median(ring)
+                wm_ring = _weighted_median_topn(comp_dict, ring)
+                num += W1 * (wm_ring if wm_ring is not None else median([pm for _, pm, _ in ring]))
                 den += W1
             expected_raw = num / den
             sources_bldg = False
@@ -329,9 +428,7 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
 
         # ── Hedonic-корректировка P_expected: класс ЖК + высота потолков ────
         # (метраж уже учтён через сегментацию по комнатности; этаж — в Risk)
-        _house_id = l.get("resolved_house_id")
-        cx = ((complexes_by_id.get(_house_id) if complexes_by_id and _house_id else None)
-              or complexes.get((l.get("complex_name") or "").strip().lower()) or {})
+        # cx уже резолвлен в первом проходе (см. выше) — не пересчитываем.
         cls = (cx.get("housing_class") or "").lower()
         cls_key = _class_key(cls)
         class_adj = _CLASS_PRICE_ADJ.get(cls_key, 1.0)
@@ -622,6 +719,9 @@ async def apply_deal_scores(as_of: datetime | None = None) -> int | dict[str, di
         si = si or {}
         kr = si.get("krisha") or {}
         cx_data = {
+            "id": c["id"],  # задача 2026-08-14 (Фаза B п.2) — резолвленный
+            # complex_id для comparable_score.py (same_complex-фактор),
+            # раньше здесь id не хранился (не был нужен до этой задачи).
             "housing_class": c["housing_class"],
             "year_built": c["year_built"],
             "krisha_rating": kr.get("rating"),
