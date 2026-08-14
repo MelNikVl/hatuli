@@ -2,8 +2,17 @@
 """Щадящий парсер krisha-комплексов: количество квартир + описание + фото ЖК.
 - apartment_count → housing_class_test
 - description → complexes (ТОЛЬКО если пусто — «не менять существующие»)
-- photos → complexes.photos (замена всех)
-Лимиты из parse_settings. Лог — krisha_parse_log. Щадим Крышу (по умолч. 10 ЖК / 20 мин)."""
+- photos → complexes.photos, ТОЛЬКО если текущий источник не приоритетнее
+  krisha (см. photos_source/SOURCE_PRIORITY ниже, задача 2026-08-13,
+  "фото ЖК ... по приоритетности: 1 сайт застройщика, 2 homeportal,
+  3 крыша, ..."). Раньше было безусловное "замена всех" — стирало бы
+  homeportal-фото (см. complex_photos_address_backfill.py), если бы тот
+  скрипт запускался ПОСЛЕ этого.
+Лимиты из parse_settings. Лог — krisha_parse_log. Щадим Крышу (по умолч. 10 ЖК / 20 мин).
+
+Раньше существовал, но не был поставлен на systemd-таймер (живая жалоба
+2026-08-13: "проверь — может уже есть и просто не запущен?" — да, именно
+так и было) — теперь krisha-complex-scan.timer, каждые 20 мин."""
 import json
 import re
 import subprocess
@@ -13,6 +22,10 @@ from urllib.request import Request, urlopen
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0 Safari/537.36"
 MAX_PHOTOS = 10
+# см. complex_photos_address_backfill.py — та же таблица приоритетов,
+# держим синхронно вручную (два процесса, не делить импортом — этот
+# скрипт исторически написан без импортов bot.*, только psql-подпроцесс).
+SOURCE_PRIORITY = {"developer": 1, "homeportal": 2, "krisha": 3, "korter": 4, "homsters": 5}
 
 
 def psql(sql: str) -> str:
@@ -123,10 +136,17 @@ def main() -> int:
     batch = int(get_setting("krisha_batch", "10"))
 
     # очередь: все ЖК с krisha_url, не обработанные полностью (счёт+описание+фото)
+    # photos_source — 4-е поле, для приоритетной проверки перед записью фото ниже.
     rows = [r.split("|") for r in psql(f"""
-        SELECT c.id, c.name, c.krisha_url FROM complexes c
+        SELECT c.id, c.name, c.krisha_url, COALESCE(c.photos_source, '') FROM complexes c
         LEFT JOIN housing_class_test hct ON hct.complex_id = c.id
         WHERE c.krisha_url IS NOT NULL
+          -- Дома зонтика (задача 2026-08-13, "исправить импортёр Крыши")
+          -- не обрабатываются тут отдельно от своего зонтика — у Крыши
+          -- нет отдельных карточек под каждый блок расшивленного ЖК,
+          -- дом наследует ссылку зонтика для отображения (см.
+          -- complex_detail в terminal_extras.py), свою запись не пишет.
+          AND c.parent_complex_id IS NULL
           AND NOT EXISTS (SELECT 1 FROM krisha_parse_log l WHERE l.complex_id = c.id
                           AND l.status = 'error' AND l.ts > now() - interval '2 days')
           -- "готово" = была хотя бы одна успешная обработка за последние 30
@@ -144,7 +164,7 @@ def main() -> int:
         return 0
 
     done, errors = 0, 0
-    for cid, name, url in rows:
+    for cid, name, url, photos_source in rows:
         try:
             html = fetch(url)
         except Exception as e404:
@@ -205,9 +225,17 @@ def main() -> int:
             # описание — ТОЛЬКО если пусто
             if desc:
                 psql(f"UPDATE complexes SET description = '{esc(desc)}' WHERE id = {cid} AND (description IS NULL OR description = '')")
-            # фото — замена всех
-            if photos:
-                psql(f"UPDATE complexes SET photos = '{json.dumps(photos, ensure_ascii=False)}'::jsonb WHERE id = {cid}")
+            # фото — приоритет источников (задача 2026-08-13, см. docstring
+            # модуля и complex_photos_address_backfill.py): пишем/освежаем
+            # только если текущий источник НЕ приоритетнее krisha (пустой
+            # photos_source считаем неизвестным — низший приоритет, можно
+            # писать; homeportal/developer — выше, не трогаем).
+            current_prio = SOURCE_PRIORITY.get(photos_source, 99)
+            if photos and SOURCE_PRIORITY["krisha"] <= current_prio:
+                psql(f"UPDATE complexes SET photos = '{json.dumps(photos, ensure_ascii=False)}'::jsonb, "
+                     f"photos_source = 'krisha' WHERE id = {cid}")
+            elif photos:
+                print(f"⏭ {cid} {name}: фото пропущены — уже стоит более приоритетный источник ({photos_source})")
 
             psql(f"INSERT INTO krisha_parse_log (complex_id, complex_name, apartment_count, status, detail) "
                  f"VALUES ({cid}, '{esc(name)}', {cnt if cnt is not None else 'NULL'}, 'ok', "

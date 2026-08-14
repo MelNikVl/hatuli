@@ -263,25 +263,31 @@ def extract_summary(content: str) -> str:
     return text[:600] if text else ""
 
 
-def enrich_images_playwright(items: list[dict], limit: int = 12) -> None:
-    """Достаём og:image и выжимку текста через Playwright (Google News разрезолв)."""
+def enrich_images_playwright(items: list[dict], limit: int = 8) -> None:
+    """Достаём og:image и выжимку текста через Playwright (Google News разрезолв).
+    Бюджет времени 150с: при 8+ новостях по ~27с цикл превышал 300с таймаут
+    ssh-обёртки на хосте (news_collect.py Windows) — крон падал в error."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
         print(f"# playwright недоступен: {e}", file=sys.stderr)
         return
+    import time as _time
     done = 0
+    budget_start = _time.monotonic()
     with sync_playwright() as p:
         b = p.chromium.launch(headless=True)
         pg = b.new_page(user_agent=UA)
         for it in items:
+            if _time.monotonic() - budget_start > 150:
+                break
             if it.get("image") and it.get("summary"):
                 continue
             if done >= limit and it.get("image"):
                 continue
             try:
-                pg.goto(it["url"], wait_until="domcontentloaded", timeout=25000)
-                pg.wait_for_timeout(2500)
+                pg.goto(it["url"], wait_until="domcontentloaded", timeout=15000)
+                pg.wait_for_timeout(1200)
                 content = pg.content()
                 if not it.get("image"):
                     m = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)', content) or \

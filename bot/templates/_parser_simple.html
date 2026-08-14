@@ -1,0 +1,18 @@
+{% if simple_rows %}
+<table class="tbl" style="width:100%;max-width:720px;margin-top:14px;">
+  <thead><tr><th style="text-align:left;padding:8px 10px;">Показатель</th>
+  <th style="text-align:left;padding:8px 10px;">Значение</th>
+  {% if simple_rows[0]|length > 2 %}<th style="text-align:left;padding:8px 10px;">Время</th>{% endif %}</tr></thead>
+  <tbody>
+  {% for r in simple_rows %}
+    <tr>
+      <td style="padding:6px 10px;border-top:1px solid var(--border);">{{ r[0] }}</td>
+      <td style="padding:6px 10px;border-top:1px solid var(--border);">{{ r[1] }}</td>
+      {% if r|length > 2 %}<td style="padding:6px 10px;border-top:1px solid var(--border);color:var(--muted);">{{ r[2] }}</td>{% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div style="color:var(--muted);font-size:13px;margin-top:14px;">Нет данных.</div>
+{% endif %}

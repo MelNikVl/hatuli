@@ -513,6 +513,21 @@ async def record_source_link(
     if confidence < REVIEW_QUEUE_THRESHOLD:
         return "skipped"
     from bot.db.pg import fetchrow, execute
+    # Семантика зонтика для Крыши (задача 2026-08-13): у Крыши нет
+    # отдельных карточек под каждый дом/блок расшивленного ЖК — если
+    # complex_id уже "дом" (parent_complex_id стоит), связь с krisha
+    # почти всегда на самом деле про весь комплекс, редиректим на
+    # зонтик, иначе получаем дубль-запись на дом (живой аудит нашёл
+    # #4008/#872, #3354/#1785 — обе через legacy complexes.krisha_url,
+    # не через эту функцию, но тот же принцип защищает и этот путь).
+    # Скоуп — только krisha: у остальных источников свои схемы
+    # матчинга (homeportal — matched_complex_id, korter/homsters —
+    # текстовые source_info), трогать не просили и не должны молча
+    # менять их пороги/поведение заодно.
+    if source == "krisha":
+        parent_row = await fetchrow("SELECT parent_complex_id FROM complexes WHERE id=$1", complex_id)
+        if parent_row and parent_row["parent_complex_id"]:
+            complex_id = parent_row["parent_complex_id"]
     evidence_json = json.dumps(evidence) if evidence is not None else None
 
     rejected = await fetchrow(
@@ -742,8 +757,21 @@ async def approve_unit_candidate(candidate_id: int, approved_by: str = "admin") 
     """Подтвердить кандидата на дубль юнита — переносит связь в
     unit_source_links (spine, тот же принцип, что complex_source_links:
     apartment_listings НЕ гарбейджится, живёт своей жизнью), помечает
-    кандидата status='merged', пишет gold label."""
-    from bot.db.pg import fetchrow, execute
+    кандидата status='merged', пишет gold label.
+
+    Задача 2026-08-14, "Approve одного кандидата -> остальные кандидаты
+    этого listing автоматически status='superseded'": одно объявление
+    продаёт ровно одну квартиру — если человек подтвердил, что оно ==
+    ЭТОТ юнит, все остальные unit_duplicate_candidates на тот же
+    listing_id автоматически проигрывают, оператору не нужно кликать
+    "отклонить" на каждого по очереди. Статус 'superseded' (не
+    'rejected') — операционно то же самое "не мерджим", но по
+    происхождению решения другое (оператор не смотрел эту конкретную
+    пару, она проиграла соседней) — UI (entity_ids.html) красит иначе.
+    Gold label для проигравших честно decision='reject' — "разные
+    квартиры" тут правда: раз объявление продаёт подтверждённый юнит,
+    все остальные кандидаты по определению не он."""
+    from bot.db.pg import fetchrow, fetch, execute
     c = await fetchrow("SELECT * FROM unit_duplicate_candidates WHERE id = $1", candidate_id)
     if not c:
         return None
@@ -757,7 +785,21 @@ async def approve_unit_candidate(candidate_id: int, approved_by: str = "admin") 
         WHERE id = $1
     """, candidate_id, approved_by)
     await _write_unit_gold_label(c, "approve", approved_by)
-    return {"unit_id": c["unit_id"], "listing_id": c["listing_id"]}
+
+    siblings = await fetch("""
+        SELECT * FROM unit_duplicate_candidates
+        WHERE listing_id = $1 AND status = 'review' AND id != $2
+    """, c["listing_id"], candidate_id)
+    superseded_ids = []
+    for s in siblings:
+        await execute("""
+            UPDATE unit_duplicate_candidates SET status = 'superseded', resolved_at = now(), resolved_by = $2
+            WHERE id = $1
+        """, s["id"], approved_by)
+        await _write_unit_gold_label(s, "reject", approved_by)
+        superseded_ids.append(s["id"])
+
+    return {"unit_id": c["unit_id"], "listing_id": c["listing_id"], "superseded_ids": superseded_ids}
 
 
 async def reject_unit_candidate(candidate_id: int, rejected_by: str = "admin") -> dict | None:
@@ -872,6 +914,41 @@ async def unset_parent_complex(complex_id: int) -> dict | None:
         return None
     await execute("UPDATE complexes SET parent_complex_id=NULL WHERE id=$1", complex_id)
     return {"complex_id": complex_id}
+
+
+async def set_umbrella(complex_id: int) -> dict | None:
+    """"Сделать ЖК зонтиком" по одному клику (задача 2026-08-13) — раньше
+    "зонтик" был чисто производным понятием (EXISTS хотя бы один дом),
+    кнопка сразу открывала попап поиска дома. Живой фидбек: нужно фиксировать
+    намерение "это зонтик" СРАЗУ, домов может пока не быть вовсе ("добавлю
+    когда-нибудь") — is_umbrella (migrations/057), независимая от
+    parent_complex_id колонка. Тот же гвард, что раньше был в JS
+    (eidMakeUmbrella): нельзя сделать зонтиком ЖК, который сам уже чей-то
+    дом — 2-уровневая модель не подразумевает цепочек длиннее одного шага
+    (см. docstring set_parent_complex)."""
+    from bot.db.pg import fetchrow, execute
+    row = await fetchrow("SELECT id, parent_complex_id FROM complexes WHERE id=$1", complex_id)
+    if not row:
+        return None
+    if row["parent_complex_id"] is not None:
+        return {"error": "already_a_house", "parent_complex_id": row["parent_complex_id"]}
+    await execute("UPDATE complexes SET is_umbrella=TRUE WHERE id=$1", complex_id)
+    return {"complex_id": complex_id, "is_umbrella": True}
+
+
+async def unset_umbrella(complex_id: int) -> dict | None:
+    """"Снять зонтик" — обратная операция к set_umbrella (задача 2026-08-13,
+    "нужна кнопка снять зонтик, что бы можно было жк переопределить").
+    Трогает ТОЛЬКО намерение (is_umbrella) — уже привязанные дома
+    (parent_complex_id других строк) НЕ отвязываются автоматически, это
+    отдельное решение (открепляются по одному со страницы /admin/umbrellas,
+    unset_parent_complex)."""
+    from bot.db.pg import fetchval, execute
+    exists = await fetchval("SELECT 1 FROM complexes WHERE id=$1", complex_id)
+    if not exists:
+        return None
+    await execute("UPDATE complexes SET is_umbrella=FALSE WHERE id=$1", complex_id)
+    return {"complex_id": complex_id, "is_umbrella": False}
 
 
 async def _execute_split_cluster(parent_id: int, name: str, cluster: dict, matched_by: str) -> dict:

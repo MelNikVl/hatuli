@@ -79,11 +79,17 @@ async function eidNoteModalSubmit() {
 
 // ── "Добавить дом к ЖК" — autocomplete (fuzzy: транслит + база без
 // продуктового токена, bot.core.entity_resolution.search_complexes_for_parent) ──
-let _eidAcFixedId = null, _eidAcMode = null, _eidAcTimer = null;
+let _eidAcFixedId = null, _eidAcMode = null, _eidAcTimer = null, _eidAcRedirectTo = null;
 // mode='set-parent-for' — fixedId это ДОМ, ищем РОДИТЕЛЯ (обычный кейс)
-// mode='add-child-to'   — fixedId это ЗОНТИК, ищем ДОМ (страница /admin/umbrellas)
-function eidOpenAcModal(fixedId, mode, title) {
-  _eidAcFixedId = fixedId; _eidAcMode = mode || 'set-parent-for';
+// mode='add-child-to'   — fixedId это ЗОНТИК, ищем ДОМ (страница /admin/umbrellas
+//                          и кнопка "Сделать ЖК зонтиком" на карточке ЖК)
+// redirectTo (опционально) — куда уйти после успеха вместо обычного
+// location.reload() текущей страницы; используется кнопкой "Сделать ЖК
+// зонтиком" на /complex/{id} — после назначения первого дома странице
+// нечего перерисовывать (сама она не "зонтик"), осмысленнее уйти на
+// /admin/umbrellas с фокусом на новый зонтик, задача 2026-08-13.
+function eidOpenAcModal(fixedId, mode, title, redirectTo) {
+  _eidAcFixedId = fixedId; _eidAcMode = mode || 'set-parent-for'; _eidAcRedirectTo = redirectTo || null;
   document.getElementById('eid-ac-modal-title').textContent = title || (
     _eidAcMode === 'add-child-to' ? '🏠 Добавить дом в зонтик' : '🏠 Добавить дом к ЖК');
   document.getElementById('eid-ac-input').value = '';
@@ -103,7 +109,18 @@ function eidAcSearch() {
     const excludeParam = _eidAcMode === 'set-parent-for' ? `&exclude=${_eidAcFixedId}` : '';
     const r = await fetch(`/admin/api/entity-ids/complex-search?q=${encodeURIComponent(q)}${excludeParam}`);
     const d = await r.json();
-    if (!d.results || !d.results.length) { dd.innerHTML = '<div class="eid-ac-item" style="color:#888;">ничего не найдено</div>'; dd.style.display = 'block'; return; }
+    if (!d.results || !d.results.length) {
+      // Пустое состояние в режиме "ищем дом для зонтика" — отдельная
+      // подсказка, не просто "ничего не найдено": детей заводят с ДРУГОЙ
+      // стороны (кнопка "Добавить дом к ЖК" на карточке дома) либо ждут
+      // авто-детектор расшивки, отсюда их не создать (задача 2026-08-13).
+      const emptyMsg = _eidAcMode === 'add-child-to'
+        ? 'Пока нет домов для добавления. Дома добавляются через кнопку «Добавить дом к ЖК» на карточках других ЖК, или подождите — авто-детектор найдёт кандидатов по расшивке.'
+        : 'ничего не найдено';
+      dd.innerHTML = `<div class="eid-ac-item" style="color:#888;cursor:default;">${emptyMsg}</div>`;
+      dd.style.display = 'block';
+      return;
+    }
     dd.innerHTML = d.results.map(c => `
       <div class="eid-ac-item" onclick="eidAcPick(${c.id})">
         #${c.id} ${c.name.replace(/</g, '&lt;')}
@@ -119,6 +136,47 @@ async function eidAcPick(pickedId) {
   const r = await fetch('/admin/api/entity-ids/set-parent', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({complex_id, parent_complex_id})});
+  if (r.ok) {
+    if (_eidAcRedirectTo) { location.href = _eidAcRedirectTo; }
+    else { location.reload(); }
+  }
+  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+}
+
+// ── "Сделать ЖК зонтиком" — кнопка на карточке ЖК (/complex/{id}),
+// admin-only. Живой фидбек 2026-08-13 переделал это с "попап поиска
+// первого дома" на "мгновенный статус по одному клику" — is_umbrella
+// (migrations/057) теперь независимая от parent_complex_id колонка,
+// дома можно добавить "когда-нибудь" отдельно (кнопка "Добавить дом к
+// ЖК" остаётся тем же попапом-поиском на СВОЕЙ странице дома). Гард на
+// клиенте — тот же, что раньше: если у ЖК уже есть parent_complex_id
+// (он сам чей-то дом), 2-уровневая модель не подразумевает цепочек —
+// сервер тоже это проверяет (set_umbrella, entity_resolution.py),
+// клиентский гард просто быстрее и без лишнего round-trip.
+async function eidMakeUmbrella(complexId, complexName, parentId, parentName) {
+  if (parentId) {
+    alert(`Этот ЖК уже прикреплён к зонтику ${parentName} (#${parentId}), сначала открепите.`);
+    return;
+  }
+  const r = await fetch('/admin/api/entity-ids/set-umbrella', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({complex_id: complexId})});
+  if (r.ok) {
+    location.href = `/admin/umbrellas?new_umbrella=${complexId}`;
+  } else {
+    const d = await r.json().catch(() => ({}));
+    alert('Ошибка: ' + (d.error || r.status));
+  }
+}
+// ── "Снять зонтик" — обратная операция (задача 2026-08-13, "нужна
+// кнопка снять зонтик, что бы можно было жк переопределить"). НЕ трогает
+// уже привязанные дома (см. unset_umbrella docstring) — те открепляются
+// по одному на /admin/umbrellas.
+async function eidUnsetUmbrella(complexId) {
+  if (!confirm('Снять статус зонтика с этого ЖК? Уже привязанные дома (если есть) останутся привязанными — их нужно откреплять по отдельности на /admin/umbrellas.')) return;
+  const r = await fetch('/admin/api/entity-ids/unset-umbrella', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({complex_id: complexId})});
   if (r.ok) { location.reload(); }
   else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
 }

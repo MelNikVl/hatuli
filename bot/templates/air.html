@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🌬 Качество воздуха в Астане
+  <small style="font-size:13px;color:#888;font-weight:400;">
+    официальные данные РГП «Казгидромет» (data.egov.kz) · версия {{ latest_version or '—' }}
+  </small>
+</div>
+
+{% if latest_rows %}
+<div style="font-size:11px;color:#888;margin-bottom:12px;">
+  Концентрации в мг/м³ · кратность — превышение ПДК (макс. разовая) · обновляется ежемесячно (проверка еженедельно, ср 07:30)
+</div>
+<table>
+  <tr><th>Загрязнитель</th><th>Мин. концентрация</th><th>Макс. концентрация</th><th>Кратность ПДК</th><th>Превышений за месяц</th></tr>
+  {% for r in latest_rows %}
+  <tr>
+    <td><b>{{ r.pollutant }}</b></td>
+    <td>{{ '%.4f'|format(r.min_conc) if r.min_conc is not none else '—' }}</td>
+    <td>{{ '%.4f'|format(r.max_conc) if r.max_conc is not none else '—' }}</td>
+    <td>
+      {% set mc = r.excess_mc %}
+      <span style="font-weight:700;color:{% if mc is none or mc < 1 %}#16a34a{% elif mc < 2 %}#d97706{% else %}#dc2626{% endif %};">
+        {{ '%.2f'|format(mc) if mc is not none else '—' }}
+      </span>
+    </td>
+    <td>
+      {% set ec = r.excess_count %}
+      <span style="font-weight:700;color:{% if not ec or ec == 0 %}#16a34a{% elif ec < 10 %}#d97706{% else %}#dc2626{% endif %};">
+        {{ ec if ec is not none else '—' }}
+      </span>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+
+{% if history %}
+<div class="page-title" style="font-size:15px;margin-top:22px;">История (по месяцам, версии {{ versions|join(', ') }})</div>
+<table style="font-size:12px;">
+  <tr><th>Загрязнитель</th>{% for v in versions %}<th>v{{ v }}</th>{% endfor %}</tr>
+  {% for poll, items in history|groupby('pollutant') %}
+  <tr>
+    <td>{{ poll }}</td>
+    {% for v in versions %}
+      {% set row = items|selectattr('version', 'equalto', v)|first %}
+      <td>
+        {% if row and row.excess_count %}
+          <span style="color:#dc2626;font-weight:700;">{{ row.excess_count }}×</span>
+        {% elif row and row.excess_mc and row.excess_mc >= 1 %}
+          <span style="color:#d97706;font-weight:700;">{{ '%.1f'|format(row.excess_mc) }} ПДК</span>
+        {% elif row %}
+          <span style="color:#16a34a;">✓</span>
+        {% else %}
+          <span style="color:#bbb;">—</span>
+        {% endif %}
+      </td>
+    {% endfor %}
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<div style="font-size:12px;color:#888;margin-top:14px;">
+  Источник: <a href="https://data.egov.kz/datasets/view?index=atmosferalyk_aua_lastanuy_moni1" target="_blank">data.egov.kz — «Мониторинг загрязнения атмосферного воздуха»</a> (РГП «Казгидромет»).
+  «Превышения» — число случаев превышения предельно допустимой концентрации за месяц.
+</div>
+{% else %}
+<p style="color:#888;">Данных пока нет — первый сбор произойдёт по расписанию (ср 07:30) или вручную: <code>python3 /home/nik/krisha_bot/air_collect.py</code></p>
+{% endif %}
+{% endblock %}

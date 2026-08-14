@@ -169,6 +169,22 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
                 # Продавец: бейдж/текст карточки ("Хозяин недвижимости" и т.п.)
                 card_text = card.get_text(" ", strip=True)
                 is_owner = bool(re.search(r"хозяин|владел|собственник", card_text, re.IGNORECASE))
+                # Скоринг доверия (задача 2026-08-13, "скоринг доверия для
+                # каждого объявления") — пока один параметр, тип продавца:
+                # "Крыша Агент" — структурный бейдж карточки (label-user-agent,
+                # тот же класс, что у фильтра "От Крыша Агентов" —
+                # das[_sys.fromAgent] в поиске), НАДЁЖНЕЕ текстового regex
+                # (хозяин/владелец не всегда есть в тексте карточки, а бейдж
+                # рисуется Крышей детерминированно). Крыша Агент — верифи-
+                # цированный Крышей партнёр (её собственная агентская
+                # программа), выше доверия, чем рядовой риелтор без бейджа.
+                is_krisha_agent = card.select_one(".label-user-agent") is not None
+                if is_krisha_agent:
+                    seller_type, trust_score = "krisha_agent", 1.0
+                elif is_owner:
+                    seller_type, trust_score = "owner", 0.8
+                else:
+                    seller_type, trust_score = "realtor", 0.6
                 district = address.split(",")[0].strip() if address else ""
 
                 rooms = _extract_rooms(title)
@@ -193,7 +209,7 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
                 listings.append({
                     "id": lid, "url": listing_url, "title": title,
                     "price": price, "address": address, "district": district,
-                    "is_owner": is_owner,
+                    "is_owner": is_owner, "seller_type": seller_type, "trust_score": trust_score,
                     "rooms": rooms, "area": area, "published_at": published,
                     "description": "", "photo_url": photo_url,
                 })

@@ -166,7 +166,27 @@
   <input type="text" id="eid-source-search" class="eid-ac-input" style="margin:10px 0;" placeholder="🔎 поиск по всем трём таблицам ниже (имя ЖК/источник/причина)…" oninput="eidSourceSearch()">
 
   <div id="eid-candidates">
-  <b style="font-size:13.5px;">🔍 Очередь на проверку и конфликты ({{ candidates|length }})</b>
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <b style="font-size:13.5px;">🔍 Очередь на проверку и конфликты ({{ candidates|length }})</b>
+    <!-- "Обновить" (задача 2026-08-13, "там уже есть удалённые жк") —
+         не просто location.reload() (данные и так без кеша, тянутся
+         заново на каждый GET), а реальная чистка: удаляет кандидатов,
+         чей ЖК уже мягко удалён (is_garbage), потом перезагружает. -->
+    <a href="javascript:void(0)" onclick="eidRefreshQueue()" id="eid-refresh-btn" title="Удалить кандидатов на уже удалённые ЖК и обновить список" style="font-size:12px;color:#2563eb;font-weight:600;">🔄 Обновить</a>
+  </div>
+  <script>
+  async function eidRefreshQueue() {
+    const btn = document.getElementById('eid-refresh-btn');
+    const prevText = btn.textContent;
+    btn.textContent = '🔄 обновляю…';
+    try {
+      const r = await fetch('/admin/api/entity-ids/cleanup-garbage', {method: 'POST'});
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { location.reload(); }
+      else { alert('Ошибка: ' + (d.error || r.status)); btn.textContent = prevText; }
+    } catch (e) { alert('Ошибка: ' + e); btn.textContent = prevText; }
+  }
+  </script>
   <p style="font-size:12px;color:#888;line-height:1.6;margin-top:6px;">
     Еженедельный ритуал: разбирать очередь, а не только смотреть на неё — приток стабильно &gt; разбора
     (тайл выше) значит, что она копится. Строки с <span style="color:#d97706;font-weight:600;">🔢 фаза</span> —
@@ -183,7 +203,15 @@
     {% set ev = c.evidence %}
     <tr id="eid-cand-{{ c.id }}">
       <td>{{ '⚠️ конфликт' if c.kind == 'conflict' else '⏳ проверка' }}</td>
-      <td><a href="/complex/{{ c.complex_id }}" style="color:var(--text);">{{ c.complex_name }}</a></td>
+      <td><a href="/complex/{{ c.complex_id }}" style="color:var(--text);">{{ c.complex_name }}</a>
+        {% if c.parent_complex_id %}
+        <!-- "Семантика зонтика для Крыши" (задача 2026-08-13, п.3):
+             complex_id — дом с родителем-зонтиком, мержить/подтверждать
+             сюда не нужно (у Крыши нет отдельной карточки под дом) —
+             подсказка + кнопки ниже заменены на ссылку на зонтик. -->
+        <div style="font-size:11px;color:#eab308;margin-top:2px;" title="Дома зонтика не имеют своей связи с источником — матчить нужно на зонтик, дом унаследует для отображения">⭐ Зонтик: <a href="/complex/{{ c.parent_complex_id }}" style="color:#eab308;">{{ c.parent_complex_name }}</a></div>
+        {% endif %}
+      </td>
       <td>{{ c.source }} ·
         {% if c.url %}<a href="{{ c.url }}" target="_blank" rel="noopener" style="color:#2563eb;">{{ c.source_id }} ↗</a>{% else %}{{ c.source_id }}{% endif %}
       </td>
@@ -197,11 +225,18 @@
           <span title="address_match" style="color:{{ '#16a34a' if ev.address_match else '#888' }};">🏠{{ 'да' if ev.address_match else '—' }}</span>
         {% else %}<span style="color:#888;">— (до перескора)</span>{% endif %}
       </td>
-      <td>{{ c.confidence }}</td>
+      <!-- Округление до сотых (задача 2026-08-13) — confidence из БД NUMERIC,
+           без округления показывало полную "хвостатую" точность типа
+           0.7899999999999999911182158029987476766109466552734375. -->
+      <td>{{ '%.2f'|format(c.confidence) if c.confidence is not none else '—' }}</td>
       <td>{% if c.conflict_with_name %}<a href="/complex/{{ c.conflict_with_complex_id }}" style="color:var(--text);">{{ c.conflict_with_name }}</a>{% else %}—{% endif %}</td>
       <td style="white-space:nowrap;">
+        {% if c.parent_complex_id %}
+        <span style="color:#888;font-size:11.5px;" title="Мержить/подтверждать нужно на зонтике #{{ c.parent_complex_id }}, не на доме">заблокировано — см. зонтик</span>
+        {% else %}
         <a href="javascript:void(0)" onclick="eidResolve({{ c.id }}, 'approve')" style="color:#16a34a;font-size:12px;margin-right:8px;">подтвердить</a>
         <a href="javascript:void(0)" onclick="eidResolve({{ c.id }}, 'reject')" style="color:#ef4444;font-size:12px;">отклонить</a>
+        {% endif %}
       </td>
     </tr>
     {% else %}
@@ -301,77 +336,107 @@ document.addEventListener('DOMContentLoaded', eidDupCount);
 </script>
 
   <div id="eid-units" style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px;">
-  <b style="font-size:13.5px;">🧱 Юниты — дубли-кандидаты ({{ unit_candidates|length }})</b>
+  <b style="font-size:13.5px;">🧱 Юниты — кандидаты переуступок (объявление ↔ юнит) ({{ unit_groups|length }} объявлений)</b>
+  <p style="font-size:12px;color:var(--text);line-height:1.6;margin-top:6px;">
+    <b>Подтвердить</b> = объявление продаёт именно этот юнит (создаётся связь, записи не сливаются);
+    <b>Отклонить</b> = разные квартиры; <b>Skip</b> = не уверен.
+  </p>
   <p style="font-size:12px;color:#888;line-height:1.6;margin-top:6px;">
     Пары newbuild_units (застройщик) ↔ apartment_listings (Крыша) на одном ЖК, не разрешённые автоматически —
     Фаза 2, гейт п.Б (<code>phase2_unit_match.py</code>, <code>docs/entity_resolution_plan.md</code>).
-    <b>зеркало</b> — 2+ юнита с тем же этаж+метраж на какой-то из сторон блока (планировка повторяется, номер
-    квартиры не подтверждён ни у одной стороны) — большинство очереди, решается только руками по evidence.
+    Сгруппировано по объявлению (задача 2026-08-14) — один аккордеон на listing, внутри все юниты-кандидаты
+    на него. <b>зеркало</b> — 2+ юнита с тем же этаж+метраж на какой-то из сторон блока (планировка повторяется,
+    номер квартиры не подтверждён ни у одной стороны) — большинство очереди, решается только руками по evidence.
     У newbuild_units нет собственной публичной страницы юнита (закрытый API шахматки застройщика) — ссылка
     "юнит" ведёт на карточку ЖК, где искать этот юнит по этажу/площади/цене ниже. Каждое решение (включая
     «пропустить») пишется в <code>unit_match_gold_labels</code> — журнал для будущей перекалибровки, не только
-    операционный статус очереди.
+    операционный статус очереди. Подтверждение одного кандидата автоматически закрывает остальных кандидатов
+    того же объявления (<code>status='superseded'</code> + gold label «разные квартиры» на каждого — объявление
+    продаёт ровно одну квартиру, отклонять проигравших руками не нужно).
   </p>
   <div style="display:flex;align-items:center;gap:14px;margin:10px 0;">
     <label style="font-size:12.5px;display:flex;align-items:center;gap:6px;cursor:pointer;">
       <input type="checkbox" id="eid-unit-filter" onchange="eidUnitFilter()"> только зеркало
     </label>
   </div>
-  <table class="eid-table">
-    <tr><th></th><th>Крыша</th><th>Юнит застройщика</th><th>Evidence</th><th></th></tr>
-    {% for u in unit_candidates %}
-    {% set ev = u.evidence %}
-    <tr id="eid-unit-{{ u.id }}" data-mirror="{{ 'y' if u.is_mirror else 'n' }}">
-      <td>
-        {% if u.is_mirror %}<span style="color:#d97706;font-weight:600;" title="зеркальный кап">🪟 зеркало</span>
-        {% else %}<span style="color:#888;" title="ни цена, ни даты не подтвердили">❓ нет подтв.</span>{% endif %}
-      </td>
-      <td>
-        <a href="{{ u.al_url }}" target="_blank" rel="noopener" style="color:var(--text);font-weight:600;">{{ u.al_title or u.listing_id }}</a>
-        <div style="font-size:11px;color:#888;">
-          эт.{{ u.al_floor if u.al_floor is not none else '—' }} ·
-          {{ u.al_area if u.al_area is not none else '—' }}м² ·
-          {{ u.al_rooms if u.al_rooms is not none else '—' }}к ·
-          {{ '{:,}'.format(u.al_price)|replace(',', ' ') if u.al_price else '—' }}₸
-        </div>
-      </td>
-      <td>
-        <a href="{{ u.complex_krisha_url or ('/complex/' ~ u.complex_id) }}" target="_blank" rel="noopener" style="color:var(--text);font-weight:600;">{{ u.complex_name }}</a>
-        <span style="font-size:10.5px;color:#888;">({{ u.nu_source }})</span>
-        {% if u.nu_photo %}<a href="{{ u.nu_photo }}" target="_blank" rel="noopener" style="font-size:11px;">план</a>{% endif %}
-        <div style="font-size:11px;color:#888;">
-          {% if u.nu_building %}корп.{{ u.nu_building }}{% endif %}{% if u.nu_section %}/{{ u.nu_section }}{% endif %}
-          эт.{{ u.nu_floor if u.nu_floor is not none else '—' }} ·
-          {{ u.nu_area if u.nu_area is not none else '—' }}м² ·
-          {{ u.nu_rooms if u.nu_rooms is not none else '—' }}к ·
-          {{ '{:,}'.format(u.nu_price)|replace(',', ' ') if u.nu_price else '—' }}₸
-        </div>
-      </td>
-      <td style="white-space:nowrap;font-size:11px;">
-        <span title="этаж совпадает">🏢{{ 'да' if ev.floor_nb == ev.floor_al else '≠' }}</span>
-        <span title="дельта метража">📐{{ '%.2f'|format(ev.area_nb - ev.area_al) if ev.area_nb is not none and ev.area_al is not none else '—' }}м²</span><br>
-        <span title="цена в допуске" style="color:{{ '#16a34a' if ev.price_ok else '#888' }};">💰{{ 'да' if ev.price_ok else '—' }}</span>
-        <span title="периоды пересекаются" style="color:{{ '#16a34a' if ev.date_ok else '#888' }};">📅{{ 'да' if ev.date_ok else '—' }}</span><br>
-        {% if ev.unit_number_nb or ev.unit_number_al %}<span title="номер квартиры">№{{ ev.unit_number_nb or '?' }}/{{ ev.unit_number_al or '?' }}</span><br>{% endif %}
-        <span title="зеркальный счёт (застройщик/Крыша)" style="color:{{ '#d97706' if (ev.mirror_count_nb or 0) > 1 or (ev.mirror_count_al or 0) > 1 else '#888' }};">🪞{{ ev.mirror_count_nb }}/{{ ev.mirror_count_al }}</span>
-      </td>
-      <td style="white-space:nowrap;">
-        <a href="javascript:void(0)" onclick="eidUnitResolve({{ u.id }}, 'approve')" style="color:#16a34a;font-size:12px;margin-right:6px;">подтвердить</a>
-        <a href="javascript:void(0)" onclick="eidUnitResolve({{ u.id }}, 'reject')" style="color:#ef4444;font-size:12px;margin-right:6px;">отклонить</a>
-        <a href="javascript:void(0)" onclick="eidUnitResolve({{ u.id }}, 'skip')" style="color:#888;font-size:12px;">пропустить</a>
-      </td>
-    </tr>
-    {% else %}
-    <tr><td colspan="5" style="color:#888;text-align:center;">пусто</td></tr>
-    {% endfor %}
-  </table>
+  {% for g in unit_groups %}
+  {% set n = g.candidates|length %}
+  <details class="eid-unit-listing" {% if loop.first %}open{% endif %} style="border:1px solid var(--border);border-radius:8px;margin-bottom:8px;padding:0 10px;">
+    <summary style="cursor:pointer;padding:10px 4px;">
+      <a href="{{ g.al_url }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--text);font-weight:700;">{{ g.al_title or g.listing_id }}</a>
+      <span style="font-size:11px;color:#888;">
+        эт.{{ g.al_floor if g.al_floor is not none else '—' }} ·
+        {{ g.al_area if g.al_area is not none else '—' }}м² ·
+        {{ g.al_rooms if g.al_rooms is not none else '—' }}к ·
+        {{ '{:,}'.format(g.al_price)|replace(',', ' ') if g.al_price else '—' }}₸
+        · <a href="{{ g.complex_krisha_url or ('/complex/' ~ g.candidates[0].complex_id) }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:#888;">{{ g.complex_name }}</a>
+      </span>
+      <span style="font-size:11px;color:#2563eb;font-weight:700;margin-left:6px;">{{ n }} {{ 'кандидат' if n == 1 else ('кандидата' if 2 <= n <= 4 else 'кандидатов') }}</span>
+    </summary>
+    <table class="eid-table" style="margin:2px 0 10px;">
+      <tr><th></th><th>Юнит застройщика</th><th>Evidence</th><th></th></tr>
+      {% for u in g.candidates %}
+      {% set ev = u.evidence %}
+      <tr id="eid-unit-{{ u.id }}" data-mirror="{{ 'y' if u.is_mirror else 'n' }}" data-status="review">
+        <td>
+          {% if u.is_mirror %}<span style="color:#d97706;font-weight:600;" title="зеркальный кап">🪟 зеркало</span>
+          {% else %}<span style="color:#888;" title="ни цена, ни даты не подтвердили">❓ нет подтв.</span>{% endif %}
+        </td>
+        <td>
+          <span style="color:var(--text);font-weight:600;">{{ u.complex_name }}</span>
+          <span style="font-size:10.5px;color:#888;">({{ u.nu_source }})</span>
+          {% if u.nu_photo %}<a href="{{ u.nu_photo }}" target="_blank" rel="noopener" style="font-size:11px;">план</a>{% endif %}
+          <div style="font-size:11px;color:#888;">
+            {% if u.nu_building %}корп.{{ u.nu_building }}{% endif %}{% if u.nu_section %}/{{ u.nu_section }}{% endif %}
+            эт.{{ u.nu_floor if u.nu_floor is not none else '—' }} ·
+            {{ u.nu_area if u.nu_area is not none else '—' }}м² ·
+            {{ u.nu_rooms if u.nu_rooms is not none else '—' }}к ·
+            {{ '{:,}'.format(u.nu_price)|replace(',', ' ') if u.nu_price else '—' }}₸
+          </div>
+        </td>
+        <td style="white-space:nowrap;font-size:11px;">
+          <span title="этаж совпадает">🏢{{ 'да' if ev.floor_nb == ev.floor_al else '≠' }}</span>
+          <span title="дельта метража">📐{{ '%.2f'|format(ev.area_nb - ev.area_al) if ev.area_nb is not none and ev.area_al is not none else '—' }}м²</span><br>
+          <span title="цена в допуске" style="color:{{ '#16a34a' if ev.price_ok else '#888' }};">💰{{ 'да' if ev.price_ok else '—' }}</span>
+          <span title="периоды пересекаются" style="color:{{ '#16a34a' if ev.date_ok else '#888' }};">📅{{ 'да' if ev.date_ok else '—' }}</span><br>
+          {% if ev.unit_number_nb or ev.unit_number_al %}<span title="номер квартиры">№{{ ev.unit_number_nb or '?' }}/{{ ev.unit_number_al or '?' }}</span><br>{% endif %}
+          <span title="зеркальный счёт (застройщик/Крыша)" style="color:{{ '#d97706' if (ev.mirror_count_nb or 0) > 1 or (ev.mirror_count_al or 0) > 1 else '#888' }};">🪞{{ ev.mirror_count_nb }}/{{ ev.mirror_count_al }}</span>
+        </td>
+        <td class="eid-unit-actions" style="white-space:nowrap;">
+          <a href="javascript:void(0)" onclick="eidUnitResolve({{ u.id }}, 'approve')" title="Подтвердить = объявление продаёт именно этот юнит (создаётся связь, записи не сливаются); Отклонить = разные квартиры; Skip = не уверен." style="color:#16a34a;font-size:12px;margin-right:6px;">подтвердить</a>
+          <a href="javascript:void(0)" onclick="eidUnitResolve({{ u.id }}, 'reject')" title="Подтвердить = объявление продаёт именно этот юнит (создаётся связь, записи не сливаются); Отклонить = разные квартиры; Skip = не уверен." style="color:#ef4444;font-size:12px;margin-right:6px;">отклонить</a>
+          <a href="javascript:void(0)" onclick="eidUnitResolve({{ u.id }}, 'skip')" title="Подтвердить = объявление продаёт именно этот юнит (создаётся связь, записи не сливаются); Отклонить = разные квартиры; Skip = не уверен." style="color:#888;font-size:12px;">пропустить</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </details>
+  {% else %}
+  <p style="color:#888;text-align:center;">пусто</p>
+  {% endfor %}
   </div>
 </div>
 <script>
 async function eidUnitResolve(id, action) {
   const r = await fetch(`/admin/api/entity-ids/units/${id}/${action}`, {method: 'POST'});
-  if (r.ok) { const row = document.getElementById('eid-unit-' + id); if (row) row.remove(); }
-  else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+  if (!r.ok) { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); return; }
+  const d = await r.json().catch(() => ({}));
+  const row = document.getElementById('eid-unit-' + id);
+  if (row) row.remove();
+  // Approve одного кандидата закрывает остальных кандидатов того же
+  // объявления автоматически на сервере (задача 2026-08-14,
+  // approve_unit_candidate возвращает superseded_ids) — их строки не
+  // удаляем молча (это выглядело бы как ручной reject, оператор не
+  // поймёт, куда они делись), а красим серым с пояснением прямо на
+  // месте, визуально отличимо от reject (тот строку просто убирает).
+  (d.superseded_ids || []).forEach(sid => {
+    const srow = document.getElementById('eid-unit-' + sid);
+    if (!srow) return;
+    srow.dataset.status = 'superseded';
+    srow.style.opacity = '.55';
+    const actions = srow.querySelector('.eid-unit-actions');
+    if (actions) actions.innerHTML = '<span style="color:#888;font-style:italic;">закрыто выбором другого</span>';
+  });
 }
 function eidUnitFilter() {
   const onlyMirror = document.getElementById('eid-unit-filter').checked;

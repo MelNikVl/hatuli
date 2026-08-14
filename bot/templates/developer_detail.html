@@ -74,25 +74,7 @@ tr:last-child td{border-bottom:none}
 </div>
 {% endif %}
 
-{% if hp_projects %}
-<div class="page-title" style="font-size:16px;">Проекты ({{ hp_projects|length }})</div>
-<div class="dev-card">
-  <table style="font-size:13px;">
-    <tr><th>Название (homeportal)</th><th>ЖК на Hatuli</th><th>Этажность</th><th>Квартир</th><th>Срок сдачи</th></tr>
-    {% for p in hp_projects %}
-    <tr>
-      <td>{{ p.name or '—' }}</td>
-      <td>{% if p.cx_id %}<a href="/complex/{{ p.cx_id }}">{{ p.cx_name }}</a>{% else %}<span style="color:#888;">не сопоставлен</span>{% endif %}</td>
-      <td>{{ p.no_of_floors or '—' }}</td>
-      <td>{{ p.apartments_total or '—' }}</td>
-      <td>{{ p.commissioning_date or '—' }}</td>
-    </tr>
-    {% endfor %}
-  </table>
-</div>
-{% endif %}
-
-<div class="page-title" style="font-size:16px;">ЖК застройщика в нашей базе</div>
+<div class="page-title" style="font-size:16px;">&nbsp;</div>
 {% if complexes %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

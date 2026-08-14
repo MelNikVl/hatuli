@@ -72,6 +72,13 @@
 {% elif tab == 'novostroyki' %}
   {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
   {% include "_parser_novostroyki.html" %}
+{% elif tab == 'krisha-air' %}
+  {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
+  {% if extra_blocks %}{% for eb in extra_blocks %}{{ toggle_card(eb) }}{% endfor %}{% endif %}
+  {% include "_parser_simple.html" %}
+{% elif tab in ['krisha-crime', 'krisha-newbuild', 'krisha-programs', 'krisha-floorplan'] %}
+  {% if active_block %}{{ toggle_card(active_block) }}{% endif %}
+  {% include "_parser_simple.html" %}
 {% else %}
   {% if active_block %}
     {{ toggle_card(active_block) }}

@@ -204,9 +204,25 @@ async def save_to_db(found: dict[int, dict]) -> int:
     saved = 0
     for cid, d in found.items():
         try:
-            row = await fetchrow("SELECT source_info FROM complexes WHERE id=$1", cid)
+            row = await fetchrow("SELECT source_info, parent_complex_id FROM complexes WHERE id=$1", cid)
             if not row:
                 continue
+            # Семантика зонтика для Крыши (задача 2026-08-13, "исправить
+            # импортёр Крыши"): этот скрипт находит URL по ТОЧНОМУ имени
+            # (apartment_listings.complex_url) — если у ЖК уже есть
+            # parent_complex_id, то это "дом" одного зонтика, и найденная
+            # ссылка почти всегда представляет ОБЩУЮ карточку Крыши на
+            # весь комплекс (у Крыши нет отдельных карточек под каждый
+            # блок/очередь расшивленного ЖК) — пишем на зонтик, не на дом,
+            # иначе krisha_url дублируется по домам (живой кейс #4008/#872,
+            # #3354/#1785, найдено при аудите этой задачи). Дом
+            # унаследует ссылку для отображения через parent_complex
+            # (см. terminal_extras.py complex_detail).
+            if row["parent_complex_id"]:
+                cid = row["parent_complex_id"]
+                row = await fetchrow("SELECT source_info FROM complexes WHERE id=$1", cid)
+                if not row:
+                    continue
             si = row["source_info"]
             if isinstance(si, str):
                 try:

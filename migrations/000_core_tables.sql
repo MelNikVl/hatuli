@@ -122,6 +122,11 @@ CREATE TABLE IF NOT EXISTS apartment_listings (
     developer_name                   TEXT,
     seller_type                        TEXT,
     is_owner                             BOOLEAN,
+    -- Скоринг доверия (задача 2026-08-13) — пока один параметр (seller_type):
+    -- 1.0 Крыша Агент (label-user-agent на карточке, тот же сигнал, что
+    -- фильтр "От Крыша Агентов"), 0.8 собственник (is_owner), 0.6 обычный
+    -- риелтор без бейджа. См. bot/core/apartment_parser.py.
+    trust_score                        NUMERIC,
 
     -- торг / аналоги
     bargain_target        BIGINT,
