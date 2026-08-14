@@ -68,6 +68,45 @@ async def _from_local_table(lat: float, lon: float) -> tuple[int, str] | None:
     return 0, "школ/садиков в 700м не найдено"
 
 
+async def fetch_schools_poi(lat: float, lon: float) -> list[dict] | None:
+    """Сырые точки школ/садиков/вузов с координатами (Фаза L2, docs/
+    location_product_design.md, задача 2026-08-14) — для карты со слоями
+    на /complex/{id} (bot/core/complex_location_detail.py). compute()
+    выше отдаёт только агрегированный adj/reason, не список точек —
+    эта функция параллельна ей, тем же путём (city_poi -> Overpass-кэш),
+    но возвращает список, а не решение. None, если оба источника
+    недоступны (не путать с пустым списком — "искали, не нашли")."""
+    from bot.db.pg import fetch as pg_fetch
+    from bot.score_layers.osm import haversine_m, overpass_cached, element_coords
+
+    try:
+        rows = await pg_fetch("""
+            SELECT kind, lat, lon FROM city_poi
+            WHERE lat BETWEEN $1 - 0.008 AND $1 + 0.008
+              AND lon BETWEEN $2 - 0.013 AND $2 + 0.013
+              AND kind IN ('school', 'kindergarten', 'university')
+        """, lat, lon)
+    except Exception:
+        rows = None
+    if rows:
+        return [{"kind": r["kind"], "lat": r["lat"], "lon": r["lon"]}
+                for r in rows if haversine_m(lat, lon, r["lat"], r["lon"]) <= 700]
+
+    data = await overpass_cached(lat, lon, "schools", _QUERY.format(lat=lat, lon=lon))
+    if data is None:
+        return None
+    out = []
+    for el in data.get("elements", []):
+        am = (el.get("tags") or {}).get("amenity")
+        if am not in ("school", "kindergarten", "university"):
+            continue
+        coords = element_coords(el)
+        if not coords or coords[0] is None:
+            continue
+        out.append({"kind": am, "lat": coords[0], "lon": coords[1]})
+    return out
+
+
 async def compute(listing: dict) -> tuple[int, str]:
     lat, lon = listing.get("lat"), listing.get("lon")
     if not lat or not lon:

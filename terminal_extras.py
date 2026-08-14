@@ -5672,6 +5672,25 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse({"error": "failed"}, status_code=500)
         return JSONResponse(loc_score or {"error": "no_result"})
 
+    @router.get("/admin/api/complex/{complex_id}/location-detail")
+    async def complex_location_detail_api(request: Request, complex_id: int):
+        """Данные для блока «🗺 Локация» на странице ЖК (Фаза L2,
+        docs/location_product_design.md, задача 2026-08-14) — ДОПОЛНЯЕТ
+        location-score выше (тот не менялся): группированный скор из
+        complex_location_scores, плотность по гексагонам, снос рядом,
+        POI/школы (через уже кэш-aware fetch_poi/fetch_schools_poi — без
+        нового живого Overpass-запроса), тренд price_drop_share_30d.
+        Публичный роут, как и сам /admin/complex/{id}/location-score."""
+        from bot.core.complex_location_detail import build_complex_location_detail, ComplexNotFound
+        try:
+            detail = await build_complex_location_detail(complex_id)
+        except ComplexNotFound:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except Exception as exc:
+            logger.warning("location_detail API failed for complex %s: %s", complex_id, exc)
+            return JSONResponse({"error": "failed"}, status_code=500)
+        return JSONResponse(detail)
+
     @router.get("/admin/api/complex/{complex_id}/price-dynamics")
     async def complex_price_dynamics(request: Request, complex_id: int,
                                       kind: str = "sale", days: int = 90, rooms: str = ""):

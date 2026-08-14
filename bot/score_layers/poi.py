@@ -4,6 +4,12 @@
 
 Возвращает элементы с координатами; слои transit/amenities/parks
 фильтруют их по своим радиусам через haversine.
+
+lat/lon в каждом элементе (Фаза L2, docs/location_product_design.md,
+задача 2026-08-14) — добавлены для карты со слоями на /complex/{id}
+(bot/core/complex_location_detail.py); transit.py/amenities.py/parks.py
+как использовали только kind/dist_m, так и продолжают — обратная
+совместимость не нарушена, поля просто раньше не читались.
 """
 from __future__ import annotations
 
@@ -48,5 +54,6 @@ async def fetch_poi(lat: float, lon: float) -> list[dict] | None:
             kind = "park"
         else:
             continue
-        out.append({"kind": kind, "dist_m": haversine_m(lat, lon, coords[0], coords[1])})
+        out.append({"kind": kind, "dist_m": haversine_m(lat, lon, coords[0], coords[1]),
+                     "lat": coords[0], "lon": coords[1]})
     return out
