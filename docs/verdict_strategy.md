@@ -544,6 +544,13 @@ linear → CatBoost, MAE/MAPE/R²) — это задача предсказан�
   seller_type + ЖК + location + listing attributes → outcome
 - Сравнения с честным baseline `price_score` ≈0.71-0.72
 
+**Архитектурный вход для перепроектирования** —
+[`liquidity_model_design.md`](liquidity_model_design.md) (2026-08-14):
+9 блоков признаков, Property Episode ID (объединение релистов),
+Relative Demand Index, Ablation Study Framework (добавлять блоки по
+одному, мерить honest AUC на каждом шаге от price-only baseline
+0.72) — читать перед стартом реализации Фазы C.
+
 Старое описание (задача цены, сохранено как контекст того, что
 переосмысливается — не как актуальный план):
 
@@ -637,7 +644,9 @@ Score v4 остаётся в проде без изменений формулы
 Фазы C и D НЕ запускаются до:
 1. Накопления `views_history` ≥30 дней
 2. Накопления `deal_score_snapshots` ≥30 дней
-3. Перепроектирования Фазы C вокруг предсказания исхода (не цены)
+3. Перепроектирования Фазы C вокруг предсказания исхода (не цены) —
+   архитектурный вход готов, см.
+   [`liquidity_model_design.md`](liquidity_model_design.md) (2026-08-14)
 4. Завершения продуктового трека «Локация» (или его первой фазы L1, см.
    [`location_product_design.md`](location_product_design.md))
 
