@@ -322,6 +322,116 @@ risk-flags). `krisha-apartments.service` перезапускался трижд
 фазы (после п.4, п.6, п.7) — каждый раз проверено git_hash/mtime по
 чеклисту [`process.md`](process.md#deploy-чеклист-код-на-диске--код-в-процессе).
 
+**Дальше** — по решению заказчика Фаза B отложена в пользу
+внепланового Фазы A.5 (Baseline Hardening, см. ниже) — Фаза A дала
+baseline, но методологически недостаточно строгий, чтобы против него
+честно мерить будущие модели.
+
+---
+
+## Часть 7. Вердикт-стратегия, Фаза A.5 (Baseline Hardening) — ✅ ЗАВЕРШЕНО 2026-08-14
+
+Не начинать Фазу B до завершения — условие задачи, выполнено (гейт ниже
+пройден в тот же день). Гейт применён по
+[`verdict_strategy.md` §8](verdict_strategy.md#8-гейт-одно-правило-на-все-фазы),
+как и в Части 6 — до/после диффы, счётчики, топ-20 movers там, где
+менялась формула.
+
+1. **Аудит аналогов** ([`bot/core/bargain.py`](../bot/core/bargain.py)) —
+   живой баг: ни один из 4 SQL-запросов `get_comparables()` не фильтровал
+   активность вовсе — архивные (проданные/снятые) объявления тихо
+   участвовали в медиане "текущего рынка". Живая проверка: 2736 архивных
+   объявлений структурно подходили под типичные фильтры и могли попасть
+   в чью-то медиану аналогов. Фикс — `_activity_filter()`, общий на все 4
+   запроса, + опциональный `as_of` для будущего backtesting (точечная
+   реконструкция "было активно НА ЭТУ ДАТУ", не текущий `is_active`).
+   Self-exclusion (`exclude_id`) и `deal_score.py` — проверены, уже были
+   корректны до задачи. Регресс:
+   [`tests/test_bargain_comparables_activity.py`](../tests/test_bargain_comparables_activity.py)
+   (5 тестов на реальной БД).
+   *Побочный фикс, найден при подготовке п.2*: `apartment_listings.
+   comparables_cnt`/новая `bargain_method` — были 0/47016 заполнены
+   ("живой код, мёртвый эффект", тот же класс, что `finish_level` до
+   волны 1) — `service_apartments.py` INSERT/UPDATE никогда их не
+   включал, хотя `apartment_parser.py` считал каждый цикл. Исправлено,
+   [`migrations/067`](../migrations/067_bargain_method_column.sql).
+2. **`deal_score_snapshots`** ([`migrations/068`](../migrations/068_deal_score_snapshots.sql),
+   [`deal_score_snapshot.py`](../deal_score_snapshot.py)) — append-only
+   исторический журнал Deal Score. НЕ пересчитывает формулу задним
+   числом — читает текущее уже посчитанное `apply_deal_scores()`
+   состояние, пишет `score_version`/`git_commit`. Скоуп —
+   `is_active IS NOT FALSE` (архивные уже заморожены).
+3. **Таймер** `krisha-deal-score-snapshot.timer` (08:35, после
+   listing-snapshot 08:30) — установлен и запущен, первый снимок снят
+   вручную: 37735 строк. Регресс:
+   [`tests/test_deal_score_snapshot.py`](../tests/test_deal_score_snapshot.py)
+   (4 теста).
+4. **`outcome_labels` расширены** ([`migrations/069`](../migrations/069_outcome_labels_extend.sql),
+   [`outcome_labels_recompute.py`](../outcome_labels_recompute.py)) —
+   `clean_disappearance_within_30d` (уточнение `disappeared_within_30d`
+   за вычетом вероятного релиста/модерации, см.
+   [`verdict_strategy.md` §3.5](verdict_strategy.md#35-disappeared_within_30d--прокси-ликвидности-не-продажи)),
+   `relisted_within_60d`/`possibly_relisted` (два порога уверенности,
+   принцип auto/review из `entity_resolution.py`), `possibly_moderation_
+   removed`, `observation_days`, `censored`, `outcome_notes`.
+   Релист-матчинг сначала упал по 30с `command_timeout` (коррелированные
+   `EXISTS`, тот же класс бага, что уже был в `deal_score.py` — см.
+   комментарий в том файле) — переписан на JOIN+GROUP BY
+   ([`migrations/070`](../migrations/070_apt_complex_name_lower_full_idx.sql)
+   — недостающий полный индекс), 1.9с вместо таймаута. По ходу
+   разработки тестами пойман и исправлен логический баг: relist_match —
+   INNER JOIN, при нуле кандидатов не даёт строки, "нет строки" было
+   неотличимо от "окно ещё не закрылось" — добавлена явная проверка
+   `window_closed`. Живой прогон (47021): `clean_true=0` — честно
+   ожидаемо (60-дневное окно релиста и свежий `first_seen` не могут
+   одновременно выполниться до ~2026-09-08, `price_history` моложе 60
+   дней), `relisted_true=568`. Регресс:
+   [`tests/test_outcome_labels_relist.py`](../tests/test_outcome_labels_relist.py)
+   (12 тестов, включая прямой регресс на найденный баг).
+5. **`baseline_measure.py` переписан** — temporally_safe (снимок ДО
+   начала окна исхода из `deal_score_snapshots`, не текущий score против
+   давнего исхода), AUC/PR-AUC/lift@10%/precision@10%/калибровка по
+   децилям, сравнение `score_total` vs `price_score` vs `bargain_
+   discount_pct`, отдельно по `disappeared_within_30d` и `clean_
+   disappearance_within_30d`. Два живых бага найдены и исправлены при
+   разработке: (а) `observation_days>=30` как фильтр парадоксально
+   вырезал именно TRUE-случаи (n_true=0 из 186); (б) `censored=TRUE`
+   неверно трактовался как "исход неизвестен" (убирал 7627→1164 строк);
+   (в) ~19% связок в `price_score` — `argsort` стабилен, "топ-10%" и
+   "дециль 10" выбирали разные подмножества одной связки
+   (precision@10%=0.000 против дециля 0.57 для ОДНОГО сигнала) — фикс:
+   фиксированная случайная перестановка перед ранжированиями. Живой
+   прогон (n=7627): `score_total` AUC=0.8219, `price_score` AUC=0.8613
+   (выше score_total), `quality_score` AUC=0.3935 (ниже 0.5 — обратно
+   предсказательна, находка после п.4 Часть 6), `market_score`
+   AUC=0.7106. `temporally_safe=True`: 0 строк — ожидаемо,
+   `deal_score_snapshots` начал копиться в тот же день. Регресс:
+   [`tests/test_baseline_measure_metrics.py`](../tests/test_baseline_measure_metrics.py)
+   (12 тестов).
+6. **`effective_score` проверен** — живая проверка на всей таблице
+   (47021 строка) после правок формулы Часть 6 п.4/п.6: 0 расхождений.
+   Структурно не может разъехаться (`GENERATED ALWAYS` ссылается на
+   `score_total` напрямую, не дублирует формулу) — миграция не
+   потребовалась. Постоянная regress-проверка добавлена в
+   [`tests/test_effective_score.py`](../tests/test_effective_score.py).
+
+**Общий регресс Фазы A.5**: `./venv/bin/pytest tests/ -q` → **317/317
+passed** (было 281 после Части 6 — 44 новых теста, включая 3 живых бага,
+пойманных и исправленных самими тестами при разработке, не оставленных
+"на потом"). `krisha-apartments.service`/`krisha-web.service`
+перезапускались по ходу фазы (после правки `bargain.py` — оба сразу,
+после `service_apartments.py`/`apartment_parser.py` — apartments) —
+каждый раз проверено git_hash/mtime по чеклисту
+[`process.md`](process.md#deploy-чеклист-код-на-диске--код-в-процессе).
+
+**Гейт A.5** (задача заказчика): нет runtime `ALTER TABLE` (только
+единственный из Части 6 п.7, уже вынесен; ни один новый код Фазы A.5 не
+добавил своего) ✅; нет аналогов из архива ✅ (п.1); есть тесты ✅ (44);
+есть снапшот скора ✅ (п.2-3); `baseline_measure.py` имеет временную
+защиту ✅ (п.5); отчёт показывает AUC/PR-AUC/lift и сравнение price-only
+vs score_total ✅ (п.5); все изменения закоммичены и применены на проде
+✅ (миграции 067-070 применены, таймеры активны, сервисы перезапущены).
+
 **Дальше** — Фаза B (comparable engine v2, класс-модель, ER-калибровка,
 параллельно разбор `admin_web.py`) — см.
 [`verdict_strategy.md` §5](verdict_strategy.md#фаза-b-недели-3-4--comparable-engine-v2--начало-разбора-admin_webpy).
