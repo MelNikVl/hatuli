@@ -61,6 +61,14 @@ def extract_bargain(r: dict) -> dict:
         "target_price": r.get("bargain_target"),
         "discount_pct": r.get("bargain_discount_pct"),
         "recommendation": r.get("bargain_rec"),
+        # Задача 2026-08-14 (Фаза A.5 п.2 вердикт-стратегии) — тот же
+        # класс бага, что был у finish_level до волны 1 (scoring_roadmap.
+        # md, Часть 1, п.3): apartment_parser.py считал s["comparables_
+        # cnt"]/s["bargain_method"] каждый цикл, но INSERT/UPDATE ниже их
+        # никогда не включал — apartment_listings.comparables_cnt был
+        # 0/47016 заполнен (живая проверка перед фиксом). Теперь пишутся.
+        "comparables_cnt": r.get("comparables_cnt", 0),
+        "method": r.get("bargain_method"),
     }
 
 
@@ -212,14 +220,15 @@ async def run_cycle():
                          year_built, building_type, renovation, furniture,
                          is_new_build, developer_name, seller_type, is_owner, trust_score,
                          rent_source, bargain_target, bargain_discount_pct, bargain_rec,
+                         comparables_cnt, bargain_method,
                          details_fetched, ceiling_height, kitchen_area, photo_url,
                          first_seen, last_seen, notified)
                     VALUES
                         ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
                          $14,$15,$16,$17,$18,$19,$20,$21,
                          $22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,
-                         $35,$36,$37,$38,
-                         $39,$40,$41,$42,NOW(),NOW(),FALSE)
+                         $35,$36,$37,$38,$39,$40,
+                         $41,$42,$43,$44,NOW(),NOW(),FALSE)
                     ON CONFLICT (id) DO NOTHING
                 """,
                     r["id"], r.get("url"), r.get("title"), r.get("price"), r.get("area"),
@@ -236,6 +245,7 @@ async def run_cycle():
                     r.get("seller_type"), r.get("is_owner"), r.get("trust_score"),
                     r.get("rent_source"), bargain.get("target_price"),
                     bargain.get("discount_pct"), bargain.get("recommendation"),
+                    bargain.get("comparables_cnt", 0), bargain.get("method"),
                     r.get("details_fetched", False), r.get("ceiling_height"),
                     r.get("kitchen_area"), r.get("photo_url"),
                 )
@@ -292,6 +302,7 @@ async def run_cycle():
                         title=$19, rooms=$20, area=$21, address=$22, district=$23,
                         net_yield_pct=$24, kitchen_area=COALESCE($25, kitchen_area),
                         photo_url=COALESCE(photo_url, $26), trust_score=$27,
+                        comparables_cnt=$28, bargain_method=$29,
                         last_seen=NOW()
                     WHERE id=$1
                 """,
@@ -307,6 +318,7 @@ async def run_cycle():
                     r.get("address"), r.get("district"),
                     r.get("net_yield_pct", 0), r.get("kitchen_area"), r.get("photo_url"),
                     r.get("trust_score"),
+                    bargain.get("comparables_cnt", 0), bargain.get("method"),
                 )
                 upd_cnt += 1
 

@@ -1,0 +1,14 @@
+-- Фаза A.5, п.2 вердикт-стратегии (docs/verdict_strategy.md, задача
+-- 2026-08-14, подготовка данных для deal_score_snapshots.bargain_method)
+-- — bot/core/bargain.get_comparables() возвращает meta.method
+-- ('same_complex'|'hex+ring+class'|'hex+ring'|'city_segment'|
+-- 'district_fallback') с самого начала, но apartment_listings его никогда
+-- не хранил — только текстом внутри bargain_rec (class_note), не
+-- структурно. Заодно найден и чинится соседний "живой код, мёртвый
+-- эффект": apartment_listings.comparables_cnt (колонка существует с
+-- волны 1, см. scoring_roadmap.md) — 0 из 47016 строк когда-либо имели
+-- значение, apartment_parser.py считает s["comparables_cnt"], но
+-- service_apartments.py никогда не включал её в INSERT/UPDATE (тот же
+-- класс бага, что был у finish_level до волны 1) — фикс кода в этой же
+-- задаче, эта миграция только добавляет недостающую колонку метода.
+ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS bargain_method TEXT;

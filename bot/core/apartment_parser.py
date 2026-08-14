@@ -343,6 +343,11 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
         s["bargain_discount_pct"] = bargain.get("discount_pct")
         s["bargain_rec"] = bargain.get("recommendation")
         s["comparables_cnt"] = bargain.get("comparables_cnt", 0)
+        # Задача 2026-08-14 (Фаза A.5 п.2 вердикт-стратегии, подготовка
+        # deal_score_snapshots.bargain_method) — meta.method (bargain.py)
+        # раньше нигде не сохранялся структурно, только текстом внутри
+        # bargain_rec/class_note.
+        s["bargain_method"] = comps_meta.get("method")
 
         s["score_total"] = 0  # реальный скор — позже, в deal_score.apply_deal_scores()
         s["_prelim_rank"] = _prelim_rank(s, avg_m2)

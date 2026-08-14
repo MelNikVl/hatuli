@@ -25,13 +25,37 @@ def test_extract_bargain_reads_flat_keys_from_parser():
         "bargain_target": 28_500_000,
         "bargain_discount_pct": 5.0,
         "bargain_rec": "цена на уровне рынка, реальный торг 5-8%",
+        "comparables_cnt": 12,
+        "bargain_method": "hex+ring+class",
     }
     bargain = extract_bargain(r)
     assert bargain == {
         "target_price": 28_500_000,
         "discount_pct": 5.0,
         "recommendation": "цена на уровне рынка, реальный торг 5-8%",
+        "comparables_cnt": 12,
+        "method": "hex+ring+class",
     }
+
+
+def test_extract_bargain_comparables_cnt_and_method_persisted():
+    # Задача 2026-08-14 (Фаза A.5 п.2 вердикт-стратегии): живой баг —
+    # apartment_listings.comparables_cnt был 0/47016 заполнен, потому что
+    # INSERT/UPDATE в service_apartments.py никогда его не включал, хотя
+    # apartment_parser.py считал s["comparables_cnt"] каждый цикл (тот же
+    # класс бага, что finish_level до волны 1). extract_bargain() —
+    # единственная точка, откуда SQL берёт эти значения.
+    r = {"id": "1", "comparables_cnt": 7, "bargain_method": "city_segment"}
+    bargain = extract_bargain(r)
+    assert bargain["comparables_cnt"] == 7
+    assert bargain["method"] == "city_segment"
+
+
+def test_extract_bargain_comparables_cnt_defaults_to_zero():
+    r = {"id": "2"}
+    bargain = extract_bargain(r)
+    assert bargain["comparables_cnt"] == 0
+    assert bargain["method"] is None
 
 
 def test_extract_bargain_ignores_dead_score_data_path():
@@ -58,4 +82,7 @@ def test_extract_bargain_missing_fields_return_none():
     # пробросить None, не притворяться нулём/пустой строкой.
     r = {"id": "789"}
     bargain = extract_bargain(r)
-    assert bargain == {"target_price": None, "discount_pct": None, "recommendation": None}
+    assert bargain == {
+        "target_price": None, "discount_pct": None, "recommendation": None,
+        "comparables_cnt": 0, "method": None,
+    }
