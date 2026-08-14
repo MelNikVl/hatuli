@@ -438,6 +438,96 @@ vs score_total ✅ (п.5); все изменения закоммичены и �
 
 ---
 
+## Часть 8. Вердикт-стратегия, Фаза B — ✅ ЗАВЕРШЕНО 2026-08-14
+
+Цель Фазы B — поднять AUC `price_score` через более точный пул аналогов
+(`comparable_score`). **Гейт по AUC не пройден** — задокументировано
+честно, код не откатывается (см. п.2 ниже и
+[`verdict_strategy.md` §5, «Анализ потолка price_score»](verdict_strategy.md#анализ-потолка-price_score-фаза-b-2026-08-14)).
+
+1. **`comparable_score` core** ([`bot/core/comparable_score.py`](../bot/core/comparable_score.py))
+   — 8-факторный непрерывный скор сопоставимости пары объявлений (0-1):
+   `same_building`/`same_complex`/`area`/`floor`/`year_built`/
+   `housing_class`/`finish_level`/`distance`, каждый фактор — `None` при
+   недостающих данных (Unknown ≠ average), не 0/среднее. `as_of` первого
+   класса. Регресс: [`tests/test_comparable_score.py`](../tests/test_comparable_score.py)
+   (36 тестов).
+2. **Интеграция в `deal_score.py`** — `P_expected` внутри `own_bldg`/
+   own-гекс/кольцо теперь weighted median топ-N (веса = `comparable_score`)
+   вместо плоской медианы. Live-гейт distribution объясним (33.2%
+   объявлений изменили `score_total`, >5 баллов — 3.87%, топ-20 movers
+   ±44, без аномалий) — но **обязательный честный `as_of`-backtest на
+   тех же 3 `t0` (2026-07-10/12/14) показал AUC `price_score` v2
+   практически неотличим от v1** (Δ от −0.0016 до −0.0021, на порядок
+   меньше bootstrap CI ~0.01-0.02). Побочная находка при интеграции:
+   `compute_deal_scores()` выросло с <1с до ~8с (профилировано
+   `cProfile`) — фикс (`@lru_cache` на `_class_key`, отказ от копирования
+   `_WEIGHTS`, `MAX_POOL_BEFORE_SCORING=60`) вернул к ~6.5с. Регресс:
+   [`tests/test_deal_score_comparable_integration.py`](../tests/test_deal_score_comparable_integration.py)
+   (11 тестов).
+   **Итог**: качество пула аналогов — не bottleneck AUC, `price_score`
+   ≈0.72 похоже на потолок предсказания по одной цене.
+3. **Класс-модель ЖК** ([`bot/core/housing_class_model.py`](../bot/core/housing_class_model.py),
+   [`housing_class_model_recompute.py`](../housing_class_model_recompute.py),
+   [`migrations/071`](../migrations/071_predicted_housing_class.sql)) —
+   Gaussian Naive Bayes на ручных лейблах `complexes.housing_class`
+   (`log(avg_price_m2)`, `year_built`), применена как `predicted_
+   housing_class`/`_probability`/`_source` — `'manual'` не
+   перезаписывается, `'predicted'` — модельный вывод, `NULL` — признаков
+   не хватило (не гадаем). Holdout accuracy=0.795; редкие классы (элит/
+   эконом) — recall=0.0 на holdout из-за 1-2 примеров, честно
+   зафиксировано, не скрыто. **Явно НЕ попытка поднять AUC `price_score`
+   прямо сейчас** — подготовка для стратификации/Фазы C. Регресс:
+   [`tests/test_housing_class_model.py`](../tests/test_housing_class_model.py)
+   (9 тестов), [`tests/test_housing_class_model_recompute.py`](../tests/test_housing_class_model_recompute.py)
+   (5 тестов).
+4. **ER-калибровка** ([`bot/core/er_calibration.py`](../bot/core/er_calibration.py),
+   [`er_calibration_report.py`](../er_calibration_report.py)) — по ходу
+   выяснилось, что `unit_match_gold_labels` (юнит-уровень,
+   `phase2_unit_match.py`, дерево правил без confidence) и
+   `AUTO_MATCH_THRESHOLD`/`REVIEW_QUEUE_THRESHOLD` (ЖК-уровень,
+   `entity_resolution.py::score_match()`) — два разных механизма; первый
+   физически не калибрует второй. ЖК-уровень откалиброван по
+   `complex_source_links`/`_candidates`/`_rejections` (confidence реально
+   есть) — пороги 0.8/0.5 подтверждены данными как есть, менять не на
+   что. Юнит-уровень — честная сводка того, что есть (0 отклонённых
+   кандидатов на сегодня, calibrate-ready gold-labels не накоплены).
+   Регресс: [`tests/test_er_calibration.py`](../tests/test_er_calibration.py)
+   (7 тестов).
+5. **Вынос роутов `admin_web.py`/`terminal_extras.py`** (гигиена, не
+   связано с AUC) — 3 роута: `/admin/api/listing/{id}` и
+   `/admin/api/price-history/{id}` →
+   [`bot/core/listing_detail.py`](../bot/core/listing_detail.py)
+   (`build_listing_detail`/`build_price_history`, исключения
+   `ListingNotFound`/`ListingRestricted` вместо статус-кодов внутри
+   роута); геоцентроид ЖК — тот же SQL был буквально задублирован в двух
+   роутах (`/admin/complex/{id}` и `/admin/api/complex/{id}/location-score`)
+   → одна функция
+   [`bot/core/house_resolution.resolve_complex_geo_centroid()`](../bot/core/house_resolution.py).
+   Поведение не менялось. Регресс: [`tests/test_listing_detail.py`](../tests/test_listing_detail.py)
+   (6 тестов), [`tests/test_house_resolution_geo_centroid.py`](../tests/test_house_resolution_geo_centroid.py)
+   (3 теста).
+
+**Общий регресс Фазы B**: полный прогон `./venv/bin/pytest tests/ -q` →
+**405/405 passed** после каждого коммита. `krisha-apartments.service`/
+`krisha-web.service` перезапускались по ходу фазы, git_hash проверен по
+чеклисту [`process.md`](process.md#deploy-чеклист-код-на-диске--код-в-процессе).
+
+**Главный вывод фазы**: `comparable_score` v2 не поднял AUC (Δ в
+пределах шума, потолок `price_score` ≈0.72) — bottleneck не в качестве
+пула аналогов, а в потолке цены как единственного сигнала. Подробный
+разбор и гипотезы для сдвига потолка — [`verdict_strategy.md` §5,
+«Анализ потолка price_score»](verdict_strategy.md#анализ-потолка-price_score-фаза-b-2026-08-14).
+
+**Дальше**: Фаза C **НЕ начинается** до накопления `views_history` ≥30
+дней (готовность ~2026-09-14, см. `verdict_strategy.md` шапка) — один из
+кандидатов на сдвиг потолка (`views_velocity`) физически недоступен
+раньше. Следующий заход — продуктовый трек (алерты/локация,
+[`verdict_strategy.md` §7](verdict_strategy.md#7-продуктовая-ветка--персональные-алерты-параллельно-отдельный-заход)),
+не Фаза C.
+
+---
+
 ## Журнал запусков (для регресс-чека бейджа «🤝 Торг» на живых данных)
 
 - 2026-08-14 11:50 — `krisha-apartments.service` перезапущен (git
