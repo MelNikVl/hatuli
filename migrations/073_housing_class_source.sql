@@ -1,0 +1,31 @@
+-- Эвристика класса старого фонда (задача 2026-08-14, read-only-сессия
+-- п.4, docs/liquidity_model_design.md §11) — housing_class_pre2000_
+-- backfill.py.
+--
+-- housing_class_source различает, ОТКУДА взялось complexes.housing_
+-- class, когда оно не заполнено человеком напрямую через /complexes:
+-- NULL — заполнено вручную (или пусто); 'pre2000_heuristic' —
+-- присвоено эвристикой year_built<2000 AND housing_class IS NULL ->
+-- эконом (обоснование и проверка масштаба — см. docs/liquidity_model_
+-- design.md §11: эвристика закрывает 34 из 1837 записей без класса,
+-- ≈1.9%, НЕ "основную дыру", как изначально предполагалось — основную
+-- дыру закрывает predicted_housing_class, migrations/071).
+--
+-- **Важно для bot/core/housing_class_model_recompute.py**: та функция
+-- считает ЛЮБОЕ непустое housing_class "ручной меткой" (normalize_label()
+-- truthy -> source='manual', приоритет над предсказанием, и включается
+-- в обучающую выборку класс-модели как ground truth) — она НЕ смотрит
+-- на housing_class_source. После этого бэкфилла 34 строки формально
+-- станут "manual" для этой логики, хотя метка эвристическая, не
+-- человеческая — известное ограничение, зафиксировано, не исправлено
+-- в этой миграции (исправление — отдельная задача: научить housing_
+-- class_model_recompute.py различать housing_class_source, если это
+-- когда-нибудь станет заметно искажать обучение; 34 строки на фоне
+-- сотен размеченных вручную — маловероятно, но не проверено).
+--
+-- computed_at — по правилу temporal_policy.md ("обязателен на любую
+-- НОВУЮ вычисляемую колонку с самого начала", урок Г3/housing_class_
+-- estimate) — добавлен, хотя задача его явно не просила.
+ALTER TABLE complexes
+    ADD COLUMN IF NOT EXISTS housing_class_source TEXT,
+    ADD COLUMN IF NOT EXISTS housing_class_source_computed_at TIMESTAMPTZ;
