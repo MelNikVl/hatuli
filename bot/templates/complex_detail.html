@@ -583,6 +583,80 @@ async function toggleFavComplex() {
 </script>
 {% endif %}
 
+<!-- 🗺 Локация (Фаза L2 продуктового трека «Локация», docs/location_
+     product_design.md, задача 2026-08-14) — ДОПОЛНЯЕТ карточку "Что
+     рядом" ниже (та не меняется, читает /location-score как раньше),
+     читает НОВЫЙ /admin/api/complex/{id}/location-detail (Фаза L2 п.1).
+     Явно НЕ дублирует цену/DOM — те уже графиками ниже на странице
+     (price-dynamics/turnover-dynamics), см. план L2. Группированный
+     скор + риск-бейджи здесь; карта со слоями и таймлайн — следующие
+     коммиты той же фазы, встраиваются в этот же контейнер. -->
+{% if geo %}
+<div id="cx-location-block" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <b style="font-size:15px;">🗺 Локация</b>
+    <span id="cxl-computed-at" style="font-size:11px;color:#888;"></span>
+  </div>
+  <div id="cxl-groups" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;"></div>
+  <div id="cxl-risk-badges" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;"></div>
+  <div id="cxl-no-score" style="display:none;font-size:12px;color:#888;margin-top:6px;">Расчёт локационного скора для этого ЖК ещё не выполнен — обновляется ежемесячно.</div>
+</div>
+<script>
+(function() {
+  // Группы = РОВНО те же 5, что bot/core/complex_location_score_snapshot.
+  // py::_GROUPS (Фаза L1) — building_age внутри "risk", bank —
+  // informational (не в группах, не считается в group-суммах).
+  const GROUP_LABELS = {transport: '🚏 Транспорт', infra: '🏫 Инфраструктура', noise: '🔇 Шум', green: '🌳 Зелень', risk: '⚠️ Риски'};
+  fetch('/admin/api/complex/{{ cx.id }}/location-detail').then(r => r.ok ? r.json() : null).then(d => {
+    if (!d || !d.has_coords) return;
+    if (!d.has_score) {
+      document.getElementById('cxl-no-score').style.display = '';
+      return;
+    }
+    const s = d.score;
+    document.getElementById('cxl-computed-at').textContent = 'расчёт на ' + s.computed_at + ' · уверенность ' + s.confidence + '%';
+
+    const groups = document.getElementById('cxl-groups');
+    ['transport', 'infra', 'noise', 'green', 'risk'].forEach(function(g) {
+      const val = s[g + '_score'];
+      if (val === null || val === undefined) return;
+      const color = val > 0 ? '#16a34a' : (val < 0 ? '#ef4444' : '#888');
+      const bg = val > 0 ? 'rgba(16,185,129,.12)' : (val < 0 ? 'rgba(239,68,68,.12)' : 'var(--bg)');
+      const factors = Object.values(s.breakdown[g] || {}).map(function(f) { return f.label + ': ' + f.reason; }).join('\n');
+      groups.insertAdjacentHTML('beforeend',
+        '<span title="' + factors.replace(/"/g, '&quot;') + '" style="font-size:12px;padding:4px 10px;border-radius:20px;background:' + bg + ';color:' + color + ';border:1px solid var(--border);cursor:help;display:inline-block;">' +
+        GROUP_LABELS[g] + ' ' + (val > 0 ? '+' : '') + val + '</span>');
+    });
+
+    // Риск-бейджи — только когда есть реальные основания (снос, заметная
+    // доля снижений цены за 30д), не пустая "рисков нет" (Unknown ≠
+    // average — молчим, когда нечего сказать, не ставим зелёную галочку
+    // за неимением данных).
+    const badges = document.getElementById('cxl-risk-badges');
+    const riskFactors = (s.breakdown && s.breakdown.risk) || {};
+    Object.keys(riskFactors).forEach(function(key) {
+      const f = riskFactors[key];
+      if (f.adj < 0) {
+        badges.insertAdjacentHTML('beforeend',
+          '<span style="font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);">' + f.label + ': ' + f.reason + '</span>');
+      }
+    });
+    // Доля снижений цены за 30д — последняя точка тренда (тот же
+    // источник, что таймлайн следующего коммита); порог 20% — заметно
+    // выше "нормального" фонового шума (наблюдалось ~8-19% на живой
+    // выборке комплексов при разработке Фазы L1).
+    if (d.price_drop_trend && d.price_drop_trend.length) {
+      const last = d.price_drop_trend[d.price_drop_trend.length - 1];
+      if (last.share >= 0.2) {
+        badges.insertAdjacentHTML('beforeend',
+          '<span style="font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(245,158,11,.12);color:#f59e0b;border:1px solid rgba(245,158,11,.3);">📉 ' + Math.round(last.share * 100) + '% объявлений со снижением цены за 30д</span>');
+      }
+    }
+  }).catch(() => {});
+})();
+</script>
+{% endif %}
+
 <!-- Удобства/Что рядом (задача 2026-08-13) — под описанием, не рядом
      с ним: половина ширины каждая, одинаковая высота (grid stretch по
      умолчанию, в отличие от .cx-row2 выше — там align-items:start). -->
