@@ -70,6 +70,25 @@ async def fetch_view_count(browser, url: str) -> int | None:
         await page.close()
 
 
+async def _record_observation(pg_exec, listing_id: str, views_count: int) -> None:
+    """Один снимок просмотров: обновляет текущее значение (как раньше) И
+    добавляет строку в views_history (Г2, задача 2026-08-14, docs/
+    data_collection_audit.md) — append-only, на КАЖДОЕ успешное
+    наблюдение, не только на изменение (в отличие от price_history, где
+    событие = смена цены, тут "не изменилось между X и Y" — тоже нужная
+    точка для честного графика динамики). Вынесено отдельной функцией,
+    чтобы быть тестируемой без похода в полный батч-запрос run_cycle()
+    (тот трогает реальную очередь активных объявлений — гонять его в
+    тестах означало бы дёргать `views_count_updated_at` случайных
+    боевых строк)."""
+    await pg_exec(
+        "UPDATE apartment_listings SET views_count=$2, views_count_updated_at=now() WHERE id=$1",
+        listing_id, views_count)
+    await pg_exec(
+        "INSERT INTO views_history (listing_id, views_count) VALUES ($1, $2)",
+        listing_id, views_count)
+
+
 async def run_cycle(browser) -> dict:
     from bot.db import settings as app_settings
     from bot.db.pg import fetch as pg_fetch, execute as pg_exec
@@ -95,9 +114,7 @@ async def run_cycle(browser) -> dict:
             await asyncio.sleep(random.uniform(delay_min, delay_max))
         n = await fetch_view_count(browser, r["url"])
         if n is not None:
-            await pg_exec(
-                "UPDATE apartment_listings SET views_count=$2, views_count_updated_at=now() WHERE id=$1",
-                r["id"], n)
+            await _record_observation(pg_exec, r["id"], n)
             updated += 1
         else:
             # Отмечаем попытку, даже неудачную — иначе один и тот же
