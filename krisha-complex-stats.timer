@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежедневного снимка статистики ЖК (complex_stats_history) — Г3, задача 2026-08-14
+
+[Timer]
+OnCalendar=*-*-* 08:15:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=krisha-complex-stats.service
+
+[Install]
+WantedBy=timers.target

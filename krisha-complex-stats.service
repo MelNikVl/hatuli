@@ -1,0 +1,11 @@
+[Unit]
+Description=Ежедневный снимок статистики ЖК (complex_stats_history) — Г3, задача 2026-08-14
+After=network.target postgresql.service krisha-apartments.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/complex_stats_snapshot.py
+StandardOutput=append:/home/nik/krisha_bot/complex_stats_snapshot.log
+StandardError=append:/home/nik/krisha_bot/complex_stats_snapshot.log
