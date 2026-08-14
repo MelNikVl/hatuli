@@ -248,6 +248,86 @@ freeze-лист, гейт).
 
 ---
 
+## Часть 6. Вердикт-стратегия, Фаза A (данные и outcomes) — ✅ ЗАВЕРШЕНО 2026-08-14
+
+Гейт применён по [`verdict_strategy.md` §8](verdict_strategy.md#8-гейт-одно-правило-на-все-фазы)
+ко всем пунктам с изменением формулы (п.4/п.6): отчёт распределения
+до/после, счётчик >5 баллов, топ-20 movers — каждый со своим срезом
+before-снапшота (п.6 снят ПОСЛЕ применения п.4, чтобы изолировать
+эффекты, не смешать их в одном диффе). Полные докстринги/обоснования —
+в коде и коммитах, здесь — только итог по формату волн 1-2.
+
+1. **`listing_snapshots`** ([`migrations/064`](../migrations/064_listing_snapshots.sql),
+   [`listing_snapshot.py`](../listing_snapshot.py)) — daily-снимок
+   listing_id/price/views/is_active. Таймер `krisha-listing-snapshot.timer`
+   (08:30) установлен и запущен, первый снимок снят вручную в день
+   задачи: 47016 объявлений (43755 активных). Бэкфила нет и не может
+   быть — накопление строго с 2026-08-14.
+2. **`outcome_labels`** ([`migrations/065`](../migrations/065_outcome_labels.sql),
+   [`outcome_labels_recompute.py`](../outcome_labels_recompute.py)) —
+   `disappeared_within_30d`/`price_reduction_within_30d`/`survives_90d`/
+   `time_on_market`/`views_velocity`, бэкфил по всей истории
+   `price_history` (с 2026-07-09) + `archived_at` (с 2026-06-05) +
+   ongoing-таймер (08:45). Живой бэкфил: 47016 объявлений,
+   `disappeared_within_30d` разрешено 16406 (35%, TRUE=1207),
+   `price_reduction_within_30d` разрешено 7427 (TRUE=3677), `survives_90d`
+   разрешено 3261 (все FALSE — датасет младше 90 дней, TRUE физически
+   невозможен на эту дату), TOM известен для 3261 архивных (среднее 25
+   дней), `views_velocity` — 0 (views_history/Г2 живёт только с сегодня).
+3. **Baseline-замер** ([`baseline_measure.py`](../baseline_measure.py)) —
+   заглавный артефакт фазы, снят ДО правок формулы (п.4/6). AUC
+   `score_total`=0.8726 на `disappeared_within_30d`, но почти целиком
+   тянет компонент `price` (AUC=0.8706) — `quality`=0.5169 (случайность,
+   прямое обоснование для п.4), `market`=0.7108, `risk`=0.5235,
+   `deal_confidence`=0.2775 (обратно предсказательна, зафиксировано как
+   есть). TOM (n=1226, малая выборка): `market` rho=-0.232 (p=2e-14,
+   ожидаемо), `risk` rho=+0.2755 (p=8e-20, контринтуитивно, не
+   объяснено). `survives_90d` честно пропущена — окно 90 дней не
+   разрешилось ни разу на этом датасете.
+4. **Убрать price→quality proxy** ([`bot/core/deal_score.py`](../bot/core/deal_score.py)) —
+   при неизвестном `housing_class` больше не подставляется перцентиль
+   цены/м² как прокси-класс (эмпирически обоснованно п.3: AUC
+   quality=0.517). Confidence лишена частичной надбавки (+8) за сам факт
+   возможности прокси. Регресс:
+   [`tests/test_deal_score_no_quality_proxy.py`](../tests/test_deal_score_no_quality_proxy.py)
+   (4 теста). Живой прогон: 22857/23039 без churn, 72.9% (16664)
+   изменили `score_total`, >5 баллов — 24.76% (5659, ожидаемо — у 74%
+   объявлений класс неизвестен, quality — 20% веса), топ-20 movers
+   ±37..51 без аномалий.
+5. **Терминология** ([`bot/templates/dashboard.html`](../bot/templates/dashboard.html),
+   [`analytics_detail.html`](../bot/templates/analytics_detail.html),
+   [`analytics.html`](../bot/templates/analytics.html)) — «уверенность
+   NN%» → «полнота данных NN%» во всех живых местах показа
+   `deal_confidence` (только лейбл, не API/поле). `location_score`
+   confidence — по-прежнему не в скоупе, отложена на Фазу D.
+6. **Risk → флаги вердикта** ([`bot/core/deal_score.py`](../bot/core/deal_score.py)) —
+   `W_RISK=0` (было 5%), `risk_bits` + 2 новых сигнала (⚠ мало аналогов,
+   ⚠ класс ЖК не известен) — отдельный список `flags`, не вес. price/
+   quality/market перенормированы (пропорции 40:20:15 сохранены).
+   Регресс:
+   [`tests/test_deal_score_risk_flags.py`](../tests/test_deal_score_risk_flags.py)
+   (9 тестов). Живой прогон (изолирован от п.4): 84.7% (19398) изменили
+   `score_total`, распределение |Δ| **целиком** в 1-5 баллов, 0 изменений
+   >5 — математически ожидаемо (старый вклад risk был ограничен ±5
+   баллами). Живое распределение флагов: класс не известен 75.1%,
+   риелтор 35.6%, мало аналогов 13.4%, последний этаж 10.4%, 1й этаж
+   4.8%, совсем без флагов 13.2%.
+7. **Гигиена** ([`migrations/066`](../migrations/066_deal_confidence_column.sql)) —
+   единственный `ALTER TABLE` из `apply_deal_scores()` (гонялся на
+   каждый цикл парсера) вынесен в миграцию.
+
+**Общий регресс Фазы A**: `./venv/bin/pytest tests/ -q` → **281/281
+passed** (было 271 до начала фазы — 10 новых тестов на quality-proxy/
+risk-flags). `krisha-apartments.service` перезапускался трижды в течение
+фазы (после п.4, п.6, п.7) — каждый раз проверено git_hash/mtime по
+чеклисту [`process.md`](process.md#deploy-чеклист-код-на-диске--код-в-процессе).
+
+**Дальше** — Фаза B (comparable engine v2, класс-модель, ER-калибровка,
+параллельно разбор `admin_web.py`) — см.
+[`verdict_strategy.md` §5](verdict_strategy.md#фаза-b-недели-3-4--comparable-engine-v2--начало-разбора-admin_webpy).
+
+---
+
 ## Журнал запусков (для регресс-чека бейджа «🤝 Торг» на живых данных)
 
 - 2026-08-14 11:50 — `krisha-apartments.service` перезапущен (git
