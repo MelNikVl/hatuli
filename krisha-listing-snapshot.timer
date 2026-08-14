@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежедневного снимка объявлений (listing_snapshots) — Фаза A п.1 вердикт-стратегии, задача 2026-08-14
+
+[Timer]
+OnCalendar=*-*-* 08:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=krisha-listing-snapshot.service
+
+[Install]
+WantedBy=timers.target

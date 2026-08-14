@@ -1,0 +1,11 @@
+[Unit]
+Description=Ежедневный снимок объявлений (listing_snapshots) — Фаза A п.1 вердикт-стратегии, задача 2026-08-14
+After=network.target postgresql.service krisha-apartments.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/listing_snapshot.py
+StandardOutput=append:/home/nik/krisha_bot/listing_snapshot.log
+StandardError=append:/home/nik/krisha_bot/listing_snapshot.log
