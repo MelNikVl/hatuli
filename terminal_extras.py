@@ -3262,7 +3262,7 @@ def make_extras_router(templates) -> APIRouter:
               AND last_seen > now() - interval '14 days'
               AND price >= 500000
               AND COALESCE(yield_pct, 0) <= 100
-            ORDER BY (score_total + COALESCE(zone_bonus, 0) + COALESCE(layer_bonus, 0) + COALESCE(price_drop_bonus, 0)) DESC,
+            ORDER BY effective_score DESC,
                      yield_pct DESC NULLS LAST
             LIMIT 10
         """)
@@ -3636,9 +3636,7 @@ def make_extras_router(templates) -> APIRouter:
             LEFT JOIN developers d ON d.id = c.developer_id
             LEFT JOIN LATERAL (
                 SELECT AVG(al.lat) AS lat, AVG(al.lon) AS lon,
-                       AVG(COALESCE(score_total,0) + COALESCE(zone_bonus,0)
-                           + COALESCE(layer_bonus,0) + COALESCE(price_drop_bonus,0))
-                         FILTER (WHERE is_active IS NOT FALSE) AS avg_score
+                       AVG(al.effective_score) FILTER (WHERE is_active IS NOT FALSE) AS avg_score
                 FROM apartment_listings al
                 WHERE lower(trim(regexp_replace(al.complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
                       = lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
@@ -4035,9 +4033,7 @@ def make_extras_router(templates) -> APIRouter:
             LEFT JOIN developers d ON d.id = c.developer_id
             LEFT JOIN LATERAL (
                 SELECT AVG(al.lat) AS lat, AVG(al.lon) AS lon,
-                       AVG(COALESCE(score_total,0) + COALESCE(zone_bonus,0)
-                           + COALESCE(layer_bonus,0) + COALESCE(price_drop_bonus,0))
-                         FILTER (WHERE is_active IS NOT FALSE) AS avg_score,
+                       AVG(al.effective_score) FILTER (WHERE is_active IS NOT FALSE) AS avg_score,
                        AVG(EXTRACT(EPOCH FROM (al.archived_at - al.first_seen))/86400)
                          FILTER (WHERE al.archived_at IS NOT NULL) AS avg_days_to_sell,
                        COUNT(*) FILTER (WHERE al.archived_at >= now() - interval '30 days')
@@ -4312,7 +4308,7 @@ def make_extras_router(templates) -> APIRouter:
         if area_max > 0:
             conds.append(f"AND area <= ${i}"); params.append(area_max); i += 1
         if min_score > 0:
-            conds.append(f"AND (COALESCE(score_total,0) + COALESCE(zone_bonus,0) + COALESCE(layer_bonus,0) + COALESCE(price_drop_bonus,0)) >= ${i}")
+            conds.append(f"AND a.effective_score >= ${i}")
             params.append(min_score); i += 1
         if seller == "owner":
             conds.append("AND is_owner IS TRUE")
@@ -4370,12 +4366,7 @@ def make_extras_router(templates) -> APIRouter:
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    a.hex_deal_index, a.deal_confidence, a.yield_pct,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
-                   (CASE WHEN a.market_type = 'primary' AND a.primary_score_total IS NOT NULL
-                         THEN a.primary_score_total
-                         ELSE COALESCE(a.score_total,0) END
-                    + COALESCE(a.zone_bonus,0)
-                    + COALESCE(a.layer_bonus,0)
-                    + COALESCE(a.price_drop_bonus,0)) AS eff_score,
+                   a.effective_score AS eff_score,
                    ph.old_price AS prev_price,
                    ph.changed_at AS price_changed_at,
                    dv.id AS developer_id, dv.name AS developer_name, dv.logo AS developer_logo,
@@ -4412,10 +4403,7 @@ def make_extras_router(templates) -> APIRouter:
                 WHERE a.lat IS NOT NULL AND a.is_active IS NOT FALSE
                   AND COALESCE(a.is_duplicate, FALSE) = FALSE
                   AND a.last_seen > now() - interval '14 days'
-                ORDER BY (CASE WHEN a.market_type = 'primary' AND a.primary_score_total IS NOT NULL
-                               THEN a.primary_score_total ELSE COALESCE(a.score_total,0) END
-                          + COALESCE(a.zone_bonus,0) + COALESCE(a.layer_bonus,0)
-                          + COALESCE(a.price_drop_bonus,0)) DESC
+                ORDER BY a.effective_score DESC
                 LIMIT 10
             """)
             top10_ids = {r["id"] for r in top10_rows}
