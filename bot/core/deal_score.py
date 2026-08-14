@@ -514,7 +514,11 @@ async def apply_deal_scores() -> int:
     from bot.db.pg import fetch, execute
     from bot.db import settings as app_settings
 
-    await execute("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS deal_confidence INT")
+    # ALTER TABLE deal_confidence вынесен в migrations/066_deal_confidence_
+    # column.sql — задача 2026-08-14, Фаза A п.7 вердикт-стратегии
+    # (docs/verdict_strategy.md §5): раньше гонялся здесь на КАЖДЫЙ вызов
+    # (каждый цикл парсера), хотя колонка уже давно существует — no-op,
+    # но лишний.
 
     edge = float(app_settings.get_int("HEX_EDGE_M", 50))
     weights = {
