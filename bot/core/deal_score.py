@@ -219,16 +219,32 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
              имени); без него (None, старые вызовы) поведение не меняется —
              только текстовый lookup, как раньше.
     weights: {"price","location","quality","market","risk"} — доли, сумма 1.0
-             (если None — дефолт _DEFAULT_WEIGHTS)
+             (если None — дефолт _DEFAULT_WEIGHTS). "risk" принимается для
+             обратной совместимости вызова (и всё ещё читается из
+             app_settings SCORE_W_RISK на /admin/settings), но с задачи
+             2026-08-14 (Фаза A п.6 вердикт-стратегии, docs/
+             verdict_strategy.md §5) НЕ участвует в взвешенной сумме —
+             см. докстринг ниже про risk_score/flags.
     poi_idx: индекс city_poi по гексагонам (см. _poi_index_from_rows) —
              если None, локация считается без инфраструктурного слоя.
-    Возвращает {id: {deal, confidence, di, expected_m2, components{...}}}
+    Возвращает {id: {deal, confidence, di, expected_m2, components{...},
+                flags: [...]}} — flags см. докстринг у блока RISK ниже.
     """
-    w = {**_DEFAULT_WEIGHTS, **(weights or {})}
-    wsum = sum(w.values()) or 1.0
-    w = {k: v / wsum for k, v in w.items()}
-    W_PRICE, W_LOC, W_QUALITY, W_MARKET, W_RISK = (
-        w["price"], w["location"], w["quality"], w["market"], w["risk"])
+    w_in = {**_DEFAULT_WEIGHTS, **(weights or {})}
+    # risk больше НЕ входит в нормировку суммы весов (Фаза A п.6) — тот же
+    # приём, что уже применялся к location (W_LOC=0, прежнее решение
+    # заказчика): числитель/знаменатель нормировки считаются только по
+    # price+location+quality+market, пропорции price:quality:market между
+    # собой сохраняются (40:20:15 — если app_settings не переопределяет).
+    # risk остаётся полноценным компонентом (score+text в breakdown), но
+    # его роль — список флагов вердикта (risk_bits → flags ниже), не вес
+    # в среднем, который тонул на фоне остальных 95%.
+    wsum = (w_in["price"] + w_in["location"] + w_in["quality"] + w_in["market"]) or 1.0
+    W_PRICE = w_in["price"] / wsum
+    W_LOC = w_in["location"] / wsum
+    W_QUALITY = w_in["quality"] / wsum
+    W_MARKET = w_in["market"] / wsum
+    W_RISK = 0.0
 
     # ── Гекс-агрегации (hedonic ядро) ────────────────────────────────────────
     seg_hex: dict[tuple[str, str], list[float]] = {}
@@ -397,7 +413,12 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         market_txt = (f"yield {yp}%" if yp else "нет данных аренды") + \
                      f", в ЖК {supply} объявл."
 
-        # ── 5. RISK (5%): штрафы ────────────────────────────────────────────
+        # ── 5. RISK: штрафы — score/text для breakdown (компонент остаётся
+        # видимым), но с задачи 2026-08-14 (Фаза A п.6 вердикт-стратегии,
+        # docs/verdict_strategy.md §5) НЕ взвешивается в deal (W_RISK=0,
+        # см. докстринг функции) — раньше даже серьёзный флаг тонул в
+        # общей сумме (было всего 5% веса). Вместо этого risk_bits +
+        # два новых сигнала идут отдельным списком flags вердикта ниже.
         risk, risk_bits = 100, []
         fl, flt = l.get("floor"), l.get("floors_total")
         floor_pts = 8  # проекция для legacy score_floor (0-8)
@@ -414,6 +435,21 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
             risk_bits.append("риелтор (+комиссия)")
         risk_score = _clamp(risk)
         risk_txt = ", ".join(risk_bits) if risk_bits else "флагов нет"
+
+        # ── Флаги вердикта (Фаза A п.6) — risk_bits как есть (⚠-префикс)
+        # + два новых, которых раньше не было явно в UI:
+        #  · "мало аналогов" — sources == "только город" означает, что ни
+        #    свой дом/ЖК (MIN_BLDG), ни свой гексагон (MIN_HEX), ни кольцо
+        #    (MIN_RING, все три — bot/core/hedonic_constants.py) не дали
+        #    достаточно аналогов, P_expected целиком держится на городской
+        #    медиане — самый слабый локальный сигнал из возможных.
+        #  · "класс ЖК не известен" — прямое следствие Фазы A п.4
+        #    (class_unknown уже вычислен в блоке QUALITY выше).
+        flags = [f"⚠ {b}" for b in risk_bits]
+        if sources == "только город":
+            flags.append("⚠ мало аналогов")
+        if class_unknown:
+            flags.append("⚠ класс ЖК не известен")
 
         deal = round(price_score * W_PRICE + loc_score * W_LOC +
                      quality_score * W_QUALITY + market_score * W_MARKET +
@@ -444,6 +480,7 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
             "actual_m2": round(p_m2),
             "hex_n": len(own), "ring_n": len(ring),
             "segment": f"{seg}-комн", "edge_m": edge_m, "sources": sources,
+            "flags": flags,
             "components": {
                 "price": {"score": price_score, "weight": W_PRICE, "text": price_txt},
                 "location": {"score": loc_score, "weight": W_LOC, "text": loc_txt},
