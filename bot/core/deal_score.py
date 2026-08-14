@@ -334,20 +334,26 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         loc_txt += f", рядом {poi_cnt} объектов инфраструктуры (школы/сады/вузы)" if poi_idx else ""
 
         # ── 3. QUALITY (20%): класс ЖК + год + рейтинг Крыши ────────────────
-        # (без класса — прокси: перцентиль цены/м² в сегменте, вместо
-        # плоского дефолта 50, см. модуль docstring п.4)
+        # Задача 2026-08-14 (Фаза A п.4 вердикт-стратегии, docs/
+        # verdict_strategy.md §3.1 "Unknown ≠ average"): раньше при
+        # неизвестном классе сюда подставлялся прокси — перцентиль цены/м²
+        # объявления В ЕГО ЖЕ СЕГМЕНТЕ (см. историю этого файла) — то есть
+        # цена объявления второй раз просачивалась в quality, который сам
+        # взвешенно суммируется с price-компонентом (40% веса) в один
+        # score_total: скрытая циклическая зависимость, эмпирически
+        # подтверждённая baseline-замером (Фаза A п.3) — AUC quality на
+        # disappeared_within_30d = 0.517 (случайность), притом что AUC
+        # price = 0.871 (реальный сигнал) на той же выборке — прокси не
+        # нёс своего сигнала, просто размывал price другим именем.
+        # Теперь: класс неизвестен → просто НЕТ вклада от класса (тот же
+        # принцип, что уже применялся к неизвестному году/рейтингу ниже —
+        # там компонент честно пропускается, не подменяется), доля класса
+        # не заполняется — confidence падает симметрично (см. conf ниже).
         parts, wq = [], 0.0
         cls_score = _CLASS_SCORE.get(cls_key)
         if cls_score is not None:
             parts.append(cls_score * 0.45)
             wq += 0.45
-        else:
-            svals = city_sorted.get(seg)
-            if svals:
-                pr = bisect.bisect_left(svals, p_m2) / len(svals)
-                proxy_score = round(pr * 100)
-                parts.append(proxy_score * 0.30)
-                wq += 0.30
         yr = l.get("year_built") or cx.get("year_built")
         ys = _year_score(yr)
         if ys is not None:
@@ -362,13 +368,14 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
         if finish_score is not None:
             parts.append(finish_score * _W_FINISH_IN_QUALITY)
             wq += _W_FINISH_IN_QUALITY
+        class_unknown = cls_score is None
         if wq:
             quality_score = round(sum(parts) / wq)
             q_bits = []
             if cls_score is not None:
                 q_bits.append(f"класс «{cls_key}»")
-            elif city_sorted.get(seg):
-                q_bits.append("класс не известен, оценка по цене/м² в сегменте")
+            else:
+                q_bits.append("класс ЖК не известен")
             if ys is not None:
                 q_bits.append(f"{yr} г.")
             if rating:
@@ -412,11 +419,18 @@ def compute_deal_scores(listings: list[dict], complexes: dict[str, dict],
                      quality_score * W_QUALITY + market_score * W_MARKET +
                      risk_score * W_RISK)
 
-        # ── Confidence: сколько компонентов на реальных данных ──────────────
+        # ── Confidence (= "полнота данных", Фаза A п.5 вердикт-стратегии):
+        # сколько компонентов посчитано на реальных данных. Задача
+        # 2026-08-14 (Фаза A п.4): убрана частичная надбавка (было +8) за
+        # прокси-класс по цене — та надбавка награждала confidence именно
+        # за наличие данных для ПОДМЕНЫ сигнала, а не за настоящую
+        # полноту; класс неизвестен теперь просто не добавляет 20 баллов,
+        # ничем не компенсируется ("Unknown ≠ average" — data_completeness
+        # вниз, не подмена, см. docs/verdict_strategy.md §3.1).
         conf = 0
         conf += 30 if (d0 or d1) else 0           # локальная ценовая модель есть
         conf += 10 if d0 else 0                   # свой гексагон не пуст
-        conf += 20 if cls_score is not None else (8 if city_sorted.get(seg) else 0)
+        conf += 20 if cls_score is not None else 0
         conf += 15 if ys is not None else 0
         conf += 15 if yp else 0
         conf += 10 if rating else 0

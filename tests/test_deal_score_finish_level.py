@@ -46,10 +46,21 @@ def test_finish_level_weight_is_small_not_dominant():
     # другие сигналы и разбавляют его долю ещё сильнее) — разница в
     # итоговом score_total заметно меньше типичного разброса Deal Score
     # (0-100), не переворачивает скор с ног на голову.
+    #
+    # Верхняя граница поднята 10→15 задачей 2026-08-14 (Фаза A п.4
+    # вердикт-стратегии, "убрать price→quality proxy"): раньше "without"
+    # (ни класса, ни года, ни рейтинга, ни отделки) в этом ОДНОлистинговом
+    # синтетическом вызове доставал квази-прокси по цене вырожденного вида
+    # (city_sorted из одного элемента → перцентиль строго 0) — baseline
+    # quality занижался артефактом, не честным сигналом. Теперь "without"
+    # честно падает на плоский дефолт 50 (см. test_deal_score_no_quality_
+    # proxy.py), delta считается против реального baseline, не против
+    # проксированного нуля — эффект отделки (11 баллов) не изменился по
+    # существу, изменилась точка отсчёта.
     with_finish = compute_deal_scores([_listing("E", finish_level="designer")], _COMPLEXES, edge_m=100.0)
     without = compute_deal_scores([_listing("F", finish_level=None)], _COMPLEXES, edge_m=100.0)
     delta = with_finish["E"]["deal"] - without["F"]["deal"]
-    assert 0 <= delta <= 10
+    assert 0 <= delta <= 15
 
 
 def test_unknown_finish_code_ignored_gracefully():
