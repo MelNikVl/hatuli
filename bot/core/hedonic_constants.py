@@ -30,6 +30,22 @@ MIN_COMPARABLES (bargain.py, было своим числом) семантич�
 используемого для оценки достаточности кольца. У deal_score.py есть ещё
 MIN_HEX (свой гексагон отдельно, без кольца) — этому в bargain.py прямого
 аналога нет (там гекс+кольцо всегда считаются вместе, не по отдельности).
+
+_CLASS_SCORE/_class_key/_FINISH_QUALITY_SCORE/_FINISH_LABEL (задача
+2026-08-14, "Фаза B: comparable_score core") — перенесены сюда из
+deal_score.py: теперь нужны ВТОРОМУ модулю (bot/core/comparable_score.py,
+housing_class_similarity/finish_level_similarity), не только deal_score.py
+(quality-компонент) — тот же принцип централизации, что уже применён к
+AREA_BAND_PCT/MIN_BLDG/_activity_filter выше, не копия таксономии в двух
+местах, которая может разойтись (класс "элит" в comparable_score.py и в
+deal_score.py обязан значить одно и то же число).
+
+is_active_as_of() — Python-твин _activity_filter() для пар УЖЕ
+загруженных словарей (comparable_score.py сравнивает два listing-dict,
+не делает SQL-запрос сам) — та же троичная логика, тот же смысл, другая
+форма (булева проверка, не SQL-фрагмент) — намеренно не сведена в одну
+функцию с _activity_filter (разные потребители: SQL-строитель vs
+Python-предикат), но сверяется с ней тестами.
 """
 from __future__ import annotations
 
@@ -90,3 +106,51 @@ def _activity_filter(as_of: datetime | None, param_idx: int, alias: str = "") ->
         return f"AND {p}is_active IS NOT FALSE", []
     return (f"AND {p}first_seen <= ${param_idx} "
             f"AND ({p}archived_at IS NULL OR {p}archived_at > ${param_idx})", [as_of])
+
+
+def is_active_as_of(first_seen: datetime | None, archived_at: datetime | None,
+                     as_of: datetime | None, is_active: bool | None = None) -> bool:
+    """Python-эквивалент _activity_filter() для уже загруженных пар
+    (comparable_score.py) — та же троичная логика:
+    as_of=None — текущий is_active (передан явно вызывающим, НЕ выводится
+    из first_seen/archived_at — is_active остаётся источником истины для
+    ЖИВОГО состояния, тот же принцип, что в SQL-версии; если не передан,
+    честно считаем активным — вызывающий сам решает, нужен ли ему этот
+    параметр вовсе).
+    as_of=дата — first_seen<=as_of И (ещё не архивировано ИЛИ
+    архивировано позже as_of), НЕ текущий is_active.
+    """
+    if as_of is None:
+        return True if is_active is None else bool(is_active)
+    if first_seen is None or first_seen > as_of:
+        return False
+    if archived_at is not None and archived_at <= as_of:
+        return False
+    return True
+
+
+# ── Класс ЖК: элит/бизнес/комфорт/эконом ────────────────────────────────
+# Задача 2026-08-14 ("Фаза B: comparable_score core") — перенесено из
+# deal_score.py (было там с волны 1, quality-компонент) — теперь общее с
+# comparable_score.py (housing_class_similarity), см. докстринг модуля.
+_CLASS_SCORE = {"элит": 100, "бизнес": 80, "комфорт": 60, "эконом": 35}
+
+
+def _class_key(cls: str) -> str | None:
+    """Нормализует произвольный текст housing_class к одному из ключей
+    _CLASS_SCORE (подстрокой — источники пишут по-разному: "элит-класс",
+    "бизнес класс" и т.п.). None, если класс неизвестен/пуст/не узнан."""
+    return next((k for k in _CLASS_SCORE if k in (cls or "")), None)
+
+
+# ── Отделка: 7 кодов bot/core/listing_intel.detect_finish_level ─────────
+# Тоже перенесено из deal_score.py той же задачей — общее с comparable_
+# score.py (finish_level_similarity).
+_FINISH_QUALITY_SCORE = {
+    "rough": 20, "prefinish": 35, "needs_repair": 25,
+    "finished": 60, "renovated": 75, "furnished": 80, "designer": 95,
+}
+_FINISH_LABEL = {
+    "rough": "черновая", "prefinish": "предчистовая", "needs_repair": "требует ремонта",
+    "finished": "чистовая", "renovated": "свежий ремонт", "furnished": "с мебелью", "designer": "дизайнерский ремонт",
+}

@@ -51,6 +51,7 @@ from statistics import median
 from bot.core.hexgrid import hex_id, neighbors
 from bot.core.hedonic_constants import (
     AREA_BAND_PCT, MIN_BLDG, MIN_HEX, MIN_RING, W0, W1, W2, _activity_filter,
+    _CLASS_SCORE, _class_key, _FINISH_QUALITY_SCORE, _FINISH_LABEL,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,17 +91,12 @@ _DEFAULT_WEIGHTS = {"price": 0.40, "location": 0.0, "quality": 0.20,
 # "не имеет эффекта"). Теперь — небольшой (0.12 из quality, т.е. не
 # сильнее прокси-класса и заметно слабее года/рейтинга) полноправный
 # субкомпонент quality, виден в breakdown, не теряется при пересчёте.
-_FINISH_QUALITY_SCORE = {
-    "rough": 20, "prefinish": 35, "needs_repair": 25,
-    "finished": 60, "renovated": 75, "furnished": 80, "designer": 95,
-}
-_FINISH_LABEL = {
-    "rough": "черновая", "prefinish": "предчистовая", "needs_repair": "требует ремонта",
-    "finished": "чистовая", "renovated": "свежий ремонт", "furnished": "с мебелью", "designer": "дизайнерский ремонт",
-}
+# _FINISH_QUALITY_SCORE/_FINISH_LABEL — см. import вверху файла (задача
+# 2026-08-14 "Фаза B: comparable_score core" перенесла их в hedonic_
+# constants.py, теперь общие с comparable_score.py).
 _W_FINISH_IN_QUALITY = 0.12
 
-_CLASS_SCORE = {"элит": 100, "бизнес": 80, "комфорт": 60, "эконом": 35}
+# _CLASS_SCORE/_class_key — см. import вверху файла (та же задача).
 # Ценовая надбавка/дисконт класса ЖК к ожидаемой цене — тот же порядок величин,
 # что и субиндекс, но применяется к P_expected (класс — часть цены, а не
 # только описательный атрибут).
@@ -143,10 +139,6 @@ def _year_score(y):
     if y >= 2000:
         return 40
     return 20
-
-
-def _class_key(cls: str) -> str | None:
-    return next((k for k in _CLASS_SCORE if k in cls), None)
 
 
 def _ceiling_adj(ceiling_height) -> float:
