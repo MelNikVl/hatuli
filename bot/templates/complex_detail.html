@@ -611,6 +611,15 @@ async function toggleFavComplex() {
   <div id="cxl-groups" style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;"></div>
   <div id="cxl-risk-badges" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;"></div>
   <div id="cxl-no-score" style="display:none;font-size:12px;color:#888;margin-top:6px;">Расчёт локационного скора для этого ЖК ещё не выполнен — обновляется ежемесячно.</div>
+  <!-- Таймлайн price_drop_share_30d — НЕ цена/DOM (те уже есть отдельными
+       графиками ниже страницы), только то, чего на странице ещё не было.
+       Скрыт, пока точек <2 (график из одной точки бессмысленен) —
+       collect с 2026-08-14, честно ждём накопления, не рисуем фиктивную
+       линию по одной точке. -->
+  <div id="cxl-trend-wrap" style="display:none;margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
+    <div style="font-size:12.5px;color:#888;margin-bottom:4px;">📉 Доля объявлений со снижением цены за 30д, по дням</div>
+    <div id="cxl-trend-chart" style="min-height:120px;"></div>
+  </div>
 </div>
 <script>
 (function() {
@@ -674,8 +683,41 @@ async function toggleFavComplex() {
     // хотя geo есть — см. комментарий у window.cxLocMap) — слои просто
     // не строятся, без ошибки.
     if (window.cxLocMap) cxlBuildMapLayers(window.cxLocMap, d);
+
+    // Таймлайн — минимум 2 точки, иначе линия не нарисуется осмысленно
+    // (тот же принцип, что уже применён в cxdRender() price-dynamics
+    // выше для "мало точек во времени").
+    if (d.price_drop_trend && d.price_drop_trend.length >= 2) {
+      document.getElementById('cxl-trend-wrap').style.display = '';
+      cxlRenderTrend(d.price_drop_trend);
+    }
   }).catch(() => {});
 })();
+
+function cxlRenderTrend(points) {
+  const el = document.getElementById('cxl-trend-chart');
+  const W = Math.max(300, (el.clientWidth || 460) - 20), H = 140, padL = 34, padB = 20, padT = 10, padR = 10;
+  const x = i => padL + (points.length > 1 ? i / (points.length - 1) : 0) * (W - padL - padR);
+  const maxShare = Math.max(0.1, Math.max.apply(null, points.map(function(p) { return p.share; })) * 1.15);
+  const yScaled = v => padT + (1 - Math.min(v, maxShare) / maxShare) * (H - padT - padB);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:100%;overflow:visible;">`;
+  for (let g = 0; g <= 3; g++) {
+    const v = maxShare * g / 3;
+    const yy = yScaled(v);
+    svg += `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="var(--border)" stroke-width="1"/>`;
+    svg += `<text x="${padL - 6}" y="${yy + 4}" font-size="10" fill="var(--text)" text-anchor="end">${Math.round(v * 100)}%</text>`;
+  }
+  const xStep = Math.max(1, Math.ceil(points.length / 8));
+  points.forEach(function(p, i) {
+    if (i % xStep !== 0 && i !== points.length - 1) return;
+    svg += `<text x="${x(i)}" y="${H - 4}" font-size="10" fill="var(--text)" text-anchor="middle">${p.date.slice(5)}</text>`;
+  });
+  const path = points.map(function(p, i) { return (i === 0 ? 'M' : 'L') + x(i).toFixed(1) + ',' + yScaled(p.share).toFixed(1); }).join(' ');
+  svg += `<path d="${path}" fill="none" stroke="#f59e0b" stroke-width="2.5"/>`;
+  points.forEach(function(p, i) { svg += `<circle cx="${x(i)}" cy="${yScaled(p.share)}" r="3" fill="#f59e0b"/>`; });
+  svg += '</svg>';
+  el.innerHTML = svg;
+}
 
 function cxlBuildMapLayers(map, d) {
   const POI_LABELS = {bus_stop: '🚏 остановка', shop: '🛒 магазин', health: '💊 аптека/клиника',

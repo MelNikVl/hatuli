@@ -78,6 +78,8 @@ async def test_location_block_renders_when_geo_present(client, complex_with_geo)
     assert "cxl-groups" in r.text
     assert "cxl-risk-badges" in r.text
     assert "cxl-no-score" in r.text
+    assert "cxl-trend-wrap" in r.text
+    assert "cxl-trend-chart" in r.text
 
 
 @pytest.mark.asyncio
@@ -115,3 +117,15 @@ async def test_location_block_map_layers_reuse_existing_leaflet_map(client, comp
     assert "📍 POI" in r.text
     assert "🚧 Снос" in r.text
     assert "🌡 Плотность" in r.text
+
+
+@pytest.mark.asyncio
+async def test_location_block_trend_hidden_by_default_shown_only_with_2plus_points(client, complex_with_geo):
+    """Коммит 4 плана L2: таймлайн price_drop_share_30d — контейнер
+    рендерится СЕРВЕРОМ с display:none всегда (клиент решает, показывать
+    ли, по числу точек) — та же логика, что уже применена в cxdRender()
+    price-dynamics для "мало точек во времени"."""
+    r = await client.get(f"/complex/{complex_with_geo}")
+    assert 'id="cxl-trend-wrap" style="display:none' in r.text
+    assert "cxlRenderTrend" in r.text
+    assert "length >= 2" in r.text
