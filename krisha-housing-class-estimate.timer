@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежемесячного пересчёта housing_class_estimate — Часть 2 п.11, задача 2026-08-14
+
+[Timer]
+OnCalendar=*-*-01 08:45:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=krisha-housing-class-estimate.service
+
+[Install]
+WantedBy=timers.target

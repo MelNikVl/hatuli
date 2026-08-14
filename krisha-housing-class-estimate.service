@@ -1,0 +1,11 @@
+[Unit]
+Description=Ежемесячный пересчёт housing_class_estimate — Часть 2 п.11, задача 2026-08-14
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/housing_class_estimate_recompute.py
+StandardOutput=append:/home/nik/krisha_bot/housing_class_estimate_recompute.log
+StandardError=append:/home/nik/krisha_bot/housing_class_estimate_recompute.log
