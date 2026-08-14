@@ -1732,20 +1732,28 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                                      "hour": 0, "high_score_count": 0, "last_parsed": None}
 
         # ── Investment ──────────────────────────────────────────────────────
+        # Г12 (задача 2026-08-14, docs/data_collection_audit.md) — живой
+        # писатель investment_listings — SQLite bot.db (bot/jobs/scheduler.py
+        # check_investment_objects), НЕ Postgres. Одноимённая Postgres-таблица
+        # мигрирована один раз (migrate_sqlite_to_pg.py, 2026-06-05) и с тех
+        # пор не обновляется — читать её тут означало молча показывать
+        # 2-месячной давности статистику как текущую.
         try:
-            inv_total = await pg_fetchval("SELECT COUNT(*) FROM investment_listings") or 0
-            inv_today = await pg_fetchval(
-                "SELECT COUNT(*) FROM investment_listings WHERE found_at >= $1", today_start) or 0
-            inv_top_score = await pg_fetchval(
-                "SELECT MAX(score_total) FROM investment_listings") or 0
-            last_inv = await pg_fetchval("SELECT MAX(found_at) FROM investment_listings")
+            from bot.db.investment_queries import get_healthcheck_stats
+            inv_stats = await get_healthcheck_stats(db_path, today_start.isoformat())
+            last_inv = None
+            if inv_stats["last_found"]:
+                try:
+                    last_inv = datetime.fromisoformat(inv_stats["last_found"])
+                except ValueError:
+                    last_inv = None
             inv_ok = last_inv and (now - last_inv).total_seconds() < 7200 if last_inv else False
 
             result["investment"] = {
                 "ok": bool(inv_ok),
-                "total": inv_total,
-                "today": inv_today,
-                "top_score": inv_top_score,
+                "total": inv_stats["total"],
+                "today": inv_stats["today"],
+                "top_score": inv_stats["top_score"],
                 "sheets_ok": None,
                 "sheets_updated": None,
             }
@@ -1756,7 +1764,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         try:
             rental_idx_count = await pg_fetchval("SELECT COUNT(*) FROM rental_index") or 0
             apt_count = await pg_fetchval("SELECT COUNT(*) FROM apartment_listings") or 0
-            inv_count = await pg_fetchval("SELECT COUNT(*) FROM investment_listings") or 0
+            # Г12 — тот же источник, что "Investment" блок выше (SQLite, живой).
+            inv_count = result.get("investment", {}).get("total", 0)
             dupes = await pg_fetchval(
                 "SELECT COUNT(*) FROM apartment_listings WHERE is_duplicate = TRUE") or 0
 

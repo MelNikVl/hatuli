@@ -108,3 +108,31 @@ async def get_stats(db_path: str) -> dict:
         above_75 = (await (await db.execute("SELECT COUNT(*) FROM investment_listings WHERE score_total>=75")).fetchone())[0]
         notified = (await (await db.execute("SELECT COUNT(*) FROM investment_listings WHERE notified=1")).fetchone())[0]
     return {"total": total, "above_75": above_75, "notified": notified}
+
+
+async def get_healthcheck_stats(db_path: str, since_iso: str) -> dict:
+    """Задача 2026-08-14 (Г12, docs/data_collection_audit.md) — тот же
+    источник, что видит живой писатель (bot/jobs/scheduler.py, SQLite
+    bot.db), вместо мёртвого снимка в Postgres `investment_listings`
+    (мигрирован один раз migrate_sqlite_to_pg.py 2026-06-05, с тех пор
+    не обновлялся — /admin/dashboard/data и sheets_sync.py читали именно
+    его, показывая 2-месячную давность статистику как текущую).
+    first_seen/last_seen хранятся ISO-строками (см. upsert_investment_
+    listing) — сравнение и MAX() строкового ISO 8601 лексикографически
+    совпадает с хронологическим порядком, отдельного парсинга не нужно
+    для WHERE/ORDER BY, но возвращаем last_found как строку — вызывающая
+    сторона сама решает, парсить ли в datetime."""
+    async with aiosqlite.connect(db_path) as db:
+        total = (await (await db.execute(
+            "SELECT COUNT(*) FROM investment_listings")).fetchone())[0]
+        today = (await (await db.execute(
+            "SELECT COUNT(*) FROM investment_listings WHERE first_seen >= ?",
+            (since_iso,))).fetchone())[0]
+        top_score = (await (await db.execute(
+            "SELECT MAX(score_total) FROM investment_listings")).fetchone())[0]
+        last_found = (await (await db.execute(
+            "SELECT MAX(first_seen) FROM investment_listings")).fetchone())[0]
+    return {
+        "total": total or 0, "today": today or 0,
+        "top_score": top_score or 0, "last_found": last_found,
+    }
