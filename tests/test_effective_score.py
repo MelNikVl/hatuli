@@ -91,3 +91,32 @@ async def test_effective_score_column_is_not_directly_writable(db):
     with pytest.raises(Exception):
         await execute(
             "INSERT INTO apartment_listings (id, effective_score) VALUES ('__test_eff_write__', 99)")
+
+
+@pytest.mark.asyncio
+async def test_effective_score_matches_score_total_across_live_table(db):
+    """Фаза A.5, п.6 вердикт-стратегии (задача 2026-08-14, docs/
+    verdict_strategy.md) — после того как Фаза A поменяла ФОРМУЛУ
+    score_total (убран price->quality proxy, W_RISK=0, см. Часть 6
+    п.4/п.6 scoring_roadmap.md), нужно было проверить, не разъехалась ли
+    effective_score. Ответ структурный: GENERATED ALWAYS ... STORED
+    ссылается на score_total НАПРЯМУЮ (не дублирует формулу) — расхождение
+    физически невозможно независимо от того, как считается сам
+    score_total на стороне Python (bot/core/deal_score.py). Живая
+    проверка на ВСЕЙ таблице (не синтетике) — гейт-число для отчёта."""
+    from bot.db.pg import fetchrow
+    row = await fetchrow("""
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (
+                WHERE market_type != 'primary' AND effective_score IS DISTINCT FROM
+                    COALESCE(score_total,0) + COALESCE(zone_bonus,0) + COALESCE(layer_bonus,0) + COALESCE(price_drop_bonus,0)
+            ) AS secondary_mismatch,
+            COUNT(*) FILTER (
+                WHERE market_type = 'primary' AND primary_score_total IS NOT NULL AND effective_score IS DISTINCT FROM
+                    primary_score_total + COALESCE(zone_bonus,0) + COALESCE(layer_bonus,0) + COALESCE(price_drop_bonus,0)
+            ) AS primary_mismatch
+        FROM apartment_listings
+    """)
+    assert row["secondary_mismatch"] == 0
+    assert row["primary_mismatch"] == 0
