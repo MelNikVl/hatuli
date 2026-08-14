@@ -166,25 +166,36 @@ Jinja-шаблоны не спасают бэкенд-логику).
 
 ---
 
-## Часть 2. Скоринг, волна 2 (гигиена) — ⏳ ОЧЕРЕДЬ
+## Часть 2. Скоринг, волна 2 (гигиена) — ✅ ЗАВЕРШЕНО 2026-08-14
 
-4. `effective_score = score_total+zone_bonus+layer_bonus+price_drop_bonus`
-   — generated column или view; все `ORDER BY` через неё (сейчас 4+
-   неидентичные копии в `terminal_extras.py`: строки ~3265, 3639-3641,
-   3948-3950, 4225, 4288, 4328 на момент аудита).
-5. Общее hedonic-ядро «аналоги по гекс+кольцо+ЖК+площадь» для
-   `bargain.py` и `deal_score.py` — сейчас константы (`AREA_BAND_PCT`,
-   `MIN_BLDG`/`MIN_SAME_COMPLEX`) синхронизированы вручную комментарием,
-   не общим кодом (см. живой инцидент #1014506231 Landmark в аудите).
-6. Мёртвый код → `docs/archive/` с пояснением: `apartment_score.py`,
-   `apartment_score_v2.py.clean`, `hex_price.py`.
-7. `housing_class_estimate`: UI-лейбл «оценка на 2026-08-01» (пока не
-   пересчитан) + ежемесячный пересчёт в scheduler.
-8. Секция в `docs/scoring_audit.md` — явная таблица четырёх понятий
-   confidence (домен/шкала/потребители): `deal_confidence` (0-100,
-   deal_score.py), ER `score_match` (0-1, entity_resolution.py),
-   `location_score` confidence (0-100, location_score.py),
-   `insights.confidence_note` (🟢/🟡/🔴, insights.py).
+8. **`effective_score`** ([`migrations/062_effective_score.sql`](../migrations/062_effective_score.sql))
+   — `GENERATED ALWAYS ... STORED` column вместо 7 неидентичных копий
+   формулы в `terminal_extras.py` (было 4+ на момент первого аудита,
+   живой grep перед фиксом нашёл ещё одну — итого 7). Гейт: 46959/47002
+   (99.9%) активных объявлений — старая формула и новая колонка дают
+   одинаковое значение; ровно 43 расхождения — 100% объясняются найденным
+   живым багом (`/admin/api/map-points` уже учитывал `primary_score_total`
+   для `market_type='primary'`, остальные 6 копий — нет), не побочный
+   эффект унификации.
+9. **Общее hedonic-ядро** — [`bot/core/hedonic_constants.py`](../bot/core/hedonic_constants.py),
+   единственный источник `AREA_BAND_PCT`/`MIN_BLDG`/`MIN_HEX`/`MIN_RING`/
+   `W0`/`W1`/`W2` для `bargain.py` и `deal_score.py` (архитектуры разные —
+   async live-запрос vs batch-агрегация в памяти — общий КОД аналогов не
+   выносился, только пороги/веса, как и просили).
+10. **Мёртвый код** → [`docs/archive/`](../docs/archive/README.md):
+    `apartment_score.py`, `apartment_score_v2.py.clean` (→ `.txt`),
+    `hex_price.py` — все три подтверждены 0 живых импортёров перед
+    переносом.
+11. **`housing_class_estimate`** — [`migrations/063`](../migrations/063_housing_class_estimate_computed_at.sql)
+    (`computed_at`, урок Г3) + [`housing_class_estimate_recompute.py`](../housing_class_estimate_recompute.py)
+    (реконструкция формулы — точная формула одноразового прогона
+    2026-08-01 нигде не сохранилась, честно об этом сказано в докстринге
+    скрипта) + `krisha-housing-class-estimate.timer` (ежемесячно).
+    Живой прогон: покрытие 1068/2397 (45%, заморожено) → 1740/2397 (73%),
+    1615 свежих оценок + 125 нетронутых (нет `avg_price_m2` для честного
+    пересчёта — не гадаем).
+12. **Секция confidence** — [`scoring_audit.md` §5.0](scoring_audit.md#50-четыре-понятия-confidence-добавлено-2026-08-14-часть-2-п12),
+    явная таблица домен/шкала/потребители на все 4 понятия.
 
 ## Часть 3. Локация как продуктовая ось — ⏳ ОЧЕРЕДЬ
 
