@@ -47,6 +47,30 @@ logger = logging.getLogger(__name__)
 _M_PER_DEG_LAT = 110_574.0
 
 
+def _activity_filter(as_of: datetime | None, param_idx: int, alias: str = "") -> tuple[str, list]:
+    """SQL-фрагмент фильтра активности для аналогов — задача 2026-08-14
+    (Фаза A.5 п.1 вердикт-стратегии, docs/verdict_strategy.md): раньше НИ
+    ОДИН из 4 запросов get_comparables() не фильтровал активность вовсе —
+    архивные (проданные/снятые) объявления тихо участвовали в медиане
+    "текущего рынка", искажая target_price/discount_pct тем сильнее, чем
+    старше и дешевле давно ушедшие аналоги.
+
+    as_of=None (по умолчанию — весь текущий вызов из попапа/парсера, живой
+    "сейчас"): текущий is_active, архив не участвует.
+    as_of=дата: точечная реконструкция "было активно НА ЭТУ ДАТУ"
+    (first_seen <= as_of И (ещё не архивировано ИЛИ архивировано позже
+    as_of)) — НЕ текущий is_active, для честного backtesting/снапшотов,
+    где текущее состояние БД (объявление могло уйти в архив уже после
+    интересующей даты) не совпадает с состоянием на момент, который
+    анализируется.
+    """
+    p = f"{alias}." if alias else ""
+    if as_of is None:
+        return f"AND {p}is_active IS NOT FALSE", []
+    return (f"AND {p}first_seen <= ${param_idx} "
+            f"AND ({p}archived_at IS NULL OR {p}archived_at > ${param_idx})", [as_of])
+
+
 async def get_comparables(
     lat: float | None,
     lon: float | None,
@@ -56,8 +80,12 @@ async def get_comparables(
     complex_name: str | None = None,
     district: str | None = None,
     exclude_id: str | None = None,
+    as_of: datetime | None = None,
 ) -> tuple[list[dict], dict]:
     """Найти аналоги: тот же гексагон+кольцо, комнаты, площадь ±15%, класс ЖК.
+
+    as_of — см. _activity_filter(); None (по умолчанию) — текущий
+    is_active, как и раньше для всех живых вызовов (попап/парсер).
 
     Возвращает (comparables, meta). meta:
       method      — 'same_complex' | 'hex+ring+class' | 'hex+ring' | 'city_segment' | 'district_fallback'
@@ -85,8 +113,9 @@ async def get_comparables(
     # делом (площадь всё ещё ±15% — сравниваем сопоставимые квартиры внутри
     # ЖК, а не студию с трёшкой).
     if complex_name:
+        activity_sql, activity_params = _activity_filter(as_of, 6)
         same_complex_rows = await fetch(
-            """
+            f"""
             SELECT id, price, area, floor, floors_total,
                    first_seen, last_seen, complex_name, district, address
             FROM apartment_listings
@@ -96,10 +125,11 @@ async def get_comparables(
               AND price > 0 AND price < 200000000
               AND (is_duplicate IS NULL OR is_duplicate = FALSE)
               AND ($5::text IS NULL OR id != $5)
+              {activity_sql}
             ORDER BY last_seen DESC NULLS LAST
             LIMIT 30
             """,
-            complex_name, rooms, area_min, area_max, exclude_id,
+            complex_name, rooms, area_min, area_max, exclude_id, *activity_params,
         )
         if len(same_complex_rows) >= MIN_SAME_COMPLEX:
             meta["method"] = "same_complex"
@@ -111,8 +141,9 @@ async def get_comparables(
 
     if lat is None or lon is None:
         # Без координат гекс-сравнение невозможно — старый район-фоллбэк.
+        activity_sql, activity_params = _activity_filter(as_of, 6)
         rows = await fetch(
-            """
+            f"""
             SELECT id, price, area, floor, floors_total,
                    first_seen, last_seen, complex_name, district, address
             FROM apartment_listings
@@ -122,10 +153,11 @@ async def get_comparables(
               AND price > 0 AND price < 200000000
               AND (is_duplicate IS NULL OR is_duplicate = FALSE)
               AND ($5::text IS NULL OR id != $5)
+              {activity_sql}
             ORDER BY last_seen DESC NULLS LAST
             LIMIT 30
             """,
-            district, rooms, area_min, area_max, exclude_id,
+            district, rooms, area_min, area_max, exclude_id, *activity_params,
         )
         meta["class_note"] = "нет координат объявления — сравнение по району, не по гексагону"
         return [dict(r) for r in rows], meta
@@ -153,8 +185,9 @@ async def get_comparables(
     box_deg_lat = edge * 3 / _M_PER_DEG_LAT
     box_deg_lon = edge * 3 / (111_320.0 * math.cos(math.radians(lat)))
 
+    activity_sql, activity_params = _activity_filter(as_of, 9, alias="a")
     rows = await fetch(
-        """
+        f"""
         SELECT a.id, a.price, a.area, a.floor, a.floors_total, a.lat, a.lon,
                a.first_seen, a.last_seen, a.complex_name, a.district, a.address,
                c.housing_class
@@ -166,9 +199,10 @@ async def get_comparables(
           AND a.price > 0 AND a.price < 200000000
           AND (a.is_duplicate IS NULL OR a.is_duplicate = FALSE)
           AND ($8::text IS NULL OR a.id != $8)
+          {activity_sql}
         """,
         lat - box_deg_lat, lat + box_deg_lat, lon - box_deg_lon, lon + box_deg_lon,
-        rooms, area_min, area_max, exclude_id,
+        rooms, area_min, area_max, exclude_id, *activity_params,
     )
     in_hex = [dict(r) for r in rows
               if r["lat"] is not None and r["lon"] is not None
@@ -196,8 +230,9 @@ async def get_comparables(
 
     # Данных в гексагоне+кольце всё равно мало — сравниваем с городским
     # сегментом (те же комнаты+площадь), явно помечая это как менее точное.
+    activity_sql, activity_params = _activity_filter(as_of, 5)
     city_rows = await fetch(
-        """
+        f"""
         SELECT id, price, area, floor, floors_total, first_seen, last_seen,
                complex_name, district, address
         FROM apartment_listings
@@ -206,10 +241,11 @@ async def get_comparables(
           AND price > 0 AND price < 200000000
           AND (is_duplicate IS NULL OR is_duplicate = FALSE)
           AND ($4::text IS NULL OR id != $4)
+          {activity_sql}
         ORDER BY last_seen DESC NULLS LAST
         LIMIT 30
         """,
-        rooms, area_min, area_max, exclude_id,
+        rooms, area_min, area_max, exclude_id, *activity_params,
     )
     meta["method"] = "city_segment"
     meta["class_note"] = (
