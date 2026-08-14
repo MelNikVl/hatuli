@@ -31,15 +31,17 @@ import logging
 from datetime import datetime, timezone
 
 from bot.core.hexgrid import hex_id, neighbors
+# Задача 2026-08-14 (Часть 2, п.9: "общее hedonic-ядро для bargain.py и
+# deal_score.py") — AREA_BAND_PCT/пороги больше не определяются здесь
+# по-своему, импортируются из bot/core/hedonic_constants.py (та же пара,
+# что deal_score.py) — раньше синхронизировались вручную комментарием,
+# см. живой инцидент #1014506231 "Landmark" в docstring этого модуля.
+# Локальные имена (MIN_COMPARABLES/MIN_SAME_COMPLEX) сохранены как алиасы
+# — используются по всему остальному файлу, переименовывать не было нужды.
+from bot.core.hedonic_constants import AREA_BAND_PCT, MIN_BLDG as MIN_SAME_COMPLEX, MIN_RING as MIN_COMPARABLES
 
 logger = logging.getLogger(__name__)
 
-MIN_COMPARABLES = 5
-# Свои же объявления ЖК — сигнал точнее гекс-соседства (см. get_comparables),
-# поэтому порог ниже, чем у общего MIN_COMPARABLES: заказчик прямо просил
-# "хотя бы 3-5" — 3 своих объявления уже достаточно надёжная медиана для
-# внутри-ЖК сравнения площадей того же метража.
-MIN_SAME_COMPLEX = 3
 _M_PER_DEG_LAT = 110_574.0
 
 
@@ -65,8 +67,8 @@ async def get_comparables(
     if not area or area <= 0:
         area_min, area_max = 0, 999
     else:
-        area_min = area * 0.85
-        area_max = area * 1.15
+        area_min = area * (1 - AREA_BAND_PCT)
+        area_max = area * (1 + AREA_BAND_PCT)
 
     meta = {"method": "district_fallback", "class": None, "class_note": None}
 
