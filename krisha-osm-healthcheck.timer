@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежедневного healthcheck зеркал Overpass — Фаза L1 «Локация», задача 2026-08-14
+
+[Timer]
+OnCalendar=*-*-* 09:05:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=krisha-osm-healthcheck.service
+
+[Install]
+WantedBy=timers.target

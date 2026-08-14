@@ -53,7 +53,6 @@ from bot.db.pg import execute, fetch, fetchrow
 logger = logging.getLogger(__name__)
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 
 # Ключ в complex_facts -> человекочитаемое название (для телеграм-уведомления)
 _COMPLEX_FACT_LABELS = {
@@ -137,20 +136,6 @@ async def analyze_one(listing_id: str, title: str, description: str) -> dict | N
         return None
 
 
-async def _notify_admin(text: str) -> None:
-    token = os.getenv("BOT_TOKEN")
-    admin_id = os.getenv("ADMIN_TELEGRAM_ID")
-    if not token or not admin_id:
-        logger.warning("BOT_TOKEN/ADMIN_TELEGRAM_ID не заданы — уведомление не отправлено")
-        return
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            await client.post(TELEGRAM_API.format(token=token),
-                               json={"chat_id": admin_id, "text": text})
-    except Exception as exc:
-        logger.warning("telegram notify failed: %s", exc)
-
-
 async def apply_layout_bonus(listing_id: str, result: dict) -> None:
     """Небольшой плюс к скору за распашонку/свободную планировку — пишем в
     те же layer_bonus/layer_details, что и остальные слои скоринга."""
@@ -210,7 +195,8 @@ async def apply_complex_facts(listing_id: str, complex_name: str | None,
         "UPDATE complexes SET ai_features = $2::jsonb WHERE id = $1",
         complex_row["id"], json.dumps(existing, ensure_ascii=False),
     )
-    await _notify_admin(
+    from bot.core.admin_alert import notify_admin
+    await notify_admin(
         f"🏢 ЖК «{complex_row['name']}»: AI дополнил из описания объявления — {', '.join(added_labels)}.\n"
         f"Источник: {url or '(без ссылки)'}"
     )

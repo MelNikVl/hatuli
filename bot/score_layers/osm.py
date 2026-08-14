@@ -90,6 +90,34 @@ async def overpass_cached(lat: float, lon: float, kind: str, query: str) -> dict
     return data
 
 
+# Минимальный дешёвый запрос для healthcheck — один конкретный узел по id,
+# не гео-запрос: проверяем, отвечает ли зеркало вообще, не грузим его
+# реальными данными (Фаза L1, docs/location_product_design.md §7,
+# задача 2026-08-14, п.9 "Часть 3" scoring_roadmap.md — "healthcheck
+# зеркал Overpass с алертом при <2 живых").
+_HEALTHCHECK_QUERY = "[out:json][timeout:10];node(1);out;"
+
+
+async def check_mirrors(timeout: float = 10.0) -> dict[str, bool]:
+    """Проверяет КАЖДОЕ зеркало из OVERPASS_MIRRORS независимо (в отличие
+    от overpass_request(), который перебирает по очереди и останавливается
+    на первом живом) — возвращает {mirror_url: alive}. Используется
+    osm_mirrors_healthcheck.py, не участвует в обычном пути слоёв
+    локации (тот по-прежнему через overpass_request/overpass_cached)."""
+    result: dict[str, bool] = {}
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for mirror in OVERPASS_MIRRORS:
+            try:
+                resp = await client.post(mirror, data={"data": _HEALTHCHECK_QUERY})
+                result[mirror] = resp.status_code == 200
+                if resp.status_code != 200:
+                    logger.warning("healthcheck %s -> HTTP %s", mirror, resp.status_code)
+            except Exception as exc:
+                logger.warning("healthcheck %s failed: %s", mirror, exc)
+                result[mirror] = False
+    return result
+
+
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Расстояние между точками в метрах."""
     import math

@@ -1,0 +1,11 @@
+[Unit]
+Description=Ежедневный healthcheck зеркал Overpass — Фаза L1 «Локация», задача 2026-08-14
+After=network.target
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/osm_mirrors_healthcheck.py
+StandardOutput=append:/home/nik/krisha_bot/osm_mirrors_healthcheck.log
+StandardError=append:/home/nik/krisha_bot/osm_mirrors_healthcheck.log
