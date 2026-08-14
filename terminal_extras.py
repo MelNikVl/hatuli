@@ -4642,6 +4642,27 @@ def make_extras_router(templates) -> APIRouter:
 
     # ── Зоны приоритета: карта с рисованием полигонов ────────────────────
 
+
+    @router.get("/admin/renovation", response_class=HTMLResponse)
+    async def renovation_page(request: Request):
+        """Реновация Астаны — район ТД Артём: сводка по сносу цеха и планам
+        (школа + 2 детсада + ЖК), Генплан 2035, источники, хайп-локация."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        loc = None
+        try:
+            db = _hype_db_conn()
+            cur = db.cursor()
+            cur.execute("SELECT name, district, lat, lon, rating, reason, sentiment "
+                        "FROM hype_locations WHERE id = 385")
+            row = cur.fetchone()
+            if row:
+                loc = dict(row)
+            db.close()
+        except Exception:
+            loc = None
+        return templates.TemplateResponse("renovation.html", {"request": request, "loc": loc})
+
     @router.get("/admin/zones", response_class=HTMLResponse)
     async def zones_page(request: Request):
         if not is_authed(request):
@@ -6166,225 +6187,31 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/api/listing/{listing_id}")
     async def api_listing_detail(request: Request, listing_id: str):
         """Полные данные объявления для модалки (фото, адрес, торг).
-        Публичному тиру — только новостройки (market_type='primary'),
-        вторичка отдаётся ограниченным ответом (задача "общий доступ",
-        2026-08-12: это и есть точка реальной утечки, из-за которой заход
-        по прямой ссылке на объявление вторички показывал всё)."""
-        from bot.db.pg import fetchrow as pg_fetchrow, fetch as pg_fetch
-        from bot.core.bargain import get_comparables, analyze_bargain
+        Сборка вынесена в bot/core/listing_detail.build_listing_detail()
+        (Фаза B, п.5, "роут не знает SQL") — здесь только тир + перевод
+        исключений в HTTP-статусы, поведение не менялось."""
         from bot.core.site_auth import get_user_tier
-        from datetime import datetime as _dt, timezone as _tz
-        import json as _json_ld
-
-        row = await pg_fetchrow("SELECT * FROM apartment_listings WHERE id = $1", listing_id)
-        if not row:
-            return JSONResponse({"error": "not_found"}, status_code=404)
-        l = dict(row)
+        from bot.core.listing_detail import build_listing_detail, ListingNotFound, ListingRestricted
 
         tier = await get_user_tier(request)
-        if tier == "public":
-            # Задача "только Новостройки для всех" (2026-08-12): эта таблица
-            # (apartment_listings) — личные объявления с Крыши, публичному
-            # тиру не показываются вовсе, даже market_type='primary'.
-            # Новостройки — отдельная таблица newbuild_units, свой роут
-            # (/admin/api/newbuild-unit/{id}), сюда не попадает вообще.
-            return JSONResponse({
-                "error": "restricted",
-                "message": "Публично открыт только раздел новостроек. Полный доступ к остальным объявлениям открывает администратор — войдите через Telegram (Личный кабинет) и запросите доступ.",
-            }, status_code=403)
-
-        photos = l.get("photos")
-        if isinstance(photos, str):
-            try:
-                photos = _json_ld.loads(photos)
-            except ValueError:
-                photos = []
-
-        comps, comps_meta = await get_comparables(
-            lat=float(l["lat"]) if l.get("lat") is not None else None,
-            lon=float(l["lon"]) if l.get("lon") is not None else None,
-            rooms=l.get("rooms"), area=l.get("area"), current_price=l.get("price", 0),
-            complex_name=l.get("complex_name"), district=l.get("district"),
-            exclude_id=listing_id,
-        )
-        bargain = analyze_bargain(l.get("price", 0), comps, l.get("is_owner"), l.get("is_urgent") is True, comps_meta)
-
-        from bot.core.listing_intel import build_negotiation_points, build_seller_questions, compute_similar_listings
-        negotiation_points = build_negotiation_points(l, bargain, len(comps))
-        seller_questions = build_seller_questions(l)
-        # tier уже посчитан выше (гейт вторички) — переиспользуем.
-        # Публичному тиру не показываем "похожие рядом" (карта+список) —
-        # ни в попапе с карты, ни в попапе, открытом через "вставить ссылку
-        # с Крыши" (задача "3 уровня доступа", 2026-08-07). Не считаем
-        # вовсе, а не просто прячем в шаблоне — не тратим время на compute
-        # для тира, которому это всё равно не покажется.
-        similar_listings = [] if tier == "public" else await compute_similar_listings(l, listing_id, limit=10)
-
-        layers = l.get("layer_details")
-        if isinstance(layers, str):
-            try:
-                layers = _json_ld.loads(layers)
-            except ValueError:
-                layers = None
-
-        ai_analysis = l.get("ai_analysis")
-        if isinstance(ai_analysis, str):
-            try:
-                ai_analysis = _json_ld.loads(ai_analysis)
-            except ValueError:
-                ai_analysis = None
-
-        # Фото ЖК — для галереи в модалке объявления (переиспользуем то же
-        # поле photos, что и на карточке ЖК)
-        complex_photos = []
-        if l.get("complex_name"):
-            cx_row = await pg_fetchrow(
-                "SELECT photos, photo_url FROM complexes WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
-                l["complex_name"])
-            if cx_row:
-                cxp = cx_row["photos"]
-                if isinstance(cxp, str):
-                    try:
-                        cxp = _json_ld.loads(cxp)
-                    except ValueError:
-                        cxp = None
-                complex_photos = cxp or ([cx_row["photo_url"]] if cx_row.get("photo_url") else [])
-
-        # Лента "рядом" — 3 ближайших активных объявления по прямому расстоянию
-        nearby = []
-        if l.get("lat") is not None and l.get("lon") is not None:
-            nb_rows = await pg_fetch("""
-                SELECT id, url, price, rooms, area, photos
-                FROM apartment_listings
-                WHERE lat IS NOT NULL AND lon IS NOT NULL
-                  AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
-                  AND id != $3
-                ORDER BY (lat - $1)^2 + (lon - $2)^2 ASC LIMIT 3
-            """, float(l["lat"]), float(l["lon"]), listing_id)
-            for nb in nb_rows:
-                nb_photos = nb["photos"]
-                if isinstance(nb_photos, str):
-                    try:
-                        nb_photos = _json_ld.loads(nb_photos)
-                    except ValueError:
-                        nb_photos = []
-                nearby.append({
-                    "id": nb["id"], "url": nb.get("url") or "",
-                    "price": nb.get("price"), "rooms": nb.get("rooms"),
-                    "area": float(nb["area"]) if nb.get("area") else None,
-                    "photo": (nb_photos or [None])[0],
-                })
-
-        return JSONResponse({
-            "id": l["id"], "url": l.get("url") or "",
-            "price": l.get("price"), "rooms": l.get("rooms"),
-            "market": l.get("market_type") or "secondary",
-            "area": float(l["area"]) if l.get("area") else None,
-            "floor": l.get("floor"), "floors_total": l.get("floors_total"),
-            "address": l.get("address") or "", "district": l.get("district") or "",
-            "lat": float(l["lat"]) if l.get("lat") is not None else None,
-            "lon": float(l["lon"]) if l.get("lon") is not None else None,
-            "complex_name": l.get("complex_name") or "",
-            "complex_photos": complex_photos,
-            "geo": l.get("geo_source") or "",
-            "photos": photos or [],
-            "seller_name": l.get("seller_name") or "",
-            "is_owner": l.get("is_owner") is True,
-            "seller_type": l.get("seller_type") or ("owner" if l.get("is_owner") else "realtor"),
-            "trust_score": float(l["trust_score"]) if l.get("trust_score") is not None else None,
-            "year_built": l.get("year_built"),
-            "views_count": l.get("views_count"),
-            "floorplan_url": l.get("floorplan_url") or "",
-            # ceiling_height не отдавался тут вообще — d.ceiling_height в
-            # модалке (dashboard.html) был мёртвым полем (всегда undefined),
-            # плашка "потолок N м" никогда не показывалась. kitchen_area —
-            # новое поле (см. задачу "кухня в парсерах продажи").
-            "ceiling_height": float(l["ceiling_height"]) if l.get("ceiling_height") is not None else None,
-            "kitchen_area": float(l["kitchen_area"]) if l.get("kitchen_area") is not None else None,
-            "ai_analysis": ai_analysis,
-            "similar": similar_listings,
-            "tier": tier,
-            "layers": layers,
-            "description": l.get("description") or "",
-            "first_seen": l["first_seen"].strftime("%d.%m.%Y") if l.get("first_seen") else None,
-            "age": int((_dt.now(_tz.utc) - l["first_seen"]).days) if l.get("first_seen") else None,
-            "bargain": {
-                "discount_pct": bargain.get("discount_pct") or 0,
-                "target_price": bargain.get("target_price"),
-                "median_price": bargain.get("median_price"),
-                "comparables_cnt": bargain.get("comparables_cnt") or 0,
-                "recommendation": bargain.get("recommendation") or "",
-                "method": bargain.get("method"),
-                "class_note": bargain.get("class_note"),
-            },
-            "nearby": nearby,
-            "deal_score": (lambda hd: {
-                "deal": hd.get("deal"), "confidence": hd.get("confidence"),
-            } if hd else None)(
-                (lambda v: (_json_ld.loads(v) if isinstance(v, str) else v) if v else None)(l.get("hex_details"))
-            ),
-            # То же, что показывает страница /admin/analytics/{id} — доходность
-            # и разбивка скора по компонентам, теперь дублируется и в модалке
-            # на карте, чтобы не заставлять переходить на отдельную страницу.
-            "est_rent": l.get("est_rent"),
-            "yield_pct": l.get("yield_pct"),
-            # net_yield_pct — доходность с поправкой на вакантность/налог/
-            # расходы на покупку (см. Notion "Расчет доходности"), gross
-            # выше остаётся для обратной совместимости со старым скорингом.
-            "net_yield_pct": l.get("net_yield_pct"),
-            "payback_years": l.get("payback_years"),
-            # ── Бейджи "недооценено"/"высокая доходность" — те же пороги
-            # (топ-10%), что и в /admin/api/map-points, см. комментарий там.
-            "underpriced_pct": (round((l["hex_deal_index"] - 1) * 100)
-                                 if l.get("hex_deal_index") and (l.get("deal_confidence") or 0) >= 50
-                                 and (l["hex_deal_index"] - 1) * 100 >= 28.8 else None),
-            "high_yield": bool(l.get("yield_pct") and l["yield_pct"] >= 13.9),
-            "rent_source": l.get("rent_source") or "",
-            "zone_name": l.get("zone_name") or "",
-            "zone_bonus": l.get("zone_bonus"),
-            "score_breakdown": {
-                "yield": l.get("score_yield") or 0,
-                "price_market": l.get("score_price_market") or 0,
-                "location": l.get("score_location") or 0,
-                "apt_type": l.get("score_apt_type") or 0,
-                "floor": l.get("score_floor") or 0,
-                "complex": l.get("score_complex") or 0,
-                "supply": l.get("score_supply") or 0,
-            },
-            "negotiation_points": negotiation_points,
-            "seller_questions": seller_questions,
-        })
+        try:
+            payload = await build_listing_detail(listing_id, tier)
+        except ListingNotFound:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except ListingRestricted as exc:
+            return JSONResponse({"error": "restricted", "message": exc.message}, status_code=403)
+        return JSONResponse(payload)
 
     # ── История цены объявления ───────────────────────────────────────────
 
     @router.get("/admin/api/price-history/{listing_id}")
     async def api_price_history(request: Request, listing_id: str):
         """История цены для карточки/попапа на карте.
-        Публичный (как и сама карта) — ничего чувствительного тут нет."""
-        from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
-        rows = await pg_fetch("""
-            SELECT old_price, new_price, changed_at
-            FROM price_history
-            WHERE listing_id = $1
-            ORDER BY changed_at ASC
-        """, listing_id)
-        cur = await pg_fetchrow(
-            "SELECT price, first_seen FROM apartment_listings WHERE id = $1",
-            listing_id)
-        points = []
-        # стартовая точка — цена при первом появлении в базе
-        if cur and cur["first_seen"]:
-            first_price = rows[0]["old_price"] if rows else cur["price"]
-            points.append({"at": cur["first_seen"].strftime("%d.%m.%Y"),
-                           "price": first_price})
-        for r in rows:
-            points.append({"at": r["changed_at"].strftime("%d.%m.%Y"),
-                           "price": r["new_price"]})
-        return JSONResponse({
-            "points": points,
-            "current": cur["price"] if cur else None,
-            "changes": len(rows),
-        })
+        Публичный (как и сама карта) — ничего чувствительного тут нет.
+        Сборка вынесена в bot/core/listing_detail.build_price_history()
+        (Фаза B, п.5, "роут не знает SQL")."""
+        from bot.core.listing_detail import build_price_history
+        return JSONResponse(await build_price_history(listing_id))
 
     @router.get("/admin/api/no-photo-history")
     async def no_photo_history(request: Request, days: int = 30):
