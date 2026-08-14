@@ -372,6 +372,69 @@ def make_extras_router(templates) -> APIRouter:
         hexes.sort(key=lambda h: h["score"], reverse=True)
         return JSONResponse({"hexes": hexes})
 
+    @router.get("/admin/api/air-station-points")
+    async def air_station_points_api(request: Request):
+        # «Воздух» — реальные станции ПНЗ Казгидромета (Астана, ecodata.kz):
+        # усреднение индекса загрязнения по станции за период ?days=
+        # (1=последние 24ч, 3, 7, 30, 180); координаты/адрес/значения —
+        # из последней записи станции в периоде.
+        from bot.db.pg import fetch as pg_fetch
+        try:
+            days = max(1, min(int(request.query_params.get("days", 1)), 365))
+        except (TypeError, ValueError):
+            days = 1
+        rows = await pg_fetch("""
+            SELECT s.station_name,
+                   (SELECT lat FROM air_stations s2 WHERE s2.station_name = s.station_name
+                     AND s2.ts >= now() - make_interval(days => $1) ORDER BY s2.ts DESC LIMIT 1) AS lat,
+                   (SELECT lon FROM air_stations s2 WHERE s2.station_name = s.station_name
+                     AND s2.ts >= now() - make_interval(days => $1) ORDER BY s2.ts DESC LIMIT 1) AS lon,
+                   (SELECT address FROM air_stations s2 WHERE s2.station_name = s.station_name
+                     AND s2.ts >= now() - make_interval(days => $1) ORDER BY s2.ts DESC LIMIT 1) AS address,
+                   (SELECT ts FROM air_stations s2 WHERE s2.station_name = s.station_name
+                     AND s2.ts >= now() - make_interval(days => $1) ORDER BY s2.ts DESC LIMIT 1) AS ts,
+                   (SELECT values_json FROM air_stations s2 WHERE s2.station_name = s.station_name
+                     AND s2.ts >= now() - make_interval(days => $1) ORDER BY s2.ts DESC LIMIT 1) AS values_json,
+                   AVG(s.index_value) AS index_avg,
+                   COUNT(s.id) AS n_obs,
+                   MODE() WITHIN GROUP (ORDER BY s.index_pollutant) AS poll_mode
+            FROM air_stations s
+            WHERE s.ts >= now() - make_interval(days => $1)
+            GROUP BY s.station_name
+            ORDER BY s.station_name
+        """, days)
+        pts = []
+        for r in rows:
+            d = dict(r)
+            pts.append({
+                "name": d.get("station_name"),
+                "lat": float(d["lat"]) if d.get("lat") is not None else None,
+                "lon": float(d["lon"]) if d.get("lon") is not None else None,
+                "index": float(d["index_avg"]) if d.get("index_avg") is not None else None,
+                "poll": d.get("poll_mode"),
+                "ts": str(d["ts"]) if d.get("ts") else None,
+                "n_obs": d.get("n_obs"),
+                "values": d.get("values_json"),
+            })
+        return JSONResponse({"points": pts, "days": days})
+
+    @router.get("/admin/api/air-grid-points")
+    async def air_grid_points_api(request: Request):
+        # «Воздух» — свежая сетка качества воздуха (Open-Meteo/CAMS, AQI EU):
+        # последний сбор air_grid_collect.py (каждые 3 ч).
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT lat, lon, aqi, pm25, pm10, no2, o3
+            FROM air_grid
+            WHERE fetched_at = (SELECT MAX(fetched_at) FROM air_grid)
+            ORDER BY lat, lon
+        """)
+        pts = []
+        for r in rows:
+            d = dict(r)
+            pts.append({k: (float(v) if v is not None else None) for k, v in d.items()})
+        return JSONResponse({"points": pts})
+
     @router.get("/admin/api/views-hexes")
     async def views_hexes_api(request: Request, edge: int | None = None):
         # «Интерес» — просматриваемость объявлений (задача 2026-08-13):
@@ -1533,29 +1596,78 @@ def make_extras_router(templates) -> APIRouter:
         операция к "добавить дом к ЖК": все complexes, у которых ЕСТЬ
         дети (parent_complex_id других строк указывает на них), с
         возможностью открепить дом или добавить ещё один (тот же
-        autocomplete, что на карточке ЖК — _entity_modals.html)."""
+        autocomplete, что на карточке ЖК — _entity_modals.html).
+        is_umbrella=TRUE (migrations/057, задача 2026-08-13 "по нажатию,
+        а дома добавлю потом") — ЖК тоже попадает в список СРАЗУ, даже
+        с нулём детей: EXISTS-условие само по себе больше не единственный
+        путь войти в этот список."""
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         umbrella_rows = await fetch("""
-            SELECT c.id, c.name, c.address,
+            SELECT c.id, c.name, c.address, c.is_umbrella,
                    (SELECT count(*) FROM apartment_listings al
-                     WHERE lower(trim(al.complex_name)) = lower(trim(c.name))) AS listings_count
+                     WHERE lower(trim(al.complex_name)) = lower(trim(c.name))) AS listings_count,
+                   -- "Дом неизвестен: N" (задача 2026-08-13, п.3) — из
+                   -- листингов под именем САМОГО зонтика, сколько не
+                   -- удалось (пока) привязать к конкретному дому. См.
+                   -- bot/core/house_resolution.py.
+                   (SELECT count(*) FROM apartment_listings al
+                     WHERE lower(trim(al.complex_name)) = lower(trim(c.name))
+                       AND al.resolved_house_id IS NULL
+                       AND COALESCE(al.is_duplicate, FALSE) = FALSE) AS house_unknown_count
             FROM complexes c
-            WHERE EXISTS (SELECT 1 FROM complexes h WHERE h.parent_complex_id = c.id)
+            WHERE COALESCE(c.is_umbrella, FALSE) = TRUE
+               OR EXISTS (SELECT 1 FROM complexes h WHERE h.parent_complex_id = c.id)
             ORDER BY c.name
         """)
         umbrellas = []
         for u in umbrella_rows:
+            # listings_count дома — тоже + resolved_house_id (задача
+            # 2026-08-13, "аналитика по домам считает только атрибутированные").
             children = await fetch("""
                 SELECT id, name, krisha_url,
                        (SELECT count(*) FROM apartment_listings al
-                         WHERE lower(trim(al.complex_name)) = lower(trim(complexes.name))) AS listings_count
+                         WHERE lower(trim(al.complex_name)) = lower(trim(complexes.name))
+                            OR al.resolved_house_id = complexes.id) AS listings_count
                 FROM complexes WHERE parent_complex_id = $1 ORDER BY name
             """, u["id"])
             umbrellas.append({**dict(u), "children": [dict(c) for c in children]})
         return templates.TemplateResponse("umbrellas.html", {
             "request": request, "atab": "umbrellas", "umbrellas": umbrellas,
         })
+
+    # "Обновить" очередь (задача 2026-08-13, "там уже есть удалённые жк")
+    # — не просто reload страницы (данные и так тянутся заново при каждом
+    # GET, кеша нет), а реальная чистка: кандидаты, чей complex_id или
+    # conflict_with_complex_id указывает на уже мягко удалённый (is_garbage)
+    # ЖК, больше никому не нужны — сам ЖК пропал со всех публичных
+    # страниц, решать по нему уже нечего. DELETE, не просто фильтр в
+    # запросе (тот тоже стоит, см. candidates_rows ниже) — иначе строки
+    # копятся в БД вечно, каждый раз просто скрываясь по новой.
+    @router.post("/admin/api/entity-ids/cleanup-garbage")
+    async def entity_ids_cleanup_garbage(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetchval
+        deleted = await fetchval("""
+            WITH gone AS (
+                DELETE FROM complex_source_link_candidates cslc
+                USING complexes c
+                WHERE c.id = cslc.complex_id AND COALESCE(c.is_garbage, FALSE) = TRUE
+                RETURNING cslc.id
+            )
+            SELECT count(*) FROM gone
+        """)
+        deleted2 = await fetchval("""
+            WITH gone AS (
+                DELETE FROM complex_source_link_candidates cslc
+                USING complexes c2
+                WHERE c2.id = cslc.conflict_with_complex_id AND COALESCE(c2.is_garbage, FALSE) = TRUE
+                RETURNING cslc.id
+            )
+            SELECT count(*) FROM gone
+        """)
+        return JSONResponse({"ok": True, "deleted": (deleted or 0) + (deleted2 or 0)})
 
     @router.get("/admin/entity-ids", response_class=HTMLResponse)
     async def entity_ids_page(request: Request):
@@ -1580,8 +1692,21 @@ def make_extras_router(templates) -> APIRouter:
                 (SELECT COUNT(*) FROM newbuild_units u
                     WHERE EXISTS (SELECT 1 FROM complex_source_links l WHERE l.complex_id = u.complex_id)) AS units_resolved,
                 (SELECT COUNT(*) FROM complex_source_links) AS links_total,
-                (SELECT COUNT(*) FROM complex_source_link_candidates WHERE kind = 'review') AS review_queue_count,
-                (SELECT COUNT(*) FROM complex_source_link_candidates WHERE kind = 'conflict') AS conflict_count,
+                -- Считаем ВСЕ строки, включая дома под зонтиком — задача
+                -- "семантика зонтика для Крыши" (2026-08-13) сменила
+                -- политику с "дом прячем из очереди целиком" на "дом
+                -- показываем с подсказкой ⭐ и без кнопок" (см. candidates_
+                -- rows ниже), счётчик в заголовке снова считает то же,
+                -- что реально видно в таблице. Живой баг (задача 2026-08-13,
+                -- "там уже есть удалённые жк") — не проверяли is_garbage,
+                -- кандидаты на уже удалённые (мягко) ЖК висели вечно и
+                -- считались в счётчике.
+                (SELECT COUNT(*) FROM complex_source_link_candidates cslc
+                    JOIN complexes c ON c.id = cslc.complex_id AND COALESCE(c.is_garbage, FALSE) = FALSE
+                    WHERE cslc.kind = 'review') AS review_queue_count,
+                (SELECT COUNT(*) FROM complex_source_link_candidates cslc
+                    JOIN complexes c ON c.id = cslc.complex_id AND COALESCE(c.is_garbage, FALSE) = FALSE
+                    WHERE cslc.kind = 'conflict') AS conflict_count,
                 (SELECT ROUND(AVG(cnt), 2) FROM (
                     SELECT complex_id, COUNT(*) AS cnt FROM complex_source_links GROUP BY complex_id
                 ) x) AS avg_sources_per_resolved,
@@ -1623,13 +1748,33 @@ def make_extras_router(templates) -> APIRouter:
             SELECT width_bucket(confidence, 0, 1, 10) AS bucket, COUNT(*) AS n
             FROM complex_source_links GROUP BY 1 ORDER BY 1
         """)
+        # Живой баг (найден на #3354 Qaiyndy 3 -> зонтик #1785, #4008 Rio De
+        # Janeiro 3 -> зонтик #872, 2026-08-13): назначение parent_complex_id
+        # ("Добавить дом к ЖК"/зонтик-модель) не связано с этой таблицей
+        # вообще — тут своя, независимая заявка "сматчить ЭТОТ complex_id
+        # с внешним источником (krisha и т.п.)", она никуда не девается
+        # сама просто от появления parent_complex_id.
+        #
+        # Ревизия того же дня ("семантика зонтика для Крыши", п.3):
+        # решение "прятать строку целиком" заменено на "показывать, но с
+        # подсказкой и без кнопок подтверждения" — прятать молча означало
+        # "забыть", что заявка вообще была, резолвер не видел вообще
+        # ничего. Теперь LEFT JOIN на родителя (parent_name/parent_id) —
+        # шаблон рисует «⭐ Зонтик: {parent_name}» и убирает
+        # подтвердить/отклонить для таких строк (мержить нужно на зонтик,
+        # не на дом — см. record_source_link() редирект для krisha,
+        # entity_resolution.py, который новые такие заявки уже не создаёт;
+        # эта ветка — на случай уже накопленных до фикса и заявок с других
+        # источников без редиректа).
         candidates_rows = await pg_fetch("""
             SELECT cslc.id, cslc.complex_id, c.name AS complex_name, cslc.source, cslc.source_id,
                    cslc.url, cslc.match_method, cslc.confidence, cslc.kind, cslc.conflict_with_complex_id,
-                   c2.name AS conflict_with_name, cslc.evidence, cslc.created_at
+                   c2.name AS conflict_with_name, cslc.evidence, cslc.created_at,
+                   c.parent_complex_id, cp.name AS parent_complex_name
             FROM complex_source_link_candidates cslc
-            JOIN complexes c ON c.id = cslc.complex_id
+            JOIN complexes c ON c.id = cslc.complex_id AND COALESCE(c.is_garbage, FALSE) = FALSE
             LEFT JOIN complexes c2 ON c2.id = cslc.conflict_with_complex_id
+            LEFT JOIN complexes cp ON cp.id = c.parent_complex_id
             ORDER BY cslc.kind, cslc.confidence DESC LIMIT 100
         """)
         candidates = []
@@ -1704,15 +1849,40 @@ def make_extras_router(templates) -> APIRouter:
             JOIN apartment_listings al ON al.id = udc.listing_id
             JOIN complexes c ON c.id = udc.complex_id
             WHERE udc.status = 'review'
-            ORDER BY udc.reason, udc.created_at DESC
+            ORDER BY udc.listing_id, udc.reason, udc.created_at DESC
         """)
         unit_candidates = []
+        # Группировка по объявлению (задача 2026-08-14, "группировка по
+        # объявлению — один аккордеон на listing, внутри его кандидаты-
+        # юниты с evidence. Счётчик секции — N объявлений, не пар") —
+        # ORDER BY udc.listing_id выше даёт строки одного listing_id
+        # подряд, группировка в Python — просто по смене ключа, без
+        # отдельного SQL-запроса/second pass. unit_candidates (плоский
+        # список) остаётся — им пользуется общий счётчик "Source-
+        # candidates" наверху страницы (там сумма ПАР по трём очередям,
+        # не листингов, менять не просили).
+        unit_groups_by_listing: dict[str, dict] = {}
+        unit_groups = []
         for r in unit_rows:
             d = dict(r)
             ev = d.get("evidence")
             d["evidence"] = json.loads(ev) if isinstance(ev, str) else (ev or {})
             d["is_mirror"] = d["reason"] == "ambiguous_floorplan"
             unit_candidates.append(d)
+            g = unit_groups_by_listing.get(d["listing_id"])
+            if g is None:
+                g = {
+                    "listing_id": d["listing_id"], "al_url": d["al_url"], "al_title": d["al_title"],
+                    "al_price": d["al_price"], "al_area": d["al_area"], "al_rooms": d["al_rooms"],
+                    "al_floor": d["al_floor"], "complex_name": d["complex_name"],
+                    "complex_krisha_url": d["complex_krisha_url"], "candidates": [],
+                }
+                unit_groups_by_listing[d["listing_id"]] = g
+                unit_groups.append(g)
+            g["candidates"].append(d)
+        # Самые спорные листинги (больше кандидатов-юнитов на выбор) —
+        # первыми, порядок SQL (по listing_id) сам по себе не значим.
+        unit_groups.sort(key=lambda g: -len(g["candidates"]))
 
         # "Расшивка" (unravel) как review-очередь (задача 2026-08-13, см.
         # docs/entity_resolution_plan.md, "расшивка как review-очередь") —
@@ -1790,6 +1960,7 @@ def make_extras_router(templates) -> APIRouter:
             "candidates": candidates,
             "dup_candidates": dup_candidates,
             "unit_candidates": unit_candidates,
+            "unit_groups": unit_groups,
             "split_candidates": split_candidates,
             "breakdown": {
                 "unresolved_total": len(unresolved_rows),
@@ -1870,6 +2041,10 @@ def make_extras_router(templates) -> APIRouter:
     # resolution.*_unit_candidate, каждое пишет gold label
     # (unit_match_gold_labels, migrations/051) вместе с операционным
     # эффектом (approve мержит в unit_source_links, reject/skip — нет).
+    # approve дополнительно (задача 2026-08-14) сам закрывает остальных
+    # кандидатов того же listing_id — status='superseded' + gold label —
+    # ответ approve несёт "superseded_ids", фронт красит эти строки
+    # серым вместо ручного клика "отклонить" оператором.
     @router.post("/admin/api/entity-ids/units/{candidate_id}/approve")
     async def entity_ids_unit_approve(request: Request, candidate_id: int):
         if not is_authed(request):
@@ -1947,6 +2122,40 @@ def make_extras_router(templates) -> APIRouter:
         if not complex_id:
             return JSONResponse({"error": "complex_id обязателен"}, status_code=400)
         result = await unset_parent_complex(int(complex_id))
+        if result is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({"ok": True, **result})
+
+    # "Сделать ЖК зонтиком" по клику, без попапа поиска дома (задача
+    # 2026-08-13, "надо просто по нажатию... а если я не добавил в него
+    # другие дом — потом добавлю когда-нибудь") + "Снять зонтик" — см.
+    # set_umbrella/unset_umbrella в entity_resolution.py.
+    @router.post("/admin/api/entity-ids/set-umbrella")
+    async def entity_ids_set_umbrella(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import set_umbrella
+        body = await request.json()
+        complex_id = body.get("complex_id")
+        if not complex_id:
+            return JSONResponse({"error": "complex_id обязателен"}, status_code=400)
+        result = await set_umbrella(int(complex_id))
+        if result is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if result.get("error") == "already_a_house":
+            return JSONResponse(result, status_code=409)
+        return JSONResponse({"ok": True, **result})
+
+    @router.post("/admin/api/entity-ids/unset-umbrella")
+    async def entity_ids_unset_umbrella(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.entity_resolution import unset_umbrella
+        body = await request.json()
+        complex_id = body.get("complex_id")
+        if not complex_id:
+            return JSONResponse({"error": "complex_id обязателен"}, status_code=400)
+        result = await unset_umbrella(int(complex_id))
         if result is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
         return JSONResponse({"ok": True, **result})
@@ -2187,6 +2396,64 @@ def make_extras_router(templates) -> APIRouter:
         out, _ = await proc.communicate()
         return proc.returncode == 0, out.decode(errors="replace").strip()
 
+    async def _simple_parser_rows(key: str):
+        """Простые таблицы для новых вкладок парсеров: [[label, value], ...]."""
+        from bot.db.pg import fetch as pg_fetch
+        rows = []
+        if key == "krisha-air":
+            # Станции ПНЗ (почасовые замеры)
+            r = await pg_fetch("""SELECT station_name, index_value, index_pollutant, ts
+                FROM air_stations WHERE fetched_at = (SELECT MAX(fetched_at) FROM air_stations)
+                ORDER BY station_name""")
+            rows.append(["── Станции ПНЗ (почасовые замеры) ──", "", ""])
+            for x in r:
+                idx = f"{float(x['index_value']):.3f}" if x["index_value"] is not None else "—"
+                rows.append([x["station_name"], f"индекс {idx}" + (f" ({x['index_pollutant']})" if x["index_pollutant"] else ""),
+                             str(x["ts"])[:16] if x["ts"] else ""])
+            # Сводки data.egov (ежемесячные)
+            r2 = await pg_fetch("""SELECT version, pollutant, max_conc, excess_count
+                FROM air_quality_astana WHERE fetched_at = (SELECT MAX(fetched_at) FROM air_quality_astana)
+                ORDER BY excess_count DESC NULLS LAST LIMIT 10""")
+            rows.append(["── Сводки Казгидромета (месячные) ──", "", ""])
+            for x in r2:
+                rows.append([f"v{x['version']} · {x['pollutant']}",
+                             f"макс {x['max_conc']}" if x["max_conc"] is not None else "—",
+                             f"превышений: {x['excess_count'] or 0}"])
+            return rows
+            r = await pg_fetch("""SELECT version, pollutant, max_conc, excess_count
+                FROM air_quality_astana WHERE fetched_at = (SELECT MAX(fetched_at) FROM air_quality_astana)
+                ORDER BY excess_count DESC NULLS LAST LIMIT 12""")
+            for x in r:
+                rows.append([f"v{x['version']} · {x['pollutant']}",
+                             f"макс {x['max_conc']}" if x["max_conc"] is not None else "—",
+                             f"превышений: {x['excess_count'] or 0}"])
+        elif key == "krisha-crime":
+            r = await pg_fetch("""SELECT crime_title, street || ' ' || COALESCE(house,'') AS addr, date_excitation
+                FROM crime_incidents WHERE fetched_at = (SELECT MAX(fetched_at) FROM crime_incidents)
+                ORDER BY date_excitation DESC LIMIT 8""")
+            for x in r:
+                rows.append([x["crime_title"] or "?", x["addr"] or "?", str(x["date_excitation"])[:16] if x["date_excitation"] else ""])
+        elif key == "krisha-newbuild":
+            r = await pg_fetch("""SELECT COALESCE(d.name, '—') AS dev, count(*) AS cnt
+                FROM complexes c LEFT JOIN developers d ON d.id = c.developer::int
+                WHERE c.is_newbuild IS TRUE GROUP BY d.name ORDER BY cnt DESC""")
+            for x in r:
+                rows.append([x["dev"], f"ЖК: {x['cnt']}"])
+        elif key == "krisha-programs":
+            r = await pg_fetch("""SELECT COALESCE(d.name, source) AS dev, source, count(*) AS cnt
+                FROM developer_programs p LEFT JOIN developers d ON d.id = p.developer_id
+                GROUP BY d.name, source ORDER BY cnt DESC""")
+            for x in r:
+                rows.append([x["dev"] or "?", x["source"] or "", f"программ: {x['cnt']}"])
+        elif key == "krisha-floorplan":
+            r = await pg_fetch("""SELECT count(*) FILTER (WHERE is_floorplan) AS with_fp,
+                count(*) AS total, max(checked_at) AS last FROM listing_floorplans""")
+            x = r[0] if r else {}
+            rows.append(["проверено всего", str(x["total"] or 0)])
+            rows.append(["с планировками", str(x["with_fp"] or 0)])
+            rows.append(["последняя проверка", str(x["last"])[:19] if x["last"] else "—"])
+        return rows
+
     async def _is_active(service: str) -> bool:
         # "--quiet" (exit-code only) считает работающим только состояние
         # "active" — для долгих Type=oneshot юнитов (например
@@ -2245,6 +2512,12 @@ def make_extras_router(templates) -> APIRouter:
         "krisha-market": "Внешние рыночные данные: ставка НБРК, депозиты КДИФ, индекс жилья stat.gov.kz",
         "krisha-viewcount": "Реальные просмотры объявлений (Playwright) на krisha.kz",
         "krisha-homeportal": "homeportal.kz — официальные данные КЖК по ЖК (долевое строительство)",
+        "krisha-air-stations": "Станции ПНЗ Казгидромета (ecodata.kz) — почасовые замеры воздуха Астаны",
+        "krisha-air": "Казгидромет data.egov.kz — ежемесячные сводки загрязнения (страница /air)",
+        "krisha-crime": "Преступность КПСиСУ (gis.kgp.kz) — ежедневно 06:30",
+        "krisha-newbuild": "Обход застройщиков (новостройки) — еженедельно Пн 06:00",
+        "krisha-programs": "Программы покупки застройщиков — еженедельно Вт 07:30",
+        "krisha-floorplan": "Планировки квартир (автодетект) — каждые 20 минут",
     }
 
     async def _parser_registry_blocks():
@@ -2378,6 +2651,76 @@ def make_extras_router(templates) -> APIRouter:
             "last": nb_last["last"] if nb_last else None,
         })
 
+        # air-stations — станции ПНЗ (почасовые замеры)
+        active = await _is_active("krisha-air-stations")
+        r = await pg_fetchrow("""SELECT
+            count(*) FILTER (WHERE fetched_at > now() - interval '1 hour') AS h1,
+            count(*) FILTER (WHERE fetched_at > now() - interval '1 day') AS d1,
+            max(fetched_at) AS last FROM air_stations""")
+        blocks.append({
+            "key": "krisha-air-stations", "kind": "systemd", "active": active,
+            "name": "🌬 Воздух (ПНЗ)", "desc": PARSERS_SYSTEMD["krisha-air-stations"],
+            "activity": f"замеров за час: {r['h1'] or 0}, за сутки: {r['d1'] or 0}",
+            "last": r["last"],
+        })
+
+        # air — ежемесячные сводки data.egov
+        active = await _is_active("krisha-air")
+        r = await pg_fetchrow("""SELECT count(*) AS cnt, max(fetched_at) AS last
+            FROM air_quality_astana""")
+        blocks.append({
+            "key": "krisha-air", "kind": "systemd", "active": active,
+            "name": "🌬 Воздух (сводки)", "desc": PARSERS_SYSTEMD["krisha-air"],
+            "activity": f"строк сводок в БД: {r['cnt'] or 0}",
+            "last": r["last"],
+        })
+
+        # crime — преступность КПСиСУ
+        active = await _is_active("krisha-crime")
+        r = await pg_fetchrow("""SELECT
+            count(*) FILTER (WHERE fetched_at > now() - interval '1 day') AS d1,
+            max(fetched_at) AS last FROM crime_incidents""")
+        blocks.append({
+            "key": "krisha-crime", "kind": "systemd", "active": active,
+            "name": "🚔 Преступность", "desc": PARSERS_SYSTEMD["krisha-crime"],
+            "activity": f"событий за сутки: {r['d1'] or 0}",
+            "last": r["last"],
+        })
+
+        # newbuild — обход застройщиков
+        active = await _is_active("krisha-newbuild")
+        r = await pg_fetchrow("""SELECT count(*) AS cnt FROM complexes WHERE is_newbuild IS TRUE""")
+        blocks.append({
+            "key": "krisha-newbuild", "kind": "systemd", "active": active,
+            "name": "🏗 Обход застройщиков", "desc": PARSERS_SYSTEMD["krisha-newbuild"],
+            "activity": f"новостроек в базе: {r['cnt'] or 0}",
+            "last": None,
+        })
+
+        # programs — программы покупки
+        active = await _is_active("krisha-programs")
+        r = await pg_fetchrow("""SELECT count(*) AS cnt, max(created_at) AS last
+            FROM developer_programs""")
+        blocks.append({
+            "key": "krisha-programs", "kind": "systemd", "active": active,
+            "name": "💳 Программы", "desc": PARSERS_SYSTEMD["krisha-programs"],
+            "activity": f"программ в БД: {r['cnt'] or 0}",
+            "last": r["last"],
+        })
+
+        # floorplan — планировки
+        active = await _is_active("krisha-floorplan")
+        r = await pg_fetchrow("""SELECT
+            count(*) FILTER (WHERE checked_at > now() - interval '1 hour') AS h1,
+            count(*) FILTER (WHERE checked_at > now() - interval '1 day') AS d1,
+            max(checked_at) AS last FROM listing_floorplans""")
+        blocks.append({
+            "key": "krisha-floorplan", "kind": "systemd", "active": active,
+            "name": "📐 Планировки", "desc": PARSERS_SYSTEMD["krisha-floorplan"],
+            "activity": f"проверено за час: {r['h1'] or 0}, за сутки: {r['d1'] or 0}",
+            "last": r["last"],
+        })
+
         return blocks
 
     async def _activity_over_time(table: str, ts_col: str, days: int,
@@ -2484,6 +2827,11 @@ def make_extras_router(templates) -> APIRouter:
         {"key": "krisha-homeportal", "label": "🏛 Homeportal"},
         {"key": "novostroyki", "label": "🏗 Новостройки"},
         {"key": "recheck", "label": "🔁 Повторный обход"},
+        {"key": "krisha-air", "label": "🌬 Воздух"},
+        {"key": "krisha-crime", "label": "🚔 Преступность"},
+        {"key": "krisha-newbuild", "label": "🏗 Обход застройщиков"},
+        {"key": "krisha-programs", "label": "💳 Программы"},
+        {"key": "krisha-floorplan", "label": "📐 Планировки"},
     ]
 
     async def _recheck_data(days: int):
@@ -2843,6 +3191,12 @@ def make_extras_router(templates) -> APIRouter:
             ctx["days"] = days
             ctx["source_label"] = "Korter.kz" if src == "korter" else "Homsters.kz"
             ctx.update(await _source_changes_data(src, days))
+        elif tab == "krisha-air":
+            ctx["simple_rows"] = await _simple_parser_rows("krisha-air")
+            ctx["extra_blocks"] = [b for b in blocks if b["key"] == "krisha-air"]
+        elif tab in ("krisha-crime", "krisha-newbuild",
+                     "krisha-programs", "krisha-floorplan"):
+            ctx["simple_rows"] = await _simple_parser_rows(tab)
 
         # Task 1: график "что и когда спарсилось" — на каждой вкладке
         # реального парсера (все, кроме general/recheck, у которых свои
@@ -2920,6 +3274,32 @@ def make_extras_router(templates) -> APIRouter:
     # ── Инфо-страница: объяснения метрик ─────────────────────────────────
 
     @router.get("/info", response_class=HTMLResponse)
+    @router.get("/air", response_class=HTMLResponse)
+    async def air_page(request: Request):
+        """🌬 Качество воздуха в Астане — официальные данные РГП «Казгидромет»
+        (портал data.egov.kz, датасет atmosferalyk_aua_lastanuy_moni1,
+        ежемесячные сводки: город × загрязнитель → мин/макс концентрация,
+        превышения ПДК). Собирается air_collect.py (krisha-air.timer, ср 07:30)."""
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT version, pollutant, min_conc, max_conc, excess_lc, excess_mc,
+                   excess_count, excess5, excess10
+            FROM air_quality_astana
+            ORDER BY version DESC, pollutant
+        """)
+        recs = [dict(r) for r in rows]
+        versions = sorted({r["version"] for r in recs}, reverse=True)
+        latest = versions[0] if versions else None
+        latest_rows = [r for r in recs if r["version"] == latest]
+        history = [r for r in recs if r["version"] != latest]
+        return templates.TemplateResponse("air.html", {
+            "request": request,
+            "latest_version": latest,
+            "latest_rows": latest_rows,
+            "history": history,
+            "versions": versions,
+        })
+
     @router.get("/admin/info", response_class=HTMLResponse)
     async def info_page(request: Request):
         # Публичная страница ("Инфо" в верхнем паб-нав) — объяснения метрик
@@ -3308,6 +3688,15 @@ def make_extras_router(templates) -> APIRouter:
             if isinstance(si, dict):
                 developer = ((si.get("korter") or {}).get("developer")
                              or (si.get("homsters") or {}).get("developer"))
+        # Тот же фикс, что в /complex/{id} (задача "логотип застройщика
+        # должен быть в названии", 2026-08-13) — застройщик, найденный
+        # только текстом (korter/homsters), не терял бы логотип, если он
+        # уже есть в справочнике developers под тем же именем.
+        if developer and not developer_logo:
+            _dl2 = await fetchrow(
+                "SELECT logo FROM developers WHERE lower(trim(name)) = lower(trim($1))", developer)
+            if _dl2:
+                developer_logo = _dl2["logo"]
         listings = await pg_fetch("""
             SELECT id, price, rooms, area, url, photos
             FROM apartment_listings
@@ -3357,6 +3746,21 @@ def make_extras_router(templates) -> APIRouter:
             SELECT DISTINCT d.id, d.name, d.logo
             FROM complexes c JOIN developers d ON d.id = c.developer_id
             WHERE c.is_newbuild AND c.lat IS NOT NULL AND c.lon IS NOT NULL
+              AND (EXISTS (SELECT 1 FROM newbuild_units u2
+                            WHERE u2.complex_id = c.id
+                              AND u2.status IN ('available','reserved'))
+                   OR EXISTS (SELECT 1 FROM apartment_listings al2
+                              -- resolved_house_id (задача 2026-08-14) — дом
+                              -- зонтика может быть is_newbuild=TRUE сам по
+                              -- себе, но его объявления ещё называть именем
+                              -- зонтика (house-resolution их всё равно
+                              -- привязала по адресу/токену/гео); без этого
+                              -- условия застройщик такого дома пропадал бы
+                              -- из фильтра слева, хотя предложения у него есть.
+                              WHERE (lower(trim(al2.complex_name)) = lower(trim(c.name))
+                                     OR al2.resolved_house_id = c.id)
+                                AND al2.is_active
+                                AND NOT COALESCE(al2.is_duplicate, false)))
             ORDER BY d.name
         """)
         return JSONResponse({"developers": [
@@ -3388,16 +3792,38 @@ def make_extras_router(templates) -> APIRouter:
             SELECT c.id, c.name, c.lat, c.lon, c.completion_year, c.completion_quarter,
                    c.developer_id, d.name AS developer, d.logo, d.website AS developer_website,
                    c.housing_class, c.photos, c.source_info, c.address,
-                   count(u.id) FILTER (
-                       WHERE u.status IN ('available','reserved')
-                         AND ($1::int[] = '{}' OR u.rooms = ANY($1::int[]))
-                   ) AS units_count
+                   (SELECT count(*) FROM newbuild_units u
+                    WHERE u.complex_id = c.id
+                      AND u.status IN ('available','reserved')
+                      AND ($1::int[] = '{}' OR u.rooms = ANY($1::int[])))
+                   -- resolved_house_id (задача 2026-08-14, "двойное
+                   -- размещение предложений людей в новостройках") — те же
+                   -- условия, что _listing_id_match по всему проекту: дом
+                   -- зонтика может числиться под именем зонтика в самих
+                   -- объявлениях, house-resolution всё равно резолвит их
+                   -- сюда по адресу/токену/гео. Каждый listing.id входит
+                   -- максимум в ОДИН c.id (resolved_house_id указывает на
+                   -- конкретный дом, не на зонтик) — двойного счёта между
+                   -- маркерами нет.
+                   + (SELECT count(*) FROM apartment_listings al
+                      WHERE (lower(trim(al.complex_name)) = lower(trim(c.name))
+                             OR al.resolved_house_id = c.id)
+                        AND al.is_active AND NOT COALESCE(al.is_duplicate, false)
+                        AND ($1::int[] = '{}' OR al.rooms = ANY($1::int[])))
+                   AS units_count
             FROM complexes c
             JOIN developers d ON d.id = c.developer_id
-            LEFT JOIN newbuild_units u ON u.complex_id = c.id
             WHERE c.is_newbuild AND c.lat IS NOT NULL AND c.lon IS NOT NULL
               AND ($2::int = 0 OR c.completion_year = $2)
               AND ($3::int[] = '{}' OR c.developer_id = ANY($3::int[]))
+              AND (EXISTS (SELECT 1 FROM newbuild_units u2
+                           WHERE u2.complex_id = c.id
+                             AND u2.status IN ('available','reserved'))
+                   OR EXISTS (SELECT 1 FROM apartment_listings al2
+                              WHERE (lower(trim(al2.complex_name)) = lower(trim(c.name))
+                                     OR al2.resolved_house_id = c.id)
+                                AND al2.is_active
+                                AND NOT COALESCE(al2.is_duplicate, false)))
             GROUP BY c.id, c.name, c.lat, c.lon, c.completion_year, c.completion_quarter,
                      c.developer_id, d.name, d.logo, d.website, c.housing_class, c.photos, c.source_info
         """, room_list, year, dev_list)
@@ -3434,8 +3860,26 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/api/newbuild-complex/{complex_id}/units")
     async def newbuild_complex_units(request: Request, complex_id: int, rooms: str = ""):
         """Список вариантов квартир в наличии для попапа ЖК на карте (клик
-        по маркеру) — как listings в complex_summary, только из newbuild_units."""
+        по маркеру) — как listings в complex_summary, только из newbuild_units.
+
+        Задача 2026-08-14 ("двойное размещение предложений людей в
+        новостройках; раздел/поиск новостроек включает эти объявления с
+        бейджем «предложение человека»") — вторым пулом подмешиваем
+        apartment_listings того же ЖК/дома (тот же паттерн, что house_
+        listings/people_offers на complex_detail — имя ЖК ИЛИ resolved_
+        house_id), каждый с source='person' + тег переуступка/вторичка +
+        дельта к цене застройщика (bot/core/newbuild_person_offers.py,
+        та же логика, что на странице ЖК — не продублирована, а
+        переиспользована). Дублей: apartment_listings.id встречается в
+        этом ответе не больше одного раза (один SELECT, без JOIN,
+        размножающего строки) — общегородская статистика (если где-то
+        суммирует несколько ЖК/попапов) должна считать по DISTINCT
+        listing.id, не по числу мест, где он показан."""
         from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
+        from bot.core.newbuild_person_offers import (
+            classify_person_offer, build_developer_price_index,
+            developer_price_for_listing, price_delta_pct,
+        )
         import json as _json_nbcu
         cx = await pg_fetchrow("""
             SELECT c.id, c.name, c.completion_year, c.completion_quarter, c.district,
@@ -3447,13 +3891,40 @@ def make_extras_router(templates) -> APIRouter:
         if not cx:
             return JSONResponse({"error": "not_found"}, status_code=404)
         room_list = [int(r) for r in rooms.split(",") if r.strip().isdigit()]
-        units = await pg_fetch("""
-            SELECT id, rooms, area, floor, floors_total, price, layout_photo_url, status
+        dev_units = await pg_fetch("""
+            SELECT id, rooms, area, floor, floors_total, price, price_per_m2, layout_photo_url, status
             FROM newbuild_units
             WHERE complex_id = $1 AND status IN ('available','reserved')
               AND ($2::int[] = '{}' OR rooms = ANY($2::int[]))
             ORDER BY price ASC NULLS LAST LIMIT 30
         """, complex_id, room_list)
+
+        # Прайс-индекс застройщика — по ВСЕМ доступным/забронированным
+        # юнитам ЖК (не только тем 30, что попали в dev_units выше под
+        # текущий фильтр комнатности), чтобы дельта у людских предложений
+        # считалась честно, даже если сам фильтр комнатности урезал
+        # видимую часть официального supply.
+        _dev_all_rows = await pg_fetch("""
+            SELECT id, rooms, price, area, price_per_m2 FROM newbuild_units
+            WHERE complex_id = $1 AND status IN ('available','reserved')
+        """, complex_id)
+        _price_index = build_developer_price_index([dict(r) for r in _dev_all_rows])
+        _unit_link_rows = await pg_fetch("""
+            SELECT usl.source_id AS listing_id, usl.unit_id
+            FROM unit_source_links usl JOIN newbuild_units nu ON nu.id = usl.unit_id
+            WHERE nu.complex_id = $1 AND usl.source = 'krisha'
+        """, complex_id)
+        _unit_id_by_listing = {r["listing_id"]: r["unit_id"] for r in _unit_link_rows}
+
+        person_rows = await pg_fetch("""
+            SELECT id, title, description, rooms, area, price, photos, floor, floors_total, first_seen
+            FROM apartment_listings
+            WHERE (lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)
+              AND COALESCE(is_duplicate, FALSE) = FALSE AND is_active IS NOT FALSE
+              AND ($3::int[] = '{}' OR rooms = ANY($3::int[]))
+            ORDER BY score_total DESC NULLS LAST, first_seen DESC LIMIT 20
+        """, cx["name"], complex_id, room_list)
+
         # photos — jsonb, asyncpg отдаёт строкой (см. тот же паттерн в complex_detail)
         cx_photos = cx["photos"]
         if isinstance(cx_photos, str):
@@ -3461,18 +3932,44 @@ def make_extras_router(templates) -> APIRouter:
                 cx_photos = _json_nbcu.loads(cx_photos)
             except ValueError:
                 cx_photos = None
+
+        units_out = [{
+            "id": u["id"], "source": "developer", "rooms": u["rooms"],
+            "area": float(u["area"]) if u["area"] is not None else None,
+            "floor": u["floor"], "floors_total": u["floors_total"], "price": u["price"],
+            "photo": u["layout_photo_url"], "status": u["status"],
+        } for u in dev_units]
+        for p in person_rows:
+            pph = p["photos"]
+            if isinstance(pph, str):
+                try:
+                    pph = _json_nbcu.loads(pph)
+                except ValueError:
+                    pph = None
+            tag, tag_reason, tag_signal = classify_person_offer(
+                p["title"], p["description"], p["first_seen"],
+                cx["completion_year"], cx["completion_quarter"])
+            dev_ppm2, dev_method = developer_price_for_listing(
+                _price_index, p["rooms"], _unit_id_by_listing.get(p["id"]))
+            units_out.append({
+                "id": p["id"], "source": "person", "badge": "предложение человека",
+                "tag": tag, "tag_reason": tag_reason, "tag_signal": tag_signal,
+                "rooms": p["rooms"], "area": float(p["area"]) if p["area"] is not None else None,
+                "floor": p["floor"], "floors_total": p["floors_total"], "price": p["price"],
+                "photo": (pph or [None])[0], "status": "available",
+                "delta_pct": price_delta_pct(p["price"], p["area"], dev_ppm2),
+                "dev_price_per_m2": round(dev_ppm2) if dev_ppm2 else None,
+                "dev_price_method": dev_method,
+            })
+        units_out.sort(key=lambda u: u["price"] if u["price"] else float("inf"))
+
         return JSONResponse({
             "id": cx["id"], "name": cx["name"], "district": cx["district"],
             "address": cx["address"], "photos": cx_photos or [],
             "completion_year": cx["completion_year"], "completion_quarter": cx["completion_quarter"],
             "developer": cx["developer"], "developer_id": cx["developer_id"], "sales_phone": cx["sales_phone"],
             "developer_logo": cx["logo"],
-            "units": [{
-                "id": u["id"], "rooms": u["rooms"],
-                "area": float(u["area"]) if u["area"] is not None else None,
-                "floor": u["floor"], "floors_total": u["floors_total"], "price": u["price"],
-                "photo": u["layout_photo_url"], "status": u["status"],
-            } for u in units],
+            "units": units_out,
         })
 
     @router.get("/admin/api/newbuild-unit/{unit_id}")
@@ -3866,7 +4363,7 @@ def make_extras_router(templates) -> APIRouter:
         rows = await pg_fetch(f"""
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
-                   a.is_owner, a.seller_name, a.year_built, a.views_count,
+                   a.is_owner, a.seller_name, a.seller_type, a.trust_score, a.year_built, a.views_count,
                    a.description, a.ceiling_height, a.kitchen_area, a.finish_type, a.floor, a.floors_total,
                    a.floorplan_url,
                    a.score_yield, a.score_price_market, a.score_location,
@@ -3970,6 +4467,11 @@ def make_extras_router(templates) -> APIRouter:
             },
             "is_owner": r["is_owner"] is True,
             "seller_name": r["seller_name"] or "",
+            # Скоринг доверия (задача 2026-08-13) — seller_type различает
+            # Крыша Агента (верифицированный партнёр) от рядового риелтора,
+            # is_owner один это не умел (агент/риелтор оба давали False).
+            "seller_type": r["seller_type"] or ("owner" if r["is_owner"] else "realtor"),
+            "trust_score": float(r["trust_score"]) if r["trust_score"] is not None else None,
             "views": r["views_count"],
             "age": int(r["age_days"] or 0),
             # последняя смена цены (если была) — для попапа на карте
@@ -4243,7 +4745,11 @@ def make_extras_router(templates) -> APIRouter:
     async def complexes_data_audit(request: Request, limit: int = 300):
         """Таблица по всем ЖК: где какие данные удалось вытащить (застройщик,
         описание, фото, цена/м²), а где нет — чтобы разбираться точечно.
-        Публичная страница — админ-элементы скрываются в шаблоне."""
+        Раньше была публичной (админ-элементы скрывались в шаблоне) —
+        задача 2026-08-13 ("убрать из общего доступа"): это внутренний
+        рабочий инструмент, не то, что стоит открывать анонимам."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
         limit = max(50, min(limit, 5000))
         rows = await fetch("""
             SELECT c.id, c.name, c.developer_id, d.name AS developer_name,
@@ -4316,7 +4822,10 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/houses", response_class=HTMLResponse)
     async def admin_houses_page(request: Request, y: str = "no", q: str = "", limit: int = 500):
         """Таблица «Дома по адресам»: все уникальные адреса домов из объявлений,
-        с годом постройки (house_years) и привязкой к ЖК. Фильтр y=no — без года."""
+        с годом постройки (house_years) и привязкой к ЖК. Фильтр y=no — без года.
+        Убрано из общего доступа (задача 2026-08-13) — внутренний инструмент."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
         limit = max(50, min(limit, 3000))
         where = []
         params = []
@@ -4444,12 +4953,20 @@ def make_extras_router(templates) -> APIRouter:
         cname = cx["name"]
 
         # Координаты ЖК = центроид координат его объявлений; адрес = самый
-        # частый адрес среди объявлений (в complexes своих координат нет)
+        # частый адрес среди объявлений (в complexes своих координат нет).
+        # resolved_house_id (задача 2026-08-14, "House-resolution в
+        # скоринге") — тот же _listing_id_match, что и everywhere на этой
+        # странице: объявления дома зонтика могут по-прежнему называть его
+        # именем зонтика в тексте, house_resolution.py их уже привязал к
+        # ЭТОМУ дому по адресу/токену/гео — без этого условия центроид
+        # дома молча считался бы по чужим (умбреловым) координатам либо
+        # не считался вовсе.
         geo = await fetchrow("""
             SELECT AVG(lat) AS lat, AVG(lon) AS lon
             FROM apartment_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1)) AND lat IS NOT NULL
-        """, cname)
+            WHERE (lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)
+              AND lat IS NOT NULL
+        """, cname, complex_id)
         addr_row = await fetchrow("""
             SELECT address, COUNT(*) AS cnt FROM apartment_listings
             WHERE lower(trim(complex_name)) = lower(trim($1))
@@ -4477,16 +4994,91 @@ def make_extras_router(templates) -> APIRouter:
             if isinstance(si, dict):
                 developer = ((si.get("korter") or {}).get("developer")
                              or (si.get("homsters") or {}).get("developer"))
+        # Живой баг (задача "логотип застройщика должен быть в названии",
+        # 2026-08-13): застройщик выше мог найтись ТОЛЬКО текстом (korter/
+        # homsters source_info), без cx.developer_id — тогда developer_logo
+        # так и оставался None, даже если справочник developers уже знает
+        # этот же бренд (по имени) и хранит его логотип. 24 ЖК на проде
+        # молча теряли логотип из-за этого на момент фикса. Резолвим по
+        # имени как fallback — тот же приоритет: developer_id (точная связь)
+        # сильнее текстового совпадения имени.
+        if developer and not developer_logo:
+            _dl2 = await fetchrow(
+                "SELECT logo, website FROM developers WHERE lower(trim(name)) = lower(trim($1))", developer)
+            if _dl2:
+                developer_logo = developer_logo or _dl2["logo"]
+                developer_website = developer_website or _dl2["website"]
 
-        sale_listings = await fetch("""
+        # House-resolution (задача 2026-08-13, "аналитика по домам считает
+        # только атрибутированные"): на странице ДОМА (parent_complex_id
+        # стоит) листинги — не только точное имя-совпадение (старое
+        # поведение, для домов с собственным явным именем в объявлении —
+        # напр. "Qaiyndy 3"), но и `resolved_house_id = $2` — привязанные
+        # к ЭТОМУ дому по адресу/токену/гео (bot/core/house_resolution.py),
+        # хотя их complex_name всё ещё говорит "ЖК Qaiyndy" (имя зонтика).
+        # Для НЕ-дома (обычный ЖК/сам зонтик) $2 = complex_id, а
+        # resolved_house_id никогда не равен ID зонтика (то поле указывает
+        # только на детей) — условие безвредно, ничего лишнего не добавляет.
+        _listing_id_match = "(lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)"
+        sale_listings = await fetch(f"""
             SELECT id, title, rooms, area, floor, floors_total, price, yield_pct,
-                   score_total, url, is_active, first_seen, last_seen, archived_at
+                   score_total, url, is_active, first_seen, last_seen, archived_at,
+                   resolved_house_id, house_attribution, house_attribution_detail
             FROM apartment_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1))
+            WHERE {_listing_id_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE
             ORDER BY is_active DESC NULLS FIRST, score_total DESC NULLS LAST
             LIMIT 60
-        """, cname)
+        """, cname, complex_id)
+
+        # Карточки "Объявления в этом доме" (задача 2026-08-13, "на всех
+        # страницах домов должны быть 5 объявлений в этом доме, под блоками
+        # Удобства и Что рядом") — фото/цена/метраж, клик открывает
+        # /listing/{id} (наша страница объявления). is_active IS NOT FALSE —
+        # тот же приём, что у остальных агрегатов на этой странице (см.
+        # migrations/017), NULL трактуется как "ещё активно", не только TRUE.
+        # Отдельный лёгкий запрос (не переиспользует sale_listings выше) —
+        # там нет photos (не нужны для 60-строчной агрегатной выборки),
+        # тут нужны ровно 5 карточек с фото.
+        _house_listing_rows = await fetch(f"""
+            SELECT id, title, rooms, area, price, photos
+            FROM apartment_listings
+            WHERE {_listing_id_match}
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND is_active IS NOT FALSE
+            ORDER BY score_total DESC NULLS LAST, first_seen DESC
+            LIMIT 5
+        """, cname, complex_id)
+        house_listings = []
+        for _hl in _house_listing_rows:
+            _hld = dict(_hl)
+            _hlph = _hld.get("photos")
+            if isinstance(_hlph, str):
+                import json as _json_hl
+                try:
+                    _hlph = _json_hl.loads(_hlph)
+                except ValueError:
+                    _hlph = None
+            _hld["photo"] = _hlph[0] if _hlph else None
+            house_listings.append(_hld)
+
+        # Прозрачность атрибуции (задача 2026-08-13, п.3, "на странице дома
+        # — прозрачность атрибуции: по чему привязано") — эта страница не
+        # рендерит карточки отдельных объявлений (см. её же докстринг —
+        # только агрегаты), поэтому прозрачность тут = агрегированная
+        # разбивка по методу, не бейдж на каждой карточке. Полный набор
+        # (не LIMIT 60, как sale_listings выше) — иначе с ЖК под 60
+        # объявлений картина была бы неполной.
+        attribution_breakdown = None
+        if cx.get("parent_complex_id"):
+            _attr_rows = await fetch(f"""
+                SELECT COALESCE(house_attribution, 'имя') AS method, COUNT(*) AS cnt
+                FROM apartment_listings
+                WHERE {_listing_id_match} AND COALESCE(is_duplicate, FALSE) = FALSE
+                GROUP BY 1 ORDER BY 2 DESC
+            """, cname, complex_id)
+            if _attr_rows:
+                attribution_breakdown = [dict(r) for r in _attr_rows]
 
         rentals = await fetch("""
             SELECT rooms, price, area, found_at
@@ -4501,7 +5093,7 @@ def make_extras_router(templates) -> APIRouter:
         # роут (мини-карта в попапе объявления, см. вызов ниже по файлу).
 
         # Сводка по комнатности: медиана цены продажи, скорость архивации
-        stats = await fetch("""
+        stats = await fetch(f"""
             SELECT rooms,
                    COUNT(*) AS cnt,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_price,
@@ -4512,29 +5104,46 @@ def make_extras_router(templates) -> APIRouter:
                    MIN(archived_at) FILTER (WHERE archived_at IS NOT NULL) AS first_archived,
                    MAX(archived_at) FILTER (WHERE archived_at IS NOT NULL) AS last_archived
             FROM apartment_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1))
+            WHERE {_listing_id_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE AND price > 500000
             GROUP BY rooms ORDER BY rooms
-        """, cname)
+        """, cname, complex_id)
 
         # Период наблюдения за ЖК (для контекста цифр выше)
         from bot.db.pg import fetchrow as _fetchrow
-        obs = await _fetchrow("""
+        obs = await _fetchrow(f"""
             SELECT MIN(first_seen) AS since, MAX(last_seen) AS until
             FROM apartment_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1))
-        """, cname)
+            WHERE {_listing_id_match}
+        """, cname, complex_id)
 
         # Темп продаж по ЖК: ушло в архив всего / за 30 дней, ср. дней до архива
-        pace = await _fetchrow("""
+        pace = await _fetchrow(f"""
             SELECT COUNT(*) FILTER (WHERE is_active IS FALSE) AS archived_total,
                    COUNT(*) FILTER (WHERE archived_at >= now() - interval '30 days') AS archived_30d,
                    AVG(EXTRACT(EPOCH FROM (archived_at - first_seen))/86400)
                        FILTER (WHERE archived_at IS NOT NULL) AS avg_days_to_sell
             FROM apartment_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1))
+            WHERE {_listing_id_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE AND price > 500000
-        """, cname)
+        """, cname, complex_id)
+
+        # "Дом неизвестен: N" (задача 2026-08-13, п.3) — только для
+        # зонтиков (child_complexes ниже), не для обычных ЖК/домов: сколько
+        # из листингов ПОД ИМЕНЕМ САМОГО ЗОНТИКА не удалось (пока) привязать
+        # к конкретному дому. "Зонтик = агрегат включая неизвестен" (п.4) —
+        # сами sale_listings/stats выше НЕ фильтруются по resolved_house_id
+        # для зонтика (остаются как есть, полный пул под именем зонтика),
+        # этот счётчик — просто прозрачность, сколько из них "не уверены".
+        from bot.db.pg import fetchval as _fetchval_house_unknown
+        house_unknown_count = await _fetchval_house_unknown("""
+            SELECT COUNT(*) FROM apartment_listings
+            WHERE lower(trim(complex_name)) = lower(trim($1))
+              AND resolved_house_id IS NULL
+              AND COALESCE(is_duplicate, FALSE) = FALSE
+        """, cname) if await _fetchval_house_unknown(
+            "SELECT EXISTS(SELECT 1 FROM complexes WHERE parent_complex_id = $1)", complex_id
+        ) else None
 
         # Аренда: скорость ухода. "Ушло" = не видели парсером > 3 дней.
         rental_stats = await fetch("""
@@ -4572,12 +5181,36 @@ def make_extras_router(templates) -> APIRouter:
                 heating_type TEXT, heating_details TEXT, ventilation_type TEXT,
                 lifts_brand TEXT, lifts_model TEXT, lifts_count_per_section INT,
                 ceiling_height_min NUMERIC, ceiling_height_max NUMERIC,
+                -- Высота окон (задача 2026-08-13, "собирать данные по высоте
+                -- окон для новостроек") — колонки были обещаны комментарием
+                -- выше ("плюс детальные .../windows/...") ещё на моменте
+                -- создания таблицы, но не заведены. Ни один из 5 текущих
+                -- застройщик-импортёров (sensata/bi_group/bazis/orda_invest/
+                -- nak — newbuild_common.py) сейчас НЕ парсит даже высоту
+                -- потолков со своих сайтов (несмотря на наличие ceiling_
+                -- height_min/max выше) — живая проверка на момент задачи
+                -- (спот-чек 5 сайтов застройщиков) не нашла высоты окон ни
+                -- на одном; ceiling_height тоже приходит НЕ от них (другой
+                -- источник — krisha/ручной ввод). Заводим колонки заранее
+                -- (дёшево, обратимо), чтобы было куда класть данные — ручным
+                -- вводом сейчас, скрапером конкретного застройщика, когда
+                -- реальный источник подтвердится.
+                window_type TEXT, window_height_min NUMERIC, window_height_max NUMERIC,
                 developer_bin TEXT, elicense_status TEXT, elicense_checked_at TIMESTAMPTZ,
                 docs_psd_expertise_number TEXT, docs_psd_expertise_date DATE,
                 docs_apz_number TEXT, docs_apz_date DATE,
                 docs_commission_act_number TEXT, docs_commission_act_date DATE,
                 notes TEXT, updated_at TIMESTAMPTZ DEFAULT now()
             )
+        """)
+        # Таблица уже существует на проде (создана раньше без window_*) —
+        # CREATE TABLE IF NOT EXISTS выше её не тронет, добавляем колонки
+        # отдельно, идемпотентно.
+        await _tech_execute("""
+            ALTER TABLE complex_tech_specs
+                ADD COLUMN IF NOT EXISTS window_type TEXT,
+                ADD COLUMN IF NOT EXISTS window_height_min NUMERIC,
+                ADD COLUMN IF NOT EXISTS window_height_max NUMERIC
         """)
         tech_row = await fetchrow(
             "SELECT * FROM complex_tech_specs WHERE complex_id = $1", complex_id)
@@ -4598,9 +5231,24 @@ def make_extras_router(templates) -> APIRouter:
 
         # Официальные данные homeportal.kz (реестр КЖК) — блок в шаблоне.
         # Раньше hp не передавался, блок «Официальные данные» не рендерился.
+        # Живой баг (найден на #2481 "Family Nest F", 2026-08-13): merge_
+        # complex_pair() при слиянии дублей переносит complex_source_links,
+        # но НЕ homeportal_objects.matched_complex_id — эта устаревшая
+        # legacy-колонка может годами указывать на уже is_garbage=TRUE
+        # complex_id, пока актуальная связь лежит в complex_source_links
+        # (source='homeportal'). 74 таких "осиротевших" object_id на
+        # проде на момент фикса (запрос см. в описании задачи) — доливаем
+        # через OR EXISTS вместо разовой миграции колонки: самозалечивается
+        # при будущих merge'ах без повторного бэкфила.
         hp_rows = await fetch(
-            """SELECT * FROM homeportal_objects
-               WHERE matched_complex_id = $1 ORDER BY object_id""", complex_id)
+            """SELECT ho.* FROM homeportal_objects ho
+               WHERE ho.matched_complex_id = $1
+                  OR EXISTS (
+                      SELECT 1 FROM complex_source_links csl
+                      WHERE csl.source = 'homeportal' AND csl.source_id = ho.object_id::text
+                        AND csl.complex_id = $1
+                  )
+               ORDER BY ho.object_id""", complex_id)
         hp = None
         if hp_rows:
             hp = {"count": len(hp_rows)}
@@ -4646,9 +5294,38 @@ def make_extras_router(templates) -> APIRouter:
         # см. терминал 2026-08-07 фидбек "проверь эти связи".
         # URL-паттерн homeportal.kz/ru/projects/{object_id} подтверждён
         # вручную (открыт живьём, совпадает с нужным ЖК).
+        # Живой баг (найден на #2481, 2026-08-13): cx.krisha_url/korter_url
+        # — legacy-колонки старого парсера, не бэкфилятся из более нового
+        # entity-resolution спайна (complex_source_links) — 24 ЖК с реальной
+        # krisha-связью и 15 с korter-связью на проде показывали серую
+        # (нерабочую) кнопку, хотя связь есть. complex_source_links.url
+        # уже хранит нужный URL (записан record_source_link() в момент
+        # матча) — простой fallback, без миграции данных.
+        _src_urls = {r["source"]: r["url"] for r in await fetch(
+            "SELECT source, url FROM complex_source_links WHERE complex_id = $1 AND source IN ('krisha','korter') AND url IS NOT NULL",
+            complex_id)}
+        # Наследование ссылки Крыши для домов зонтика (задача 2026-08-13,
+        # "проверить и починить семантику зонтика для Крыши", п.5) — у
+        # Крыши нет отдельной карточки под каждый дом расшивленного ЖК
+        # (см. запись krisha_url теперь только на зонтике, krisha_complex_
+        # import.py/record_source_link), поэтому дом сам по себе krisha_
+        # url/complex_source_links не имеет — берём с родителя, если он
+        # есть. Раньше этого фолбэка не было вовсе — кнопка "Крыша" на
+        # странице дома всегда была серой, даже когда зонтик реально
+        # сопоставлен (живой аудит нашёл ЭТО как отдельный незакрытый
+        # хвост, не просто гипотезу).
+        _krisha_from_parent = None
+        if cx.get("parent_complex_id"):
+            from bot.db.pg import fetchval as _fetchval_parent_krisha
+            _krisha_from_parent = await _fetchval_parent_krisha(
+                "SELECT krisha_url FROM complexes WHERE id = $1", cx["parent_complex_id"])
+            if not _krisha_from_parent:
+                _krisha_from_parent = await _fetchval_parent_krisha(
+                    "SELECT url FROM complex_source_links WHERE complex_id = $1 AND source = 'krisha' AND url IS NOT NULL",
+                    cx["parent_complex_id"])
         ext_links = {
-            "krisha": cx.get("krisha_url") or None,
-            "korter": cx.get("korter_url") or (cx_sources.get("korter") or {}).get("url"),
+            "krisha": cx.get("krisha_url") or _src_urls.get("krisha") or _krisha_from_parent,
+            "korter": cx.get("korter_url") or (cx_sources.get("korter") or {}).get("url") or _src_urls.get("korter"),
             "homsters": (cx_sources.get("homsters") or {}).get("url"),
             "homeportal": (f"https://homeportal.kz/ru/projects/{hp['object_id']}"
                            if hp and hp.get("object_id") else None),
@@ -4678,6 +5355,13 @@ def make_extras_router(templates) -> APIRouter:
             _add("Лифты", ts.get("lifts_brand") and (str(ts.get("lifts_brand")) + ((" " + str(ts["lifts_model"])) if ts.get("lifts_model") else "")))
             if ts.get("ceiling_height_min"):
                 _add("Высота потолков", str(ts["ceiling_height_min"]) + ("–" + str(ts["ceiling_height_max"]) if ts.get("ceiling_height_max") and ts["ceiling_height_max"] != ts["ceiling_height_min"] else "") + " м")
+            # Высота окон (задача 2026-08-13) — тот же паттерн, что потолки;
+            # пока только ручной ввод (см. window_height_min/max в CREATE
+            # TABLE complex_tech_specs выше — источника со стороны
+            # застройщиков подтверждённого не нашлось).
+            if ts.get("window_height_min"):
+                _add("Высота окон" + (f" ({ts['window_type']})" if ts.get("window_type") else ""),
+                     str(ts["window_height_min"]) + ("–" + str(ts["window_height_max"]) if ts.get("window_height_max") and ts["window_height_max"] != ts["window_height_min"] else "") + " м")
             if ts.get("notes"):
                 _add("Примечания", ts["notes"])
             if fall:
@@ -4724,6 +5408,86 @@ def make_extras_router(templates) -> APIRouter:
             ORDER BY rooms
         """, complex_id)
 
+        # "Предложения людей (Крыша)" в новостройках (задача 2026-08-14,
+        # "двойное размещение предложений людей в новостройках; аналитика
+        # считает listing один раз") — apartment_listings того же ЖК/дома
+        # (тот же _listing_id_match, что у house_listings выше), но с тегом
+        # переуступка/вторичка + дельта к актуальной цене застройщика.
+        # Считаем ТОЛЬКО на страницах новостроек (is_newbuild ИЛИ у ЖК есть
+        # хоть один юнит застройщика вне зависимости от фильтра nb_rooms —
+        # newbuild_rooms_available выше НЕ фильтруется по комнатности,
+        # в отличие от newbuild_units_total/_list) — на обычной вторичке
+        # это была бы лишняя секция и лишний запрос; house_listings (простые
+        # карточки "Объявления в этом доме" выше) остаётся её единственной
+        # секцией без изменений, как и просили ("вторичка без изменений").
+        # Фаза 2 (юнит-мэтчинг) — НЕ блокер: без unit-линка на конкретное
+        # объявление просто берём агрегат по ЖК/комнатности вместо точной
+        # цены смэтченного юнита (bot/core/newbuild_person_offers.py).
+        is_newbuild_page = bool(cx.get("is_newbuild")) or bool(newbuild_rooms_available)
+        people_offers: list[dict] = []
+        people_offers_total = 0
+        if is_newbuild_page:
+            from bot.core.newbuild_person_offers import (
+                classify_person_offer, build_developer_price_index,
+                developer_price_for_listing, price_delta_pct,
+            )
+            _po_total_row = await fetchrow(f"""
+                SELECT COUNT(*) AS cnt FROM apartment_listings
+                WHERE {_listing_id_match}
+                  AND COALESCE(is_duplicate, FALSE) = FALSE AND is_active IS NOT FALSE
+            """, cname, complex_id)
+            people_offers_total = (_po_total_row["cnt"] or 0) if _po_total_row else 0
+            _po_rows = await fetch(f"""
+                SELECT id, title, description, rooms, area, price, photos, first_seen
+                FROM apartment_listings
+                WHERE {_listing_id_match}
+                  AND COALESCE(is_duplicate, FALSE) = FALSE AND is_active IS NOT FALSE
+                ORDER BY score_total DESC NULLS LAST, first_seen DESC
+                LIMIT 20
+            """, cname, complex_id)
+            # Прайс-индекс застройщика строится ОДИН раз на весь ЖК (не на
+            # каждое объявление) — все доступные/забронированные юниты, без
+            # LIMIT/фильтра комнатности (в отличие от newbuild_units_list
+            # выше, той для карточек хватает 5).
+            _dev_unit_rows = await fetch("""
+                SELECT id, rooms, price, area, price_per_m2
+                FROM newbuild_units
+                WHERE complex_id = $1 AND status IN ('available','reserved')
+            """, complex_id)
+            _price_index = build_developer_price_index([dict(r) for r in _dev_unit_rows])
+            # unit_source_links (Фаза 2) — только для юнитов ЭТОГО ЖК, чтобы
+            # не тянуть всю таблицу; source_id у неё TEXT = apartment_listings.id.
+            _unit_link_rows = await fetch("""
+                SELECT usl.source_id AS listing_id, usl.unit_id
+                FROM unit_source_links usl
+                JOIN newbuild_units nu ON nu.id = usl.unit_id
+                WHERE nu.complex_id = $1 AND usl.source = 'krisha'
+            """, complex_id)
+            _unit_id_by_listing = {r["listing_id"]: r["unit_id"] for r in _unit_link_rows}
+            for _po in _po_rows:
+                _pod = dict(_po)
+                _poph = _pod.get("photos")
+                if isinstance(_poph, str):
+                    import json as _json_po
+                    try:
+                        _poph = _json_po.loads(_poph)
+                    except ValueError:
+                        _poph = None
+                _pod["photo"] = _poph[0] if _poph else None
+                tag, tag_reason, tag_signal = classify_person_offer(
+                    _pod.get("title"), _pod.get("description"), _pod.get("first_seen"),
+                    cx.get("completion_year"), cx.get("completion_quarter"))
+                _pod["tag"] = tag
+                _pod["tag_reason"] = tag_reason
+                _pod["tag_signal"] = tag_signal
+                _unit_id = _unit_id_by_listing.get(_pod["id"])
+                dev_ppm2, dev_method = developer_price_for_listing(
+                    _price_index, _pod.get("rooms"), _unit_id)
+                _pod["dev_price_per_m2"] = round(dev_ppm2) if dev_ppm2 else None
+                _pod["dev_price_method"] = dev_method
+                _pod["delta_pct"] = price_delta_pct(_pod.get("price"), _pod.get("area"), dev_ppm2)
+                people_offers.append(_pod)
+
         # Зонтик/дом (задача 2026-08-13, "модель зонтик/дом") — публичная
         # сторона: дом показывает ссылку "часть комплекса X", зонтик —
         # список домов. UX-фикс кнопки расшивки — нужно знать, есть ли
@@ -4733,14 +5497,38 @@ def make_extras_router(templates) -> APIRouter:
         if cx.get("parent_complex_id"):
             parent_complex = await fetchrow(
                 "SELECT id, name FROM complexes WHERE id = $1", cx["parent_complex_id"])
+        # address — задача "если в ЖК несколько домов с разными адресами,
+        # это надо писать на странице ЖК" (2026-08-13): дома одного зонтика
+        # часто на СВОИХ отдельных адресах (разные корпуса/очереди одной
+        # стройки могут физически стоять на разных улицах), это не видно
+        # было нигде на странице зонтика — только кликнув в каждый дом.
+        # COALESCE(c2.address, ...) — та же логика, что у самого ЖК в шаблоне
+        # (cx.address or cx_address), берём адрес из объявлений, если в
+        # complexes.address пусто.
+        # listings_count теперь включает и house-resolution (задача
+        # 2026-08-13, "аналитика по домам считает только атрибутированные")
+        # — не только точное имя-совпадение, но и resolved_house_id=c2.id
+        # (объявления зонтика, привязанные к ЭТОМУ дому по адресу/токену/
+        # гео, см. bot/core/house_resolution.py).
         child_complexes = await fetch("""
             SELECT c2.id, c2.name, c2.krisha_url,
                    (SELECT count(*) FROM apartment_listings al
-                     WHERE lower(trim(al.complex_name)) = lower(trim(c2.name))) AS listings_count,
-                   c2.source_info->'krisha'->>'deadline' AS deadline
+                     WHERE lower(trim(al.complex_name)) = lower(trim(c2.name))
+                        OR al.resolved_house_id = c2.id) AS listings_count,
+                   c2.source_info->'krisha'->>'deadline' AS deadline,
+                   COALESCE(c2.address, (
+                       SELECT al.address FROM apartment_listings al
+                       WHERE lower(trim(al.complex_name)) = lower(trim(c2.name))
+                         AND al.address IS NOT NULL AND al.address != ''
+                       GROUP BY al.address ORDER BY count(*) DESC LIMIT 1
+                   )) AS address
             FROM complexes c2 WHERE c2.parent_complex_id = $1
             ORDER BY c2.name
         """, complex_id)
+        child_addresses_differ = len({
+            (c["address"] or "").strip().lower() for c in child_complexes
+            if c["address"]
+        }) > 1
         pending_split_candidate = await fetchval(
             "SELECT id FROM split_candidates WHERE complex_id = $1 AND status = 'review'", complex_id)
 
@@ -4749,6 +5537,9 @@ def make_extras_router(templates) -> APIRouter:
             "cx": dict(cx),
             "parent_complex": dict(parent_complex) if parent_complex else None,
             "child_complexes": [dict(c) for c in child_complexes],
+            "child_addresses_differ": child_addresses_differ,
+            "house_unknown_count": house_unknown_count,
+            "attribution_breakdown": attribution_breakdown,
             "pending_split_candidate": pending_split_candidate,
             "cx_sources": cx_sources,
             "geo": {"lat": float(geo["lat"]), "lon": float(geo["lon"])} if geo and geo["lat"] else None,
@@ -4758,6 +5549,7 @@ def make_extras_router(templates) -> APIRouter:
             "developer_website": developer_website,
             "ext_links": ext_links,
             "sales": [dict(r) for r in sale_listings],
+            "house_listings": house_listings,
             "rentals": [dict(r) for r in rentals],
             "stats": [dict(r) for r in stats],
             "rental_stats": [dict(r) for r in rental_stats],
@@ -4773,6 +5565,9 @@ def make_extras_router(templates) -> APIRouter:
             "newbuild_rooms_available": [r["rooms"] for r in newbuild_rooms_available],
             "nb_rooms": nb_rooms,
             "nb_all": nb_all,
+            "is_newbuild_page": is_newbuild_page,
+            "people_offers": people_offers,
+            "people_offers_total": people_offers_total,
         })
 
     # ── Отзывы о ЖК (задача "блок отзывов", 2026-08-07) — смотреть могут
@@ -4852,11 +5647,18 @@ def make_extras_router(templates) -> APIRouter:
         if not cx:
             return JSONResponse({"error": "not_found"}, status_code=404)
         cx = dict(cx)
+        # resolved_house_id (задача 2026-08-14, "House-resolution в
+        # скоринге") — тот же фикс, что у геоцентроида на самой странице
+        # ЖК (см. комментарий в complex_detail выше): без него центроид
+        # дома под зонтиком мог посчитаться по чужим координатам или не
+        # найтись вовсе (no_coords), пока объявления дома всё ещё названы
+        # именем зонтика в тексте.
         geo = await fetchrow("""
             SELECT AVG(lat) AS lat, AVG(lon) AS lon
             FROM apartment_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1)) AND lat IS NOT NULL
-        """, cx["name"])
+            WHERE (lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)
+              AND lat IS NOT NULL
+        """, cx["name"], complex_id)
         if not geo or not geo["lat"]:
             return JSONResponse({"error": "no_coords"}, status_code=404)
         try:
@@ -4988,6 +5790,66 @@ def make_extras_router(templates) -> APIRouter:
             })
         return JSONResponse({"data": by_rooms})
 
+    # "Создать ЖК" (задача 2026-08-13, кнопка рядом с "Добавить дом к ЖК") —
+    # ручное создание ЖК с нуля: название + адрес + минимум 3 фото. До этого
+    # новые complexes-строки заводились только парсерами/расшивкой — не было
+    # пути для ЖК, которого вообще нет ни у одного источника (например
+    # что-то совсем новое/маленькое, что ещё не попало ни на Крышу, ни на
+    # homsters/korter), кроме прямого SQL руками.
+    @router.post("/admin/api/complex/create")
+    async def complex_create(request: Request, name: str = Form(...), address: str = Form(""),
+                              files: list[UploadFile] = File(default=[])):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        name = name.strip()
+        if not name:
+            return JSONResponse({"error": "Название обязательно"}, status_code=400)
+        valid_files = [f for f in files if f.filename]
+        if len(valid_files) < 3:
+            return JSONResponse({"error": "Нужно минимум 3 фото"}, status_code=400)
+        from bot.db.pg import fetchval, execute
+        from bot.core.entity_resolution import ensure_complex_code
+        from datetime import datetime as _dt, timezone as _tz
+        existing = await fetchval(
+            "SELECT id FROM complexes WHERE lower(trim(name)) = lower(trim($1))", name)
+        if existing:
+            return JSONResponse({"error": f"ЖК с таким названием уже есть (#{existing})"}, status_code=409)
+        prov = json.dumps({"created_by": "admin", "created_at": _dt.now(_tz.utc).isoformat(), "method": "manual_create"})
+        new_id = await fetchval("""
+            INSERT INTO complexes (name, address, provenance)
+            VALUES ($1, $2, $3::jsonb) RETURNING id
+        """, name, address.strip() or None, prov)
+        urls = await _save_uploaded_photos(valid_files, "complexes", new_id)
+        if urls:
+            await execute("UPDATE complexes SET photos = $2::jsonb, photo_url = $3 WHERE id = $1",
+                          new_id, json.dumps(urls), urls[0])
+        await ensure_complex_code(new_id)
+        return JSONResponse({"ok": True, "id": new_id})
+
+    # Переименование ЖК прямо на его странице (задача 2026-08-13,
+    # "для админов сделай возможность редактирования названия жк прям на
+    # странице") — раньше правки имени были только прямым SQL руками (см.
+    # живой кейс #1211 в этой же задаче). complexes.name — уникальный
+    # индекс (idx_complexes_name_lower, case-insensitive) — конфликт не
+    # 500, а понятная 409 с id уже существующего ЖК под этим именем.
+    @router.post("/admin/complex/{complex_id}/rename")
+    async def complex_rename(request: Request, complex_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        data = await request.json()
+        new_name = (data.get("name") or "").strip()
+        if not new_name:
+            return JSONResponse({"error": "Название не может быть пустым"}, status_code=400)
+        from bot.db.pg import fetchval, execute
+        dup = await fetchval(
+            "SELECT id FROM complexes WHERE lower(trim(name)) = lower(trim($1)) AND id != $2",
+            new_name, complex_id)
+        if dup:
+            return JSONResponse({"error": f"ЖК с таким названием уже есть (#{dup})"}, status_code=409)
+        await execute("UPDATE complexes SET name = $2, updated_at = now() WHERE id = $1",
+                      complex_id, new_name)
+        return JSONResponse({"ok": True, "name": new_name})
+
     @router.post("/admin/complex/{complex_id}/photos")
     async def complex_photos_save(request: Request, complex_id: int):
         """Админ может задать до 3 фото ЖК (внешние URL — как и остальные
@@ -5025,6 +5887,48 @@ def make_extras_router(templates) -> APIRouter:
         """, complex_id, _json_ph3.dumps(urls), urls[0])
         return JSONResponse({"ok": True, "photos": urls})
 
+    # Удалить одно фото из галереи (задача 2026-08-13, "мог удалить какие
+    # то фото на нем если надо") — раньше можно было только целиком
+    # переписать 3 URL-слота через /photos; точечное удаление снимка из
+    # списка (в т.ч. загруженного через приоритетный бэкфил/krisha-скан,
+    # может быть больше 3 штук) отдельной ручки не имело.
+    @router.post("/admin/complex/{complex_id}/photos/delete")
+    async def complex_photo_delete(request: Request, complex_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        data = await request.json()
+        url = (data.get("url") or "").strip()
+        if not url:
+            return JSONResponse({"error": "url обязателен"}, status_code=400)
+        from bot.db.pg import fetchval, execute
+        raw = await fetchval("SELECT photos FROM complexes WHERE id = $1", complex_id)
+        photos = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        if not isinstance(photos, list):
+            photos = []
+        new_photos = [p for p in photos if p != url]
+        await execute("""
+            UPDATE complexes SET photos = $2::jsonb,
+                   photo_url = $3, updated_at = now()
+            WHERE id = $1
+        """, complex_id, json.dumps(new_photos, ensure_ascii=False), new_photos[0] if new_photos else None)
+        return JSONResponse({"ok": True, "photos": new_photos})
+
+    # Удалить ЖК целиком прямо со страницы (задача 2026-08-13, "сделай
+    # функционал что бы админ мог вообще удалить жк прям с его страницы") —
+    # тот же приём, что везде в этом проекте для "удаления" complexes:
+    # is_garbage=TRUE (soft, обратимо — см. merge_complex_pair и живой
+    # кейс #1211), НЕ хардовый DELETE. Редирект после успеха на /complexes.
+    @router.post("/admin/complex/{complex_id}/delete")
+    async def complex_delete(request: Request, complex_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.db.pg import fetchval, execute
+        exists = await fetchval("SELECT id FROM complexes WHERE id = $1", complex_id)
+        if not exists:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        await execute("UPDATE complexes SET is_garbage = TRUE, updated_at = now() WHERE id = $1", complex_id)
+        return JSONResponse({"ok": True})
+
     @router.post("/admin/complex/{complex_id}/contacts")
     async def complex_contacts_save(request: Request, complex_id: int):
         if not is_authed(request):
@@ -5055,6 +5959,16 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse({"error": "auth"}, status_code=401)
         data = await request.json()
         from bot.db.pg import execute
+        # Та же идемпотентная миграция, что в GET /complex/{id} — этот POST
+        # может прилететь раньше, чем кто-то открывал саму карточку ЖК на
+        # свежем окружении (не гарантирован порядок), а window_* колонки
+        # нужны уже здесь для INSERT ниже.
+        await execute("""
+            ALTER TABLE complex_tech_specs
+                ADD COLUMN IF NOT EXISTS window_type TEXT,
+                ADD COLUMN IF NOT EXISTS window_height_min NUMERIC,
+                ADD COLUMN IF NOT EXISTS window_height_max NUMERIC
+        """)
 
         def _s(key):
             v = (data.get(key) or "").strip()
@@ -5091,26 +6005,29 @@ def make_extras_router(templates) -> APIRouter:
                 heating_type, heating_details, ventilation_type,
                 lifts_brand, lifts_model, lifts_count_per_section,
                 ceiling_height_min, ceiling_height_max,
+                window_type, window_height_min, window_height_max,
                 developer_bin, elicense_status, docs_psd_expertise_number,
                 docs_psd_expertise_date, docs_apz_number, docs_apz_date,
                 docs_commission_act_number, docs_commission_act_date, notes,
                 updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24, now())
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27, now())
             ON CONFLICT (complex_id) DO UPDATE SET
                 construction_type=$2, concrete_class=$3, rebar_class=$4,
                 facade_type=$5, insulation_material=$6, insulation_thickness_mm=$7,
                 heating_type=$8, heating_details=$9, ventilation_type=$10,
                 lifts_brand=$11, lifts_model=$12, lifts_count_per_section=$13,
                 ceiling_height_min=$14, ceiling_height_max=$15,
-                developer_bin=$16, elicense_status=$17, docs_psd_expertise_number=$18,
-                docs_psd_expertise_date=$19, docs_apz_number=$20, docs_apz_date=$21,
-                docs_commission_act_number=$22, docs_commission_act_date=$23, notes=$24,
+                window_type=$16, window_height_min=$17, window_height_max=$18,
+                developer_bin=$19, elicense_status=$20, docs_psd_expertise_number=$21,
+                docs_psd_expertise_date=$22, docs_apz_number=$23, docs_apz_date=$24,
+                docs_commission_act_number=$25, docs_commission_act_date=$26, notes=$27,
                 updated_at=now()
         """, complex_id, _s("construction_type"), _s("concrete_class"), _s("rebar_class"),
             _s("facade_type"), _s("insulation_material"), _i("insulation_thickness_mm"),
             _s("heating_type"), _s("heating_details"), _s("ventilation_type"),
             _s("lifts_brand"), _s("lifts_model"), _i("lifts_count_per_section"),
             _f("ceiling_height_min"), _f("ceiling_height_max"),
+            _s("window_type"), _f("window_height_min"), _f("window_height_max"),
             _s("developer_bin"), _s("elicense_status"), _s("docs_psd_expertise_number"),
             _d("docs_psd_expertise_date"), _s("docs_apz_number"), _d("docs_apz_date"),
             _s("docs_commission_act_number"), _d("docs_commission_act_date"), _s("notes"),
@@ -5385,6 +6302,8 @@ def make_extras_router(templates) -> APIRouter:
             "photos": photos or [],
             "seller_name": l.get("seller_name") or "",
             "is_owner": l.get("is_owner") is True,
+            "seller_type": l.get("seller_type") or ("owner" if l.get("is_owner") else "realtor"),
+            "trust_score": float(l["trust_score"]) if l.get("trust_score") is not None else None,
             "year_built": l.get("year_built"),
             "views_count": l.get("views_count"),
             "floorplan_url": l.get("floorplan_url") or "",

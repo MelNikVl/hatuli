@@ -1,16 +1,64 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="page-title">🏢 Жилой Комплекс {{ cx.name }}
+<div class="page-title">
+  <!-- Зонтик = "группа домов" в заголовке — is_umbrella (migrations/057,
+       задача 2026-08-13, "надо просто по нажатию... дома добавлю потом")
+       ИЛИ реальные дети (кто-то мог стать домом через "Добавить дом к
+       ЖК" на СВОЕЙ странице, не отмечая зонтик явно на этой) — оба пути
+       валидны. -->
+  <span id="cx-title-icon">{{ '🏘' if (child_complexes or cx.is_umbrella) else '🏢' }}</span>
+  <span id="cx-title-kind">{{ 'Группа домов' if (child_complexes or cx.is_umbrella) else 'Жилой Комплекс' }}</span>
+  <span id="cx-name-display">{{ cx.name }}</span>
+  {% if is_admin(request) %}
+  <span onclick="cxToggleNameEdit()" title="Переименовать ЖК" style="cursor:pointer;font-size:16px;margin-left:2px;color:#888;user-select:none;">✏️</span>
+  {% endif %}
   <span id="cx-fav-star" onclick="toggleFavComplex()" title="В избранное — уведомления в Telegram об изменениях в ЖК" style="cursor:pointer;font-size:22px;vertical-align:middle;color:#ccc;user-select:none;">☆</span>
   {% if cx.live_url %}<a href="{{ cx.live_url }}" target="_blank" style="display:inline-block;font-size:13px;font-weight:800;padding:6px 14px;border-radius:8px;background:linear-gradient(135deg,#dc2626,#ef4444);color:#fff;text-decoration:none;margin-left:8px;box-shadow:0 2px 6px rgba(220,38,38,.35);">🔴 Прямая трансляция</a>{% endif %}
   {% if developer %}<small style="font-size:14px;font-weight:800;">· 🏗 Застройщик {% if developer_logo %}<img src="{{ developer_logo }}" alt="" style="height:20px;max-width:80px;object-fit:contain;background:#fff;border-radius:4px;padding:1px 4px;vertical-align:middle;margin-right:4px;">{% endif %}{% if cx.developer_id %}<a href="/developer/{{ cx.developer_id }}" style="color:#eab308;text-decoration:none;">{{ developer }}</a>{% else %}<span style="color:#eab308;">{{ developer }}</span>{% endif %}</small>{% endif %}
-  <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% elif cx.housing_class_estimate %} · {{ cx.housing_class_estimate }}{% endif %}{% if cx.code %} · <span title="Постоянный ID объекта в системе (entity resolution, docs/entity_resolution_plan.md) — не привязан ни к одному источнику, не меняется при ребрендинге/смене застройщика" style="font-family:monospace;color:#aaa;">{{ cx.code }}</span>{% endif %}</small>
-  {% if cx.description %}
-  <div style="margin-top:10px;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-left:3px solid #eab308;border-radius:8px;font-size:13px;line-height:1.55;color:var(--text);">
-    <span style="font-weight:700;color:#eab308;">📝 Описание ЖК</span>
-    <div style="margin-top:4px;">{{ cx.description }}</div>
+  <small style="font-size:13px;color:#888;font-weight:400;">{{ cx.district or '' }}{% if cx.year_built %} · {{ cx.year_built }} г.{% endif %}{% if cx.housing_class %} · {{ cx.housing_class }}{% elif cx.housing_class_estimate %} · {{ cx.housing_class_estimate }}{% endif %}</small>
+  <!-- cx.code (JK-000468) переехал в блок кнопок Крыша/Homsters/Korter/
+       Homeportal ниже (задача 2026-08-13, "номер типа 000468 расположи в
+       блоке кнопок Кортера, Хомстера и пр") — см. ext_links-блок. -->
+
+  {% if is_admin(request) %}
+  <!-- Инлайн-переименование (задача 2026-08-13, "возможность редактирования
+       названия жк прям на странице") — POST /admin/complex/{id}/rename,
+       409 с понятной ошибкой при конфликте уникального имени (живой кейс
+       #1211 из этой же задачи — дубль-пустышка с похожим именем). -->
+  <div id="cx-name-edit" style="display:none;margin-top:8px;">
+    <input type="text" id="cx-name-input" value="{{ cx.name }}" class="eid-ac-input" style="max-width:420px;display:inline-block;">
+    <button type="button" onclick="cxSaveName()" style="padding:7px 14px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;">💾 Сохранить</button>
+    <span id="cx-name-status" style="font-size:12px;margin-left:8px;color:#ef4444;"></span>
   </div>
+  <script>
+  function cxToggleNameEdit() {
+    const el = document.getElementById('cx-name-edit');
+    const open = el.style.display !== 'none';
+    el.style.display = open ? 'none' : 'block';
+    if (!open) document.getElementById('cx-name-input').focus();
+  }
+  async function cxSaveName() {
+    const name = document.getElementById('cx-name-input').value.trim();
+    const status = document.getElementById('cx-name-status');
+    if (!name) { status.textContent = 'Укажите название'; return; }
+    status.style.color = '#888'; status.textContent = 'сохраняю…';
+    const r = await fetch('/admin/complex/{{ cx.id }}/rename', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({name}),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) { location.reload(); }
+    else { status.style.color = '#ef4444'; status.textContent = 'Ошибка: ' + (d.error || r.status); }
+  }
+  </script>
   {% endif %}
+
+  <!-- Адрес — прямо под названием, всегда (задача 2026-08-13, "прям под
+       названием жк писать адрес всегда"), не только в глубине карточки
+       "Описание" ниже. cx_address — фолбэк из apartment_listings, тот же,
+       что уже использовался в "Описание" (см. cx.address or cx_address
+       там же). -->
+  <div style="margin-top:6px;font-size:13.5px;color:var(--text);">📍 {{ cx.address or cx_address or 'адрес не определён' }}</div>
 
   <!-- Зонтик/дом (задача 2026-08-13, "модель зонтик/дом") — публичная
        сторона: дом ссылается на зонтик, зонтик перечисляет дома. -->
@@ -18,15 +66,39 @@
   <div style="margin-top:10px;font-size:13px;color:var(--text);">
     🏠 Часть комплекса: <a href="/complex/{{ parent_complex.id }}" style="color:#2563eb;font-weight:600;">{{ parent_complex.name }}</a>
   </div>
+  {% if attribution_breakdown %}
+  <!-- Прозрачность атрибуции (задача 2026-08-13, п.3, "на странице дома —
+       прозрачность атрибуции: по чему привязано") — эта страница не
+       рендерит карточки отдельных объявлений, только агрегаты, поэтому
+       прозрачность здесь — разбивка по методу, не бейдж на карточке.
+       "имя" — прямое совпадение complex_name (без резолва вообще, было и
+       раньше); адрес/токен/гео — привязаны через bot/core/
+       house_resolution.py (задача "House-resolution в матчинге"). -->
+  <div style="margin-top:6px;font-size:12px;color:#888;" title="Как объявления этого дома были привязаны именно к нему">
+    🔗 Привязка:
+    {% for a in attribution_breakdown %}{{ {'имя':'по имени','address':'по адресу','address_geo':'по адресу+гео','token':'по тексту','geo':'по гео'}.get(a.method, a.method) }}: {{ a.cnt }}{% if not loop.last %} · {% endif %}{% endfor %}
+  </div>
+  {% endif %}
   {% endif %}
   {% if child_complexes %}
   <div style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
     <b style="font-size:13.5px;">🏘 Дома в составе комплекса ({{ child_complexes|length }})</b>
+    {% if child_addresses_differ %}
+    <div style="font-size:11.5px;color:#eab308;margin-top:2px;">⚠️ У домов этого комплекса разные адреса — это разные здания/очереди, не один дом.</div>
+    {% endif %}
+    {% if house_unknown_count %}
+    <!-- "Дом неизвестен: N" (задача 2026-08-13, п.3) — объявления под
+         именем зонтика, для которых адрес/токен/гео не дали уверенного
+         результата (bot/core/house_resolution.py) — остаются на
+         зонтике, не потеряны, просто пока без привязки к дому. -->
+    <div style="font-size:11.5px;color:#eab308;margin-top:2px;" title="Объявления под именем зонтика без уверенной привязки к конкретному дому — считаются здесь, в общей сводке зонтика (агрегат), не на страницах домов">🏠❓ дом неизвестен: {{ house_unknown_count }}</div>
+    {% endif %}
     <table style="font-size:13px;border-collapse:collapse;width:100%;margin-top:6px;">
       {% for c in child_complexes %}
       <tr style="border-top:1px solid var(--border);">
         <td style="padding:6px 10px 6px 0;"><a href="/complex/{{ c.id }}" style="color:var(--text);font-weight:600;">{{ c.name }}</a></td>
-        <td style="padding:6px 10px;color:#888;">{{ c.listings_count }} объявл.</td>
+        {% if c.address %}<td style="padding:6px 10px;color:#888;" title="{{ c.address }}">📍 {{ c.address }}</td>{% else %}<td style="padding:6px 10px;color:#888;">—</td>{% endif %}
+        <td style="padding:6px 10px;color:#888;white-space:nowrap;">{{ c.listings_count }} объявл.</td>
         <td style="padding:6px 0;color:#888;">{{ c.deadline or '—' }}</td>
       </tr>
       {% endfor %}
@@ -41,34 +113,123 @@
          этой же странице, не переход на /admin/entity-ids. Кнопка всегда
          "Открыть пометку" — модалка сама покажет историю (пусто, если
          никогда не помечали) и поле для новой/дополнительной заметки. -->
-    <button type="button" onclick="eidOpenNoteModal({{ cx.id }}, {{ cx.name|tojson }})" title="Пометки на расшивку этого ЖК — вся история, можно дописать"
+    <!-- onclick — одинарные кавычки, не двойные: фильтр tojson рендерит
+         ЛИТЕРАЛЬНЫЕ двойные кавычки (JSON-синтаксис строки, не
+         экранируется — так документирует сам Jinja2 у tojson: "The
+         exception is in HTML attributes that are double quoted; either
+         use single quotes or the |forceescape filter"), внутри
+         onclick="..." эта неэкранированная " обрывает атрибут раньше
+         времени — обработчик становится битым JS, клик молча ничего
+         не делает. Баг был у "Пометки на расшивку" и у "Сделать ЖК
+         зонтиком" сразу после её добавления, найдено при живой
+         проверке 2026-08-13. -->
+    <button type="button" onclick='eidOpenNoteModal({{ cx.id }}, {{ cx.name|tojson }})' title="Пометки на расшивку этого ЖК — вся история, можно дописать"
             style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">📋 Пометки на расшивку{% if pending_split_candidate %} (есть неразрешённая){% endif %}</button>
     <button type="button" onclick="eidOpenAcModal({{ cx.id }}, 'set-parent-for', '🏠 Добавить дом к ЖК #{{ cx.id }}')" title="Привязать этот ЖК как дом к другому ЖК-зонтику (модель зонтик/дом)"
             style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">🏠 Добавить дом к ЖК</button>
+    {% if cx.is_umbrella %}
+    <!-- "Снять зонтик" (задача 2026-08-13) — is_umbrella=TRUE уже стоит,
+         кнопка меняется на обратную операцию вместо повторного "сделать". -->
+    <button type="button" onclick="eidUnsetUmbrella({{ cx.id }})"
+            title="Снять статус зонтика — уже привязанные дома (если есть) останутся привязанными"
+            style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">➖ Снять статус зонтика</button>
+    {% else %}
+    <button type="button" onclick='eidMakeUmbrella({{ cx.id }}, {{ cx.name|tojson }}, {{ parent_complex.id if parent_complex else "null" }}, {{ parent_complex.name|tojson if parent_complex else "null" }})'
+            title="Пометить этот ЖК зонтиком сразу, по клику — дома можно добавить позже (обратная операция к «Добавить дом к ЖК»)"
+            style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">🏢 Сделать ЖК зонтиком</button>
+    {% endif %}
+    <button type="button" onclick="cxOpenCreateModal()"
+            title="Создать новый ЖК с нуля — до сих пор новые ЖК заводили только парсеры/расшивка"
+            style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;">➕ Создать ЖК</button>
+    <!-- Удалить ЖК целиком (задача 2026-08-13, "сделай функционал что бы
+         админ мог вообще удалить жк прям с его страницы") — soft-delete
+         (is_garbage=TRUE, тот же механизм, что merge_complex_pair/живой
+         кейс #1211), confirm() перед отправкой — необратимо только на
+         вид, из БД ничего не стирается, но со страницы ЖК пропадает
+         сразу и везде на публичных страницах. -->
+    <button type="button" onclick="cxDeleteComplex()"
+            title="Удалить этот ЖК (мягко — is_garbage, можно восстановить только руками через БД)"
+            style="padding:6px 14px;border-radius:8px;border:1px solid #ef4444;background:var(--surface);color:#ef4444;font-size:12.5px;font-weight:600;cursor:pointer;">🗑 Удалить ЖК</button>
   </div>
   {% endif %}
   </div>
 
-{% if cx.lat and cx.lon %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<div style="margin:0 0 14px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;">
-  <div style="font-size:13px;font-weight:700;margin-bottom:8px;">📍 Расположение</div>
-  <div id="cx-loc-map" style="height:260px;border-radius:10px;border:1px solid var(--border);"></div>
-</div>
-<script>
-(function() {
-  const lat = {{ cx.lat }}, lon = {{ cx.lon }};
-  const name = {{ cx.name|tojson }};
-  const map = L.map('cx-loc-map', {scrollWheelZoom: false}).setView([lat, lon], 15);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18, attribution: '© OpenStreetMap'}).addTo(map);
-  L.marker([lat, lon]).addTo(map).bindTooltip(name, {sticky: true});
-  // Скролл-зум карты не должен воровать прокрутку страницы — включается
-  // по клику по карте.
-  map.on('click', function() { map.scrollWheelZoom.enable(); });
-})();
-</script>
-{% endif %}
+  {% if is_admin(request) %}
+  <script>
+  async function cxDeleteComplex() {
+    if (!confirm('Удалить этот ЖК? Он перестанет показываться на всех страницах (мягкое удаление — is_garbage, из БД физически ничего не стирается).')) return;
+    const r = await fetch('/admin/complex/{{ cx.id }}/delete', {method: 'POST'});
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) { location.href = '/complexes'; }
+    else { alert('Ошибка: ' + (d.error || r.status)); }
+  }
+  </script>
+  {% endif %}
+
+  <!-- "Создать ЖК" (задача 2026-08-13, кнопка рядом с "Добавить дом к ЖК") —
+       попап на этой же странице (тот же приём, что попапы _entity_modals.html:
+       без перехода на отдельную страницу). Название+адрес+файлы (мультипарт,
+       не JSON — нужны реальные файлы, не только URL) -> /admin/api/complex/
+       create -> редирект на карточку нового ЖК. -->
+  {% if is_admin(request) %}
+  <div class="eid-modal-overlay" id="cx-create-modal-overlay" onclick="if(event.target===this) cxCloseCreateModal()">
+    <div class="eid-modal">
+      <span class="eid-modal-close" onclick="cxCloseCreateModal()">✕</span>
+      <h3>➕ Создать новый ЖК</h3>
+      <div style="margin-top:10px;">
+        <label style="font-size:12px;color:#888;">Название *</label>
+        <input type="text" id="cxc-name" class="eid-ac-input" placeholder="ЖК …" style="margin-top:4px;">
+      </div>
+      <div style="margin-top:10px;">
+        <label style="font-size:12px;color:#888;">Адрес</label>
+        <input type="text" id="cxc-address" class="eid-ac-input" placeholder="Город, район, улица…" style="margin-top:4px;">
+      </div>
+      <div style="margin-top:10px;">
+        <label style="font-size:12px;color:#888;">Фото — минимум 3</label>
+        <input type="file" id="cxc-files" accept="image/*" multiple style="font-size:12.5px;display:block;margin-top:4px;">
+      </div>
+      <div style="margin-top:12px;display:flex;align-items:center;gap:10px;">
+        <button type="button" onclick="cxSubmitCreate()" style="padding:7px 16px;border-radius:8px;border:none;background:var(--accent);color:#fff;font-size:13px;font-weight:600;cursor:pointer;">Создать</button>
+        <span id="cxc-status" style="font-size:11.5px;color:#ef4444;"></span>
+      </div>
+    </div>
+  </div>
+  <script>
+  function cxOpenCreateModal() {
+    document.getElementById('cxc-name').value = '';
+    document.getElementById('cxc-address').value = '';
+    document.getElementById('cxc-files').value = '';
+    document.getElementById('cxc-status').textContent = '';
+    document.getElementById('cx-create-modal-overlay').classList.add('open');
+  }
+  function cxCloseCreateModal() {
+    document.getElementById('cx-create-modal-overlay').classList.remove('open');
+  }
+  async function cxSubmitCreate() {
+    const name = document.getElementById('cxc-name').value.trim();
+    const address = document.getElementById('cxc-address').value.trim();
+    const files = document.getElementById('cxc-files').files;
+    const status = document.getElementById('cxc-status');
+    if (!name) { status.textContent = 'Укажите название'; return; }
+    if (files.length < 3) { status.textContent = 'Нужно минимум 3 фото (выбрано ' + files.length + ')'; return; }
+    status.style.color = '#888';
+    status.textContent = 'создаю…';
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('address', address);
+    [...files].forEach(f => fd.append('files', f));
+    const r = await fetch('/admin/api/complex/create', {method: 'POST', body: fd});
+    const d = await r.json().catch(() => ({}));
+    if (r.ok) {
+      location.href = '/complex/' + d.id;
+    } else {
+      status.style.color = '#ef4444';
+      status.textContent = 'Ошибка: ' + (d.error || r.status);
+    }
+  }
+  </script>
+  {% endif %}
+
 <script>
 (async function() {
   const star = document.getElementById('cx-fav-star');
@@ -97,12 +258,16 @@ async function toggleFavComplex() {
 <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:stretch;margin-bottom:14px;">
   <div style="flex:2 1 420px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;display:flex;gap:22px;flex-wrap:wrap;align-items:center;">
     <div>
-      <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.4px;">🏠 В продаже сейчас</div>
+      <!-- Всего объявлений — задача 2026-08-13 ("показывай сколько
+           объявлений есть в нём"): ns.total уже считался построчно для
+           поглощения рынком, просто нигде не выводился — теперь крупным
+           числом прямо в заголовке блока, разбивка по комнатности ниже. -->
+      {% set ns = namespace(total=0) %}
+      {% for s in stats %}{% set ns.total = ns.total + ((s.cnt or 0) - (s.sold_cnt or 0)) %}{% endfor %}
+      <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.4px;">🏠 В продаже сейчас {% if stats %}· <b style="font-size:13px;color:var(--text);text-transform:none;letter-spacing:normal;">{{ ns.total }}</b>{% endif %}</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:5px;">
-        {% set ns = namespace(total=0) %}
         {% for s in stats %}
         {% set active = (s.cnt or 0) - (s.sold_cnt or 0) %}
-        {% set ns.total = ns.total + active %}
         <span style="font-size:13.5px;white-space:nowrap;"><b>{{ active }}</b> <span style="color:#888;">· {{ s.rooms }}-комн</span></span>
         {% endfor %}
         {% if not stats %}<span style="font-size:13px;color:#888;">нет данных</span>{% endif %}
@@ -138,6 +303,9 @@ async function toggleFavComplex() {
     {% if developer_website %}
       <a href="{{ developer_website }}" target="_blank" rel="noopener" style="font-size:12.5px;font-weight:700;padding:7px 12px;border-radius:8px;background:#eab308;color:#1a1a1a;text-decoration:none;white-space:nowrap;">🏗 Сайт застройщика</a>
     {% endif %}
+    {% if cx.code %}
+    <span title="Постоянный ID объекта в системе (entity resolution, docs/entity_resolution_plan.md) — не привязан ни к одному источнику, не меняется при ребрендинге/смене застройщика" style="font-size:11.5px;font-family:monospace;font-weight:600;padding:7px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--border);color:#aaa;white-space:nowrap;margin-left:auto;">{{ cx.code }}</span>
+    {% endif %}
   </div>
 </div>
 
@@ -147,10 +315,11 @@ async function toggleFavComplex() {
      третий — варианты квартир (ниже, уже была). Карта — убрана совсем. -->
 <style>
 .cx-col-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
-/* .cx-row2 теперь только "Описание" (задача 2026-08-13 — Удобства/Что
-   рядом переехали под него в .cx-row3) — минимальный диф, тот же класс,
-   1 колонка вместо 3. */
-.cx-row2 { display:grid; grid-template-columns:1fr; gap:16px; margin-bottom:16px; align-items:start; }
+/* .cx-row2 — карта слева / описание справа (задача 2026-08-13, "карту
+   расположи ровно под фото, в левой половине... описание — в правой"),
+   было в 1 колонку под фото на всю ширину, карта отдельным рядом ниже. */
+.cx-row2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; align-items:start; }
+@media (max-width:1000px) { .cx-row2 { grid-template-columns:1fr; } }
 .cx-row3 { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; }
 @media (max-width:1000px) { .cx-row3 { grid-template-columns:1fr; } }
 .chart-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; display:flex; flex-direction:column; }
@@ -164,7 +333,10 @@ async function toggleFavComplex() {
 
 <!-- Ряд 1: галерея во всю ширину -->
 <div id="cx-card-photo" class="cx-col-card" style="margin-bottom:16px;">
-    {% set photos = (cx.photos or ([cx.photo_url] if cx.photo_url else [])) %}
+    {# Дедуп галереи (задача 2026-08-13) — источники фото пересекаются
+       (ручной url + сохранённый cx.photos + иногда повтор с krisha),
+       |unique по значению (URL) сохраняет порядок первого вхождения. #}
+    {% set photos = ((cx.photos or ([cx.photo_url] if cx.photo_url else [])) | unique | list) %}
     <div id="cx-photos-view">
       {% if photos %}
       <div style="display:flex;gap:6px;height:420px;">
@@ -223,10 +395,40 @@ async function toggleFavComplex() {
     }
     </script>
     <div style="display:flex;justify-content:space-between;align-items:center;">
-      <b style="font-size:15px;">Основная информация</b>
       <button type="button" onclick="togglePhotoEdit()" style="font-size:11px;padding:3px 9px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);cursor:pointer;">🖼 фото</button>
     </div>
     <div id="cx-photos-edit" style="display:none;margin:8px 0;padding:10px;background:var(--bg);border-radius:8px;">
+      {% if photos %}
+      <!-- Точечное удаление фото (задача 2026-08-13, "мог удалить какие
+           то фото на нем если надо") — список текущих фото (может быть
+           больше 3, если пришли из приоритетного бэкфила/krisha-скана,
+           не только из ручных 3 URL-слотов ниже), у каждого своя ✕. -->
+      <div style="font-size:11px;color:#888;margin-bottom:6px;">Текущие фото ({{ photos|length }}) — ✕ удаляет конкретное фото сразу</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+        {% for ph in photos %}
+        <div style="position:relative;">
+          <img src="{{ ph }}" loading="lazy" style="width:70px;height:52px;object-fit:cover;border-radius:5px;border:1px solid var(--border);">
+          <!-- onclick — одинарные кавычки: фильтр tojson рендерит НЕ-
+               экранированные двойные кавычки, внутри двойных ломает атрибут
+               (тот самый баг из "Пометки на расшивку", 2026-08-13, см.
+               комментарий у кнопки переименования выше). -->
+          <span onclick='cxDeletePhoto({{ ph|tojson }})' title="Удалить это фото" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;line-height:18px;text-align:center;border-radius:50%;background:#ef4444;color:#fff;font-size:11px;font-weight:800;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.4);">✕</span>
+        </div>
+        {% endfor %}
+      </div>
+      <script>
+      async function cxDeletePhoto(url) {
+        if (!confirm('Удалить это фото?')) return;
+        const r = await fetch('/admin/complex/{{ cx.id }}/photos/delete', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({url}),
+        });
+        if (r.ok) { location.reload(); }
+        else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
+      }
+      </script>
+      <div style="border-top:1px solid var(--border);margin-bottom:10px;"></div>
+      {% endif %}
       <div style="font-size:11px;color:#888;margin-bottom:6px;">До 3 ссылок на фото (URL), пусто = убрать</div>
       <input id="ph-url-1" placeholder="Фото 1 URL" value="{{ photos[0] if photos|length > 0 else '' }}" style="width:100%;padding:6px 8px;margin-bottom:5px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:12px;box-sizing:border-box;">
       <input id="ph-url-2" placeholder="Фото 2 URL" value="{{ photos[1] if photos|length > 1 else '' }}" style="width:100%;padding:6px 8px;margin-bottom:5px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:12px;box-sizing:border-box;">
@@ -242,8 +444,30 @@ async function toggleFavComplex() {
     </div>
 </div>
 
-<!-- Ряд 2: описание / удобства / что рядом (Ostrovok-стиль) -->
+<!-- Ряд 2: карта слева / описание справа (задача 2026-08-13) — карта
+     раньше была отдельным рядом на всю ширину ПОСЛЕ описания, теперь
+     ровно под фото, левая половина той же строки, что и описание. -->
 <div class="cx-row2">
+  {% if cx.lat and cx.lon %}
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <div id="cx-card-map" class="cx-col-card">
+    <div style="font-size:13px;font-weight:700;margin-bottom:8px;">📍 Расположение</div>
+    <div id="cx-loc-map" style="height:420px;border-radius:10px;border:1px solid var(--border);"></div>
+  </div>
+  <script>
+  (function() {
+    const lat = {{ cx.lat }}, lon = {{ cx.lon }};
+    const name = {{ cx.name|tojson }};
+    const map = L.map('cx-loc-map', {scrollWheelZoom: false}).setView([lat, lon], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18, attribution: '© OpenStreetMap'}).addTo(map);
+    L.marker([lat, lon]).addTo(map).bindTooltip(name, {sticky: true});
+    // Скролл-зум карты не должен воровать прокрутку страницы — включается
+    // по клику по карте.
+    map.on('click', function() { map.scrollWheelZoom.enable(); });
+  })();
+  </script>
+  {% endif %}
   <div id="cx-card-desc" class="cx-col-card">
     <b style="font-size:15px;">📝 Описание</b>
     {% if cx.notes or cx.residents_notes %}
@@ -328,6 +552,36 @@ async function toggleFavComplex() {
     {% endif %}
   </div>
 </div>
+{% if cx.lat and cx.lon %}
+<script>
+// Высота карточки "Описание" всегда равна высоте карточки карты — карта
+// задаёт размер (задача 2026-08-13, "блок описания который рядом с картой
+// одинаковой с ней высоты, мерить по карте"), а не наоборот: если текста
+// в описании больше, чем помещается — карточка не растягивает карту вниз,
+// внутри неё появляется свой скролл. .cx-row2 выше — align-items:start
+// (каждая карточка сама по себе, без grid-stretch), поэтому синхронизация
+// высоты явная, через JS, а не автоматическая через CSS grid.
+(function() {
+  function cxSyncDescHeight() {
+    const mapCard = document.getElementById('cx-card-map');
+    const descCard = document.getElementById('cx-card-desc');
+    if (!mapCard || !descCard) return;
+    // На узких экранах .cx-row2 схлопывается в 1 колонку (см. media-запрос
+    // ниже в <style>) — там карта и описание идут друг под другом,
+    // одинаковая высота там не нужна и мешала бы читать текст.
+    if (window.innerWidth <= 1000) {
+      descCard.style.height = '';
+      descCard.style.overflowY = '';
+      return;
+    }
+    descCard.style.height = mapCard.offsetHeight + 'px';
+    descCard.style.overflowY = 'auto';
+  }
+  cxSyncDescHeight();
+  window.addEventListener('resize', cxSyncDescHeight);
+})();
+</script>
+{% endif %}
 
 <!-- Удобства/Что рядом (задача 2026-08-13) — под описанием, не рядом
      с ним: половина ширины каждая, одинаковая высота (grid stretch по
@@ -335,7 +589,30 @@ async function toggleFavComplex() {
 <div class="cx-row3">
   <div id="cx-card-amenities" class="cx-col-card">
     <b style="font-size:15px;">🛎 Удобства</b>
-    <div style="margin-top:6px;">
+    <!-- "Ярлычки плюшек" (задача 2026-08-13) — вернул как цветные
+         бейджи-пилюли вместо плоского ✓/✕-списка (тот остаётся ниже,
+         это просто более заметное визуальное представление тех же 4
+         булевых колонок complexes.has_*) + добавил бейджи из уже
+         собранных, но раньше никак не показанных данных: Orda Plus и
+         счётчики парковки/площадок из реестра homeportal.kz (hp,
+         показывался только в таблице "Официальные данные" ниже). -->
+    {% set amenity_badges = [] %}
+    {% if cx.has_parking %}{% if amenity_badges.append(('🅿️ Парковка', '#16a34a')) %}{% endif %}{% endif %}
+    {% if cx.has_security %}{% if amenity_badges.append(('🛡️ Охрана 24/7', '#16a34a')) %}{% endif %}{% endif %}
+    {% if cx.has_closed_territory %}{% if amenity_badges.append(('🚧 Закрытая территория', '#16a34a')) %}{% endif %}{% endif %}
+    {% if cx.has_playground %}{% if amenity_badges.append(('🧸 Детская площадка', '#16a34a')) %}{% endif %}{% endif %}
+    {% if hp and hp.is_orda_plus_bool %}{% if amenity_badges.append(('✅ Orda Plus', '#16a34a')) %}{% endif %}{% endif %}
+    {% if hp and hp.parking_places %}{% if amenity_badges.append(('🅿️ ' ~ hp.parking_places ~ ' парковочных мест', '#2563eb')) %}{% endif %}{% endif %}
+    {% if hp and hp.playgrounds %}{% if amenity_badges.append(('🧸 ' ~ hp.playgrounds ~ ' детских площадок', '#2563eb')) %}{% endif %}{% endif %}
+    {% if hp and hp.sports_fields %}{% if amenity_badges.append(('⚽ ' ~ hp.sports_fields ~ ' спортплощадок', '#2563eb')) %}{% endif %}{% endif %}
+    {% if amenity_badges %}
+    <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
+      {% for label, color in amenity_badges %}
+      <span style="display:inline-block;font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;background:{{ color }}1a;color:{{ color }};border:1px solid {{ color }}40;white-space:nowrap;">{{ label }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div style="margin-top:10px;">
       {% for flag, label in [
         (cx.has_parking, 'Парковка'),
         (cx.has_security, 'Охрана'),
@@ -384,6 +661,35 @@ async function toggleFavComplex() {
     {% endif %}
   </div>
 </div>
+
+{% if house_listings and not is_newbuild_page %}
+<!-- Объявления в этом доме (задача 2026-08-13, "на всех страницах домов
+     должны быть 5 объявлений в этом доме под блоками Удобства и Что
+     рядом") — карточки фото/цена/метраж, тот же визуальный приём, что у
+     "Варианты квартир в доме" ниже (та секция — новостройки/newbuild_units,
+     эта — вторичка/apartment_listings). Меньше 5, если в доме меньше 5
+     активных объявлений — house_listings уже LIMIT 5 в запросе. Клик по
+     карточке — /listing/{id}, наша страница объявления (не внешняя Крыша).
+     "and not is_newbuild_page" (задача 2026-08-14, "вторичка без
+     изменений") — на страницах новостроек эти же объявления показывает
+     более богатая секция "🧑‍🤝‍🧑 Предложения людей (Крыша)" ниже
+     (тег переуступка/вторичка + дельта к цене застройщика), дублировать
+     тот же список в двух видах на одной странице незачем. -->
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;">
+  <b style="font-size:13.5px;">📋 Объявления в этом доме <span style="font-weight:400;color:#888;">({{ house_listings|length }})</span></b>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px;">
+    {% for l in house_listings %}
+    <a href="/listing/{{ l.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+      {% if l.photo %}<img src="{{ l.photo }}" loading="lazy" style="width:100%;height:120px;object-fit:cover;display:block;">{% else %}<div style="width:100%;height:120px;background:var(--bg);"></div>{% endif %}
+      <div style="padding:7px 8px;">
+        <div style="font-weight:800;font-size:13px;">{{ '%.1f'|format(l.price/1e6) if l.price else 'по запросу' }}{% if l.price %} млн ₸{% endif %}</div>
+        <div style="font-size:11px;color:#888;margin-top:2px;">{% if l.rooms %}{{ l.rooms }}-комн · {% endif %}{{ l.area|round(1) if l.area else '?' }} м²</div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 {% if materials or wall_material_from_desc %}
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;">
@@ -483,10 +789,63 @@ async function toggleFavComplex() {
 </div>
 {% endif %}
 
-<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13.5px;color:var(--text);">
-  <b>Проверить документы застройщика</b> — Управление архитектуры и градостроительства Астаны: по телефону горячей линии или личному обращению можно уточнить наличие полного пакета документов и иногда получить информацию по проекту (конструктивная схема, этажность, материалы).
-  Контакты: <b>+7 (7172) 55-04-28</b>, <b>+7 (7172) 55-67-03</b>.
+{% if is_newbuild_page and people_offers %}
+<!-- 🧑‍🤝‍🧑 Предложения людей (Крыша) — задача 2026-08-14, "двойное
+     размещение предложений людей в новостройках; аналитика считает
+     listing один раз". Те же apartment_listings, что house_listings
+     (см. вторичную секцию выше, скрытую здесь через is_newbuild_page),
+     но с двумя доп. сигналами:
+       - тег «переуступка»/«вторичка» — bot/core/newbuild_person_offers.
+         classify_person_offer() (текст объявления ИЛИ срок сдачи ЖК vs
+         первое появление объявления);
+       - дельта цены/м² к актуальному прайсу застройщика — точная, если
+         Фаза 2 (юнит-мэтчинг) уже связала это объявление с конкретным
+         newbuild_units.id (dev_price_method == 'unit'), иначе агрегат по
+         той же комнатности в этом ЖК ('rooms') или по всему ЖК ('overall').
+         Фаза 2 не блокер — секция показывается независимо от её покрытия.
+     Каждое apartment_listings.id тут ровно из ОДНОГО запроса (тот же
+     _listing_id_match, что и everywhere — имя ЖК ИЛИ resolved_house_id),
+     дублей/двойного счёта в рамках этой страницы нет; тот же принцип
+     соблюдается в /admin/api/newbuild-complex/{id}/units (карта/поиск
+     новостроек) — см. комментарий там. -->
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+    <b style="font-size:13.5px;">🧑‍🤝‍🧑 Предложения людей (Крыша) <span style="font-weight:400;color:#888;">({{ people_offers_total }})</span></b>
+    <span style="font-size:11px;color:#888;" title="Индивидуальные объявления людей на Крыше по этому ЖК/дому — не официальное предложение застройщика (то — блок «Варианты квартир в доме» выше)">не путать с официальным предложением застройщика ↑</span>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
+    {% for l in people_offers %}
+    <a href="/listing/{{ l.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;position:relative;">
+      {% if l.tag %}
+      {# Задача 2026-08-14 ("бейдж переуступки — слабый сигнал"): живой отчёт
+         показал 89.9% тега assignment только по дате (tag_signal='date'),
+         не по тексту — категоричное «переуступка» на слабом сигнале вводило
+         в заблуждение, «возможно» — только для него; текстовый сигнал
+         (tag_signal='text') остаётся безусловным. #}
+      <span title="{{ l.tag_reason }}" style="position:absolute;top:6px;left:6px;font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;
+              {% if l.tag == 'assignment' %}background:rgba(234,179,8,.9);color:#1a1a1a;{% else %}background:rgba(37,99,235,.9);color:#fff;{% endif %}">
+        {{ 'возможно, переуступка' if (l.tag == 'assignment' and l.tag_signal == 'date') else ('переуступка' if l.tag == 'assignment' else 'вторичка') }}
+      </span>
+      {% endif %}
+      {% if l.photo %}<img src="{{ l.photo }}" loading="lazy" style="width:100%;height:120px;object-fit:cover;display:block;">{% else %}<div style="width:100%;height:120px;background:var(--bg);"></div>{% endif %}
+      <div style="padding:7px 8px;">
+        <div style="font-weight:800;font-size:13px;">{{ '%.1f'|format(l.price/1e6) if l.price else 'по запросу' }}{% if l.price %} млн ₸{% endif %}</div>
+        <div style="font-size:11px;color:#888;margin-top:2px;">{% if l.rooms %}{{ l.rooms }}-комн · {% endif %}{{ l.area|round(1) if l.area else '?' }} м²</div>
+        {% if l.delta_pct is not none %}
+        <div style="font-size:10.5px;margin-top:3px;color:{{ '#ef4444' if l.delta_pct > 0 else '#16a34a' }};"
+             title="Цена/м² объявления против {{ 'цены смэтченного юнита застройщика (Фаза 2)' if l.dev_price_method == 'unit' else ('медианы застройщика по этой комнатности в ЖК' if l.dev_price_method == 'rooms' else 'медианы застройщика по всему ЖК') }}: {{ l.dev_price_per_m2 }} ₸/м²">
+          {{ '+' if l.delta_pct > 0 else '' }}{{ l.delta_pct }}% к цене застройщика{% if l.dev_price_method == 'unit' %} (юнит){% endif %}
+        </div>
+        {% endif %}
+      </div>
+    </a>
+    {% endfor %}
+  </div>
 </div>
+{% endif %}
+<!-- "Проверить документы застройщика" переехал вниз, перед "Отзывы"
+     (задача 2026-08-13, "расположить снизу перед Отзывами") — см. блок
+     чуть выше секции 💬 Отзывы. -->
 
 <!-- Карта убрана совсем (задача "убери карту", 2026-08-12) — блок
      "Локация ЖК" переехал в карточку "Что рядом" в ряду 2 выше, попапы
@@ -817,6 +1176,7 @@ document.addEventListener('hatuli:chart-resize', (e) => {
       <tr><td style="padding:4px 12px 4px 0;color:#888;">Отопление / вентиляция</td><td>{{ tech_specs.heating_type or '—' }}{% if tech_specs.ventilation_type %} · {{ tech_specs.ventilation_type }}{% endif %}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#888;">Лифты</td><td>{% if tech_specs.lifts_brand %}{{ tech_specs.lifts_brand }}{% if tech_specs.lifts_model %} {{ tech_specs.lifts_model }}{% endif %}{% if tech_specs.lifts_count_per_section %} · {{ tech_specs.lifts_count_per_section }} на секцию{% endif %}{% else %}—{% endif %}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#888;">Потолки (мин–макс)</td><td>{% if tech_specs.ceiling_height_min %}{{ tech_specs.ceiling_height_min }}–{{ tech_specs.ceiling_height_max or tech_specs.ceiling_height_min }} м{% else %}—{% endif %}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#888;">Окна (тип, мин–макс высота)</td><td>{% if tech_specs.window_height_min %}{% if tech_specs.window_type %}{{ tech_specs.window_type }} · {% endif %}{{ tech_specs.window_height_min }}–{{ tech_specs.window_height_max or tech_specs.window_height_min }} м{% elif tech_specs.window_type %}{{ tech_specs.window_type }}{% else %}—{% endif %}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#888;">БИН застройщика</td><td>{{ tech_specs.developer_bin or '—' }}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#888;">Лицензия (elicense.kz)</td><td>{{ tech_specs.elicense_status or '—' }}{% if tech_specs.developer_bin %} · <a href="https://elicense.kz/ru/search?bin={{ tech_specs.developer_bin }}" target="_blank">проверить ↗</a>{% endif %}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#888;">Экспертиза ПСД</td><td>{% if tech_specs.docs_psd_expertise_number %}№{{ tech_specs.docs_psd_expertise_number }}{% if tech_specs.docs_psd_expertise_date %} от {{ tech_specs.docs_psd_expertise_date }}{% endif %}{% else %}—{% endif %}</td></tr>
@@ -840,6 +1200,14 @@ document.addEventListener('hatuli:chart-resize', (e) => {
         <input id="t-lifts-count" type="number" placeholder="Лифтов на секцию" value="{{ tech_specs.lifts_count_per_section or '' }}">
         <input id="t-ceiling-min" placeholder="Потолки мин, м" value="{{ tech_specs.ceiling_height_min or '' }}">
         <input id="t-ceiling-max" placeholder="Потолки макс, м" value="{{ tech_specs.ceiling_height_max or '' }}">
+        <!-- Высота окон (задача 2026-08-13, "собирать данные по высоте окон
+             для новостроек") — ручной ввод, тот же паттерн, что потолки:
+             живой спот-чек 5 сайтов застройщиков не нашёл этих данных ни
+             на одном (не нашлось даже высоты потолков — та тоже приходит
+             не от них), заводим поле заранее под будущий источник. -->
+        <input id="t-window-type" placeholder="Окна — тип (ПВХ 3-камерные...)" value="{{ tech_specs.window_type or '' }}">
+        <input id="t-window-min" placeholder="Окна мин, м" value="{{ tech_specs.window_height_min or '' }}">
+        <input id="t-window-max" placeholder="Окна макс, м" value="{{ tech_specs.window_height_max or '' }}">
         <input id="t-bin" placeholder="БИН застройщика" value="{{ tech_specs.developer_bin or '' }}">
         <input id="t-elicense" placeholder="Статус лицензии elicense.kz" value="{{ tech_specs.elicense_status or '' }}">
         <input id="t-psd-num" placeholder="№ заключения экспертизы ПСД" value="{{ tech_specs.docs_psd_expertise_number or '' }}">
@@ -854,6 +1222,13 @@ document.addEventListener('hatuli:chart-resize', (e) => {
       <span id="t-status" style="font-size:12px;color:#22c55e;margin-left:8px;"></span>
     </div>
   </div>
+
+<!-- "Проверить документы застройщика" — задача 2026-08-13, "расположить
+     снизу перед Отзывами" (раньше был выше, сразу после блока новостроек). -->
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:13.5px;color:var(--text);">
+  <b>Проверить документы застройщика</b> — Управление архитектуры и градостроительства Астаны: по телефону горячей линии или личному обращению можно уточнить наличие полного пакета документов и иногда получить информацию по проекту (конструктивная схема, этажность, материалы).
+  Контакты: <b>+7 (7172) 55-04-28</b>, <b>+7 (7172) 55-67-03</b>.
+</div>
 
 <!-- Отзывы о ЖК — смотреть могут все, оставлять только залогиненные через
      Telegram (задача "блок отзывов", 2026-08-07). Перенесены в самый низ
@@ -940,6 +1315,7 @@ async function saveTechSpecs() {
       lifts_brand: val('t-lifts-brand'), lifts_model: val('t-lifts-model'),
       lifts_count_per_section: val('t-lifts-count'),
       ceiling_height_min: val('t-ceiling-min'), ceiling_height_max: val('t-ceiling-max'),
+      window_type: val('t-window-type'), window_height_min: val('t-window-min'), window_height_max: val('t-window-max'),
       developer_bin: val('t-bin'), elicense_status: val('t-elicense'),
       docs_psd_expertise_number: val('t-psd-num'), docs_psd_expertise_date: val('t-psd-date'),
       docs_apz_number: val('t-apz-num'), docs_apz_date: val('t-apz-date'),

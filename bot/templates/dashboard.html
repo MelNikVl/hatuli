@@ -97,6 +97,10 @@ html, body { overflow: hidden !important; }
 .filterbar select, .filterbar input[type=number] { padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; }
 .rooms-dd { position:relative; flex-shrink:0; }
 .rooms-dd-btn { padding:7px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); font-size:13.5px; cursor:pointer; white-space:nowrap; }
+/* "Тепловые карты" — просто вся кнопка чуть синяя (задача 2026-08-13),
+   без солидного синего уголка, который был раньше (см. setHeatDdBtnActive
+   для JS-версии подсветки, пока карта реально включена — тот же тон). */
+.heat-dd-btn-tint { background:rgba(37,99,235,.10); border-color:rgba(37,99,235,.3); }
 .rooms-dd-panel { display:none; position:absolute; top:calc(100% + 4px); left:0; background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.25); padding:10px 14px; z-index:5000; min-width:160px; }
 .rooms-dd-panel.open { display:block; }
 .rooms-dd-panel label { display:flex; align-items:center; gap:8px; padding:5px 0; font-size:13.5px; cursor:pointer; white-space:nowrap; }
@@ -197,8 +201,11 @@ html, body { overflow: hidden !important; }
   <div id="f-heat-wrap" class="rooms-dd">
     <!-- Подсветка кнопки, пока включена тепловая карта — аккуратно, не
        кислотно (задача 2026-08-13: "подсвети немного и аккуратно"), просто
-       тонкая рамка + мягкий фон, без смены цвета текста/иконки. -->
-    <button type="button" class="rooms-dd-btn" id="heat-dd-btn" onclick="toggleFbarDropdown(event,'heat-dd-btn')" style="background:linear-gradient(135deg,#2563eb 0%,#2563eb 31%,transparent 31.5%),var(--bg);">Тепловые карты</button>
+       тонкая рамка + мягкий фон, без смены цвета текста/иконки. Убрал
+       сплошной синий уголок-треугольник (задача 2026-08-13, "убери с неё
+       синее, просто саму сделай чуть синей") — вместо него ровный лёгкий
+       синий фон на всю кнопку через .heat-dd-btn ниже. -->
+    <button type="button" class="rooms-dd-btn heat-dd-btn-tint" id="heat-dd-btn" onclick="toggleFbarDropdown(event,'heat-dd-btn')">Тепловые карты</button>
     <!-- Открывается вниз-влево (right:0, не left:0 из общего .rooms-dd-panel)
          — задача 2026-08-13, раньше уходила вправо и обрезалась/налезала. -->
     <div class="rooms-dd-panel" id="heat-dd-panel" style="left:auto;right:0;">
@@ -211,6 +218,15 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="hype" onclick="toggleHeat('hype')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔥 Хайп (новости)</button>
         <button type="button" class="heat-btn" data-mode="population" onclick="toggleHeat('population')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Плотность нас.</button>
         <button type="button" class="heat-btn" data-mode="interest" onclick="toggleHeat('interest')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Интерес (просмотры)</button>
+        <button type="button" class="heat-btn" data-mode="air" onclick="toggleHeat('air')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">Воздух (ПНЗ)</button>
+        <span id="air-days-row" style="display:none;align-items:center;gap:4px;">
+          <span style="font-size:10.5px;color:#888;font-weight:700;">за</span>
+          <button type="button" class="air-days-btn" data-days="1" onclick="setAirDays(1,this)" style="padding:4px 9px;border:none;border-radius:6px;background:#e5e7eb;color:#333;font-weight:700;font-size:11px;cursor:pointer;">1д</button>
+          <button type="button" class="air-days-btn" data-days="3" onclick="setAirDays(3,this)" style="padding:4px 9px;border:none;border-radius:6px;background:#e5e7eb;color:#333;font-weight:700;font-size:11px;cursor:pointer;">3д</button>
+          <button type="button" class="air-days-btn" data-days="7" onclick="setAirDays(7,this)" style="padding:4px 9px;border:none;border-radius:6px;background:#e5e7eb;color:#333;font-weight:700;font-size:11px;cursor:pointer;">7д</button>
+          <button type="button" class="air-days-btn" data-days="30" onclick="setAirDays(30,this)" style="padding:4px 9px;border:none;border-radius:6px;background:#e5e7eb;color:#333;font-weight:700;font-size:11px;cursor:pointer;">мес</button>
+          <button type="button" class="air-days-btn" data-days="180" onclick="setAirDays(180,this)" style="padding:4px 9px;border:none;border-radius:6px;background:#e5e7eb;color:#333;font-weight:700;font-size:11px;cursor:pointer;">полгода</button>
+        </span>
         <button type="button" class="heat-btn" data-mode="count" onclick="toggleHeat('count')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🔢 Кол-во объявлений</button>
         <button type="button" class="heat-btn" data-mode="demolition" onclick="toggleHeat('demolition')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🏚 Снос домов</button>
         <button type="button" class="heat-btn" data-mode="crime" onclick="toggleHeat('crime')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🚨 Преступность</button>
@@ -729,14 +745,52 @@ function openSidePanel(ids) {
   // (список скрыт) — переключаем на список, как по кнопке-тумблеру.
   const mw = document.getElementById('map-wrap');
   if (mw && window.innerWidth <= 767) mw.classList.add('mobile-list');
-  const el = document.getElementById('card-' + ids[0]);
-  if (el) {
+  // Клик по кластеру (2+ id разом, см. saleCluster.on('clusterclick')) —
+  // живой фидбек 2026-08-13 ("кликаю на кружок с несколькими объявлениями —
+  // покажи ТОЛЬКО их справа"): раньше персистентный список игнорировался,
+  // openSidePanel просто скроллил к ПЕРВОМУ id внутри уже отрисованного
+  // "что видно на карте вообще" списка — кластер никогда не сужал панель.
+  // Явный клик по кластеру — явное намерение посмотреть именно эти N
+  // объявлений, не весь вьюпорт; следующий moveend сам вернёт персистентный
+  // список (см. refreshSidePanelList), так что это не ломает обычный режим.
+  if (ids.length > 1) {
+    sidePanelShownIds = ids.slice();
+    renderSidePanelIds(sidePanelShownIds, undefined, 'объявлений');
+  }
+  // Карточка может появиться с задержкой (ленивый батч-рендер панели,
+  // гонка с перерисовкой по moveend) — ретраим центрирование.
+  let attempts = 0;
+  const tryCenter = () => {
+    const el = document.getElementById('card-' + ids[0]);
+    if (!el) {
+      if (attempts++ < 10) { setTimeout(tryCenter, 250); return; }
+      // Живой фидбек 2026-08-13 ("иногда скроллится куда-то, где его нет,
+      // даже после полной подгрузки"): персистентный список (moveend-
+      // driven, см. refreshSidePanelList) мог просто не успеть/не выбрать
+      // именно эту карточку 10 ретраев подряд — раньше на этом молча
+      // сдавались. Кликнутый маркер гарантированно есть в MINI_PIN_MARKERS/
+      // CARD_HTML (иначе не по чему было бы кликать) — досильно вставляем
+      // именно его в список вместо очередного ожидания чужого рефреша.
+      if (!sidePanelShownIds.includes(ids[0]) && CARD_HTML[ids[0]] != null) {
+        sidePanelShownIds = [ids[0]].concat(sidePanelShownIds);
+        renderSidePanelIds(sidePanelShownIds, undefined, 'объявлений');
+        requestAnimationFrame(() => {
+          const el2 = document.getElementById('card-' + ids[0]);
+          if (!el2) return;
+          centerCardInPanel(el2);
+          el2.classList.add('side-card-flash');
+          setTimeout(() => el2.classList.remove('side-card-flash'), 3000);
+        });
+      }
+      return;
+    }
     // Мгновенный скролл ТОЛЬКО панели (см. centerCardInPanel) — карточка
     // ровно по центру правого блока, страница не прокручивается.
     centerCardInPanel(el);
     el.classList.add('side-card-flash');
     setTimeout(() => el.classList.remove('side-card-flash'), 3000);
-  }
+  };
+  tryCenter();
 }
 function closeSidePanel() {
   // Панель больше не скрывается (персистентная) — клик по карте раньше её
@@ -783,13 +837,42 @@ function highlightMapPin(cardId, on) {
   const complexId = NB_CARD_COMPLEX[cardId];
   const pinId = complexId != null ? 'nb-cx-' + complexId : cardId;
   const el = document.getElementById('pin-' + pinId);
-  if (!el) return;
-  // Пин позиционируется через inline transform:translate(-50%,-100%)
-  // (см. buildPricePinHtml/newbuildPinHtml) — CSS-класс с transform:scale
-  // не победил бы инлайн-стиль по специфичности, поэтому просто дописываем
-  // scale к тому же инлайн-transform напрямую через JS.
-  el.style.transform = on ? 'translate(-50%,-100%) scale(1.35)' : 'translate(-50%,-100%)';
-  el.style.zIndex = on ? '10000' : '';
+  if (el) {
+    // Пин позиционируется через inline transform:translate(-50%,-100%)
+    // (см. buildPricePinHtml/newbuildPinHtml) — CSS-класс с transform:scale
+    // не победил бы инлайн-стиль по специфичности, поэтому просто дописываем
+    // scale к тому же инлайн-transform напрямую через JS.
+    el.style.transform = on ? 'translate(-50%,-100%) scale(1.35)' : 'translate(-50%,-100%)';
+    el.style.zIndex = on ? '10000' : '';
+    return;
+  }
+  // Живой фидбек 2026-08-13 ("куда делась hover-подсветка? если объявление
+  // в кружке — кружок должен моргать/увеличиваться"): своего DOM-пина нет —
+  // маркер сейчас "проглочен" кластером (Leaflet.markercluster прячет
+  // отдельные маркеры внутри кластер-иконки, пока они не расспайдерятся) —
+  // раньше highlightMapPin тут просто молча выходил (`if (!el) return`).
+  // getVisibleParent() — штатный API плагина: отдаёт текущую видимую
+  // кластер-иконку для любого маркера группы, кластеризован он сейчас или
+  // нет. Новостройки (complexId != null) не кластеризуются вовсе — если
+  // для них нет DOM-пина, значит пин вне вьюпорта, подсвечивать нечего.
+  if (complexId != null) return;
+  const marker = MINI_PIN_MARKERS[pinId];
+  if (!marker || !map.hasLayer(saleCluster)) return;
+  let parent;
+  try { parent = saleCluster.getVisibleParent(marker); } catch (e) { return; }
+  const clusterIcon = parent && parent !== marker ? parent._icon : null;
+  if (!clusterIcon) return;
+  // Скейлим только внутренний div контента кластер-иконки (см.
+  // iconCreateFunction — `<div><span>N</span></div>`), не сам _icon: тот
+  // Leaflet позиционирует через свой собственный inline transform (пиксель
+  // на карте) — перезаписывать его же transform под scale сдвинуло бы
+  // кластер с места. filter — на _icon напрямую, безопасно (тот же приём,
+  // что уже использует selectClusterEl для клик-выделения кластера).
+  const inner = clusterIcon.firstElementChild || clusterIcon;
+  inner.style.transition = 'transform .15s ease';
+  inner.style.transform = on ? 'scale(1.3)' : '';
+  clusterIcon.style.filter = on ? 'drop-shadow(0 0 5px rgba(37,99,235,.9))' : '';
+  clusterIcon.style.zIndex = on ? '10000' : '';
 }
 // Инкрементальный рендер: НЕ пересоздаём уже показанные карточки (теряли
 // бы скролл/hover/уже загруженные фото при каждом moveend) — только
@@ -808,6 +891,12 @@ function renderSidePanelIds(ids, emptyMsg, countWord) {
   // карточками при переходе из пустого списка в непустой.
   body.querySelectorAll(':scope > :not(.side-card)').forEach(el => el.remove());
   const existingEls = Array.from(body.querySelectorAll(':scope > .side-card'));
+  // Полная замена списка (например, «все ЖК» 94 шт → «выбранный ЖК» 4 шт):
+  // удаляем старые карточки; браузер оставил бы «липкий» scrollTop на
+  // невалидной позиции, и центр по новой карточке уезжал бы не туда.
+  // Сбрасываем скролл ДО удаления, чтобы центр считался от чистого листа.
+  const replaced = existingEls.length && !existingEls.some(el => idsSet.has(el.dataset.id));
+  if (replaced) body.scrollTop = 0;
   existingEls.forEach(el => { if (!idsSet.has(el.dataset.id)) el.remove(); });
   const existingIds = new Set(existingEls.map(el => el.dataset.id).filter(id => idsSet.has(id)));
   const frag = document.createDocumentFragment();
@@ -894,7 +983,15 @@ async function refreshNewbuildSidePanelList() {
     const flatIds = [];
     if (d && !d.error && d.units) {
       d.units.forEach(u => {
-        const cardId = 'nb-' + u.id;
+        // Задача 2026-08-14 ("двойное размещение предложений людей в
+        // новостройках") — units теперь смешивает официальные варианты
+        // застройщика (u.source==='developer', id — newbuild_units.id,
+        // открывается через ветку 'nb-' в openDetailModal) и людские
+        // объявления с Крыши (u.source==='person', id — САМ apartment_
+        // listings.id, никакого 'nb-' префикса: у openDetailModal это уже
+        // обычная ветка /admin/api/listing/{id}, префикс сломал бы её —
+        // увёл на несуществующий/чужой newbuild-юнит с тем же числовым id).
+        const cardId = u.source === 'person' ? String(u.id) : ('nb-' + u.id);
         CARD_HTML[cardId] = buildNewbuildUnitCardHtml(d, u);
         NB_CARD_COMPLEX[cardId] = d.id;
         flatIds.push(cardId);
@@ -939,13 +1036,23 @@ async function refreshNewbuildSidePanelList() {
 // (пин виден = внутри текущего вьюпорта = его юниты уже расплющены туда),
 // просто скроллим и подсвечиваем первую карточку этого ЖК.
 function scrollToNewbuildComplex(complexId) {
-  const el = document.querySelector(`#side-panel-body .side-card[data-complex-id="${complexId}"]`);
   const mw = document.getElementById('map-wrap');
   if (mw && window.innerWidth <= 767) mw.classList.add('mobile-list');
-  if (!el) return;
-  centerCardInPanel(el);
-  el.classList.add('side-card-flash');
-  setTimeout(() => el.classList.remove('side-card-flash'), 3000);
+  // Карточки юнитов рендерятся ПОСЛЕ сетевого ответа /admin/api/newbuild-complex
+  // .../units, а панель в это же время может перерисовываться по moveend —
+  // гонка: в момент вызова карточки ещё нет (el=null → старый код молча
+  // выходил), либо «липкий» scrollTop после полной замены списка давал
+  // неверную позицию (жалоба 2026-08-13: «скроллится куда-то, где его нет»).
+  // Ретраим центрирование, пока карточка не появится и не встанет по центру.
+  let attempts = 0;
+  const tryCenter = () => {
+    const el = document.querySelector(`#side-panel-body .side-card[data-complex-id="${complexId}"]`);
+    if (!el) { if (attempts++ < 10) setTimeout(tryCenter, 250); return; }
+    centerCardInPanel(el);
+    el.classList.add('side-card-flash');
+    setTimeout(() => el.classList.remove('side-card-flash'), 3000);
+  };
+  tryCenter();
 }
 // (регистрация map.on('moveend', …) для refreshSidePanelList — см. ниже,
 // ПОСЛЕ строки `const map = L.map(...)`: `map` — const, обращение к ней
@@ -1776,8 +1883,15 @@ async function drawNewbuildLayer() {
 // пилюлями, лого застройщика перед именем (см. B4 задачи). Клик по фото
 // открывает большой попап (не лайтбокс) — как и остальная карточка.
 function buildNewbuildUnitCardHtml(d, u) {
-  const cardId = 'nb-' + u.id;
-  const photos = [u.photo, ...(d.photos || [])].filter(Boolean);
+  // См. комментарий у refreshNewbuildSidePanelList — тот же принцип: у
+  // людских объявлений (u.source==='person') cardId — голый apartment_
+  // listings.id, без 'nb-'.
+  const cardId = u.source === 'person' ? String(u.id) : ('nb-' + u.id);
+  // У людских объявлений своя (одна) фотография с Крыши — фото ЖК от
+  // застройщика (d.photos) сюда не подмешиваем: это была бы галерея
+  // застройщика на карточке конкретного чужого объявления, вводит в
+  // заблуждение, откуда фото.
+  const photos = u.source === 'person' ? [u.photo].filter(Boolean) : [u.photo, ...(d.photos || [])].filter(Boolean);
   const carHtml = photos.length ? (() => {
     ptPhotos[cardId] = photos; carIdx[cardId] = 0;
     return `
@@ -1799,9 +1913,31 @@ function buildNewbuildUnitCardHtml(d, u) {
   const devHtml = d.developer_id
     ? `<a href="/developer/${d.developer_id}" onclick="event.stopPropagation()" style="color:#888;font-weight:600;text-decoration:none;">${logoHtml}${escapeHtml(d.developer || '')}</a>`
     : `<span style="color:#888;font-weight:600;">${logoHtml}${escapeHtml(d.developer || 'застройщик не указан')}</span>`;
+  // Задача 2026-08-14 — бейдж "предложение человека" (не официальный
+  // supply застройщика) + тег переуступка/вторичка + дельта к актуальной
+  // цене застройщика (агрегат по ЖК/комнатности или точная по юниту, если
+  // есть Фаза-2 unit-линк — см. bot/core/newbuild_person_offers.py,
+  // терминал/entity_ids). Кнопка "Связаться с застройщиком" тут не к месту
+  // (это чужое объявление, не сделка с застройщиком) — не показываем.
+  const isPerson = u.source === 'person';
+  const badgeHtml = isPerson
+    ? `<span style="position:absolute;top:8px;left:8px;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:999px;background:rgba(0,0,0,.6);color:#fff;z-index:1;">предложение человека</span>`
+    : '';
+  // Задача 2026-08-14 ("бейдж переуступки — слабый сигнал") — 89.9% тега
+  // assignment на живых данных получены только по дате (tag_signal==='date'),
+  // не по тексту («переуступка»/«цессия» в объявлении) — категоричный
+  // бейдж вводил в заблуждение, «возможно» — только для слабого сигнала.
+  const tagHtml = (isPerson && u.tag)
+    ? `<span title="${escapeHtml(u.tag_reason || '')}" style="display:inline-block;font-size:11px;font-weight:700;padding:3px 10px;border-radius:999px;margin:4px 5px 0 0;
+        ${u.tag === 'assignment' ? 'background:#fef3c7;color:#92400e;' : 'background:#dbeafe;color:#1e40af;'}">${u.tag === 'assignment' ? (u.tag_signal === 'date' ? 'возможно, переуступка' : 'переуступка') : 'вторичка'}</span>`
+    : '';
+  const deltaHtml = (isPerson && u.delta_pct != null)
+    ? `<div style="font-size:12px;margin-top:4px;color:${u.delta_pct > 0 ? '#ef4444' : '#16a34a'};" title="Цена/м² против ${u.dev_price_method === 'unit' ? 'цены смэтченного юнита застройщика' : (u.dev_price_method === 'rooms' ? 'медианы застройщика по этой комнатности' : 'медианы застройщика по ЖК')}: ${u.dev_price_per_m2 || '—'} ₸/м²">
+        ${u.delta_pct > 0 ? '+' : ''}${u.delta_pct}% к цене застройщика</div>`
+    : '';
   return `
-<div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openDetailModal('${cardId}', event)">
-  ${carHtml}
+<div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;position:relative;" onclick="openDetailModal('${cardId}', event)">
+  <div style="position:relative;">${carHtml}${badgeHtml}</div>
   <div style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
     <div style="font-size:23px;font-weight:800;line-height:1.05;">${u.price ? (u.price/1e6).toFixed(1) + ' млн ₸' : 'цена по запросу'}</div>
     <div style="margin-top:4px;">
@@ -1809,10 +1945,12 @@ function buildNewbuildUnitCardHtml(d, u) {
       <span style="${pillStyle}">${u.area ? Math.round(u.area) : '?'} м²</span>
       <span style="${pillStyle}">${u.floor || '?'}/${u.floors_total || '?'} эт.</span>
     </div>
+    ${tagHtml}
+    ${deltaHtml}
     ${d.address ? `<div style="font-size:12.5px;color:var(--text);margin-top:6px;">📍 Адрес: ${escapeHtml(d.address)}</div>` : ''}
     <div style="font-size:12.5px;color:var(--text);margin-top:2px;">Год сдачи: ${escapeHtml(String(sdача))}</div>
     <div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/${d.id}" onclick="event.stopPropagation()" style="font-weight:600;">ЖК ${escapeHtml(d.name)}</a> · ${devHtml}</div>
-    ${d.sales_phone ? `<div onclick="event.stopPropagation()" style="margin-top:8px;">${contactDevBtnHtml(d, u.id)}</div>` : ''}
+    ${(!isPerson && d.sales_phone) ? `<div onclick="event.stopPropagation()" style="margin-top:8px;">${contactDevBtnHtml(d, u.id)}</div>` : ''}
   </div>
 </div>`;
 }
@@ -2542,13 +2680,22 @@ function renderSaleBatch(d, opts) {
         : (pt.address ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">📍 <span style="font-weight:600;">${escapeHtml(pt.address.replace(/\s*—.*$/, '').trim())}</span>${devTxt}</div>`
            : (devTxt ? `<div style="font-size:1em;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : ''));
       const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
-      const ownerPillStyle = isOwner
-        ? 'display:inline-block;background:#dcfce7;color:#166534;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;'
-        : 'display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+      // Скоринг доверия (задача 2026-08-13) — раньше пилюля знала только
+      // owner/риелтор (is_owner), теперь 3 состояния через seller_type:
+      // Крыша Агент (верифицированный партнёр Крыши, самый высокий скор) /
+      // собственник / риелтор без бейджа. trust_score — тултип, не текст
+      // пилюли (не перегружаем карточку числами).
+      const SELLER_PILL = {
+        krisha_agent: {bg: '#dbeafe', color: '#1e40af', label: '🔑 Крыша Агент'},
+        owner:        {bg: '#dcfce7', color: '#166534', label: 'собственник'},
+        realtor:      {bg: '#e5e7eb', color: '#374151', label: 'риелтор'},
+      };
+      const sellerInfo = SELLER_PILL[pt.seller_type] || (isOwner ? SELLER_PILL.owner : SELLER_PILL.realtor);
+      const ownerPillStyle = `display:inline-block;background:${sellerInfo.bg};color:${sellerInfo.color};border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;`;
       const roomsPillHtml = `<span style="${pillStyle}margin:0;">${pt.rooms || '?'}-комн</span>`;
       const areaPillHtml = `<span style="${pillStyle}margin:0;">${areaTxt} м²</span>`;
       const floorPillHtml = pt.floor ? `<span style="${pillStyle}">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : '';
-      const ownerPillHtml = `<span style="${ownerPillStyle}">${isOwner ? 'собственник' : 'риелтор'}</span>`;
+      const ownerPillHtml = `<span style="${ownerPillStyle}" title="${pt.trust_score != null ? 'Скоринг доверия: ' + pt.trust_score : ''}">${sellerInfo.label}</span>`;
       // Высота потолка — теперь обязательная пилюля в общем ряду (раньше
       // была условной среди метража/кухни/отделки, см. задачу "упростить
       // карточку до фото/цены/комнатности/площади/этажа/продавца/потолка").
@@ -2923,7 +3070,23 @@ const heatLayer = L.layerGroup();
 // draw-функции не знают о split-режиме, просто рисуют в heatTargetLayer.
 let heatTargetLayer = heatLayer;
 let heatMode = null;
-let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, interest: null, count: null};
+let airDays = 1;
+function setAirDays(d, btn) {
+  airDays = d;
+  document.querySelectorAll('.air-days-btn').forEach(b => {
+    b.style.background = b === btn ? '#2563eb' : '#e5e7eb';
+    b.style.color = b === btn ? '#fff' : '#333';
+  });
+  heatCache.air = null;
+  if (heatMode === 'air') {
+    // Перезапуск режима с новым периодом: сбросить heatMode, иначе
+    // toggleHeat увидит «уже включён» и выключит слой.
+    heatMode = null;
+    heatLayer.clearLayers();
+    toggleHeat('air');
+  }
+}
+let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, interest: null, air: null, count: null};
 let noiseDefaultsApplied = false;  // гекс 40м / прозрачность 50% при первом включении шума за сессию
 // Детальный слой шума (30м, по фактическим точкам дорог) при ~39к точек по
 // городу даёт под 100к+ отдельных гексов, если рисовать их все разом — это
@@ -3177,18 +3340,86 @@ function interestColor(t) {
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 function drawInterestHeat(hexes) {
-  const vals = (hexes || []).map(h => h.views).filter(v => v > 0);
-  if (!vals.length) return;
-  const hi = percentile(vals, 0.92) || Math.max(...vals) || 1;
-  (hexes || []).forEach(h => {
-    const t = Math.min(1, h.views / hi);
+  const arr = (hexes || []).filter(h => h.views > 0);
+  if (!arr.length) return;
+  // РАНГОВАЯ раскраска вместо value-based (задача 2026-08-13): распределение
+  // просмотров сильно скошено (пара гексов с сотнями тысяч просмотров,
+  // большинство — с мелкими суммами), поэтому раскраска по значению забивала
+  // почти всё в нижние 2-3 ступени палитры — «как будто цветов меньше 12».
+  // По рангу каждая 1/12 часть гексов получает свою ступень — все 12 цветов
+  // реально видны на карте.
+  const sorted = arr.slice().sort((a, b) => a.views - b.views);
+  const n = sorted.length;
+  const rankOf = new Map(sorted.map((h, i) => [h, i / (n - 1)]));
+  arr.forEach(h => {
+    const t = rankOf.get(h);
     L.polygon(transportHexCorners(h.lat, h.lon, HEAT_EDGE_M), {
-      color: 'transparent', weight: 0, fillColor: interestColor(t), fillOpacity: 0.35 + t * 0.45,
+      color: 'transparent', weight: 0, fillColor: interestColor(t), fillOpacity: 0.4 + t * 0.42,
     }).bindTooltip(`${h.name || ''} · просмотров: ${h.views.toLocaleString('ru-RU')} · в среднем ${h.avg} на объявление`, {sticky:true})
+      .addTo(heatTargetLayer);
+  });
+  // Топ-10 гексов по просмотрам — звезда ★ в центре (задача 2026-08-13).
+  const top10 = arr.slice().sort((a, b) => b.views - a.views).slice(0, 10);
+  top10.forEach((h, idx) => {
+    L.marker([h.lat, h.lon], {
+      icon: L.divIcon({
+        className: '',
+        html: '<div style="font-size:24px;line-height:1;text-align:center;color:#fbbf24;text-shadow:0 1px 3px rgba(0,0,0,.75),0 0 6px rgba(0,0,0,.5);">★</div>',
+        iconSize: [26, 26], iconAnchor: [13, 13],
+      }),
+      zIndexOffset: 1000,
+    }).bindTooltip(`★ ${idx + 1}-е место по просмотрам: ${h.views.toLocaleString('ru-RU')} · ${h.listings} объявл.`, {sticky:true})
       .addTo(heatTargetLayer);
   });
 }
 
+// «Воздух» — качество воздуха (2026-08-13): точки сетки Open-Meteo/CAMS
+// (AQI EU, часовые, обновление каждые 3 ч) бакетируются клиентской гекс-сеткой
+// (HEAT_EDGE_M, как транспорт/хайп). Цвет — стандартные категории EAQI.
+const AIR_STOPS = [
+  // [порог, цвет] — индекс загрязнения (факт/ПДК м.р.):
+  // <1 норма (зелёный), 1-2 повышенное (жёлтый), 2-4 высокое (оранжевый), >4 опасное (красный)
+  [1, [22,163,74]], [2, [234,179,8]], [4, [249,115,22]], [1e9, [239,68,68]],
+];
+function airColor(idx) {
+  if (idx == null) return 'rgb(148,163,184)';
+  for (let i = 0; i < AIR_STOPS.length; i++) {
+    if (idx < AIR_STOPS[i][0]) return `rgb(${AIR_STOPS[i][1][0]},${AIR_STOPS[i][1][1]},${AIR_STOPS[i][1][2]})`;
+  }
+  return 'rgb(239,68,68)';
+}
+function drawAirHeat(points) {
+  if (!points || !points.length) return;
+  // Реальные станции ПНЗ Казгидромета (Астана, ~10 шт) — гексы ребром
+  // 1200 м (~2,4 км в диаметре) вокруг станции, по общей гекс-сетке
+  // (hexBucket, без наложений). Цвет — по РАНГУ индекса среди видимых
+  // станций (12 равных групп, как «Интерес»): даже при близких значениях
+  // гексы различимы (жалоба 2026-08-13: «все одного цвета»). Худшая
+  // станция — красная, лучшая — зелёная; абсолютные значения в тултипе.
+  const AIR_STATION_EDGE_M = 1200;
+  const AIR_RANK_COLORS = [
+    [22,163,74], [34,197,94], [74,222,128], [132,204,22], [163,230,53],
+    [202,233,35], [234,179,8], [245,158,11], [249,115,22], [239,68,68],
+    [220,38,38], [185,28,28],
+  ];
+  const buckets = hexBucket(points, p => [p.lat, p.lon], AIR_STATION_EDGE_M);
+  if (!buckets.size) return;
+  const ranked = [...buckets.values()].sort((a, b) => (b.items[0].index ?? -1) - (a.items[0].index ?? -1));
+  ranked.forEach((b, i) => {
+    const p = b.items[0];
+    const idx = p.index;
+    const c = AIR_RANK_COLORS[Math.min(AIR_RANK_COLORS.length - 1, Math.floor(i * AIR_RANK_COLORS.length / ranked.length))];
+    const obs = p.n_obs ? ` · ${p.n_obs} замеров` : '';
+    L.polygon(hexCorners(b.q, b.r, AIR_STATION_EDGE_M), {
+      color: 'transparent', weight: 0, fillColor: `rgb(${c[0]},${c[1]},${c[2]})`, fillOpacity: 0.6,
+    }).bindTooltip(
+      `${p.name || 'станция'} · индекс ${idx != null ? idx.toFixed(3) : '—'}${p.poll ? ' (' + p.poll + ')' : ''}${obs}` +
+      `<br>${p.address || ''}<br>${p.ts || ''}`, {sticky:true})
+      .addTo(heatTargetLayer);
+  });
+}
+
+// «Воздух» — качество воздуха (2026-08-13): точки сетки Open-Meteo/CAMS
 // Преступность (см. задачу "тепловая карта преступности", официальный портал
 // КПСиСУ gis.kgp.kz -> crime_incidents -> /admin/api/crime-hexes) — ДВУМЕРНАЯ кодировка по
 // просьбе "не только количество нарушений, но и их тяжесть — закрашивать на
@@ -3712,6 +3943,12 @@ async function loadHeatData(mode) {
   } else if (mode === 'interest') {
     const d = await fetch('/admin/api/views-hexes?edge=' + HEAT_EDGE_M).then(r => r.json());
     heatCache.interest = d.hexes || [];
+  } else if (mode === 'air') {
+    // Реальные станции ПНЗ Казгидромета (Астана) — почасовые замеры;
+    // гексы ~1,2 км вокруг станций, цвет по индексу загрязнения (ПДК);
+    // период усреднения — кнопки 1д/3д/7д/мес/полгода.
+    const d = await fetch('/admin/api/air-station-points?days=' + airDays).then(r => r.json());
+    heatCache.air = d.points || [];
   } else if (mode === 'count') {
     // "Кол-во объявлений" раньше был чистым снимком текущего момента —
     // только то, что активно прямо сейчас. По задаче (2026-08-13):
@@ -3770,11 +4007,17 @@ async function loadHeatData(mode) {
 function setHeatDdBtnActive(on) {
   const b = document.getElementById('heat-dd-btn');
   if (!b) return;
+  // Убрал сплошной синий уголок-треугольник (задача 2026-08-13, "убери с
+  // неё синее, просто саму сделай чуть синей") — кнопка и так уже слегка
+  // синяя всегда (.heat-dd-btn-tint в разметке), тут просто усиливаем
+  // тон + рамку, пока реально включена хоть одна тепловая карта.
   b.style.boxShadow = on ? 'inset 0 0 0 1.5px #60a5fa' : 'none';
-  b.style.background = on ? 'linear-gradient(135deg,#2563eb 0%,#2563eb 31%,transparent 31.5%),rgba(96,165,250,.12)'
-                          : 'linear-gradient(135deg,#2563eb 0%,#2563eb 31%,transparent 31.5%),var(--bg)';
+  b.style.background = on ? 'rgba(37,99,235,.18)' : '';
 }
 async function toggleHeat(mode) {
+  const wasOn = heatMode === mode;
+  const airRow = document.getElementById('air-days-row');
+  if (airRow) airRow.style.display = (mode === 'air' && !wasOn) ? 'inline-flex' : (wasOn ? 'none' : airRow.style.display);
   const btn = document.querySelector(`.heat-btn[data-mode="${mode}"]`);
   if (heatMode === mode) {
     // повторный клик по активной — выключить
@@ -3880,6 +4123,8 @@ function renderHeatMode(mode, data) {
     drawPopulationHeat(data);
   } else if (mode === 'interest') {
     drawInterestHeat(data);
+  } else if (mode === 'air') {
+    drawAirHeat(data);
   } else if (mode === 'count') {
     drawListingCountHeat(data);
   } else if (mode === 'demolition') {
@@ -3906,7 +4151,7 @@ let splitMap = null, splitHeatLayer = null, splitSyncing = false;
 const HEAT_MODE_LABELS = {
   sale: 'Цены продажи', rental: 'Цены аренды', noise: 'Внешний шум',
   transport: 'Транспортная доступность', hype: '🔥 Хайп (новости)',
-  population: 'Плотность нас.', interest: 'Интерес (просмотры)', count: 'Кол-во объявлений',
+  population: 'Плотность нас.', interest: 'Интерес (просмотры)', air: 'Воздух (ПНЗ)', count: 'Кол-во объявлений',
   demolition: '🏚 Снос домов', crime: '🚨 Преступность',
   price_m2: '📐 Цена за м²', yield: '💰 Доходность', infra: '🏥 Инфраструктура',
   novelty: '🌿 Новизна домов',
