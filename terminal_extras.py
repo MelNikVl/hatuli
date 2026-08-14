@@ -4963,19 +4963,12 @@ def make_extras_router(templates) -> APIRouter:
 
         # Координаты ЖК = центроид координат его объявлений; адрес = самый
         # частый адрес среди объявлений (в complexes своих координат нет).
-        # resolved_house_id (задача 2026-08-14, "House-resolution в
-        # скоринге") — тот же _listing_id_match, что и everywhere на этой
-        # странице: объявления дома зонтика могут по-прежнему называть его
-        # именем зонтика в тексте, house_resolution.py их уже привязал к
-        # ЭТОМУ дому по адресу/токену/гео — без этого условия центроид
-        # дома молча считался бы по чужим (умбреловым) координатам либо
-        # не считался вовсе.
-        geo = await fetchrow("""
-            SELECT AVG(lat) AS lat, AVG(lon) AS lon
-            FROM apartment_listings
-            WHERE (lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)
-              AND lat IS NOT NULL
-        """, cname, complex_id)
+        # Вынесено в bot/core/house_resolution.resolve_complex_geo_centroid()
+        # (Фаза B, п.5, задача 2026-08-14) — тот же запрос дублировался
+        # буквально в /admin/api/complex/{id}/location-score, см. докстринг
+        # функции про resolved_house_id/зонтик.
+        from bot.core.house_resolution import resolve_complex_geo_centroid
+        centroid = await resolve_complex_geo_centroid(complex_id, cname)
         addr_row = await fetchrow("""
             SELECT address, COUNT(*) AS cnt FROM apartment_listings
             WHERE lower(trim(complex_name)) = lower(trim($1))
@@ -5551,7 +5544,7 @@ def make_extras_router(templates) -> APIRouter:
             "attribution_breakdown": attribution_breakdown,
             "pending_split_candidate": pending_split_candidate,
             "cx_sources": cx_sources,
-            "geo": {"lat": float(geo["lat"]), "lon": float(geo["lon"])} if geo and geo["lat"] else None,
+            "geo": {"lat": centroid[0], "lon": centroid[1]} if centroid else None,
             "cx_address": addr_row["address"] if addr_row else None,
             "developer": developer,
             "developer_logo": developer_logo,
@@ -5652,29 +5645,24 @@ def make_extras_router(templates) -> APIRouter:
         странице). Свой большой таймаут: не блокирует рендер страницы,
         может позволить себе подождать медленный Overpass."""
         from bot.db.pg import fetchrow
+        from bot.core.house_resolution import resolve_complex_geo_centroid
         cx = await fetchrow("SELECT name, year_built, district FROM complexes WHERE id = $1", complex_id)
         if not cx:
             return JSONResponse({"error": "not_found"}, status_code=404)
         cx = dict(cx)
-        # resolved_house_id (задача 2026-08-14, "House-resolution в
-        # скоринге") — тот же фикс, что у геоцентроида на самой странице
-        # ЖК (см. комментарий в complex_detail выше): без него центроид
-        # дома под зонтиком мог посчитаться по чужим координатам или не
-        # найтись вовсе (no_coords), пока объявления дома всё ещё названы
-        # именем зонтика в тексте.
-        geo = await fetchrow("""
-            SELECT AVG(lat) AS lat, AVG(lon) AS lon
-            FROM apartment_listings
-            WHERE (lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)
-              AND lat IS NOT NULL
-        """, cx["name"], complex_id)
-        if not geo or not geo["lat"]:
+        # Центроид вынесен в bot/core/house_resolution.resolve_complex_geo_
+        # centroid() (Фаза B, п.5) — тот же запрос дублировался буквально
+        # на самой странице ЖК (complex_detail выше), см. докстринг функции
+        # про resolved_house_id/зонтик.
+        centroid = await resolve_complex_geo_centroid(complex_id, cx["name"])
+        if centroid is None:
             return JSONResponse({"error": "no_coords"}, status_code=404)
+        lat, lon = centroid
         try:
             from bot.core.location_score import compute_complex_location_score
             loc_score = await asyncio.wait_for(
                 compute_complex_location_score(
-                    float(geo["lat"]), float(geo["lon"]),
+                    lat, lon,
                     year_built=cx.get("year_built"), district=cx.get("district"),
                 ), timeout=90.0)
         except asyncio.TimeoutError:

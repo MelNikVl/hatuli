@@ -88,6 +88,32 @@ async def get_umbrella_children(umbrella_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def resolve_complex_geo_centroid(complex_id: int, complex_name: str) -> tuple[float, float] | None:
+    """Координаты ЖК/дома = центроид координат его объявлений (в
+    complexes своих координат нет). Вынесено из terminal_extras.py
+    (Фаза B, п.5, задача 2026-08-14, docs/verdict_strategy.md) — этот
+    запрос дублировался буквально (карточка ЖК + /admin/api/complex/
+    {id}/location-score), обе точки теперь зовут одну функцию.
+
+    resolved_house_id (задача "House-resolution в скоринге", 2026-08-13) —
+    объявления дома под зонтиком могут по-прежнему называть его именем
+    зонтика в тексте; resolve_house() уже привязал их к ЭТОМУ дому по
+    адресу/токену/гео. Без OR resolved_house_id = $2 центроид дома либо
+    молча считался бы по чужим (умбреловым) координатам, либо не
+    находился бы вовсе. Возвращает None, если объявлений с координатами
+    нет вообще (Unknown != average — не гадаем, не 404 с нулями)."""
+    from bot.db.pg import fetchrow
+    geo = await fetchrow("""
+        SELECT AVG(lat) AS lat, AVG(lon) AS lon
+        FROM apartment_listings
+        WHERE (lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)
+          AND lat IS NOT NULL
+    """, complex_name, complex_id)
+    if not geo or geo["lat"] is None:
+        return None
+    return float(geo["lat"]), float(geo["lon"])
+
+
 async def resolve_house(
     *, umbrella_id: int, umbrella_name: str,
     listing_address: str | None, listing_title: str | None,
