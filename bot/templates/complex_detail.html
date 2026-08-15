@@ -708,6 +708,26 @@ async function toggleFavComplex() {
       }
     }
 
+    // Пешеходная изоляция (Фаза L3 walkability, задача 2026-08-15,
+    // миграция 075) — НЕЗАВИСИМО от has_score: complex_walkability живёт
+    // отдельно от complex_location_scores (свой ежемесячный снапшот).
+    // barrier=true — маршрут пешком >1.5x прямой (река/трасса/забор).
+    // Unknown ≠ average: нет строки/нет маршрута — молчим, не рисуем.
+    if (d.walkability) {
+      const WALK_LABELS = {school: 'школы', kindergarten: 'садика', transit: 'остановки',
+                           shop: 'магазина', park: 'парка'};
+      Object.keys(d.walkability).forEach(function(t) {
+        const w = d.walkability[t];
+        if (w.barrier && w.walking_distance_m !== null) {
+          document.getElementById('cxl-risk-badges').insertAdjacentHTML('beforeend',
+            '<span style="font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.3);">' +
+            '⚠️ Пешеходная изоляция: до ' + (WALK_LABELS[t] || t) + ' ' + w.walking_distance_m +
+            'м пешком при ' + w.haversine_distance_m + 'м по прямой (вероятный барьер: река/трасса)</span>');
+        }
+      });
+    }
+
+
     // Слои карты — переиспользуют window.cxLocMap (карта-точка, .cx-row2
     // выше), не создают вторую карту. Если её нет (cx.lat/cx.lon пусты,
     // хотя geo есть — см. комментарий у window.cxLocMap) — слои просто
