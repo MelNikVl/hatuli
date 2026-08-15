@@ -103,10 +103,16 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
         from bot.db.pg import fetchrow
         row = await fetchrow("SELECT * FROM complex_location_scores WHERE complex_id=$1", cid)
         assert row is not None
-        # total = 5+4+2+4-2 = 13; _TOTAL_ADJ_MAX=30 с 2026-08-15 (задача
-        # "школы/садики в location_score", коммит 2, было 24) ->
-        # clamp(13, -8, 30) -> (13-(-8))/(30-(-8))*100 = 55.26 -> 55
-        assert row["score"] == 55
+        # Групповая модель (задача 2026-08-15, "Location Reliability
+        # Phase", normalize_group_weighted()) — взвешенное среднее по
+        # группам, НЕ линейный total/диапазон (тот убран). По группам:
+        #   transport: lrt_access=4 из диапазона (0,11) -> 36.36%
+        #   infra: schools=5+amenities=4=9 из (0,15)     -> 60%
+        #   noise: 0 из (-6,0)                            -> 100%
+        #   green: parks=2 из (0,2)                       -> 100%
+        #   risk: demolition=-2 из (-2,2)                 -> 0%
+        # 0.25*36.36 + 0.25*60 + 0.15*100 + 0.20*100 + 0.15*0 = 59.09 -> 59
+        assert row["score"] == 59
         assert row["confidence"] == 90
         assert row["infra_score"] == 9      # schools(5)+amenities(4)
         assert row["transport_score"] == 4  # lrt_access(4), остальные 0
@@ -127,18 +133,26 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_snapshot_extreme_totals_clamp_to_0_and_100(db, monkeypatch):
+async def test_snapshot_all_groups_at_min_or_max_gives_0_or_100(db, monkeypatch):
+    """Групповая модель (задача 2026-08-15) — 0/100 достигаются, когда
+    КАЖДАЯ группа одновременно на своём мин/макс (не один общий total,
+    как раньше с _TOTAL_ADJ_MIN/MAX, убранными в этом же коммите)."""
     import complex_location_score_snapshot as snap
     import bot.core.location_score as location_score_module
 
     async def _fake_min(lat, lon, year_built=None, district=None):
-        factors = _fake_factors(noise=-6, demolition=-2)  # total=-8 -> ровно _TOTAL_ADJ_MIN
+        # noise=-6 (мин noise-группы), demolition=-2 (мин risk-группы,
+        # т.к. building_age=0 — тоже её собственный минимум по умолчанию);
+        # transport/infra/green уже на нуле = их минимум по умолчанию.
+        factors = _fake_factors(noise=-6, demolition=-2)
         return {"total": -8, "factors": factors, "confidence": 50}
 
     async def _fake_max(lat, lon, year_built=None, district=None):
-        # total=30 == новый _TOTAL_ADJ_MAX (было 24 до school_access/
-        # kindergarten_access, задача 2026-08-15 коммит 2) — добавлены их
-        # максимумы (4+2), остальное без изменений.
+        # Максимум КАЖДОЙ группы одновременно: transport (transit_stops+
+        # lrt_access+road_access+route_connectivity=11), infra (schools+
+        # amenities+school_access+kindergarten_access=15), green (parks=2),
+        # risk (building_age=2, demolition уже на 0 = её максимум).
+        # noise остаётся на дефолтном 0 — это и есть максимум noise-группы.
         factors = _fake_factors(schools=5, transit_stops=3, amenities=4, parks=2,
                                  lrt_access=4, road_access=2, route_connectivity=2, building_age=2,
                                  school_access=4, kindergarten_access=2)

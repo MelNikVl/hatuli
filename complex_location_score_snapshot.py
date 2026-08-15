@@ -8,8 +8,10 @@
 ЕСТЬ (не меняет её и не трогает живой /admin/api/complex/{id}/location-
 score, см. РЕШЕНИЕ 2 плана L1 — тот отдаёт сырой total/factors/
 confidence, единственный консьюмер complex_detail.html:645). Этот
-скрипт — отдельный слой: нормализует total в 0-100 (bot/core/location_
-score.py::_TOTAL_ADJ_MIN/_TOTAL_ADJ_MAX), группирует факторы в breakdown
+скрипт — отдельный слой: нормализует factors в 0-100 (bot/core/location_
+score.py::normalize_group_weighted() — взвешенное среднее по группам,
+задача 2026-08-15 "Location Reliability Phase", раньше был линейный
+_TOTAL_ADJ_MIN/MAX по total, убран), группирует факторы в breakdown
 (транспорт/инфраструктура/шум/зелень/риски + informational), пишет
 append-only снимок.
 
@@ -47,21 +49,14 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/kris
 
 SCORE_VERSION = "loc_v1"
 
-# РЕШЕНИЕ 4 плана L1: building_age -> риски (долгосрочный риск
-# обслуживания), bank -> вне групп (всегда adj=0, живёт только в
-# informational, не считается ни в одну group-сумму).
-_GROUPS: dict[str, tuple[str, ...]] = {
-    "transport": ("transit_stops", "lrt_access", "road_access", "route_connectivity"),
-    # school_access/kindergarten_access — задача 2026-08-15 (bot/core/
-    # location_score.py::_schools_factor()/_kindergartens_factor()), в
-    # ту же группу "infra", не отдельная "education" — образование
-    # решено считать частью инфраструктуры, меньше изменений в схеме.
-    "infra": ("schools", "amenities", "school_access", "kindergarten_access"),
-    "noise": ("noise",),
-    "green": ("parks",),
-    "risk": ("demolition", "building_age"),
-}
-_INFORMATIONAL: tuple[str, ...] = ("bank",)
+# Группировка факторов — задача 2026-08-15 ("Location Reliability Phase")
+# сделала bot/core/location_score.py каноническим источником: _GROUPS/
+# _INFORMATIONAL/веса групп теперь живут ТАМ (нужны и для normalize_
+# group_weighted(), не только для breakdown/UI здесь) — импортируем, не
+# дублируем. РЕШЕНИЕ 4 плана L1 (building_age -> риски, bank -> вне
+# групп, informational-only) по-прежнему в силе, отражено в исходном
+# определении.
+from bot.core.location_score import _GROUPS, _INFORMATIONAL
 
 # Сдвиг центроида крупнее этого — логируется как "координаты сместились"
 # (информационно, см. план L1 п.5 "Задача 4" — своего event-триггера на
@@ -92,10 +87,15 @@ def _build_breakdown(factors: dict) -> dict:
     return breakdown
 
 
-def _normalize_score(total: int) -> int:
-    from bot.core.location_score import _TOTAL_ADJ_MIN, _TOTAL_ADJ_MAX
-    clamped = max(_TOTAL_ADJ_MIN, min(_TOTAL_ADJ_MAX, total))
-    return round(100 * (clamped - _TOTAL_ADJ_MIN) / (_TOTAL_ADJ_MAX - _TOTAL_ADJ_MIN))
+def _normalize_score(factors: dict) -> int:
+    """Тонкая обёртка над location_score.normalize_group_weighted() —
+    задача 2026-08-15 ("Location Reliability Phase", коммит "Семантика +
+    групповая модель"). РАНЬШЕ принимала total (int, Σ всех adj) и
+    нормализовала по единому _TOTAL_ADJ_MIN/MAX (убраны из location_
+    score.py) — теперь групповая модель, принимает весь factors целиком
+    (нужны отдельные суммы по группам, не общий total)."""
+    from bot.core.location_score import normalize_group_weighted
+    return normalize_group_weighted(factors)
 
 
 async def _process_one(r: dict, commit: str, sem: asyncio.Semaphore) -> str:
@@ -142,7 +142,7 @@ async def _process_one(r: dict, commit: str, sem: asyncio.Semaphore) -> str:
                 score_version, git_commit
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
         """,
-            r["id"], _normalize_score(result["total"]), result["confidence"],
+            r["id"], _normalize_score(factors), result["confidence"],
             _group_sum(factors, _GROUPS["transport"]), _group_sum(factors, _GROUPS["infra"]),
             _group_sum(factors, _GROUPS["noise"]), _group_sum(factors, _GROUPS["green"]),
             _group_sum(factors, _GROUPS["risk"]), lat, lon,

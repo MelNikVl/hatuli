@@ -24,6 +24,56 @@
 физически нет (рейтинги школ, шум по децибелам, реальный трафик, доход
 жителей) — пропущены. Это даёт честную ПОДмножество из ~12 факторов вместо
 громкого "15" с фейковыми числами.
+
+## Семантика итогового 0-100 (Location Reliability Phase, задача
+2026-08-15, коммит "Семантика + групповая модель")
+
+Итог — НЕ "сумма всех adj, отнормированная в единый линейный диапазон".
+Раньше было именно так (`_TOTAL_ADJ_MIN`/`_TOTAL_ADJ_MAX`, единый
+глобальный диапазон) — и это дало живой баг: когда 2026-08-15 добавили
+school_access/kindergarten_access, диапазон вырос (24 -> 30), и
+нормализованный score ВСЕХ уже посчитанных ЖК просел (пример из
+регресс-теста: 66 -> 55) чисто из-за расширения знаменателя, а не
+потому что для конкретного ЖК что-то реально изменилось. Это нарушает
+базовый принцип: возможность измерить что-то новое не должна задним
+числом ухудшать оценку того, для чего это новое ничего не меняет.
+
+Теперь: **взвешенное среднее по группам** (`_GROUP_WEIGHTS` ниже; веса
+структурные — отражают важность категории для ЖК как таковой, НЕ
+зависят от того, сколько именно факторов сейчас заведено внутри
+категории):
+
+  transport 25% / infra 25% / green 20% / noise 15% / risk 15%
+
+Внутри группы факторы по-прежнему складываются и нормализуются по
+диапазону (см. `_FACTOR_RANGES`) — но диапазон ГРУППЫ, не всей модели
+целиком. Задуманный смысл шкалы: 50 — локация НИ ХУЖЕ, НИ ЛУЧШЕ среднего
+по каждой измеримой оси, НЕ "у неё есть половина возможных удобств";
+100 — максимум сразу по всем пяти категориям (на практике почти не
+бывает).
+
+**Известные ограничения (снимаются следующими коммитами этой же
+фазы)**:
+
+1. Диапазон группы по-прежнему СТАТИЧЕСКИЙ (Σ min/max факторов внутри
+   неё), а не "диапазон только измеренных для ЭТОГО ЖК факторов".
+   Значит добавление нового фактора ВНУТРИ группы (например, ещё один
+   инфра-сигнал в будущем) всё ещё может немного сдвинуть нормализованный
+   score группы для ЖК, где этот новый фактор не посчитан (unknown) —
+   тот же баг класса 66->55, но теперь ограниченный ОДНОЙ группой (25%
+   веса максимум), а не всей моделью сразу.
+2. "50 = нейтрально" — ЦЕЛЕВОЙ смысл шкалы, но пока НЕ буквально верно
+   для групп с неотрицательным диапазоном (transport 0..11, infra
+   0..15, green 0..2): unknown-фактор там по умолчанию даёт adj=0, а
+   0 — это МИНИМУМ диапазона (0%), не середина. Т.е. "не измерено" пока
+   визуально неотличимо от "измерено и оказалось худшим из возможных" —
+   ровно то, что закрывает confidence-redesign ниже.
+
+Оба пункта закрываются одним и тем же следующим коммитом фазы —
+"Confidence" (не считать unknown-факторы в диапазон группы вообще, не
+просто как 0), закреплённым stability-тестом (последний коммит фазы,
+регресс ±2 балла для существующих ЖК при добавлении нейтрального
+фактора).
 """
 from __future__ import annotations
 
@@ -45,32 +95,78 @@ _OSM_LAYERS = [
 
 _LEFT_BANK_DISTRICTS = {"есиль", "есильский"}
 
-# Теоретический диапазон total = Σadj по ВСЕМ факторам ниже — используется
-# ТОЛЬКО complex_location_score_snapshot.py (Фаза L1, docs/location_
-# product_design.md §7, задача 2026-08-14) для нормализации в 0-100 при
-# записи в complex_location_scores. compute_complex_location_score() САМА
-# эту нормализацию не делает и возвращает total как есть (см. РЕШЕНИЕ 2
-# плана L1 — живой /admin/api/complex/{id}/location-score не меняется,
-# complex_detail.html:645 читает сырой total напрямую).
-#
-# Если диапазон отдельного слоя изменится (score_layers/*.py) — эти две
-# константы надо пересчитать вручную (тот же тип обязательства, что уже
-# несёт _CLASS_SCORE в hedonic_constants.py):
-#   noise            -6..0   (score_layers/noise.py)
-#   schools            0..5  (score_layers/schools.py)
-#   transit_stops      0..3  (score_layers/transit.py)
-#   amenities          0..4  (score_layers/amenities.py)
-#   parks              0..2  (score_layers/parks.py)
-#   lrt_access         0..4  (_transport_hex_factors)
-#   road_access        0..2  (_transport_hex_factors)
-#   route_connectivity 0..2  (_transport_hex_factors)
-#   building_age       0..2  (_building_age_factor)
-#   demolition        -2..0  (_demolition_factor)
-#   school_access      0..4  (_schools_factor — задача 2026-08-15)
-#   kindergarten_access 0..2 (_kindergartens_factor — задача 2026-08-15)
-#   bank               0..0  (_bank_factor — всегда 0, информационный)
-_TOTAL_ADJ_MIN = -8
-_TOTAL_ADJ_MAX = 30
+# ── Групповая модель (см. докстринг выше) ───────────────────────────────
+# Веса групп — структурная константа продукта, требует явного решения
+# заказчика для пересмотра (тот же тип обязательства, что было у
+# _TOTAL_ADJ_MIN/MAX). building_age числится в "risk" здесь ВРЕМЕННО —
+# следующий коммит фазы ("двойные школы + building_age") выносит его из
+# location_score вовсе (это качество здания, не локации).
+_GROUP_WEIGHTS: dict[str, float] = {
+    "transport": 0.25,
+    "infra": 0.25,
+    "green": 0.20,
+    "noise": 0.15,
+    "risk": 0.15,
+}
+
+# Канонический источник группировки факторов — используется и здесь
+# (normalize_group_weighted), и complex_location_score_snapshot.py
+# (breakdown/group-суммы в UI) — тот файл ИМПОРТИРУЕТ эти константы
+# отсюда, не дублирует их (единый источник правды).
+_GROUPS: dict[str, tuple[str, ...]] = {
+    "transport": ("transit_stops", "lrt_access", "road_access", "route_connectivity"),
+    "infra": ("schools", "amenities", "school_access", "kindergarten_access"),
+    "noise": ("noise",),
+    "green": ("parks",),
+    "risk": ("demolition", "building_age"),
+}
+_INFORMATIONAL: tuple[str, ...] = ("bank",)
+
+# Диапазон (min, max) КАЖДОГО фактора — раньше жил только в комментарии
+# (документация), теперь ещё и в коде: normalize_group_weighted() строит
+# из этого диапазон группы (Σ по факторам группы). Если диапазон
+# отдельного слоя изменится (score_layers/*.py) — эту таблицу и
+# _GROUPS надо обновить вручную (тот же тип обязательства, что несёт
+# _CLASS_SCORE в hedonic_constants.py).
+_FACTOR_RANGES: dict[str, tuple[int, int]] = {
+    "noise": (-6, 0),                  # score_layers/noise.py
+    "schools": (0, 5),                 # score_layers/schools.py
+    "transit_stops": (0, 3),           # score_layers/transit.py
+    "amenities": (0, 4),               # score_layers/amenities.py
+    "parks": (0, 2),                   # score_layers/parks.py
+    "lrt_access": (0, 4),              # _transport_hex_factors
+    "road_access": (0, 2),             # _transport_hex_factors
+    "route_connectivity": (0, 2),      # _transport_hex_factors
+    "building_age": (0, 2),            # _building_age_factor
+    "demolition": (-2, 0),             # _demolition_factor
+    "school_access": (0, 4),           # _schools_factor — задача 2026-08-15
+    "kindergarten_access": (0, 2),     # _kindergartens_factor — задача 2026-08-15
+    "bank": (0, 0),                    # _bank_factor — всегда 0, информационный
+}
+
+
+def _group_range(group: str) -> tuple[int, int]:
+    keys = _GROUPS[group]
+    return (sum(_FACTOR_RANGES[k][0] for k in keys), sum(_FACTOR_RANGES[k][1] for k in keys))
+
+
+def normalize_group_weighted(factors: dict) -> int:
+    """0-100 — см. докстринг модуля "Семантика итогового 0-100". Заменяет
+    старую линейную нормализацию по единому _TOTAL_ADJ_MIN/MAX (убраны).
+    Чистая функция от factors (без сети/БД) — тестируется напрямую.
+
+    `factors` — {key: {"adj": int, ...}} с любым подмножеством ключей из
+    _FACTOR_RANGES (отсутствующие ключи внутри группы просто не
+    учитываются в raw-сумме ЭТОГО прогона — но диапазон группы всё равно
+    статический, см. "известное ограничение" в докстринге модуля)."""
+    total_pct = 0.0
+    for group, weight in _GROUP_WEIGHTS.items():
+        keys = _GROUPS[group]
+        raw = sum(factors[k]["adj"] for k in keys if k in factors)
+        lo, hi = _group_range(group)
+        pct = 50.0 if hi == lo else 100.0 * (raw - lo) / (hi - lo)
+        total_pct += weight * pct
+    return round(total_pct)
 
 
 async def _transport_hex_factors(lat: float, lon: float) -> dict:
