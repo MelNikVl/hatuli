@@ -4800,7 +4800,7 @@ def make_extras_router(templates) -> APIRouter:
                     FROM developer_reviews dr
                     LEFT JOIN complexes c ON c.id = dr.complex_id
                     LEFT JOIN developers d ON d.id = dr.developer_id
-                    WHERE dr.review_text != '' AND dr.sentiment = %s
+                    WHERE dr.review_text != '' AND dr.sentiment = $1
                     ORDER BY dr.id DESC LIMIT 300""", sentiment)
             else:
                 rows = await pg_fetch("""
@@ -4826,7 +4826,7 @@ def make_extras_router(templates) -> APIRouter:
         sentiment = form.get("sentiment", "")
         if rid and sentiment in ('positive', 'negative', 'neutral', 'spam'):
             from bot.db.pg import execute as pg_exec
-            await pg_exec("UPDATE developer_reviews SET sentiment = %s WHERE id = %s",
+            await pg_exec("UPDATE developer_reviews SET sentiment = $1 WHERE id = $2",
                           sentiment, int(rid))
         return RedirectResponse(url="/admin/developer-reviews", status_code=302)
 
