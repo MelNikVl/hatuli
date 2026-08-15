@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер еженедельного сбора реестра КЖК — задача 2026-08-15 (источник обновляется редко, чаще не имеет смысла)
+
+[Timer]
+OnCalendar=Thu *-*-* 09:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=krisha-kzk-registry.service
+
+[Install]
+WantedBy=timers.target

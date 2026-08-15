@@ -1,0 +1,11 @@
+[Unit]
+Description=Еженедельный сбор реестра КЖК (developers.kz) — задача 2026-08-15
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/kzk_registry_collect.py
+StandardOutput=append:/home/nik/krisha_bot/kzk_registry_collect.log
+StandardError=append:/home/nik/krisha_bot/kzk_registry_collect.log
