@@ -131,6 +131,61 @@ def classify_llm(reviews, api_key):
         return {}
 
 
+def _process_one_complex(cur, cid, cname, stats, api_key):
+    """Вся работа по ОДНОМУ ЖК: поиск geo_id, отзывы, спам-фильтр, LLM,
+    вставка строк через cur (без commit — им управляет вызывающий main()).
+    Выделено из main() в отдельную функцию (задача 2026-08-15, правка
+    транзакций) специально ради `return` вместо `continue`: `continue`
+    внутри `try` в main() пропускал бы `time.sleep()`/commit ПОСЛЕ
+    try/except (ровно так и произошло в первой версии этой правки — цикл
+    гнал запросы к 2GIS без вежливой паузы и без коммита на "geo не
+    найден"/"отзывов нет"). return из обычной функции такой проблемы не
+    создаёт."""
+    geo = find_geo_id(cname)
+    if not geo:
+        print('  #%d %s — geo НЕ найден' % (cid, cname[:40]))
+        return
+    gid, gtitle = geo
+    stats['geo_found'] += 1
+    revs = fetch_reviews(gid)
+    print('  #%d %s -> geo %s (%s), отзывов: %d' % (cid, cname[:36], gid, gtitle[:40], len(revs)))
+    if not revs:
+        # пометить обработанным (пустой) — чтобы не перебирать вечно
+        cur.execute("INSERT INTO developer_reviews (complex_id, source, source_entity_id, review_text, sentiment, fetched_at) "
+                    "VALUES (%s, '2gis', %s, '', 'neutral', now()) ON CONFLICT DO NOTHING", (cid, gid))
+        return
+    # спам-фильтр
+    for r in revs:
+        if SPAM_RE.search(r['text']):
+            r['sentiment'] = 'spam'
+            stats['spam'] += 1
+    # LLM для не-спама
+    todo = [r for r in revs if 'sentiment' not in r]
+    if todo and api_key:
+        res = classify_llm(todo, api_key)
+        for i, r in enumerate(todo):
+            if i in res and res[i].get('sentiment') in ('positive', 'negative', 'neutral'):
+                r['sentiment'] = res[i]['sentiment']
+                r['topics'] = [t for t in res[i].get('topics', []) if t in TOPICS]
+                stats['llm'] += 1
+    for r in revs:
+        r.setdefault('sentiment', 'neutral')
+        r.setdefault('topics', [])
+    # вставка
+    for r in revs:
+        cur.execute("""
+            INSERT INTO developer_reviews
+              (developer_id, complex_id, source, source_entity_id, review_text, rating,
+               sentiment, topics, review_date, author, verified, source_url, fetched_at)
+            VALUES ((SELECT developer_id FROM complexes WHERE id=%s), %s, '2gis', %s, %s, NULL,
+                    %s, %s, %s, %s, TRUE, %s, now())
+            ON CONFLICT (complex_id, source_entity_id, review_text) DO NOTHING
+        """, (cid, cid, gid, r['text'], r['sentiment'], r['topics'],
+              r.get('date'), r['author'],
+              'https://2gis.kz/astana/geo/%s/tab/reviews' % gid))
+        stats['reviews'] += 1
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--limit', type=int, default=50)
@@ -157,57 +212,44 @@ def main():
         ORDER BY c.id LIMIT %s
     """, (args.limit,))
     jk = cur.fetchall()
+    # Явный commit здесь же — эта SELECT сама по себе не должна оставаться
+    # висеть в открытой транзакции всё то время, пока идёт HTTP-работа
+    # первой итерации цикла ниже (см. докстринг про короткие транзакции).
+    conn.commit()
     print('ЖК к обработке:', len(jk))
 
+    # ПРАВКА 2026-08-15 (найдено при аудите: test_umbrellas_page.py падал
+    # TimeoutError — транзакция от начальной SELECT висела "idle in
+    # transaction" 15+ минут, блокируя ALTER TABLE complexes в
+    # НЕСВЯЗАННОМ роуте /admin/entity-ids): psycopg2 по умолчанию
+    # autocommit=False — каждый cur.execute() без предшествующего commit()
+    # продолжает ОДНУ и ТУ ЖЕ транзакцию. Раньше commit() стоял только в
+    # двух из трёх веток цикла (revs пустой / revs есть) — ветка "geo НЕ
+    # найден" (самая частая на практике — большинство названий ЖК не
+    # матчится с поиском 2GIS) НЕ коммитила вовсе. При нескольких подряд
+    # промахах транзакция от начальной SELECT росла на sleep_s (45-60с)
+    # КАЖДУЮ такую итерацию — минуты простоя с открытой транзакцией,
+    # держащей ACCESS SHARE на `complexes`, при живом вежливом sleep между
+    # ЖК это гарантированно происходит на каждом прогоне.
+    #
+    # commit/rollback здесь — СНАРУЖИ вызова _process_one_complex(), не
+    # внутри неё: он гарантирован на каждой итерации (одна транзакция =
+    # один ЖК, "commit пачками", не на весь прогон) независимо от того,
+    # какой веткой (return/исключение/нормальное завершение) закончилась
+    # обработка. time.sleep() — тоже снаружи try/except, БЕЗ вложенных
+    # `continue` внутри try (та ошибка была в первой версии этой правки:
+    # `continue` внутри try пропускал бы и commit, и sleep ПОСЛЕ
+    # try/except целиком) — вежливая пауза перед следующим ЖК соблюдается
+    # на любом исходе.
     stats = {'geo_found': 0, 'reviews': 0, 'spam': 0, 'llm': 0}
     for cid, cname in jk:
-        geo = find_geo_id(cname)
-        if not geo:
-            print('  #%d %s — geo НЕ найден' % (cid, cname[:40]))
-            time.sleep(sleep_s)
-            continue
-        gid, gtitle = geo
-        stats['geo_found'] += 1
-        revs = fetch_reviews(gid)
-        print('  #%d %s -> geo %s (%s), отзывов: %d' % (cid, cname[:36], gid, gtitle[:40], len(revs)))
-        if not revs:
-            # пометить обработанным (пустой) — чтобы не перебирать вечно
-            cur.execute("INSERT INTO developer_reviews (complex_id, source, source_entity_id, review_text, sentiment, fetched_at) "
-                        "VALUES (%s, '2gis', %s, '', 'neutral', now()) ON CONFLICT DO NOTHING", (cid, gid))
+        try:
+            _process_one_complex(cur, cid, cname, stats, api_key)
+        except Exception as exc:
+            conn.rollback()
+            print('  #%d %s — ошибка, транзакция отменена: %s' % (cid, cname[:40], exc))
+        else:
             conn.commit()
-            time.sleep(sleep_s)
-            continue
-        # спам-фильтр
-        for r in revs:
-            if SPAM_RE.search(r['text']):
-                r['sentiment'] = 'spam'
-                stats['spam'] += 1
-        # LLM для не-спама
-        todo = [r for r in revs if 'sentiment' not in r]
-        if todo and api_key:
-            res = classify_llm(todo, api_key)
-            for i, r in enumerate(todo):
-                if i in res and res[i].get('sentiment') in ('positive', 'negative', 'neutral'):
-                    r['sentiment'] = res[i]['sentiment']
-                    r['topics'] = [t for t in res[i].get('topics', []) if t in TOPICS]
-                    stats['llm'] += 1
-        for r in revs:
-            r.setdefault('sentiment', 'neutral')
-            r.setdefault('topics', [])
-        # вставка
-        for r in revs:
-            cur.execute("""
-                INSERT INTO developer_reviews
-                  (developer_id, complex_id, source, source_entity_id, review_text, rating,
-                   sentiment, topics, review_date, author, verified, source_url, fetched_at)
-                VALUES ((SELECT developer_id FROM complexes WHERE id=%s), %s, '2gis', %s, %s, NULL,
-                        %s, %s, %s, %s, TRUE, %s, now())
-                ON CONFLICT (complex_id, source_entity_id, review_text) DO NOTHING
-            """, (cid, cid, gid, r['text'], r['sentiment'], r['topics'],
-                  r.get('date'), r['author'],
-                  'https://2gis.kz/astana/geo/%s/tab/reviews' % gid))
-            stats['reviews'] += 1
-        conn.commit()
         time.sleep(sleep_s)
 
     conn.close()
