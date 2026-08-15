@@ -1,0 +1,13 @@
+[Unit]
+Description=Ежемесячный пересчёт complex_walkability (пешеходные маршруты OSRM) — Фаза L3 «Локация», задача 2026-08-15
+After=network.target postgresql.service
+# OSRM — docker-контейнер osrm-foot (юнит osrm-foot.service); snapshot сам
+# проверяет доступность через check_osrm() и не пишет мусор при лежачем OSRM.
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/complex_walkability_snapshot.py
+StandardOutput=append:/home/nik/krisha_bot/complex_walkability_snapshot.log
+StandardError=append:/home/nik/krisha_bot/complex_walkability_snapshot.log

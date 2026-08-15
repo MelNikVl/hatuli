@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<div class="page-title">🚶 Пешеходная изоляция (walkability, OSRM)</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<div style="font-size:13px;color:#888;max-width:1100px;margin-bottom:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;">
+  <b style="color:var(--text);">Что это:</b> для каждого ЖК посчитан <b>реальный пешеходный маршрут</b>
+  (self-hosted OSRM, foot-профиль, OSM) до ближайшей школы/садика/остановки/магазина/парка —
+  не прямая линия. Точки на карте — ЖК, где хотя бы по одному типу
+  <code>ratio = пешком / по прямой &gt; 1.5</code>: вероятный физический барьер (река, трасса, забор).
+  Данные: таблица <code>complex_walkability</code>, ежемесячный пересчёт
+  (<code>krisha-complex-walkability.timer</code>, 1-е число). Цвет — максимальный ratio ЖК.
+</div>
+
+<div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+  <div style="display:flex;gap:6px;">
+    <button type="button" class="wb-min-btn" data-min="0" onclick="setWbMin(0)"
+            style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:#2563eb;color:#fff;font-size:13px;cursor:pointer;">Все барьеры</button>
+    <button type="button" class="wb-min-btn" data-min="2" onclick="setWbMin(2)"
+            style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">ratio ≥ 2</button>
+    <button type="button" class="wb-min-btn" data-min="3" onclick="setWbMin(3)"
+            style="padding:7px 14px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);font-size:13px;cursor:pointer;">ratio ≥ 3</button>
+  </div>
+  <span id="wb-result-count" style="font-size:13px;color:#888;margin-left:auto;"></span>
+</div>
+
+<div style="border-radius:12px;border:1px solid var(--border);overflow:hidden;">
+  <div id="wb-map" style="height:60vh;min-height:400px;"></div>
+</div>
+
+<script>
+const wbMap = L.map('wb-map').setView([51.128, 71.430], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18}).addTo(wbMap);
+const wbLayer = L.layerGroup().addTo(wbMap);
+let wbPoints = [], wbMin = 0;
+const WB_TYPE_LABELS = {school: '🏫 школа', kindergarten: '🧸 садик', transit: '🚏 остановка',
+                        shop: '🛒 магазин', park: '🌳 парк'};
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function wbColor(r) {
+  if (r >= 3) return '#dc2626';
+  if (r >= 2) return '#ea580c';
+  return '#f59e0b';
+}
+function setWbMin(v) {
+  wbMin = v;
+  document.querySelectorAll('.wb-min-btn').forEach(b => {
+    const on = parseFloat(b.dataset.min) === v;
+    b.style.background = on ? '#2563eb' : 'var(--bg)';
+    b.style.color = on ? '#fff' : 'var(--text)';
+  });
+  drawWb();
+}
+function drawWb() {
+  wbLayer.clearLayers();
+  let shown = 0;
+  wbPoints.forEach(p => {
+    if (p.max_ratio < wbMin) return;
+    if (p.lat === null || p.lon === null) return;
+    shown++;
+    const rows = p.details.map(d =>
+      `${WB_TYPE_LABELS[d.type] || d.type}: <b>${d.walking}м</b> пешком / ${d.straight}м по прямой (×${d.ratio})` +
+      (d.dest ? ` — ${escapeHtml(d.dest)}` : '')).join('<br>');
+    L.circleMarker([p.lat, p.lon], {
+      radius: 6 + Math.min(6, p.barrier_count),
+      color: wbColor(p.max_ratio), weight: 2, fillOpacity: 0.55,
+    }).addTo(wbLayer).bindPopup(
+      `<b>${escapeHtml(p.name || 'ЖК #' + p.complex_id)}</b> ` +
+      `<a href="/admin/complex/${p.complex_id}" target="_blank">карточка</a><br>` +
+      `барьеров: ${p.barrier_count}, макс ratio ×${p.max_ratio}<br>${rows}`);
+  });
+  document.getElementById('wb-result-count').textContent = `показано ${shown} из ${wbPoints.length} ЖК с барьерами`;
+}
+fetch('/admin/api/walkability-barriers').then(r => r.ok ? r.json() : {points: []}).then(d => {
+  wbPoints = d.points || [];
+  drawWb();
+});
+</script>
+{% endblock %}

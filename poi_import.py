@@ -1,7 +1,11 @@
 """
-Импорт ВСЕХ школ, детских садов и вузов Астаны из OpenStreetMap в таблицу
-city_poi — одним массовым запросом Overpass по границе города (не радиусами
-вокруг объявлений, как в слоях скоринга).
+Импорт POI Астаны из OpenStreetMap в таблицу city_poi — одним массовым
+запросом Overpass по границе города (не радиусами вокруг объявлений, как
+в слоях скоринга). Категории: школы, детские сады, вузы, поликлиники,
+госучреждения, а с задачи 2026-08-15 (Фаза L3 walkability) — магазины
+(kind='shop') и парки (kind='park') как назначения для пешеходного
+роутинга OSRM (complex_walkability_snapshot.py): снапшот не должен
+зависеть от живого Overpass.
 
 Почему OSM, а не 2GIS/Яндекс: у OSM данные бесплатны, легальны (лицензия
 ODbL) и уже с координатами. 2GIS/Яндекс — лучшее покрытие, но API платные,
@@ -56,8 +60,13 @@ OVERPASS_MIRRORS = [
 # и amenity=townhall — акиматы/министерства/ЦОНы и т.п. (частичное
 # покрытие — в OSM Астаны госучреждения размечены неполно, но это тот же
 # бесплатный/легальный источник, что и остальные категории здесь).
+# shop=supermarket/convenience/greengrocer и leisure=park/garden —
+# назначения walkability-снапшота (Фаза L3, задача 2026-08-15): супер/
+# минимаркеты и овощные — «ближайший магазин», парки/сады — «ближайший
+# парк». Те же теги, что в score_layers/poi.py::fetch_poi, чтобы
+# walkability-расстояния были сопоставимы с живыми слоями скоринга.
 _QUERY = """
-[out:json][timeout:90];
+[out:json][timeout:180];
 area["name"~"Астана|Nur-Sultan"]["boundary"="administrative"]["admin_level"~"2|4"]->.a;
 (
   node(area.a)[amenity=school];
@@ -74,8 +83,12 @@ area["name"~"Астана|Nur-Sultan"]["boundary"="administrative"]["admin_level
   way(area.a)[office=government];
   node(area.a)[amenity=townhall];
   way(area.a)[amenity=townhall];
+  node(area.a)[shop~"^(supermarket|convenience|greengrocer)$"];
+  way(area.a)[shop~"^(supermarket|convenience|greengrocer)$"];
+  node(area.a)[leisure~"^(park|garden)$"];
+  way(area.a)[leisure~"^(park|garden)$"];
 );
-out tags center 3000;
+out tags center 5000;
 """
 
 
@@ -116,14 +129,20 @@ async def fetch_poi() -> list[dict]:
         amenity = tags.get("amenity")
         # townhall/government office -> единая категория "gov" (гос.
         # учреждения); clinic/hospital -> единая "clinic" (поликлиники/
-        # больницы) — детальнее не разбиваем, тепловой карте инфраструктуры
-        # достаточно этих 5 категорий.
+        # больницы); shop=supermarket/convenience/greengrocer -> "shop",
+        # leisure=park/garden -> "park" (назначения walkability, Фаза L3)
+        # — детальнее не разбиваем, тепловой карте инфраструктуры и
+        # роутингу достаточно этих категорий.
         if amenity in ("school", "kindergarten", "university"):
             kind = amenity
         elif amenity in ("clinic", "hospital"):
             kind = "clinic"
         elif amenity == "townhall" or tags.get("office") == "government":
             kind = "gov"
+        elif tags.get("shop") in ("supermarket", "convenience", "greengrocer"):
+            kind = "shop"
+        elif tags.get("leisure") in ("park", "garden"):
+            kind = "park"
         else:
             continue
         if "lat" in el:

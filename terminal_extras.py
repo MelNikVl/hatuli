@@ -604,6 +604,62 @@ def make_extras_router(templates) -> APIRouter:
             return RedirectResponse(url="/admin/login", status_code=302)
         return templates.TemplateResponse("transport_analytics.html", {"request": request})
 
+    @router.get("/admin/analytics/walkability", response_class=HTMLResponse)
+    async def walkability_page(request: Request):
+        """Карта ЖК с пешеходной изоляцией (Фаза L3, задача 2026-08-15,
+        миграция 075) — ratio walking/haversine > 1.5 по данным
+        complex_walkability (OSRM foot, ежемесячный снапшот)."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        return templates.TemplateResponse("walkability_analytics.html", {"request": request})
+
+    @router.get("/admin/api/walkability-barriers")
+    async def walkability_barriers_api(request: Request):
+        """ЖК с барьерами из LATEST-снимка complex_walkability (по строке
+        на complex_id×destination_type), сгруппированные по ЖК: макс
+        ratio, число барьеров, детали по типам для попапа карты."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch
+        rows = await fetch("""
+            WITH latest AS (
+                SELECT DISTINCT ON (complex_id, destination_type)
+                       complex_id, destination_type, walking_distance_m,
+                       haversine_distance_m, ratio, barrier, dest_name,
+                       complex_lat, complex_lon
+                FROM complex_walkability
+                ORDER BY complex_id, destination_type, computed_at DESC
+            )
+            SELECT l.complex_id, c.name,
+                   max(l.complex_lat) AS lat, max(l.complex_lon) AS lon,
+                   count(*) AS barrier_count,
+                   round(max(l.ratio)::numeric, 2) AS max_ratio,
+                   jsonb_agg(jsonb_build_object(
+                       'type', l.destination_type,
+                       'walking', round(l.walking_distance_m::numeric),
+                       'straight', round(l.haversine_distance_m::numeric),
+                       'ratio', round(l.ratio::numeric, 2),
+                       'dest', l.dest_name) ORDER BY l.ratio DESC) AS details
+            FROM latest l JOIN complexes c ON c.id = l.complex_id
+            WHERE l.barrier
+            GROUP BY l.complex_id, c.name
+            ORDER BY max(l.ratio) DESC
+        """)
+        import json as _json
+        points = []
+        for r in rows:
+            details = r["details"]
+            if isinstance(details, str):
+                details = _json.loads(details)
+            points.append({
+                "complex_id": r["complex_id"], "name": r["name"],
+                "lat": r["lat"], "lon": r["lon"],
+                "barrier_count": r["barrier_count"],
+                "max_ratio": float(r["max_ratio"]) if r["max_ratio"] is not None else None,
+                "details": details,
+            })
+        return JSONResponse({"points": points})
+
     @router.get("/admin/api/hype-locations")
     async def hype_locations_api(request: Request, days: int | None = None):
         # БАГ (найден при расследовании "хайп только у ЛРТ"): раньше отдавали
@@ -5739,6 +5795,7 @@ def make_extras_router(templates) -> APIRouter:
                 compute_complex_location_score(
                     lat, lon,
                     year_built=cx.get("year_built"), district=cx.get("district"),
+                    complex_id=complex_id,
                 ), timeout=90.0)
         except asyncio.TimeoutError:
             return JSONResponse({"error": "timeout"}, status_code=504)

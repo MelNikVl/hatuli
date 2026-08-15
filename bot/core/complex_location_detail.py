@@ -13,7 +13,11 @@
     в большинстве случаев (та же ячейка, что уже дёргалась при расчёте
     location-score), без нового живого Overpass-запроса specifically
     для карты;
-  - тренд `complex_stats_history.price_drop_share_30d` по дням.
+  - тренд `complex_stats_history.price_drop_share_30d` по дням;
+  - пешеходную доступность `complex_walkability` (Фаза L3, задача
+    2026-08-15, миграция 075): latest-строка по каждому типу назначения
+    (walking/haversine/ratio/barrier + точка назначения для карты) —
+    риск-бейдж «Пешеходная изоляция» и маркеры маршрутных POI.
 
 **Явно НЕ включает цену/DOM отдельными временными рядами** — те уже
 показаны на странице (price-dynamics/turnover-dynamics графики),
@@ -50,6 +54,7 @@ async def build_complex_location_detail(complex_id: int) -> dict:
         return {
             "has_coords": False, "has_score": False, "score": None,
             "density": [], "demolition": [], "poi": {}, "price_drop_trend": [],
+            "walkability": {},
         }
     lat, lon = centroid
 
@@ -58,6 +63,7 @@ async def build_complex_location_detail(complex_id: int) -> dict:
     demolition = await _build_demolition(lat, lon, fetch, haversine_km)
     poi = await _build_poi(lat, lon)
     price_drop_trend = await _build_price_drop_trend(complex_id, fetch)
+    walkability = await _build_walkability(complex_id, fetch)
 
     return {
         "has_coords": True,
@@ -67,6 +73,7 @@ async def build_complex_location_detail(complex_id: int) -> dict:
         "demolition": demolition,
         "poi": poi,
         "price_drop_trend": price_drop_trend,
+        "walkability": walkability,
     }
 
 
@@ -152,6 +159,36 @@ async def _build_poi(lat, lon) -> dict:
         out.setdefault(p["kind"], []).append({"lat": p["lat"], "lon": p["lon"]})
     for s in school_points:
         out["school"].append({"lat": s["lat"], "lon": s["lon"], "kind": s["kind"]})
+    return out
+
+
+async def _build_walkability(complex_id: int, fetch) -> dict:
+    """Latest-строка complex_walkability по каждому типу назначения (Фаза
+    L3, миграция 075). Пустой dict, если снапшот для ЖК ещё не считался
+    (Unknown ≠ average — молчим, не подделываем). walking_distance_m NULL
+    (маршрут не построен) отдаём как есть — фронт решает, показывать ли."""
+    rows = await fetch("""
+        SELECT DISTINCT ON (destination_type)
+               destination_type, walking_distance_m, walking_duration_s,
+               haversine_distance_m, ratio, barrier,
+               dest_name, dest_lat, dest_lon, no_route_reason, computed_at
+        FROM complex_walkability
+        WHERE complex_id = $1
+        ORDER BY destination_type, computed_at DESC
+    """, complex_id)
+    out = {}
+    for r in rows:
+        out[r["destination_type"]] = {
+            "walking_distance_m": round(r["walking_distance_m"]) if r["walking_distance_m"] is not None else None,
+            "walking_duration_s": round(r["walking_duration_s"]) if r["walking_duration_s"] is not None else None,
+            "haversine_distance_m": round(r["haversine_distance_m"]),
+            "ratio": round(float(r["ratio"]), 2) if r["ratio"] is not None else None,
+            "barrier": r["barrier"],
+            "dest_name": r["dest_name"],
+            "dest_lat": r["dest_lat"], "dest_lon": r["dest_lon"],
+            "no_route_reason": r["no_route_reason"],
+            "computed_at": r["computed_at"].strftime("%d.%m.%Y") if r["computed_at"] else None,
+        }
     return out
 
 

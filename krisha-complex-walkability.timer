@@ -1,0 +1,13 @@
+[Unit]
+Description=Таймер ежемесячного пересчёта complex_walkability (OSRM walkability) — Фаза L3 «Локация», задача 2026-08-15
+
+[Timer]
+# 06:30 — раньше krisha-complex-location-score.timer (09:15), чтобы тот
+# уже видел свежие walking-дистанции при чтении complex_walkability.
+OnCalendar=*-*-01 06:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=krisha-complex-walkability.service
+
+[Install]
+WantedBy=timers.target

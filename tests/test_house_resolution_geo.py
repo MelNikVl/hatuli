@@ -85,7 +85,7 @@ async def test_location_score_api_finds_house_coords_not_no_coords(client, house
     # не зависел от доступности Overpass и не ждал 90с таймаут.
     seen = {}
 
-    async def _fake_compute(lat, lon, year_built=None, district=None):
+    async def _fake_compute(lat, lon, year_built=None, district=None, complex_id=None):
         seen["lat"], seen["lon"] = lat, lon
         return {"total": 0, "factors": {}, "confidence": 0}
 

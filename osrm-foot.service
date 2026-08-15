@@ -1,0 +1,17 @@
+[Unit]
+Description=OSRM foot-роутинг для walkability ЖК Астаны (docker, граф Казахстана, /home/nik/osrm) — Фаза L3 «Локация», задача 2026-08-15
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=nik
+Restart=always
+RestartSec=10
+# Только localhost: внешний доступ к роутингу не нужен, порт 5000 не светим наружу.
+ExecStartPre=-/usr/bin/docker rm -f osrm-foot
+ExecStart=/usr/bin/docker run --rm --name osrm-foot -p 127.0.0.1:5000:5000 -v /home/nik/osrm:/data ghcr.io/project-osrm/osrm-backend:latest osrm-routed --algorithm mld /data/kazakhstan-latest.osrm
+ExecStop=/usr/bin/docker stop osrm-foot
+
+[Install]
+WantedBy=multi-user.target

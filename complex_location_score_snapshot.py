@@ -130,7 +130,8 @@ async def _process_one(r: dict, commit: str, sem: asyncio.Semaphore) -> str:
         lat, lon = centroid
 
         result = await compute_complex_location_score(
-            lat, lon, year_built=r["year_built"], district=r["district"])
+            lat, lon, year_built=r["year_built"], district=r["district"],
+            complex_id=r["id"])
         if result is None:
             # Теоретически недостижимо (centroid уже не None -> lat/lon
             # заданы) — защитный случай, не молчим.
