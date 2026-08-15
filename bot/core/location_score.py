@@ -98,9 +98,7 @@ _LEFT_BANK_DISTRICTS = {"есиль", "есильский"}
 # ── Групповая модель (см. докстринг выше) ───────────────────────────────
 # Веса групп — структурная константа продукта, требует явного решения
 # заказчика для пересмотра (тот же тип обязательства, что было у
-# _TOTAL_ADJ_MIN/MAX). building_age числится в "risk" здесь ВРЕМЕННО —
-# следующий коммит фазы ("двойные школы + building_age") выносит его из
-# location_score вовсе (это качество здания, не локации).
+# _TOTAL_ADJ_MIN/MAX).
 _GROUP_WEIGHTS: dict[str, float] = {
     "transport": 0.25,
     "infra": 0.25,
@@ -112,13 +110,16 @@ _GROUP_WEIGHTS: dict[str, float] = {
 # Канонический источник группировки факторов — используется и здесь
 # (normalize_group_weighted), и complex_location_score_snapshot.py
 # (breakdown/group-суммы в UI) — тот файл ИМПОРТИРУЕТ эти константы
-# отсюда, не дублирует их (единый источник правды).
+# отсюда, не дублирует их (единый источник правды). building_age УБРАН
+# отсюда с 2026-08-15 ("Location Reliability Phase", коммит "двойные
+# школы + building_age") — качество здания, не локации, см. докстринг
+# _building_age_factor() ниже.
 _GROUPS: dict[str, tuple[str, ...]] = {
     "transport": ("transit_stops", "lrt_access", "road_access", "route_connectivity"),
     "infra": ("schools", "amenities", "school_access", "kindergarten_access"),
     "noise": ("noise",),
     "green": ("parks",),
-    "risk": ("demolition", "building_age"),
+    "risk": ("demolition",),
 }
 _INFORMATIONAL: tuple[str, ...] = ("bank",)
 
@@ -128,16 +129,27 @@ _INFORMATIONAL: tuple[str, ...] = ("bank",)
 # отдельного слоя изменится (score_layers/*.py) — эту таблицу и
 # _GROUPS надо обновить вручную (тот же тип обязательства, что несёт
 # _CLASS_SCORE в hedonic_constants.py).
+#
+# "schools" — 0..2, НЕ 0..5 (было до 2026-08-15): с этой задачи ("двойные
+# школы + building_age") OSM-слой schools зовётся с university_only=True
+# в подавляющем большинстве случаев (astana_schools/kindergartens почти
+# всегда доступны, см. bot/score_layers/schools.py докстринг) — реальный
+# диапазон ЭТОГО фактора В КОНТЕКСТЕ location_score теперь "вуз рядом или
+# нет" (0/2), школьно-садиковая часть (была 3/5) переехала в school_
+# access/kindergarten_access. В редком fallback-случае (astana-таблицы
+# недоступны) OSM теоретически может вернуть до 5 — диапазон здесь
+# намеренно отражает ОБЫЧНЫЙ, не крайний случай (тот же принцип, что уже
+# был у building_age "год неизвестен" — см. общий комментарий про
+# известные ограничения статических диапазонов в докстринге модуля).
 _FACTOR_RANGES: dict[str, tuple[int, int]] = {
     "noise": (-6, 0),                  # score_layers/noise.py
-    "schools": (0, 5),                 # score_layers/schools.py
+    "schools": (0, 2),                 # score_layers/schools.py, university_only=True в обычном случае
     "transit_stops": (0, 3),           # score_layers/transit.py
     "amenities": (0, 4),               # score_layers/amenities.py
     "parks": (0, 2),                   # score_layers/parks.py
     "lrt_access": (0, 4),              # _transport_hex_factors
     "road_access": (0, 2),             # _transport_hex_factors
     "route_connectivity": (0, 2),      # _transport_hex_factors
-    "building_age": (0, 2),            # _building_age_factor
     "demolition": (-2, 0),             # _demolition_factor
     "school_access": (0, 4),           # _schools_factor — задача 2026-08-15
     "kindergarten_access": (0, 2),     # _kindergartens_factor — задача 2026-08-15
@@ -336,6 +348,14 @@ async def _kindergartens_factor(lat: float, lon: float) -> dict:
 
 
 def _building_age_factor(year_built: int | None) -> dict:
+    """НЕ вызывается из compute_complex_location_score() с 2026-08-15
+    ("Location Reliability Phase", коммит "двойные школы + building_age")
+    — возраст здания это качество ЗДАНИЯ, не локации: два соседних дома
+    (2025 и 1980 года) на одной и той же точке карты должны иметь
+    ОДИНАКОВЫЙ location score, что было не так, пока building_age жил в
+    "risk"-группе. Функция сохранена как есть (не удалена) — прямой
+    кандидат для будущего property_score/structural-quality скора,
+    который считается ПО ЖК/КВАРТИРЕ, не по локации."""
     if not year_built:
         return {"adj": 0, "reason": "год постройки неизвестен"}
     if year_built >= 2020:
@@ -363,19 +383,58 @@ async def compute_complex_location_score(
 ) -> dict | None:
     """Итог: {"total": int, "factors": {key: {"adj","label","reason"}}}.
     None, если нет координат (ЖК с невыясненной геолокацией — см. задачу
-    аудита координат ЖК)."""
+    аудита координат ЖК).
+
+    `year_built` — параметр СОХРАНЁН в сигнатуре ради обратной
+    совместимости с вызывающими (complex_location_score_snapshot.py,
+    /admin/api/complex/{id}/location-score в terminal_extras.py — их
+    менять не требовалось), но с 2026-08-15 ("Location Reliability
+    Phase", коммит "двойные школы + building_age") ВНУТРИ этой функции
+    не используется вовсе — building_age убран из location score (см.
+    докстринг _building_age_factor() выше, почему)."""
     if not lat or not lon:
         return None
     listing = {"lat": lat, "lon": lon}
     factors: dict[str, dict] = {}
 
-    # transit/amenities/parks все используют ОДИН и тот же shared-запрос
-    # bot/score_layers/poi.py (кэш-ключ "poi700") — если их не разогнать
-    # concurrently ДО прогрева кэша, каждый из трёх бьёт в Overpass отдельно
-    # (3 лишних запроса разом). У Overpass с этого сервера реально жив
-    # только 1 из 4 зеркал (см. комментарий в bot/score_layers/osm.py) —
+    # Точные DB-факторы (не Overpass — общий pg pool, дешёво) идут ПЕРВЫМИ,
+    # раньше OSM-слоёв ниже — их результат нужен, чтобы решить, в каком
+    # режиме звать OSM-слой "schools" (см. ниже про double-counting).
+    hex_factors, demolition_result, schools_result, kindergartens_result = await asyncio.gather(
+        _transport_hex_factors(lat, lon),
+        _demolition_factor(lat, lon),
+        _schools_factor(lat, lon),
+        _kindergartens_factor(lat, lon),
+    )
+    factors["lrt_access"] = {**hex_factors["lrt_access"], "label": "🚈 ЛРТ рядом"}
+    factors["road_access"] = {**hex_factors["road_access"], "label": "🚗 Доступность на авто"}
+    factors["route_connectivity"] = {**hex_factors["route_connectivity"], "label": "🔀 Маршрутная связность"}
+    factors["demolition"] = {**demolition_result, "label": "🚧 Снос по соседству"}
+    # school_access/kindergarten_access — задача 2026-08-15, ТОЧНЫЙ сигнал
+    # по расстоянию+типу (astana_schools/astana_kindergartens) —
+    # PRIMARY-источник, вытесняет школьно-садиковую часть OSM-слоя
+    # "schools" ниже (university_only=True), не дублирует её (см.
+    # докстринг bot/score_layers/schools.py про двойное взвешивание,
+    # задача "Location Reliability Phase", коммит "двойные школы +
+    # building_age").
+    factors["school_access"] = {**schools_result, "label": "🏫 Школа рядом"}
+    factors["kindergarten_access"] = {**kindergartens_result, "label": "🧸 Садик рядом"}
+    # "Нет данных" здесь практически недостижимо (astana_schools/
+    # kindergartens — стабильные городские справочники, 160/131 строка на
+    # 2026-08-15, запрос падает только при реальном сбое БД) — но именно
+    # для ЭТОГО редкого случая OSM-слой ниже остаётся полноценным fallback
+    # (university_only=False), а не университетским огрызком.
+    schools_precise_available = (
+        "нет данных" not in schools_result["reason"] or "нет данных" not in kindergartens_result["reason"]
+    )
+
+    # transit/amenities/parks/schools все используют ОДИН и тот же shared-
+    # запрос bot/score_layers/poi.py (кэш-ключ "poi700") — если их не
+    # разогнать concurrently ДО прогрева кэша, каждый бьёт в Overpass
+    # отдельно (лишние запросы разом). У Overpass с этого сервера реально
+    # жив только 1 из 4 зеркал (см. комментарий в bot/score_layers/osm.py) —
     # лишняя параллельная нагрузка повышает риск словить рейт-лимит и
-    # свалиться в каскад из 3 гарантированно мёртвых зеркал (по 30с
+    # свалиться в каскад из гарантированно мёртвых зеркал (по 30с
     # таймаута каждое). Поэтому сначала прогреваем poi-кэш ОДНИМ запросом.
     from bot.score_layers.poi import fetch_poi
     try:
@@ -385,7 +444,10 @@ async def compute_complex_location_score(
 
     async def _run_layer(key, module):
         try:
-            adj, reason = await module.compute(listing)
+            if key == "schools":
+                adj, reason = await module.compute(listing, university_only=schools_precise_available)
+            else:
+                adj, reason = await module.compute(listing)
         except Exception as exc:
             logger.warning("location_score layer %s failed: %s", key, exc)
             adj, reason = 0, f"ошибка слоя: {exc}"
@@ -396,26 +458,6 @@ async def compute_complex_location_score(
     for key, adj, reason in results:
         factors[key] = {"adj": adj, "label": label_by_key[key], "reason": reason}
 
-    # 4 независимых pg-запроса разом (не Overpass — тот же pool, что и
-    # остальная БД, лишняя нагрузка тут не проблема, в отличие от прогрева
-    # poi-кэша выше).
-    hex_factors, demolition_result, schools_result, kindergartens_result = await asyncio.gather(
-        _transport_hex_factors(lat, lon),
-        _demolition_factor(lat, lon),
-        _schools_factor(lat, lon),
-        _kindergartens_factor(lat, lon),
-    )
-    factors["lrt_access"] = {**hex_factors["lrt_access"], "label": "🚈 ЛРТ рядом"}
-    factors["road_access"] = {**hex_factors["road_access"], "label": "🚗 Доступность на авто"}
-    factors["route_connectivity"] = {**hex_factors["route_connectivity"], "label": "🔀 Маршрутная связность"}
-
-    factors["building_age"] = {**_building_age_factor(year_built), "label": "🏗 Возраст дома"}
-    factors["demolition"] = {**demolition_result, "label": "🚧 Снос по соседству"}
-    # school_access/kindergarten_access — задача 2026-08-15, ДОПОЛНЯЮТ
-    # старый OSM-фактор "schools" выше (не заменяют, см. докстринг
-    # _schools_factor()) — точный сигнал по расстоянию+типу.
-    factors["school_access"] = {**schools_result, "label": "🏫 Школа рядом"}
-    factors["kindergarten_access"] = {**kindergartens_result, "label": "🧸 Садик рядом"}
     factors["bank"] = {**_bank_factor(district), "label": "🌉 Берег Ишима"}
 
     total = sum(f["adj"] for f in factors.values())

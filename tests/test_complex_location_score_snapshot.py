@@ -39,6 +39,9 @@ async def db():
 def _fake_factors(**overrides) -> dict:
     """Полный набор факторов с нулевыми adj по умолчанию (нейтральная
     середина диапазона) — overrides переопределяют конкретные."""
+    # building_age сюда НЕ входит — с задачи "двойные школы + building_age"
+    # (2026-08-15) он не в _GROUPS и не влияет на score (см. tests/test_
+    # location_score_group_weighted.py::test_building_age_not_in_any_group).
     base = {
         "noise": {"adj": 0, "label": "🔇", "reason": "тихо"},
         "schools": {"adj": 0, "label": "🏫", "reason": "нет данных"},
@@ -50,7 +53,6 @@ def _fake_factors(**overrides) -> dict:
         "lrt_access": {"adj": 0, "label": "🚈", "reason": "нет данных"},
         "road_access": {"adj": 0, "label": "🚗", "reason": "нет данных"},
         "route_connectivity": {"adj": 0, "label": "🔀", "reason": "нет данных"},
-        "building_age": {"adj": 0, "label": "🏗", "reason": "год неизвестен"},
         "demolition": {"adj": 0, "label": "🚧", "reason": "нет объектов"},
         "bank": {"adj": 0, "label": "🌉", "reason": "район не определён"},
     }
@@ -88,7 +90,11 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
     import bot.core.location_score as location_score_module
 
     async def _fake_compute(lat, lon, year_built=None, district=None):
-        factors = _fake_factors(schools=5, amenities=4, parks=2, lrt_access=4, demolition=-2)
+        # schools=2, не 5 — с задачи "двойные школы" (2026-08-15) это
+        # реальный максимум фактора "schools" в location_score (OSM
+        # university_only=True в обычном случае, школьно-садиковая часть
+        # переехала в school_access/kindergarten_access).
+        factors = _fake_factors(schools=2, amenities=4, parks=2, lrt_access=4, demolition=-2)
         return {"total": sum(f["adj"] for f in factors.values()), "factors": factors, "confidence": 90}
 
     monkeypatch.setattr(location_score_module, "compute_complex_location_score", _fake_compute)
@@ -107,25 +113,26 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
         # Phase", normalize_group_weighted()) — взвешенное среднее по
         # группам, НЕ линейный total/диапазон (тот убран). По группам:
         #   transport: lrt_access=4 из диапазона (0,11) -> 36.36%
-        #   infra: schools=5+amenities=4=9 из (0,15)     -> 60%
+        #   infra: schools=2+amenities=4=6 из (0,12)     -> 50%
         #   noise: 0 из (-6,0)                            -> 100%
         #   green: parks=2 из (0,2)                       -> 100%
-        #   risk: demolition=-2 из (-2,2)                 -> 0%
-        # 0.25*36.36 + 0.25*60 + 0.15*100 + 0.20*100 + 0.15*0 = 59.09 -> 59
-        assert row["score"] == 59
+        #   risk: demolition=-2 из (-2,0)                 -> 0%
+        # 0.25*36.36 + 0.25*50 + 0.15*100 + 0.20*100 + 0.15*0 = 56.59 -> 57
+        assert row["score"] == 57
         assert row["confidence"] == 90
-        assert row["infra_score"] == 9      # schools(5)+amenities(4)
+        assert row["infra_score"] == 6      # schools(2)+amenities(4)
         assert row["transport_score"] == 4  # lrt_access(4), остальные 0
         assert row["green_score"] == 2
-        assert row["risk_score"] == -2      # demolition(-2)+building_age(0)
+        assert row["risk_score"] == -2      # demolition(-2), building_age больше не в группе
         assert row["noise_score"] == 0
         assert row["score_version"] == "loc_v1"
         assert row["git_commit"]
         assert round(row["lat"], 2) == 51.15
         breakdown = row["breakdown"]
         breakdown = json.loads(breakdown) if isinstance(breakdown, str) else breakdown
-        assert breakdown["infra"]["schools"]["adj"] == 5
+        assert breakdown["infra"]["schools"]["adj"] == 2
         assert breakdown["risk"]["demolition"]["adj"] == -2
+        assert "building_age" not in breakdown["risk"]  # убран из группы (задача "двойные школы")
         assert breakdown["informational"]["bank"]["adj"] == 0
         assert "bank" not in breakdown.get("risk", {})  # bank вне групп
     finally:
@@ -141,22 +148,23 @@ async def test_snapshot_all_groups_at_min_or_max_gives_0_or_100(db, monkeypatch)
     import bot.core.location_score as location_score_module
 
     async def _fake_min(lat, lon, year_built=None, district=None):
-        # noise=-6 (мин noise-группы), demolition=-2 (мин risk-группы,
-        # т.к. building_age=0 — тоже её собственный минимум по умолчанию);
-        # transport/infra/green уже на нуле = их минимум по умолчанию.
+        # noise=-6 (мин noise-группы), demolition=-2 (мин risk-группы —
+        # единственный член с задачи "двойные школы", building_age из неё
+        # убран); transport/infra/green уже на нуле = их минимум по умолчанию.
         factors = _fake_factors(noise=-6, demolition=-2)
         return {"total": -8, "factors": factors, "confidence": 50}
 
     async def _fake_max(lat, lon, year_built=None, district=None):
         # Максимум КАЖДОЙ группы одновременно: transport (transit_stops+
-        # lrt_access+road_access+route_connectivity=11), infra (schools+
-        # amenities+school_access+kindergarten_access=15), green (parks=2),
-        # risk (building_age=2, demolition уже на 0 = её максимум).
+        # lrt_access+road_access+route_connectivity=11), infra (schools=2+
+        # amenities+school_access+kindergarten_access=12 — schools сжат до
+        # 0..2 задачей "двойные школы"), green (parks=2), risk (demolition
+        # уже на 0 = её максимум, building_age в группе больше нет вовсе).
         # noise остаётся на дефолтном 0 — это и есть максимум noise-группы.
-        factors = _fake_factors(schools=5, transit_stops=3, amenities=4, parks=2,
-                                 lrt_access=4, road_access=2, route_connectivity=2, building_age=2,
+        factors = _fake_factors(schools=2, transit_stops=3, amenities=4, parks=2,
+                                 lrt_access=4, road_access=2, route_connectivity=2,
                                  school_access=4, kindergarten_access=2)
-        return {"total": 30, "factors": factors, "confidence": 100}
+        return {"total": 25, "factors": factors, "confidence": 100}
 
     cid1, lid1 = await _insert_complex_with_listing("__test_cls_min__", 51.10, 71.40)
     cid2, lid2 = await _insert_complex_with_listing("__test_cls_max__", 51.11, 71.41)
