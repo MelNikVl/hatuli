@@ -9,11 +9,18 @@
 score, см. РЕШЕНИЕ 2 плана L1 — тот отдаёт сырой total/factors/
 confidence, единственный консьюмер complex_detail.html:645). Этот
 скрипт — отдельный слой: нормализует factors в 0-100 (bot/core/location_
-score.py::normalize_group_weighted() — взвешенное среднее по группам,
-задача 2026-08-15 "Location Reliability Phase", раньше был линейный
-_TOTAL_ADJ_MIN/MAX по total, убран), группирует факторы в breakdown
-(транспорт/инфраструктура/шум/зелень/риски + informational), пишет
+score.py::normalize_group_weighted() — взвешенное среднее по пяти
+latent-свойствам локации, задача 2026-08-15 "Location Reliability
+Phase" v2, раньше был линейный _TOTAL_ADJ_MIN/MAX по total, убран),
+группирует факторы в breakdown (transport/infra/environment/risk/
+urban_quality + informational — environment = бывшие "шум"+"зелень"
+объединены, см. location_score.py про переименование), пишет
 append-only снимок.
+
+**noise_score/green_score колонки СОХРАНЕНЫ** (задача 2026-08-15 v2 не
+тянет миграцию/переделку UI ради переименования групп) — считаются явно
+по факторам noise/parks напрямую, не через _GROUPS (тех ключей там
+больше нет, см. _process_one() ниже).
 
 **НИЗКИЙ confidence — валидная строка, НЕ повод пропустить ЖК.** Полный
 отказ Overpass при пустом osm_cache всё равно даёт transport_hexes/
@@ -144,7 +151,13 @@ async def _process_one(r: dict, commit: str, sem: asyncio.Semaphore) -> str:
         """,
             r["id"], _normalize_score(factors), result["confidence"],
             _group_sum(factors, _GROUPS["transport"]), _group_sum(factors, _GROUPS["infra"]),
-            _group_sum(factors, _GROUPS["noise"]), _group_sum(factors, _GROUPS["green"]),
+            # noise_score/green_score — задача 2026-08-15 v2 ("Семантика +
+            # якоря + иерархическая модель"): "noise"/"green" больше НЕ
+            # отдельные ключи _GROUPS (объединены в "environment", см.
+            # location_score.py) — колонки СОХРАНЕНЫ как есть (не тянем
+            # миграцию/переделку UI ради одного захода), считаем явными
+            # tuple вместо _GROUPS[...] — те же самые факторы, что раньше.
+            _group_sum(factors, ("noise",)), _group_sum(factors, ("parks",)),
             _group_sum(factors, _GROUPS["risk"]), lat, lon,
             json.dumps(breakdown, ensure_ascii=False), SCORE_VERSION, commit,
         )

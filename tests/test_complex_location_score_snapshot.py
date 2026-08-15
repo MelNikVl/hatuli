@@ -102,7 +102,7 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
     import complex_location_score_snapshot as snap
     import bot.core.location_score as location_score_module
 
-    async def _fake_compute(lat, lon, year_built=None, district=None):
+    async def _fake_compute(lat, lon, year_built=None, district=None, complex_id=None):
         # schools=2, не 5 — с задачи "двойные школы" (2026-08-15) это
         # реальный максимум фактора "schools" в location_score (OSM
         # university_only=True в обычном случае, школьно-садиковая часть
@@ -122,20 +122,24 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
         from bot.db.pg import fetchrow
         row = await fetchrow("SELECT * FROM complex_location_scores WHERE complex_id=$1", cid)
         assert row is not None
-        # Групповая модель + availability-aware диапазоны (задача
-        # 2026-08-15, "Location Reliability Phase", normalize_group_
+        # Пять latent-свойств + availability-aware диапазоны (задача
+        # 2026-08-15, "Location Reliability Phase" v2, normalize_group_
         # weighted()) — только измеренные (override -> "измерено") факторы
-        # участвуют в диапазоне ГРУППЫ, не статическая схема. По группам
+        # участвуют в диапазоне СВОЙСТВА, не статическая схема. По свойствам
         # (в скобках — какие факторы AVAILABLE и их динамический диапазон):
         #   transport: только lrt_access(измерено)=4 из диапазона (0,4)
         #     — остальные 3 "нет данных", исключены целиком -> 100%
         #   infra: schools(измерено)=2 из (0,2) + amenities(измерено)=4
         #     из (0,4) -> раздельно оба на своём максимуме -> 100%
-        #   noise: 0, дефолтно ДОСТУПЕН ("тихо" не "нет данных") -> (-6,0) -> 100%
-        #   green: parks(измерено)=2 из (0,2)              -> 100%
-        #   risk: demolition(измерено)=-2 из (-2,0)         -> 0%
-        # 0.25*100 + 0.25*100 + 0.15*100 + 0.20*100 + 0.15*0 = 85
-        assert row["score"] == 85
+        #   environment: noise=0 дефолтно ДОСТУПЕН ("тихо") + parks
+        #     (измерено)=2 -> raw=2 из объединённого (-6,2) -> 100%
+        #     (air_quality "нет данных", исключён)
+        #   risk: demolition(измерено)=-2 из (-2,0)          -> 0%
+        #   urban_quality: пусто структурно -> ВСЕГДА 50% (см. tests/
+        #     test_location_score_group_weighted.py::
+        #     test_urban_quality_always_fifty_percent_structurally)
+        # 0.25*100+0.25*100+0.20*100+0.15*0+0.15*50 = 77.5 -> round -> 78
+        assert row["score"] == 78
         # confidence теперь взвешен по source_quality, не "доля посчитанных"
         # (см. bot/core/location_score.py::_compute_confidence()) —
         # передаётся из fake напрямую (90), run_snapshot() не пересчитывает.
@@ -160,30 +164,29 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_snapshot_all_groups_at_min_or_max_gives_0_or_100(db, monkeypatch):
-    """Групповая модель + availability-aware диапазоны (задача 2026-08-15,
-    коммиты "Семантика + групповая модель" и "Confidence") — 0/100
-    достигаются, когда в КАЖДОЙ группе есть измеренный ("available")
-    фактор ровно на своём мин/макс. Заведомо НЕ переопределяем все
-    факторы группы — достаточно ОДНОГО измеренного на границе (см.
-    докстринг _group_range_available() — диапазон группы строится
-    только из доступных факторов, не по статической схеме)."""
+async def test_snapshot_all_measurable_groups_at_min_or_max(db, monkeypatch):
+    """Пять latent-свойств + availability-aware диапазоны (задача
+    2026-08-15 v2) — НЕ 0/100 больше (urban_quality пусто структурно,
+    всегда тянет к своим 50% на 15% веса — см. tests/test_location_
+    score_group_weighted.py::test_theoretical_bounds_are_not_0_100_
+    while_urban_quality_empty), а 8/92: round(0.85*0+0.15*50)=8,
+    round(0.85*100+0.15*50)=92. Честное следствие пустого свойства —
+    не притворяемся, что можем быть уверены в абсолютном 0 или 100,
+    пока 15% картины (urban_quality) в принципе неизмеримы."""
     import complex_location_score_snapshot as snap
     import bot.core.location_score as location_score_module
 
-    async def _fake_min(lat, lon, year_built=None, district=None):
-        # По одному измеренному фактору на группу, каждый — на своём
-        # минимуме: route_connectivity=0 (transport), schools=0 (infra),
-        # noise=-6, parks=0 (green), demolition=-2 (risk).
-        factors = _fake_factors(route_connectivity=0, schools=0, noise=-6,
-                                 parks=0, demolition=-2)
+    async def _fake_min(lat, lon, year_built=None, district=None, complex_id=None):
+        # По одному измеренному фактору на измеримое свойство, каждый —
+        # на своём минимуме: route_connectivity=0 (transport), schools=0
+        # (infra), noise=-6 (environment), demolition=-2 (risk).
+        factors = _fake_factors(route_connectivity=0, schools=0, noise=-6, demolition=-2)
         return {"total": -8, "factors": factors, "confidence": 50}
 
-    async def _fake_max(lat, lon, year_built=None, district=None):
-        # То же самое, но на максимуме: route_connectivity=2, schools=2,
-        # parks=2 — noise/demolition уже на максимуме СВОИМИ дефолтами
-        # (0 — и "тихо", и "нет объектов на снос", оба ДОСТУПНЫ без
-        # override, оба ровно на границе своего диапазона).
+    async def _fake_max(lat, lon, year_built=None, district=None, complex_id=None):
+        # На максимуме: route_connectivity=2, schools=2, parks=2 —
+        # noise/demolition уже на максимуме СВОИМИ дефолтами (0 — и
+        # "тихо", и "нет объектов на снос", оба ДОСТУПНЫ без override).
         factors = _fake_factors(route_connectivity=2, schools=2, parks=2)
         return {"total": 4, "factors": factors, "confidence": 100}
 
@@ -198,8 +201,8 @@ async def test_snapshot_all_groups_at_min_or_max_gives_0_or_100(db, monkeypatch)
         from bot.db.pg import fetchrow
         row1 = await fetchrow("SELECT score FROM complex_location_scores WHERE complex_id=$1", cid1)
         row2 = await fetchrow("SELECT score FROM complex_location_scores WHERE complex_id=$1", cid2)
-        assert row1["score"] == 0
-        assert row2["score"] == 100
+        assert row1["score"] == 8
+        assert row2["score"] == 92
     finally:
         await _cleanup(cid1, lid1)
         await _cleanup(cid2, lid2)
@@ -212,7 +215,7 @@ async def test_snapshot_low_confidence_still_written_not_skipped(db, monkeypatch
     import complex_location_score_snapshot as snap
     import bot.core.location_score as location_score_module
 
-    async def _fake_low_confidence(lat, lon, year_built=None, district=None):
+    async def _fake_low_confidence(lat, lon, year_built=None, district=None, complex_id=None):
         factors = _fake_factors()  # все нули/нет-данных
         return {"total": 0, "factors": factors, "confidence": 18}
 
@@ -269,7 +272,7 @@ async def test_snapshot_append_only_two_runs_same_complex(db, monkeypatch):
     import complex_location_score_snapshot as snap
     import bot.core.location_score as location_score_module
 
-    async def _fake_compute(lat, lon, year_built=None, district=None):
+    async def _fake_compute(lat, lon, year_built=None, district=None, complex_id=None):
         factors = _fake_factors(schools=3)
         return {"total": 3, "factors": factors, "confidence": 70}
 
@@ -297,7 +300,7 @@ async def test_snapshot_processes_multiple_complexes_concurrently_without_mixing
     import complex_location_score_snapshot as snap
     import bot.core.location_score as location_score_module
 
-    async def _fake_compute(lat, lon, year_built=None, district=None):
+    async def _fake_compute(lat, lon, year_built=None, district=None, complex_id=None):
         # Разный total для разных координат — если конкурентные задачи
         # перепутают complex_id/результат, тест это поймает. schools
         # (не 5, а 2 — новый максимум фактора с задачи "двойные школы",

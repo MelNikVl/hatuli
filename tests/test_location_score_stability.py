@@ -160,7 +160,7 @@ def test_stability_holds_across_varied_realistic_profiles():
         {k: {"adj": v["adj"], "reason": "измерено (тест)"} for k, v in _realistic_factors().items()},  # всё measured
     ]
     fake_groups = copy.deepcopy(ls._GROUPS)
-    fake_groups["green"] = fake_groups["green"] + ("hypothetical_park_quality",)
+    fake_groups["environment"] = fake_groups["environment"] + ("hypothetical_park_quality",)
     fake_ranges = dict(ls._FACTOR_RANGES)
     fake_ranges["hypothetical_park_quality"] = (0, 3)
 
