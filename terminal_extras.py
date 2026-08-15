@@ -5076,6 +5076,15 @@ def make_extras_router(templates) -> APIRouter:
                 developer_logo = developer_logo or _dl2["logo"]
                 developer_website = developer_website or _dl2["website"]
 
+        # Юридическая защита дольщика (БВУ/КЖК/МИО) — задача 2026-08-15,
+        # bot/core/complex_detail.py::get_kzk_info(). Считаем всегда (1-3
+        # точечных SQL-запроса, дёшево) — рендерится в шаблоне только для
+        # is_newbuild_page (вторичке эта защита не актуальна вовсе, см.
+        # liquidity_model_design.md §7), но тот флаг считается ниже по
+        # коду — дешевле посчитать здесь один раз, чем городить порядок.
+        from bot.core.complex_detail import get_kzk_info
+        kzk_info = await get_kzk_info(complex_id, cx.get("developer_id"))
+
         # House-resolution (задача 2026-08-13, "аналитика по домам считает
         # только атрибутированные"): на странице ДОМА (parent_complex_id
         # стоит) листинги — не только точное имя-совпадение (старое
@@ -5612,6 +5621,7 @@ def make_extras_router(templates) -> APIRouter:
             "geo": {"lat": centroid[0], "lon": centroid[1]} if centroid else None,
             "cx_address": addr_row["address"] if addr_row else None,
             "developer": developer,
+            "kzk_info": kzk_info,
             "developer_logo": developer_logo,
             "developer_website": developer_website,
             "ext_links": ext_links,

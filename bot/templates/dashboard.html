@@ -4463,6 +4463,21 @@ function openDetailModal(id, ev, scrollToScore) {
   ${d.high_yield ? `<span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;background:rgba(22,163,74,.12);color:#16a34a;font-weight:700;font-size:12.5px;">💰 Высокая доходность</span>` : ''}
 </div>` : '';
 
+    // Юридическая защита дольщика (БВУ/КЖК/МИО, только первичка) —
+    // задача 2026-08-15, тот же смысл бейджей, что на карточке ЖК
+    // (#cx-kzk-block в complex_detail.html), сжато под 1 бейдж для модалки.
+    const kzkBadgeHtml = d.kzk_badge ? (() => {
+      if (d.kzk_badge.is_blacklisted) {
+        return `<div style="margin:8px 22px 0;"><span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;background:rgba(239,68,68,.15);color:#ef4444;font-weight:700;font-size:12.5px;border:1px solid rgba(239,68,68,.3);">⛔ Застройщик в чёрном списке КЖК</span></div>`;
+      }
+      const scheme = d.kzk_badge.warranty_scheme;
+      if (scheme === 'Гарантия КЖК') return `<div style="margin:8px 22px 0;"><span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;background:rgba(34,197,94,.12);color:#16a34a;font-weight:700;font-size:12.5px;">🟢 Гарантия КЖК</span></div>`;
+      if (scheme === 'Участие БВУ') return `<div style="margin:8px 22px 0;"><span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;background:rgba(34,197,94,.12);color:#16a34a;font-weight:700;font-size:12.5px;">🟢 Участие банка (БВУ)</span></div>`;
+      if (scheme === 'Разрешение МИО') return `<div style="margin:8px 22px 0;"><span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;background:rgba(234,179,8,.12);color:#eab308;font-weight:700;font-size:12.5px;">🟡 Разрешение акимата (МИО)</span></div>`;
+      if (scheme == null) return `<div style="margin:8px 22px 0;"><span style="display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;background:rgba(239,68,68,.08);color:#ef4444;font-weight:700;font-size:12.5px;">🔴 Нет официальной защиты дольщика</span></div>`;
+      return '';
+    })() : '';
+
     const bargainHtml = (d.bargain && d.bargain.discount_pct > 0) ? `
 <div style="margin:14px 22px 0;">
   <div style="color:#16a34a;font-weight:800;font-size:19px;display:inline-block;">
@@ -4656,6 +4671,7 @@ ${photoHtml}
   ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
 </div>
 ${dealBadgesHtml}
+${kzkBadgeHtml}
 ${bargainHtml}
 ${priceHistoryHtml}
 ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">

@@ -100,11 +100,14 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
             ai_analysis = None
 
     # Фото ЖК — для галереи в модалке объявления (переиспользуем то же
-    # поле photos, что и на карточке ЖК)
+    # поле photos, что и на карточке ЖК). Заодно резолвим id/developer_id
+    # для kzk_badge ниже — тот же lookup, не дублируем запрос.
     complex_photos = []
+    kzk_badge = None
     if l.get("complex_name"):
         cx_row = await pg_fetchrow(
-            "SELECT photos, photo_url FROM complexes WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
+            "SELECT id, developer_id, photos, photo_url FROM complexes "
+            "WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
             l["complex_name"])
         if cx_row:
             cxp = cx_row["photos"]
@@ -114,6 +117,18 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
                 except ValueError:
                     cxp = None
             complex_photos = cxp or ([cx_row["photo_url"]] if cx_row.get("photo_url") else [])
+
+            # Риск-бейдж БВУ/КЖК/МИО (задача 2026-08-15) — только для
+            # первички (l.market_type='primary'), см. bot/core/complex_
+            # detail.py::get_kzk_info() докстринг про has_signal/резолюцию.
+            if l.get("market_type") == "primary":
+                from bot.core.complex_detail import get_kzk_info
+                kzk_info = await get_kzk_info(cx_row["id"], cx_row.get("developer_id"))
+                if kzk_info and kzk_info["has_signal"]:
+                    kzk_badge = {
+                        "is_blacklisted": kzk_info["is_blacklisted"],
+                        "warranty_scheme": kzk_info["warranty_scheme"],
+                    }
 
     # Лента "рядом" — 3 ближайших активных объявления по прямому расстоянию
     nearby = []
@@ -152,6 +167,7 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
         "lon": float(l["lon"]) if l.get("lon") is not None else None,
         "complex_name": l.get("complex_name") or "",
         "complex_photos": complex_photos,
+        "kzk_badge": kzk_badge,
         "geo": l.get("geo_source") or "",
         "photos": photos or [],
         "seller_name": l.get("seller_name") or "",

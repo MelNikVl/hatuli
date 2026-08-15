@@ -153,3 +153,87 @@ async def test_price_history_with_changes_orders_ascending(db):
         assert prices == [30_000_000, 28_000_000, 27_000_000]
     finally:
         await _cleanup(lid)
+
+
+# ── kzk_badge (задача 2026-08-15, "БВУ/КЖК/МИО в карточках ЖК") ────────
+# Риск-бейдж в модалке объявления — только для market_type='primary',
+# резолюция та же, что и на карточке ЖК (bot/core/complex_detail.py::
+# get_kzk_info(), tier 0 — точный BIN через complex_tech_specs).
+
+async def _insert_complex_with_bin(name, developer_bin):
+    from bot.db.pg import fetchval, execute
+    cid = await fetchval("INSERT INTO complexes (name) VALUES ($1) RETURNING id", name)
+    await execute(
+        "INSERT INTO complex_tech_specs (complex_id, developer_bin) VALUES ($1, $2)",
+        cid, developer_bin)
+    return cid
+
+
+async def _cleanup_complex(cid):
+    from bot.db.pg import execute
+    await execute("DELETE FROM complex_tech_specs WHERE complex_id=$1", cid)
+    await execute("DELETE FROM complexes WHERE id=$1", cid)
+
+
+async def _insert_kzk_bin(bin_, warranty_scheme=None, is_blacklisted=False):
+    from bot.db.pg import execute
+    await execute(
+        "INSERT INTO kzk_registry (bin, developer_legal, warranty_scheme, is_blacklisted, in_registry) "
+        "VALUES ($1, 'ТОО Тест', $2, $3, TRUE)",
+        bin_, warranty_scheme, is_blacklisted)
+
+
+async def _cleanup_kzk_bin(bin_):
+    from bot.db.pg import execute
+    await execute("DELETE FROM kzk_registry WHERE bin=$1", bin_)
+
+
+@pytest.mark.asyncio
+async def test_kzk_badge_shown_for_primary_market(db):
+    from bot.core.listing_detail import build_listing_detail
+    cname = "__test_ld_kzk_cx1__"
+    cid = await _insert_complex_with_bin(cname, "__test_ld_bin_1__")
+    await _insert_kzk_bin("__test_ld_bin_1__", warranty_scheme="Гарантия КЖК")
+    lid = "__test_ld_kzk_primary__"
+    await _insert_listing(lid, complex_name=cname, market_type="primary")
+    try:
+        d = await build_listing_detail(lid, tier="admin")
+        assert d["kzk_badge"] is not None
+        assert d["kzk_badge"]["warranty_scheme"] == "Гарантия КЖК"
+        assert d["kzk_badge"]["is_blacklisted"] is False
+    finally:
+        await _cleanup(lid)
+        await _cleanup_kzk_bin("__test_ld_bin_1__")
+        await _cleanup_complex(cid)
+
+
+@pytest.mark.asyncio
+async def test_kzk_badge_absent_for_secondary_market(db):
+    from bot.core.listing_detail import build_listing_detail
+    cname = "__test_ld_kzk_cx2__"
+    cid = await _insert_complex_with_bin(cname, "__test_ld_bin_2__")
+    await _insert_kzk_bin("__test_ld_bin_2__", warranty_scheme="Гарантия КЖК")
+    lid = "__test_ld_kzk_secondary__"
+    await _insert_listing(lid, complex_name=cname, market_type="secondary")
+    try:
+        d = await build_listing_detail(lid, tier="admin")
+        assert d["kzk_badge"] is None  # вторичка — бейдж не считается вовсе
+    finally:
+        await _cleanup(lid)
+        await _cleanup_kzk_bin("__test_ld_bin_2__")
+        await _cleanup_complex(cid)
+
+
+@pytest.mark.asyncio
+async def test_kzk_badge_none_when_no_match(db):
+    from bot.core.listing_detail import build_listing_detail
+    cname = "__test_ld_kzk_cx3__"
+    cid = await _insert_complex_with_bin(cname, "")  # bin не заполнен
+    lid = "__test_ld_kzk_nomatch__"
+    await _insert_listing(lid, complex_name=cname, market_type="primary")
+    try:
+        d = await build_listing_detail(lid, tier="admin")
+        assert d["kzk_badge"] is None
+    finally:
+        await _cleanup(lid)
+        await _cleanup_complex(cid)
