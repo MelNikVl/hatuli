@@ -235,7 +235,7 @@ Hatuli либо (а) вычисляет что-то ЦЕЛИКОМ своё по
 | §3.2 Property Graph | `outcome_labels_recompute.py` (релист-детекция) → Property Episode ID, [`liquidity_model_design.md` §3](liquidity_model_design.md#3-property-episode-id) | 🟡 половина есть, постоянная id-сущность не построена |
 | §3.3 Данные без Крыши — локация | Фаза L1 (`complex_location_scores`/`hex_market_stats`), Фаза L2 (UI) | ✅ завершены |
 | §3.3 Данные без Крыши — воздух | `air_stations`/`air_quality_astana` | 🟡 собирается, не интегрировано в `location_score` (Фаза L3 кандидат) |
-| §3.3 Данные без Крыши — юр. риски | `developers` (частично — репутация застройщика), БВУ/КЖК/МИО | 🔴 не начато, спроектировано в [`liquidity_model_design.md` §7](liquidity_model_design.md#7-юридические-риски-первички) |
+| §3.3 Данные без Крыши — юр. риски | `developers` (частично — репутация застройщика), `kzk_registry` (реестр КЖК developers.kz, задача 2026-08-15: еженедельный сбор + двухуровневый матчинг на `developers`/ЖК + `/admin/kzk-registry`), спроектировано в [`liquidity_model_design.md` §7](liquidity_model_design.md#7-юридические-риски-первички) | 🟡 источник КЖК подключён (флаг чёрного списка + гарантия по БИН), проектных данных (адрес объекта, % продаж, сроки сдачи) в открытом доступе на источнике нет — см. докстринг `kzk_registry_collect.py`; БВУ/МИО как отдельные источники не начаты |
 | §3.4 Пользователь как датчик | `alert_feedback`, Часть 4 `scoring_roadmap.md` | 🔴 в очереди, не начато |
 | §3.5 B2B-инверсия | — | 🔴 нет артефакта, чистая идея трека |
 
