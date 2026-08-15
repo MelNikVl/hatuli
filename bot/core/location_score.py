@@ -66,9 +66,11 @@ _LEFT_BANK_DISTRICTS = {"есиль", "есильский"}
 #   route_connectivity 0..2  (_transport_hex_factors)
 #   building_age       0..2  (_building_age_factor)
 #   demolition        -2..0  (_demolition_factor)
+#   school_access      0..4  (_schools_factor — задача 2026-08-15)
+#   kindergarten_access 0..2 (_kindergartens_factor — задача 2026-08-15)
 #   bank               0..0  (_bank_factor — всегда 0, информационный)
 _TOTAL_ADJ_MIN = -8
-_TOTAL_ADJ_MAX = 24
+_TOTAL_ADJ_MAX = 30
 
 
 async def _transport_hex_factors(lat: float, lon: float) -> dict:
@@ -298,13 +300,26 @@ async def compute_complex_location_score(
     for key, adj, reason in results:
         factors[key] = {"adj": adj, "label": label_by_key[key], "reason": reason}
 
-    hex_factors = await _transport_hex_factors(lat, lon)
+    # 4 независимых pg-запроса разом (не Overpass — тот же pool, что и
+    # остальная БД, лишняя нагрузка тут не проблема, в отличие от прогрева
+    # poi-кэша выше).
+    hex_factors, demolition_result, schools_result, kindergartens_result = await asyncio.gather(
+        _transport_hex_factors(lat, lon),
+        _demolition_factor(lat, lon),
+        _schools_factor(lat, lon),
+        _kindergartens_factor(lat, lon),
+    )
     factors["lrt_access"] = {**hex_factors["lrt_access"], "label": "🚈 ЛРТ рядом"}
     factors["road_access"] = {**hex_factors["road_access"], "label": "🚗 Доступность на авто"}
     factors["route_connectivity"] = {**hex_factors["route_connectivity"], "label": "🔀 Маршрутная связность"}
 
     factors["building_age"] = {**_building_age_factor(year_built), "label": "🏗 Возраст дома"}
-    factors["demolition"] = {**await _demolition_factor(lat, lon), "label": "🚧 Снос по соседству"}
+    factors["demolition"] = {**demolition_result, "label": "🚧 Снос по соседству"}
+    # school_access/kindergarten_access — задача 2026-08-15, ДОПОЛНЯЮТ
+    # старый OSM-фактор "schools" выше (не заменяют, см. докстринг
+    # _schools_factor()) — точный сигнал по расстоянию+типу.
+    factors["school_access"] = {**schools_result, "label": "🏫 Школа рядом"}
+    factors["kindergarten_access"] = {**kindergartens_result, "label": "🧸 Садик рядом"}
     factors["bank"] = {**_bank_factor(district), "label": "🌉 Берег Ишима"}
 
     total = sum(f["adj"] for f in factors.values())

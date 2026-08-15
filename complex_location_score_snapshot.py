@@ -52,7 +52,11 @@ SCORE_VERSION = "loc_v1"
 # informational, не считается ни в одну group-сумму).
 _GROUPS: dict[str, tuple[str, ...]] = {
     "transport": ("transit_stops", "lrt_access", "road_access", "route_connectivity"),
-    "infra": ("schools", "amenities"),
+    # school_access/kindergarten_access — задача 2026-08-15 (bot/core/
+    # location_score.py::_schools_factor()/_kindergartens_factor()), в
+    # ту же группу "infra", не отдельная "education" — образование
+    # решено считать частью инфраструктуры, меньше изменений в схеме.
+    "infra": ("schools", "amenities", "school_access", "kindergarten_access"),
     "noise": ("noise",),
     "green": ("parks",),
     "risk": ("demolition", "building_age"),

@@ -44,6 +44,8 @@ def _fake_factors(**overrides) -> dict:
         "schools": {"adj": 0, "label": "🏫", "reason": "нет данных"},
         "transit_stops": {"adj": 0, "label": "🚏", "reason": "нет данных"},
         "amenities": {"adj": 0, "label": "🛒", "reason": "нет данных"},
+        "school_access": {"adj": 0, "label": "🏫", "reason": "нет данных astana_schools рядом"},
+        "kindergarten_access": {"adj": 0, "label": "🧸", "reason": "нет данных astana_kindergartens рядом"},
         "parks": {"adj": 0, "label": "🌳", "reason": "нет данных"},
         "lrt_access": {"adj": 0, "label": "🚈", "reason": "нет данных"},
         "road_access": {"adj": 0, "label": "🚗", "reason": "нет данных"},
@@ -101,8 +103,10 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
         from bot.db.pg import fetchrow
         row = await fetchrow("SELECT * FROM complex_location_scores WHERE complex_id=$1", cid)
         assert row is not None
-        # total = 5+4+2+4-2 = 13; clamp(13, -8, 24) -> (13-(-8))/(24-(-8))*100 = 65.625 -> 66
-        assert row["score"] == 66
+        # total = 5+4+2+4-2 = 13; _TOTAL_ADJ_MAX=30 с 2026-08-15 (задача
+        # "школы/садики в location_score", коммит 2, было 24) ->
+        # clamp(13, -8, 30) -> (13-(-8))/(30-(-8))*100 = 55.26 -> 55
+        assert row["score"] == 55
         assert row["confidence"] == 90
         assert row["infra_score"] == 9      # schools(5)+amenities(4)
         assert row["transport_score"] == 4  # lrt_access(4), остальные 0
@@ -132,9 +136,13 @@ async def test_snapshot_extreme_totals_clamp_to_0_and_100(db, monkeypatch):
         return {"total": -8, "factors": factors, "confidence": 50}
 
     async def _fake_max(lat, lon, year_built=None, district=None):
+        # total=30 == новый _TOTAL_ADJ_MAX (было 24 до school_access/
+        # kindergarten_access, задача 2026-08-15 коммит 2) — добавлены их
+        # максимумы (4+2), остальное без изменений.
         factors = _fake_factors(schools=5, transit_stops=3, amenities=4, parks=2,
-                                 lrt_access=4, road_access=2, route_connectivity=2, building_age=2)
-        return {"total": 24, "factors": factors, "confidence": 100}
+                                 lrt_access=4, road_access=2, route_connectivity=2, building_age=2,
+                                 school_access=4, kindergarten_access=2)
+        return {"total": 30, "factors": factors, "confidence": 100}
 
     cid1, lid1 = await _insert_complex_with_listing("__test_cls_min__", 51.10, 71.40)
     cid2, lid2 = await _insert_complex_with_listing("__test_cls_max__", 51.11, 71.41)
