@@ -113,3 +113,28 @@ async def test_astana_data_unavailable_falls_back_to_full_osm_schools(db, monkey
     result = await compute_complex_location_score(REF_LAT, REF_LON)
     assert result is not None
     assert captured["university_only"] is False
+
+
+@pytest.mark.asyncio
+async def test_group_scores_and_confidence_exposed_per_property(db, monkeypatch):
+    """Задача 2026-08-15 v2, коммит "Confidence" — compute_complex_
+    location_score() отдаёт пару "score X/100, confidence Y%" на каждое
+    из пяти latent-свойств, не только общий confidence всей локации.
+    REF_LAT/REF_LON — заведомо далеко от реальных astana_schools/
+    kindergartens/transport_hexes/demolition_houses/air_stations (те же
+    координаты, что остальные тесты этого файла), поэтому urban_quality
+    (структурно пустой) и большинство остальных свойств — низкая
+    измеренность, честно отражённая в group_confidence."""
+    _mock_osm_layers(monkeypatch)
+
+    from bot.core.location_score import compute_complex_location_score
+    result = await compute_complex_location_score(REF_LAT, REF_LON)
+    assert result is not None
+    assert set(result["group_scores"].keys()) == {"transport", "infra", "environment", "risk", "urban_quality"}
+    assert set(result["group_confidence"].keys()) == {"transport", "infra", "environment", "risk", "urban_quality"}
+    # urban_quality пусто структурно — ВСЕГДА 50/0, при любых factors.
+    assert result["group_scores"]["urban_quality"] == 50
+    assert result["group_confidence"]["urban_quality"] == 0
+    for g in result["group_confidence"]:
+        assert 0 <= result["group_confidence"][g] <= 100
+        assert 0 <= result["group_scores"][g] <= 100

@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from bot.core.location_score import (
     normalize_group_weighted, _group_pct, _GROUPS, _GROUP_WEIGHTS, _group_range, _FACTOR_RANGES,
-    _is_available, _group_range_available, _compute_confidence, _annotate_factor_metadata,
+    _is_available, _group_range_available, _compute_confidence, _group_confidence,
+    _annotate_factor_metadata,
 )
 
 
@@ -229,3 +230,40 @@ def test_annotate_factor_metadata_sets_all_four_dimensions():
     assert f["noise"]["freshness"] in ("live", "periodic", "manual")
     assert f["noise"]["precision"] in ("exact", "presence", "heuristic")
     assert f["schools"]["available"] is False  # не в available -> "нет данных"
+
+
+# ── _group_confidence (задача 2026-08-15 v2, коммит "Confidence") ───────
+
+def test_group_confidence_urban_quality_always_zero():
+    """urban_quality пусто СТРУКТУРНО — confidence=0 при ЛЮБЫХ factors,
+    не 50% (как _group_pct) — Unknown ≠ average: "не измерено вовсе"
+    честнее выразить нулевым confidence, а не нейтральным pct."""
+    assert _group_confidence("urban_quality", _factors()) == 0
+    assert _group_confidence("urban_quality", _factors(available=("noise",), noise=-3)) == 0
+
+
+def test_group_confidence_nothing_measured_in_group_is_zero():
+    assert _group_confidence("transport", _factors()) == 0
+
+
+def test_group_confidence_everything_in_group_measured_is_hundred():
+    f = _factors(available=("transit_stops", "lrt_access", "road_access", "route_connectivity"))
+    assert _group_confidence("transport", f) == 100
+
+
+def test_group_confidence_weighted_by_source_quality_within_group():
+    """infra: school_access (0.8, точный реестр) даёт БОЛЬШЕ confidence,
+    чем schools (0.6, OSM), при том же "один из четырёх факторов
+    измерен" — та же логика, что _compute_confidence(), но локально
+    внутри ОДНОГО свойства, не по всей схеме."""
+    f_precise = _factors(available=("school_access",))
+    f_osm = _factors(available=("schools",))
+    assert _group_confidence("infra", f_precise) > _group_confidence("infra", f_osm)
+
+
+def test_group_confidence_independent_of_other_groups():
+    """confidence одного свойства не зависит от того, что измерено в
+    ДРУГИХ свойствах — считается строго по _GROUPS[group]."""
+    f = _factors(available=("schools", "lrt_access", "noise", "demolition"))
+    conf_infra_alone = _group_confidence("infra", _factors(available=("schools",)))
+    assert _group_confidence("infra", f) == conf_infra_alone

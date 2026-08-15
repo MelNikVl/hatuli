@@ -357,12 +357,37 @@ def _annotate_factor_metadata(factors: dict) -> None:
 def _compute_confidence(factors: dict) -> int:
     """0-100, взвешено по source_quality (см. докстринг модуля) — ЗАМЕНЯЕТ
     старый плоский "доля посчитанных факторов" (каждый весил одинаково
-    независимо от качества источника)."""
+    независимо от качества источника). Это ОБЩИЙ confidence на всю
+    локацию — см. _group_confidence() ниже для confidence КАЖДОГО из
+    пяти свойств отдельно (задача 2026-08-15 v2, коммит "Confidence")."""
     total_weight = sum(_SOURCE_QUALITY.get(k, 0.2) for k in factors)
     if total_weight <= 0:
         return 0
     available_weight = sum(
         _SOURCE_QUALITY.get(k, 0.2) for k, f in factors.items() if _is_available(f))
+    return round(100 * available_weight / total_weight)
+
+
+def _group_confidence(group: str, factors: dict) -> int:
+    """0-100 — confidence ОДНОГО свойства (не всей локации, см.
+    _compute_confidence() выше) — задача 2026-08-15 v2, коммит
+    "Confidence": "score X/100, confidence Y%" на КАЖДОЕ из пяти
+    свойств, а не только один общий % на всю локацию. "73/31%" значит
+    "из измеренного получается 73, но данных по этому свойству мало",
+    НЕ "уверены, что оно хорошее".
+
+    Та же логика source_quality, что и _compute_confidence(), но
+    взвешена ТОЛЬКО по факторам ВНУТРИ этого свойства (_GROUPS[group]),
+    не по всей схеме. `urban_quality` со СЕЙЧАС пустым _GROUPS[...]=()
+    даёт confidence=0 СТРУКТУРНО, всегда (total_weight=0 -> return 0
+    раньше деления на ноль) — Unknown ≠ average, не 50%/нейтрально, а
+    честный ноль: "мы вообще не можем это измерить сейчас"."""
+    keys = _GROUPS[group]
+    total_weight = sum(_SOURCE_QUALITY.get(k, 0.2) for k in keys)
+    if total_weight <= 0:
+        return 0
+    available_weight = sum(
+        _SOURCE_QUALITY.get(k, 0.2) for k in keys if k in factors and _is_available(factors[k]))
     return round(100 * available_weight / total_weight)
 
 
@@ -721,5 +746,13 @@ async def compute_complex_location_score(
     _annotate_factor_metadata(factors)
     total = sum(f["adj"] for f in factors.values())
     confidence = _compute_confidence(factors)
+    # group_scores/group_confidence — задача 2026-08-15 v2, коммит
+    # "Confidence": пара "score X/100, confidence Y%" на КАЖДОЕ из пяти
+    # latent-свойств (не только общий confidence всей локации выше).
+    group_scores = {g: round(_group_pct(g, factors)) for g in _GROUPS}
+    group_confidence = {g: _group_confidence(g, factors) for g in _GROUPS}
 
-    return {"total": total, "factors": factors, "confidence": confidence}
+    return {
+        "total": total, "factors": factors, "confidence": confidence,
+        "group_scores": group_scores, "group_confidence": group_confidence,
+    }

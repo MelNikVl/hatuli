@@ -88,9 +88,19 @@ def _group_sum(factors: dict, keys: tuple[str, ...]) -> int:
 
 
 def _build_breakdown(factors: dict) -> dict:
+    from bot.core.location_score import _group_pct, _group_confidence
     breakdown = {group: {k: factors[k] for k in keys if k in factors}
                  for group, keys in _GROUPS.items()}
     breakdown["informational"] = {k: factors[k] for k in _INFORMATIONAL if k in factors}
+    # _group_scores — задача 2026-08-15 v2, коммит "Confidence": пара
+    # "score X/100, confidence Y%" на КАЖДОЕ из пяти latent-свойств (не
+    # только общий confidence всей локации, см. result["confidence"] в
+    # _process_one() ниже). urban_quality со СЕЙЧАС пустой схемой факторов
+    # даёт confidence=0 структурно, всегда.
+    breakdown["_group_scores"] = {
+        g: {"score": round(_group_pct(g, factors)), "confidence": _group_confidence(g, factors)}
+        for g in _GROUPS
+    }
     return breakdown
 
 

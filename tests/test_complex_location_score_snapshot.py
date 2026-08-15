@@ -159,6 +159,15 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
         assert "building_age" not in breakdown["risk"]  # убран из группы (задача "двойные школы")
         assert breakdown["informational"]["bank"]["adj"] == 0
         assert "bank" not in breakdown.get("risk", {})  # bank вне групп
+        # _group_scores — задача 2026-08-15 v2, коммит "Confidence":
+        # пара score/confidence на каждое из пяти свойств. confidence =
+        # source_quality доступных / source_quality ВСЕХ факторов группы
+        # (напр. transport: только lrt_access(0.8) доступен из 4 членов
+        # с суммарным весом 3.0 -> round(100*0.8/3.0)=27).
+        assert breakdown["_group_scores"]["transport"] == {"score": 100, "confidence": 27}
+        assert breakdown["_group_scores"]["infra"] == {"score": 100, "confidence": 43}
+        assert breakdown["_group_scores"]["risk"] == {"score": 0, "confidence": 100}
+        assert breakdown["_group_scores"]["urban_quality"] == {"score": 50, "confidence": 0}
     finally:
         await _cleanup(cid, lid)
 
