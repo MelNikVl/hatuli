@@ -1,0 +1,11 @@
+[Unit]
+Description=Ежедневный пересчёт seller_profiles (профиль продавца) — §2.7 liquidity_model_design.md, задача 2026-08-15
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/seller_profile_snapshot.py
+StandardOutput=append:/home/nik/krisha_bot/seller_profile_snapshot.log
+StandardError=append:/home/nik/krisha_bot/seller_profile_snapshot.log

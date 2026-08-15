@@ -1,0 +1,14 @@
+[Unit]
+Description=Таймер ежедневного пересчёта seller_profiles — §2.7 liquidity_model_design.md, задача 2026-08-15
+
+[Timer]
+# 08:55 — после krisha-listing-snapshot.timer (08:30, свежие объявления) И
+# после krisha-outcome-labels.timer (08:45, relist_count читает
+# outcome_labels.relisted_within_60d — нужны свежие метки, не вчерашние).
+OnCalendar=*-*-* 08:55:00
+RandomizedDelaySec=10m
+Persistent=true
+Unit=krisha-seller-profile.service
+
+[Install]
+WantedBy=timers.target

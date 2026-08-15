@@ -130,6 +130,39 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
                         "warranty_scheme": kzk_info["warranty_scheme"],
                     }
 
+    # Профиль продавца (§2.7 liquidity_model_design.md, задача 2026-08-15,
+    # миграция 077) — seller_profiles пересчитывается раз в сутки
+    # (seller_profile_snapshot.py), ключ — тот же нормализатор имени
+    # (trim+lower+схлопнутые пробелы), что и в снапшоте. Отсутствие строки
+    # — валидный случай (generic-имя вроде "хозяин" в стоп-листе снапшота,
+    # либо снапшот ещё не прогонялся после первого появления этого имени),
+    # не ошибка.
+    seller_profile = None
+    if l.get("seller_name"):
+        import re as _re
+        name_norm = _re.sub(r"\s+", " ", l["seller_name"].strip()).lower()
+        sp_row = await pg_fetchrow("SELECT * FROM seller_profiles WHERE seller_name = $1", name_norm)
+        if sp_row:
+            seller_profile = {
+                "seller_type": sp_row["seller_type"],
+                "active_listings_count": sp_row["active_listings_count"],
+                "total_listings_count": sp_row["total_listings_count"],
+                "relist_rate": float(sp_row["relist_rate"]) if sp_row.get("relist_rate") is not None else None,
+                "is_high_relist_rate": sp_row["is_high_relist_rate"],
+                "is_motivated_seller": sp_row["is_motivated_seller"],
+                # "агентство >50 активных" — из чтения ЖИВОГО значения
+                # active_listings_count здесь, не отдельного bool-поля
+                # (порог 50 — свойство UI-бейджа, не самого профиля).
+                "is_large_agency": sp_row["active_listings_count"] > 50,
+                # Имя выглядит частым/собирательным (>15 объявлений под
+                # одним словом-именем на практике почти всегда — коллизия
+                # разных людей, не один сверхактивный продавец, см.
+                # докстринг seller_profile_snapshot.py) — UI смягчает
+                # формулировки бейджей, а не выдаёт их за факт про одного
+                # человека.
+                "name_may_collide": sp_row["total_listings_count"] > 15,
+            }
+
     # Лента "рядом" — 3 ближайших активных объявления по прямому расстоянию
     nearby = []
     if l.get("lat") is not None and l.get("lon") is not None:
@@ -174,6 +207,7 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
         "is_owner": l.get("is_owner") is True,
         "seller_type": l.get("seller_type") or ("owner" if l.get("is_owner") else "realtor"),
         "trust_score": float(l["trust_score"]) if l.get("trust_score") is not None else None,
+        "seller_profile": seller_profile,
         "year_built": l.get("year_built"),
         "views_count": l.get("views_count"),
         "floorplan_url": l.get("floorplan_url") or "",
