@@ -147,6 +147,96 @@ async def _demolition_factor(lat: float, lon: float) -> dict:
     return {"adj": 0, "reason": "рядом нет объектов из перечня на снос"}
 
 
+_SCHOOL_BONUS_TYPES = {"лицей", "гимназия", "международная/частная", "ниш"}
+
+
+async def _schools_factor(lat: float, lon: float) -> dict:
+    """Точный фактор по ближайшей школе (`astana_schools`, 160 строк на
+    2026-08-15: 73 общеобразовательная / 43 лицей / 35 гимназия / 7
+    международная-частная / 2 НИШ) — расстояние + бонус за тип с
+    углублённой программой (НИШ/международная/лицей/гимназия против
+    обычной общеобразовательной, у которой бонуса нет). Бонус НЕ
+    применяется, если ближайшая школа дальше 1км (базовый adj уже 0 —
+    бонусировать "школа есть, но она в 5км" смысла нет).
+
+    **Не заменяет старый OSM-фактор `schools`** (ключ "schools" в
+    `_OSM_LAYERS` выше, `bot/score_layers/schools.py`) — держим оба
+    осознанно: OSM-слой видит вузы (их нет в `astana_schools`, только
+    школы), этот даёт более точный сигнал по расстоянию+типу для самих
+    школ. Частичное двойное взвешивание школьного фактора — признанный
+    компромисс, не баг; пересмотреть, когда появятся рейтинги 2GIS
+    (колонка `rating` есть в `astana_schools`, но 0% заполнена на
+    2026-08-15 — не используем).
+
+    **Ограничение свежести**: в проекте нет скрипта-писателя/обновления
+    для `astana_schools` (заведена вручную/внешним источником один раз,
+    без таймера) — актуальность не гарантируется, в отличие от
+    `transport_hexes`/`demolition_houses` выше.
+    """
+    from bot.db.pg import fetchrow
+    try:
+        row = await fetchrow("""
+            SELECT type,
+                   (((lat - $1) * 111.0)^2 + ((lon - $2) * 111.0 * 0.63)^2) AS d2
+            FROM astana_schools
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+            ORDER BY d2 LIMIT 1
+        """, lat, lon)
+    except Exception as exc:
+        logger.warning("astana_schools lookup failed: %s", exc)
+        row = None
+    if not row:
+        return {"adj": 0, "reason": "нет данных astana_schools рядом"}
+
+    import math
+    dist_m = math.sqrt(row["d2"]) * 1000
+    school_type = (row["type"] or "").strip()
+
+    if dist_m <= 300:
+        base_adj = 3
+    elif dist_m <= 500:
+        base_adj = 2
+    elif dist_m <= 1000:
+        base_adj = 1
+    else:
+        return {"adj": 0, "reason": f"ближайшая школа дальше 1км ({dist_m:.0f}м)"}
+
+    if school_type.lower() in _SCHOOL_BONUS_TYPES:
+        return {"adj": base_adj + 1, "reason": f"школа в {dist_m:.0f}м ({school_type}, углублённая программа)"}
+    return {"adj": base_adj, "reason": f"школа в {dist_m:.0f}м ({school_type or 'тип не указан'})"}
+
+
+async def _kindergartens_factor(lat: float, lon: float) -> dict:
+    """Точный фактор по ближайшему садику (`astana_kindergartens`, 131
+    строка на 2026-08-15). Только расстояние — без бонуса за тип: колонка
+    `type` в этой таблице на 100% пустая (в отличие от `astana_schools`),
+    бонусировать нечем. См. докстринг `_schools_factor()` выше про
+    осознанное частичное двойное взвешивание с OSM-слоем schools и про
+    ограничение свежести (нет скрипта-писателя)."""
+    from bot.db.pg import fetchrow
+    try:
+        row = await fetchrow("""
+            SELECT (((lat - $1) * 111.0)^2 + ((lon - $2) * 111.0 * 0.63)^2) AS d2
+            FROM astana_kindergartens
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+            ORDER BY d2 LIMIT 1
+        """, lat, lon)
+    except Exception as exc:
+        logger.warning("astana_kindergartens lookup failed: %s", exc)
+        row = None
+    if not row:
+        return {"adj": 0, "reason": "нет данных astana_kindergartens рядом"}
+
+    import math
+    dist_m = math.sqrt(row["d2"]) * 1000
+
+    if dist_m <= 300:
+        return {"adj": 2, "reason": f"садик в {dist_m:.0f}м"}
+    if dist_m <= 500:
+        return {"adj": 1, "reason": f"садик в {dist_m:.0f}м"}
+    return {"adj": 0, "reason": f"ближайший садик дальше 500м ({dist_m:.0f}м)"}
+
+
 def _building_age_factor(year_built: int | None) -> dict:
     if not year_built:
         return {"adj": 0, "reason": "год постройки неизвестен"}
