@@ -1,15 +1,20 @@
-"""Регрессия для задачи 2026-08-15 ("Location Reliability Phase"),
-последний коммит фазы — "Stability-тест". Требование заказчика:
-добавление нового фактора/группы НЕ должно сдвигать нормализованный
-score существующих ЖК больше чем на ±2 балла, если для этого ЖК новый
-фактор нейтрален/unknown.
+"""Регрессия для задачи 2026-08-15 ("Location Reliability Phase" v2),
+коммит "Stability-тест" (п.6 спеки заказчика). Требование: добавление
+нового фактора/свойства НЕ должно сдвигать нормализованный score
+существующих ЖК больше чем на ±2 балла, если для этого ЖК новый фактор
+нейтрален/unknown.
 
 По конструкции availability-aware normalize_group_weighted() (коммит
 "Confidence") это должно держаться СТРОГО (Δ=0, не просто ≤2) — эти
-тесты подтверждают именно это на нескольких сценариях и защищают от
-будущей регрессии, если кто-то ослабит _is_available()/_group_range_
-available() и вернёт баг класса 66->55 (задача 2026-08-15, "школы/
-садики", исходный триггер всей этой фазы)."""
+тесты подтверждают именно это на нескольких сценариях (включая
+таксономию v2 — пять latent-свойств с уже встроенным urban_quality) и
+защищают от будущей регрессии, если кто-то ослабит _is_available()/
+_group_range_available() и вернёт баг класса 66->55 (задача 2026-08-15,
+"школы/садики", исходный триггер всей этой фазы).
+
+Все тесты используют РЕАЛЬНЫЙ текущий ls._GROUPS (v2, с urban_quality
+уже внутри) как базу — не мокают его с нуля, поэтому urban_quality
+автоматически участвует в каждом расчёте, как и в проде."""
 import os
 import sys
 
@@ -170,3 +175,121 @@ def test_stability_holds_across_varied_realistic_profiles():
         with mock.patch.object(ls, "_GROUPS", fake_groups), mock.patch.object(ls, "_FACTOR_RANGES", fake_ranges):
             score_after = ls.normalize_group_weighted(profile)
         assert score_after == score_before, f"profile={profile} moved score {score_before}->{score_after}"
+
+
+def test_urban_quality_already_present_does_not_interfere_with_other_stability_guarantees():
+    """urban_quality (пустое latent-свойство v2, 15% веса) — это
+    КОНСТАНТНОЕ слагаемое 0.15×50=7.5 в взвешенной сумме для ЛЮБОГО
+    ЖК/factors (пока в нём нет ни одного фактора) — по определению
+    сокращается в разности before/after, поэтому не может сломать
+    остальные stability-гарантии. Явный тест поверх РЕАЛЬНОЙ (не
+    замоканной) текущей таксономии v2, а не гипотетической."""
+    before = _realistic_factors()
+    score_before = ls.normalize_group_weighted(before)
+
+    fake_groups = copy.deepcopy(ls._GROUPS)
+    fake_groups["infra"] = fake_groups["infra"] + ("hypothetical_new_signal",)
+    fake_ranges = dict(ls._FACTOR_RANGES)
+    fake_ranges["hypothetical_new_signal"] = (0, 10)
+
+    import unittest.mock as mock
+    with mock.patch.object(ls, "_GROUPS", fake_groups), mock.patch.object(ls, "_FACTOR_RANGES", fake_ranges):
+        score_after = ls.normalize_group_weighted(before)
+
+    assert score_after == score_before  # Δ=0 даже с urban_quality уже в таксономии
+
+
+def test_urban_quality_group_pct_and_confidence_never_move_regardless_of_other_factors():
+    """urban_quality пусто структурно (_GROUPS['urban_quality']=()) —
+    _group_pct/_group_confidence для него НЕ ЗАВИСЯТ от того, что
+    происходит в остальных factors, при ЛЮБЫХ входных данных."""
+    profiles = [{}, _realistic_factors(), {"noise": {"adj": -6, "reason": "измерено"}}]
+    for profile in profiles:
+        assert ls._group_pct("urban_quality", profile) == 50.0
+        assert ls._group_confidence("urban_quality", profile) == 0
+
+
+def test_confidence_may_legitimately_decrease_while_score_stays_stable():
+    """КЛЮЧЕВОЕ РАЗЛИЧИЕ (задача 2026-08-15 v2, коммит "Stability-тест"):
+    SCORE (normalize_group_weighted/_group_pct) обязан остаться Δ=0 при
+    добавлении неизмеренного фактора — но CONFIDENCE (_group_confidence)
+    НЕ обязан и МОЖЕТ честно снизиться: он отражает "какая доля
+    измеримой вселенной измерена", а вселенная только что выросла на
+    один неизмеренный пункт. Это НЕ нарушение stability-гарантии —
+    гарантия из п.6 спеки заказчика касается SCORE, не confidence
+    (confidence и ДОЛЖЕН реагировать на рост числа измеримых
+    факторов — тот же принцип, что уже в bot/core/deal_score.py:
+    "низкий confidence = меньше факторов измерено")."""
+    before = _realistic_factors()
+    score_before = ls.normalize_group_weighted(before)
+    confidence_before = ls._group_confidence("infra", before)
+
+    fake_groups = copy.deepcopy(ls._GROUPS)
+    fake_groups["infra"] = fake_groups["infra"] + ("hypothetical_new_signal",)
+    fake_ranges = dict(ls._FACTOR_RANGES)
+    fake_ranges["hypothetical_new_signal"] = (0, 10)
+    fake_quality = dict(ls._SOURCE_QUALITY)
+    fake_quality["hypothetical_new_signal"] = 0.8
+
+    import unittest.mock as mock
+    with mock.patch.object(ls, "_GROUPS", fake_groups), \
+         mock.patch.object(ls, "_FACTOR_RANGES", fake_ranges), \
+         mock.patch.object(ls, "_SOURCE_QUALITY", fake_quality):
+        # before-словарь не содержит hypothetical_new_signal вовсе -> для
+        # _group_confidence он "в схеме, но не измерен" (total_weight
+        # растёт, available_weight — нет).
+        score_after = ls.normalize_group_weighted(before)
+        confidence_after = ls._group_confidence("infra", before)
+
+    assert score_after == score_before  # score: строгий Δ=0
+    assert confidence_after < confidence_before  # confidence: честно снизился
+
+
+def test_stability_holds_on_real_snapshot_data():
+    """Гейт на реальных данных — та же формула normalize_group_weighted()
+    ДО и ПОСЛЕ гипотетического добавления неизмеренного фактора внутри
+    infra, применённая к сохранённым breakdown 1749 реальных ЖК
+    (complex_location_scores) — максимальный |Δ| должен быть 0."""
+    import asyncio
+    import json
+
+    async def _run():
+        from bot.db.pg import init_pool, close_pool, fetch
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        await init_pool(os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot"))
+        try:
+            rows = await fetch("""
+                SELECT DISTINCT ON (complex_id) complex_id, breakdown
+                FROM complex_location_scores ORDER BY complex_id, computed_at DESC
+            """)
+        finally:
+            await close_pool()
+        return rows
+
+    rows = asyncio.run(_run())
+    if not rows:
+        return  # окружение без снятых снимков — не валим тест на пустой БД
+
+    fake_groups = copy.deepcopy(ls._GROUPS)
+    fake_groups["infra"] = fake_groups["infra"] + ("hypothetical_new_signal",)
+    fake_ranges = dict(ls._FACTOR_RANGES)
+    fake_ranges["hypothetical_new_signal"] = (0, 10)
+
+    import unittest.mock as mock
+    max_delta = 0
+    for r in rows:
+        bd = r["breakdown"]
+        if isinstance(bd, str):
+            bd = json.loads(bd)
+        factors = {}
+        for g in ls._GROUPS:
+            for k, v in (bd.get(g) or {}).items():
+                factors[k] = v
+        score_before = ls.normalize_group_weighted(factors)
+        with mock.patch.object(ls, "_GROUPS", fake_groups), mock.patch.object(ls, "_FACTOR_RANGES", fake_ranges):
+            score_after = ls.normalize_group_weighted(factors)
+        max_delta = max(max_delta, abs(score_after - score_before))
+
+    assert max_delta == 0, f"максимальный |Δ| на {len(rows)} реальных ЖК: {max_delta}"
