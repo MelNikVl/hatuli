@@ -42,8 +42,8 @@ async def test_seller_profiles_insert_roundtrip(db):
                 seller_name, seller_type, active_listings_count, total_listings_count,
                 relist_count, relist_rate, price_cut_count, price_cut_rate,
                 avg_days_to_sell, median_discount_pct,
-                is_high_relist_rate, is_motivated_seller
-            ) VALUES ($1, 'realtor', 5, 12, 4, 0.3333, 6, 0.5, 21.5, 3.2, TRUE, FALSE)
+                is_high_relist_rate, is_motivated_seller, is_ambiguous
+            ) VALUES ($1, 'realtor', 5, 12, 4, 0.3333, 6, 0.5, 21.5, 3.2, TRUE, FALSE, FALSE)
             """,
             name,
         )
@@ -61,6 +61,7 @@ async def test_seller_profiles_insert_roundtrip(db):
         assert float(row["median_discount_pct"]) == pytest.approx(3.2)
         assert row["is_high_relist_rate"] is True
         assert row["is_motivated_seller"] is False
+        assert row["is_ambiguous"] is False
         assert row["computed_at"] is not None
     finally:
         await _cleanup(name)
@@ -85,6 +86,7 @@ async def test_seller_profiles_defaults_on_minimal_insert(db):
         assert row["median_discount_pct"] is None
         assert row["is_high_relist_rate"] is False
         assert row["is_motivated_seller"] is False
+        assert row["is_ambiguous"] is False
     finally:
         await _cleanup(name)
 

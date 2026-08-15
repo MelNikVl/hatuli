@@ -122,3 +122,36 @@ def test_active_listings_count_treats_null_as_active():
         _listing("3", "Тест Активность", is_active=False),
     ]
     assert _aggregate(listings, {}, NOW)[0]["active_listings_count"] == 2
+
+
+def test_is_ambiguous_flag_at_threshold():
+    """Миграция 079 — >15 объявлений под одним именем -> is_ambiguous.
+    Ровно 15 — ещё НЕ ambiguous (строгое '>', не '>='), 16 — уже да."""
+    fifteen = [_listing(str(i), "Ровно Порог") for i in range(15)]
+    assert _aggregate(fifteen, {}, NOW)[0]["is_ambiguous"] is False
+
+    sixteen = [_listing(str(i), "Чуть Больше") for i in range(16)]
+    assert _aggregate(sixteen, {}, NOW)[0]["is_ambiguous"] is True
+
+
+def test_ambiguous_name_suppresses_motivated_and_high_relist():
+    """Находка на живых данных (§2.7): частые имена ('Асель'/'Динара') —
+    почти наверняка разные люди, не один активный продавец. is_ambiguous
+    ЖЁСТКО зануляет is_high_relist_rate/is_motivated_seller, даже если
+    сырые числа формально проходят пороги — см. докстринг миграции 079."""
+    recent_cut = NOW - timedelta(days=5)
+    listings = [
+        _listing(str(i), "Частое Имя", relisted_within_60d=True)
+        for i in range(16)
+    ]
+    cuts = {
+        "0": [{"old_price": 10_000_000, "new_price": 9_000_000, "changed_at": recent_cut}],
+        "1": [{"old_price": 10_000_000, "new_price": 9_000_000, "changed_at": recent_cut}],
+    }
+    p = _aggregate(listings, cuts, NOW)[0]
+    assert p["is_ambiguous"] is True
+    # relist_rate=1.0 (все 16 relisted_within_60d=True) — формально сильно
+    # выше порога 0.3, но is_ambiguous всё равно зануляет производный флаг.
+    assert p["relist_rate"] == pytest.approx(1.0)
+    assert p["is_high_relist_rate"] is False
+    assert p["is_motivated_seller"] is False

@@ -4678,7 +4678,7 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
   ${sp.is_high_relist_rate ? `<div style="margin-top:6px;font-size:13px;">🔴 Продавец часто перевыставляет объявления (похоже на релист, а не продажу)</div>` : ''}
   ${sp.is_motivated_seller ? `<div style="margin-top:6px;font-size:13px;">🟢 Похоже, продавец сейчас активно снижает цену — 2+ снижения за последний месяц</div>` : ''}
   ${sp.is_large_agency ? `<div style="margin-top:6px;font-size:13px;">⚠️ Под этим именем сейчас ${sp.active_listings_count} активных объявлений — похоже на агентство</div>` : ''}
-  ${sp.name_may_collide ? `<div style="margin-top:8px;font-size:11.5px;color:#888;">ⓘ Имя встречается часто — статистика выше может относиться сразу к нескольким разным людям, а не к одному продавцу (точный идентификатор — телефон — пока не собирается)</div>` : ''}
+  ${sp.is_ambiguous ? `<div style="margin-top:6px;font-size:13px;">⚠️ Общее имя — ${sp.total_listings_count} объявлений под этим именем, вероятно разные люди (без телефона отличить нечем — поведенческие оценки выше по этой же причине не показываются)</div>` : ''}
 </div>` : '';
 
     content.innerHTML = `

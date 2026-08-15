@@ -75,6 +75,13 @@ _GENERIC_NAME_STOPLIST = frozenset({
 # migrations/077_seller_profiles.sql) — не отвечаем уверенно "часто
 # перевыставляет" на выборке из 1-2 объявлений.
 _MIN_LISTINGS_FOR_HIGH_RELIST = 3
+
+# Порог "имя, вероятно, общее для нескольких разных людей" (миграция 079,
+# находка на живых данных: 837 из 1249 срабатываний is_motivated_seller
+# приходились именно на такие "имена" — см. докстринг миграции). >15
+# объявлений под одним словом-именем (без телефона/др. идентификатора)
+# на практике почти всегда коллизия, не один сверхактивный продавец.
+_AMBIGUOUS_NAME_MIN_LISTINGS = 15
 _HIGH_RELIST_THRESHOLD = 0.3
 _MOTIVATED_SELLER_WINDOW_DAYS = 30
 _MOTIVATED_SELLER_MIN_CUTS = 2
@@ -175,6 +182,19 @@ def _aggregate(listings: list[dict], cuts_by_listing: dict[str, list[dict]],
         recent_cuts = sum(1 for c in cuts if c["changed_at"] and c["changed_at"] >= motivated_cutoff)
         is_motivated_seller = recent_cuts >= _MOTIVATED_SELLER_MIN_CUTS
 
+        # is_ambiguous (миграция 079) — >15 объявлений под одним словом-
+        # именем почти наверняка разные реальные люди, не один продавец
+        # (найдено на живых данных: 837/1249 срабатываний
+        # is_motivated_seller были именно такими "именами"). Для
+        # ambiguous ЖЁСТКО зануляем оба производных поведенческих флага
+        # — сами числа (relist_rate/price_cut_rate) остаются как есть,
+        # это честная агрегированная статистика по строке-имени, занулён
+        # только вывод "этот ПРОДАВЕЦ так себя ведёт".
+        is_ambiguous = total > _AMBIGUOUS_NAME_MIN_LISTINGS
+        if is_ambiguous:
+            is_high_relist_rate = False
+            is_motivated_seller = False
+
         out.append({
             "seller_name": name_norm, "seller_type": seller_type,
             "active_listings_count": active, "total_listings_count": total,
@@ -182,6 +202,7 @@ def _aggregate(listings: list[dict], cuts_by_listing: dict[str, list[dict]],
             "price_cut_count": price_cut_count, "price_cut_rate": price_cut_rate,
             "avg_days_to_sell": avg_days_to_sell, "median_discount_pct": median_discount_pct,
             "is_high_relist_rate": is_high_relist_rate, "is_motivated_seller": is_motivated_seller,
+            "is_ambiguous": is_ambiguous,
         })
     return out
 
@@ -201,8 +222,8 @@ async def run_snapshot() -> dict:
                 seller_name, seller_type, active_listings_count, total_listings_count,
                 relist_count, relist_rate, price_cut_count, price_cut_rate,
                 avg_days_to_sell, median_discount_pct,
-                is_high_relist_rate, is_motivated_seller, computed_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+                is_high_relist_rate, is_motivated_seller, is_ambiguous, computed_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
             ON CONFLICT (seller_name) DO UPDATE SET
                 seller_type = EXCLUDED.seller_type,
                 active_listings_count = EXCLUDED.active_listings_count,
@@ -215,12 +236,13 @@ async def run_snapshot() -> dict:
                 median_discount_pct = EXCLUDED.median_discount_pct,
                 is_high_relist_rate = EXCLUDED.is_high_relist_rate,
                 is_motivated_seller = EXCLUDED.is_motivated_seller,
+                is_ambiguous = EXCLUDED.is_ambiguous,
                 computed_at = now()
         """,
             p["seller_name"], p["seller_type"], p["active_listings_count"], p["total_listings_count"],
             p["relist_count"], p["relist_rate"], p["price_cut_count"], p["price_cut_rate"],
             p["avg_days_to_sell"], p["median_discount_pct"],
-            p["is_high_relist_rate"], p["is_motivated_seller"],
+            p["is_high_relist_rate"], p["is_motivated_seller"], p["is_ambiguous"],
         )
 
     # Продавцы, у которых сегодня не осталось ни одного объявления с
@@ -236,11 +258,13 @@ async def run_snapshot() -> dict:
     high_relist = sum(1 for p in profiles if p["is_high_relist_rate"])
     motivated = sum(1 for p in profiles if p["is_motivated_seller"])
     big_agencies = sum(1 for p in profiles if p["active_listings_count"] > 50)
+    ambiguous = sum(1 for p in profiles if p["is_ambiguous"])
     log.info("seller_profile_snapshot: продавцов=%d high_relist=%d motivated=%d "
-             "агентств(>50 активных)=%d удалено_устаревших=%s",
-             len(profiles), high_relist, motivated, big_agencies, deleted)
+             "агентств(>50 активных)=%d ambiguous(>%d объявлений)=%d удалено_устаревших=%s",
+             len(profiles), high_relist, motivated, big_agencies,
+             _AMBIGUOUS_NAME_MIN_LISTINGS, ambiguous, deleted)
     return {"sellers": len(profiles), "high_relist": high_relist, "motivated": motivated,
-            "big_agencies": big_agencies}
+            "big_agencies": big_agencies, "ambiguous": ambiguous}
 
 
 async def main() -> None:
