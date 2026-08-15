@@ -52,28 +52,46 @@ school_access/kindergarten_access, диапазон вырос (24 -> 30), и
 100 — максимум сразу по всем пяти категориям (на практике почти не
 бывает).
 
-**Известные ограничения (снимаются следующими коммитами этой же
-фазы)**:
+**Оба известных ограничения из предыдущего коммита ЗАКРЫТЫ** этим
+коммитом ("Confidence", 2026-08-15) — было:
 
-1. Диапазон группы по-прежнему СТАТИЧЕСКИЙ (Σ min/max факторов внутри
-   неё), а не "диапазон только измеренных для ЭТОГО ЖК факторов".
-   Значит добавление нового фактора ВНУТРИ группы (например, ещё один
-   инфра-сигнал в будущем) всё ещё может немного сдвинуть нормализованный
-   score группы для ЖК, где этот новый фактор не посчитан (unknown) —
-   тот же баг класса 66->55, но теперь ограниченный ОДНОЙ группой (25%
-   веса максимум), а не всей моделью сразу.
-2. "50 = нейтрально" — ЦЕЛЕВОЙ смысл шкалы, но пока НЕ буквально верно
-   для групп с неотрицательным диапазоном (transport 0..11, infra
-   0..15, green 0..2): unknown-фактор там по умолчанию даёт adj=0, а
-   0 — это МИНИМУМ диапазона (0%), не середина. Т.е. "не измерено" пока
-   визуально неотличимо от "измерено и оказалось худшим из возможных" —
-   ровно то, что закрывает confidence-redesign ниже.
+1. Диапазон группы был СТАТИЧЕСКИЙ (Σ min/max факторов внутри неё), а
+   не "диапазон только измеренных для ЭТОГО ЖК факторов" — добавление
+   нового фактора ВНУТРИ группы могло сдвинуть score группы для ЖК, где
+   этот новый фактор не посчитан (unknown).
+2. "50 = нейтрально" было ЦЕЛЕВЫМ смыслом шкалы, но не буквально верным
+   для групп с неотрицательным диапазоном — unknown-фактор там читался
+   как МИНИМУМ (0%), не середина.
 
-Оба пункта закрываются одним и тем же следующим коммитом фазы —
-"Confidence" (не считать unknown-факторы в диапазон группы вообще, не
-просто как 0), закреплённым stability-тестом (последний коммит фазы,
-регресс ±2 балла для существующих ЖК при добавлении нейтрального
-фактора).
+Механизм закрытия — **availability**: `_is_available(factor)` решает,
+СЧИТАН ли фактор реально (не "нет данных"/"ошибка" в `reason`).
+`normalize_group_weighted()` строит диапазон группы ТОЛЬКО из
+доступных факторов для КОНКРЕТНОГО ЖК (не статический Σ по схеме) —
+неизмеренный фактор исключается из group-диапазона ЦЕЛИКОМ, не просто
+считается как 0. Если в группе вообще нет доступных факторов — её
+вклад честно 50% (ни туда, ни сюда), а не 0%/100% по случайности того,
+на каком конце диапазона лежит "неизвестно". Это и есть свойство,
+которое проверяет stability-тест (следующий/последний коммит фазы):
+добавление нового фактора не должно сдвигать score существующих ЖК,
+для которых он unknown.
+
+**Confidence — тоже переработан**, не просто "доля посчитанных
+факторов" (раньше — плоский счётчик, каждый фактор весил одинаково
+независимо от качества источника). Теперь взвешен по `_SOURCE_QUALITY`
+(доверие к ИСТОЧНИКУ, не к конкретному измерению):
+  - 0.8 — точный городской реестр (astana_schools/kindergartens,
+    transport_hexes, demolition_houses)
+  - 0.6 — OSM Overpass (noise/schools/transit/amenities/parks)
+  - 0.2 — грубая эвристика без источника вовсе (bank)
+confidence = 100 * (Σ source_quality доступных факторов) / (Σ
+source_quality ВСЕХ факторов схемы) — ЖК с 3 факторами из точных
+реестров теперь ЗАКОНОМЕРНО доверяется больше, чем ЖК с теми же 3, но
+из OSM (раньше оба давали одинаковый % при одинаковом КОЛИЧЕСТВЕ
+посчитанного).
+
+Каждый фактор в выдаче также получает `available`/`source_quality`/
+`freshness`/`precision` (см. `_FRESHNESS`/`_PRECISION` ниже) — не
+только участвуют в расчёте, но и видны наружу для будущего UI/аудита.
 """
 from __future__ import annotations
 
@@ -158,27 +176,128 @@ _FACTOR_RANGES: dict[str, tuple[int, int]] = {
 
 
 def _group_range(group: str) -> tuple[int, int]:
+    """СТАТИЧЕСКИЙ теоретический диапазон группы (Σ min/max ВСЕХ факторов
+    по схеме) — только для документации/отображения "какой максимум в
+    принципе возможен". normalize_group_weighted() его больше НЕ
+    использует напрямую (см. _group_range_available() — динамический,
+    только по факторам, реально измеренным для конкретного ЖК)."""
     keys = _GROUPS[group]
+    return (sum(_FACTOR_RANGES[k][0] for k in keys), sum(_FACTOR_RANGES[k][1] for k in keys))
+
+
+def _is_available(factor: dict) -> bool:
+    """Реально ли фактор посчитан (не "нет данных"/"ошибка" в reason) —
+    единый источник правды и для normalize_group_weighted() (какие
+    факторы считаются в диапазон группы), и для confidence (какие
+    факторы засчитываются как измеренные). Строковая проверка (не
+    отдельный булев флаг на факторе) — обратно совместима со ВСЕМИ уже
+    существующими factor-словарями, включая исторические строки
+    complex_location_scores.breakdown, у которых нет никакого нового
+    поля "available" вообще (задача 2026-08-15, коммит "Confidence")."""
+    reason = factor.get("reason", "")
+    return "нет данных" not in reason and "ошибка" not in reason
+
+
+def _group_range_available(group: str, factors: dict) -> tuple[int, int] | None:
+    """Диапазон группы, ограниченный ТОЛЬКО реально измеренными (available)
+    факторами для КОНКРЕТНОГО ЖК — не статическая схема. None, если в
+    группе вообще нет измеренных факторов (нечего нормализовать —
+    normalize_group_weighted() в этом случае берёт честную середину)."""
+    keys = [k for k in _GROUPS[group] if k in factors and _is_available(factors[k])]
+    if not keys:
+        return None
     return (sum(_FACTOR_RANGES[k][0] for k in keys), sum(_FACTOR_RANGES[k][1] for k in keys))
 
 
 def normalize_group_weighted(factors: dict) -> int:
     """0-100 — см. докстринг модуля "Семантика итогового 0-100". Заменяет
     старую линейную нормализацию по единому _TOTAL_ADJ_MIN/MAX (убраны).
-    Чистая функция от factors (без сети/БД) — тестируется напрямую.
+    Чистая функция от factors (без сети/БД) — тестируется напрямую,
+    переиспользуется и на исторических breakdown из complex_location_
+    scores (complex_location_score_snapshot.py — не только на свежем
+    выводе compute_complex_location_score()).
 
-    `factors` — {key: {"adj": int, ...}} с любым подмножеством ключей из
-    _FACTOR_RANGES (отсутствующие ключи внутри группы просто не
-    учитываются в raw-сумме ЭТОГО прогона — но диапазон группы всё равно
-    статический, см. "известное ограничение" в докстринге модуля)."""
+    `factors` — {key: {"adj": int, "reason": str, ...}} с любым
+    подмножеством ключей из _FACTOR_RANGES. Диапазон КАЖДОЙ группы
+    строится ДИНАМИЧЕСКИ — только из факторов, которые реально доступны
+    (_is_available) для ЭТОГО набора factors, не из статической схемы
+    (см. _group_range_available()). Группа без единого доступного
+    фактора вносит нейтральные 50%, не 0%."""
     total_pct = 0.0
     for group, weight in _GROUP_WEIGHTS.items():
-        keys = _GROUPS[group]
-        raw = sum(factors[k]["adj"] for k in keys if k in factors)
-        lo, hi = _group_range(group)
-        pct = 50.0 if hi == lo else 100.0 * (raw - lo) / (hi - lo)
+        rng = _group_range_available(group, factors)
+        if rng is None:
+            pct = 50.0
+        else:
+            keys = [k for k in _GROUPS[group] if k in factors and _is_available(factors[k])]
+            raw = sum(factors[k]["adj"] for k in keys)
+            lo, hi = rng
+            pct = 50.0 if hi == lo else 100.0 * (raw - lo) / (hi - lo)
         total_pct += weight * pct
     return round(total_pct)
+
+
+# ── Confidence (задача 2026-08-15, коммит "Confidence") ─────────────────
+# source_quality — доверие к ИСТОЧНИКУ данных (не к конкретному
+# измерению): точный городской реестр > OSM Overpass > грубая эвристика.
+_SOURCE_QUALITY: dict[str, float] = {
+    "noise": 0.6, "schools": 0.6, "transit_stops": 0.6, "amenities": 0.6, "parks": 0.6,  # OSM
+    "lrt_access": 0.8, "road_access": 0.8, "route_connectivity": 0.8,                    # transport_hexes
+    "demolition": 0.8,                                                                    # demolition_houses
+    "school_access": 0.8, "kindergarten_access": 0.8,                                     # astana_schools/kindergartens
+    "bank": 0.2,                                                                          # грубая эвристика по district
+}
+
+# freshness — насколько регулярно обновляется ИСТОЧНИК (категория, не
+# вычисляется live — ни у одной из таблиц ниже нет по-факторного
+# updated_at на уровне отдельной точки, который стоило бы тащить сюда):
+#   "live"     — считается заново на каждый запрос (Overpass)
+#   "periodic" — обновляется по таймеру (transport_hexes)
+#   "manual"   — ручной/разовый сбор без таймера (demolition_houses,
+#                astana_schools/kindergartens — см. их докстринги про
+#                отсутствие writer-скрипта)
+_FRESHNESS: dict[str, str] = {
+    "noise": "live", "schools": "live", "transit_stops": "live", "amenities": "live", "parks": "live",
+    "lrt_access": "periodic", "road_access": "periodic", "route_connectivity": "periodic",
+    "demolition": "manual",
+    "school_access": "manual", "kindergarten_access": "manual",
+    "bank": "manual",
+}
+
+# precision — насколько детализирован сигнал:
+#   "exact"     — точное расстояние/число (метры, count маршрутов)
+#   "presence"  — просто да/нет в радиусе (OSM-слои)
+#   "heuristic" — грубая прикидка без калибровки (bank)
+_PRECISION: dict[str, str] = {
+    "noise": "presence", "schools": "presence", "transit_stops": "presence", "amenities": "presence", "parks": "presence",
+    "lrt_access": "exact", "road_access": "exact", "route_connectivity": "exact",
+    "demolition": "exact",
+    "school_access": "exact", "kindergarten_access": "exact",
+    "bank": "heuristic",
+}
+
+
+def _annotate_factor_metadata(factors: dict) -> None:
+    """Мутирует factors IN PLACE — добавляет available/source_quality/
+    freshness/precision к каждому фактору (не только используется для
+    confidence ниже, но и видно наружу в API/UI)."""
+    for key, f in factors.items():
+        f["available"] = _is_available(f)
+        f["source_quality"] = _SOURCE_QUALITY.get(key, 0.2)
+        f["freshness"] = _FRESHNESS.get(key, "unknown")
+        f["precision"] = _PRECISION.get(key, "unknown")
+
+
+def _compute_confidence(factors: dict) -> int:
+    """0-100, взвешено по source_quality (см. докстринг модуля) — ЗАМЕНЯЕТ
+    старый плоский "доля посчитанных факторов" (каждый весил одинаково
+    независимо от качества источника)."""
+    total_weight = sum(_SOURCE_QUALITY.get(k, 0.2) for k in factors)
+    if total_weight <= 0:
+        return 0
+    available_weight = sum(
+        _SOURCE_QUALITY.get(k, 0.2) for k, f in factors.items() if _is_available(f))
+    return round(100 * available_weight / total_weight)
 
 
 async def _transport_hex_factors(lat: float, lon: float) -> dict:
@@ -460,11 +579,12 @@ async def compute_complex_location_score(
 
     factors["bank"] = {**_bank_factor(district), "label": "🌉 Берег Ишима"}
 
+    # available/source_quality/freshness/precision на каждый фактор +
+    # confidence, взвешенный по source_quality — задача 2026-08-15,
+    # "Location Reliability Phase", коммит "Confidence" (см. докстринг
+    # модуля). Заменяет старый плоский "доля посчитанных факторов".
+    _annotate_factor_metadata(factors)
     total = sum(f["adj"] for f in factors.values())
-    # Confidence — доля факторов, реально посчитанных не по дефолту/ошибке
-    # (см. тот же принцип в bot/core/deal_score.py — "низкий confidence =
-    # доверяем меньше").
-    computed = sum(1 for f in factors.values() if "ошибка" not in f["reason"] and "нет данных" not in f["reason"])
-    confidence = round(100 * computed / len(factors))
+    confidence = _compute_confidence(factors)
 
     return {"total": total, "factors": factors, "confidence": confidence}

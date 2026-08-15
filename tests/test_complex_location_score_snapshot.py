@@ -37,8 +37,19 @@ async def db():
 
 
 def _fake_factors(**overrides) -> dict:
-    """Полный набор факторов с нулевыми adj по умолчанию (нейтральная
-    середина диапазона) — overrides переопределяют конкретные."""
+    """Полный набор факторов — БЕЗ overrides большинство "нет данных"
+    (реалистичный дефолт: astana_schools/transport_hexes/OSM ничего не
+    нашли), noise/demolition/bank — реалистично ВСЕГДА доступны (тихо/
+    нет объектов на снос/район не определён — валидные измеренные
+    результаты, не "нет данных").
+
+    **overrides = int** переопределяет adj И одновременно меняет reason
+    на "измерено (тест)" — задача 2026-08-15 ("Location Reliability
+    Phase", коммит "Confidence"): _is_available() смотрит на reason, не
+    на adj, так что override без смены reason остался бы "неизмеренным"
+    для normalize_group_weighted() (тест был бы неправдоподобным —
+    реальный измеренный фактор никогда не пишет "нет данных" в reason
+    вместе с содержательным adj)."""
     # building_age сюда НЕ входит — с задачи "двойные школы + building_age"
     # (2026-08-15) он не в _GROUPS и не влияет на score (см. tests/test_
     # location_score_group_weighted.py::test_building_age_not_in_any_group).
@@ -58,6 +69,7 @@ def _fake_factors(**overrides) -> dict:
     }
     for k, v in overrides.items():
         base[k]["adj"] = v
+        base[k]["reason"] = "измерено (тест)"
     return base
 
 
@@ -109,16 +121,23 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
         from bot.db.pg import fetchrow
         row = await fetchrow("SELECT * FROM complex_location_scores WHERE complex_id=$1", cid)
         assert row is not None
-        # Групповая модель (задача 2026-08-15, "Location Reliability
-        # Phase", normalize_group_weighted()) — взвешенное среднее по
-        # группам, НЕ линейный total/диапазон (тот убран). По группам:
-        #   transport: lrt_access=4 из диапазона (0,11) -> 36.36%
-        #   infra: schools=2+amenities=4=6 из (0,12)     -> 50%
-        #   noise: 0 из (-6,0)                            -> 100%
-        #   green: parks=2 из (0,2)                       -> 100%
-        #   risk: demolition=-2 из (-2,0)                 -> 0%
-        # 0.25*36.36 + 0.25*50 + 0.15*100 + 0.20*100 + 0.15*0 = 56.59 -> 57
-        assert row["score"] == 57
+        # Групповая модель + availability-aware диапазоны (задача
+        # 2026-08-15, "Location Reliability Phase", normalize_group_
+        # weighted()) — только измеренные (override -> "измерено") факторы
+        # участвуют в диапазоне ГРУППЫ, не статическая схема. По группам
+        # (в скобках — какие факторы AVAILABLE и их динамический диапазон):
+        #   transport: только lrt_access(измерено)=4 из диапазона (0,4)
+        #     — остальные 3 "нет данных", исключены целиком -> 100%
+        #   infra: schools(измерено)=2 из (0,2) + amenities(измерено)=4
+        #     из (0,4) -> раздельно оба на своём максимуме -> 100%
+        #   noise: 0, дефолтно ДОСТУПЕН ("тихо" не "нет данных") -> (-6,0) -> 100%
+        #   green: parks(измерено)=2 из (0,2)              -> 100%
+        #   risk: demolition(измерено)=-2 из (-2,0)         -> 0%
+        # 0.25*100 + 0.25*100 + 0.15*100 + 0.20*100 + 0.15*0 = 85
+        assert row["score"] == 85
+        # confidence теперь взвешен по source_quality, не "доля посчитанных"
+        # (см. bot/core/location_score.py::_compute_confidence()) —
+        # передаётся из fake напрямую (90), run_snapshot() не пересчитывает.
         assert row["confidence"] == 90
         assert row["infra_score"] == 6      # schools(2)+amenities(4)
         assert row["transport_score"] == 4  # lrt_access(4), остальные 0
@@ -141,30 +160,31 @@ async def test_snapshot_writes_row_with_normalized_score_and_groups(db, monkeypa
 
 @pytest.mark.asyncio
 async def test_snapshot_all_groups_at_min_or_max_gives_0_or_100(db, monkeypatch):
-    """Групповая модель (задача 2026-08-15) — 0/100 достигаются, когда
-    КАЖДАЯ группа одновременно на своём мин/макс (не один общий total,
-    как раньше с _TOTAL_ADJ_MIN/MAX, убранными в этом же коммите)."""
+    """Групповая модель + availability-aware диапазоны (задача 2026-08-15,
+    коммиты "Семантика + групповая модель" и "Confidence") — 0/100
+    достигаются, когда в КАЖДОЙ группе есть измеренный ("available")
+    фактор ровно на своём мин/макс. Заведомо НЕ переопределяем все
+    факторы группы — достаточно ОДНОГО измеренного на границе (см.
+    докстринг _group_range_available() — диапазон группы строится
+    только из доступных факторов, не по статической схеме)."""
     import complex_location_score_snapshot as snap
     import bot.core.location_score as location_score_module
 
     async def _fake_min(lat, lon, year_built=None, district=None):
-        # noise=-6 (мин noise-группы), demolition=-2 (мин risk-группы —
-        # единственный член с задачи "двойные школы", building_age из неё
-        # убран); transport/infra/green уже на нуле = их минимум по умолчанию.
-        factors = _fake_factors(noise=-6, demolition=-2)
+        # По одному измеренному фактору на группу, каждый — на своём
+        # минимуме: route_connectivity=0 (transport), schools=0 (infra),
+        # noise=-6, parks=0 (green), demolition=-2 (risk).
+        factors = _fake_factors(route_connectivity=0, schools=0, noise=-6,
+                                 parks=0, demolition=-2)
         return {"total": -8, "factors": factors, "confidence": 50}
 
     async def _fake_max(lat, lon, year_built=None, district=None):
-        # Максимум КАЖДОЙ группы одновременно: transport (transit_stops+
-        # lrt_access+road_access+route_connectivity=11), infra (schools=2+
-        # amenities+school_access+kindergarten_access=12 — schools сжат до
-        # 0..2 задачей "двойные школы"), green (parks=2), risk (demolition
-        # уже на 0 = её максимум, building_age в группе больше нет вовсе).
-        # noise остаётся на дефолтном 0 — это и есть максимум noise-группы.
-        factors = _fake_factors(schools=2, transit_stops=3, amenities=4, parks=2,
-                                 lrt_access=4, road_access=2, route_connectivity=2,
-                                 school_access=4, kindergarten_access=2)
-        return {"total": 25, "factors": factors, "confidence": 100}
+        # То же самое, но на максимуме: route_connectivity=2, schools=2,
+        # parks=2 — noise/demolition уже на максимуме СВОИМИ дефолтами
+        # (0 — и "тихо", и "нет объектов на снос", оба ДОСТУПНЫ без
+        # override, оба ровно на границе своего диапазона).
+        factors = _fake_factors(route_connectivity=2, schools=2, parks=2)
+        return {"total": 4, "factors": factors, "confidence": 100}
 
     cid1, lid1 = await _insert_complex_with_listing("__test_cls_min__", 51.10, 71.40)
     cid2, lid2 = await _insert_complex_with_listing("__test_cls_max__", 51.11, 71.41)
@@ -278,8 +298,10 @@ async def test_snapshot_processes_multiple_complexes_concurrently_without_mixing
 
     async def _fake_compute(lat, lon, year_built=None, district=None):
         # Разный total для разных координат — если конкурентные задачи
-        # перепутают complex_id/результат, тест это поймает.
-        adj = 5 if round(lat, 2) == 51.20 else 2
+        # перепутают complex_id/результат, тест это поймает. schools
+        # (не 5, а 2 — новый максимум фактора с задачи "двойные школы",
+        # 2026-08-15) vs 0 — заведомо разные измеренные значения.
+        adj = 2 if round(lat, 2) == 51.20 else 0
         factors = _fake_factors(schools=adj)
         return {"total": adj, "factors": factors, "confidence": 80}
 
@@ -300,8 +322,8 @@ async def test_snapshot_processes_multiple_complexes_concurrently_without_mixing
             "SELECT complex_id, score FROM complex_location_scores WHERE complex_id = ANY($1::int[])", cids)
         by_id = {r["complex_id"]: r["score"] for r in rows}
         assert len(by_id) == 3
-        assert by_id[cids[0]] != by_id[cids[1]]  # 51.20 (adj=5) != 51.21 (adj=2)
-        assert by_id[cids[1]] == by_id[cids[2]]  # оба adj=2 -> одинаковый score
+        assert by_id[cids[0]] != by_id[cids[1]]  # 51.20 (adj=2) != 51.21 (adj=0)
+        assert by_id[cids[1]] == by_id[cids[2]]  # оба adj=0 -> одинаковый score
     finally:
         for cid, lid in pairs:
             await _cleanup(cid, lid)
