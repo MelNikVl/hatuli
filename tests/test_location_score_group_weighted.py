@@ -96,8 +96,10 @@ def test_group_ranges_match_factor_range_sums():
     assert _group_range("infra") == (0, 12)
     assert _group_range("noise") == (-6, 0)
     assert _group_range("green") == (0, 2)
-    # risk: только demolition — building_age убран (та же задача).
-    assert _group_range("risk") == (-2, 0)
+    # risk: demolition(-2,0) + air_quality(-3,0) — задача 2026-08-15
+    # "воздух в location_score" (Task 3) добавила air_quality в risk
+    # (building_age в этой группе больше нет с "двойные школы").
+    assert _group_range("risk") == (-5, 0)
 
 
 def test_group_range_available_none_when_nothing_measured():

@@ -145,7 +145,13 @@ _GROUPS: dict[str, tuple[str, ...]] = {
     "infra": ("schools", "amenities", "school_access", "kindergarten_access"),
     "noise": ("noise",),
     "green": ("parks",),
-    "risk": ("demolition",),
+    # air_quality — задача 2026-08-15 "воздух в location_score" (Task 3,
+    # начата ПОСЛЕ явного завершения Location Reliability Phase, как
+    # требовал заказчик) — в ту же группу "risk", не отдельная (спека
+    # заказчика говорила "_GROUPS['risks']" — трактуется как ссылка на
+    # уже существующий ключ "risk", plural было опиской/обобщением, не
+    # запросом на новую группу).
+    "risk": ("demolition", "air_quality"),
 }
 _INFORMATIONAL: tuple[str, ...] = ("bank",)
 
@@ -179,6 +185,7 @@ _FACTOR_RANGES: dict[str, tuple[int, int]] = {
     "demolition": (-2, 0),             # _demolition_factor
     "school_access": (0, 4),           # _schools_factor — задача 2026-08-15
     "kindergarten_access": (0, 2),     # _kindergartens_factor — задача 2026-08-15
+    "air_quality": (-3, 0),            # _air_quality_factor — задача 2026-08-15 "воздух"
     "bank": (0, 0),                    # _bank_factor — всегда 0, информационный
 }
 
@@ -253,6 +260,7 @@ _SOURCE_QUALITY: dict[str, float] = {
     "lrt_access": 0.8, "road_access": 0.8, "route_connectivity": 0.8,                    # transport_hexes
     "demolition": 0.8,                                                                    # demolition_houses
     "school_access": 0.8, "kindergarten_access": 0.8,                                     # astana_schools/kindergartens
+    "air_quality": 0.8,                                                                    # air_stations — реальный сенсор ПНЗ
     "bank": 0.2,                                                                          # грубая эвристика по district
 }
 
@@ -269,6 +277,7 @@ _FRESHNESS: dict[str, str] = {
     "lrt_access": "periodic", "road_access": "periodic", "route_connectivity": "periodic",
     "demolition": "manual",
     "school_access": "manual", "kindergarten_access": "manual",
+    "air_quality": "periodic",  # krisha-air-stations.timer, почасово
     "bank": "manual",
 }
 
@@ -281,6 +290,7 @@ _PRECISION: dict[str, str] = {
     "lrt_access": "exact", "road_access": "exact", "route_connectivity": "exact",
     "demolition": "exact",
     "school_access": "exact", "kindergarten_access": "exact",
+    "air_quality": "exact",  # index_value — точное число, не presence/heuristic
     "bank": "heuristic",
 }
 
@@ -474,6 +484,72 @@ async def _kindergartens_factor(lat: float, lon: float) -> dict:
     return {"adj": 0, "reason": f"ближайший садик дальше 500м ({dist_m:.0f}м)"}
 
 
+async def _air_quality_factor(lat: float, lon: float) -> dict:
+    """Индекс загрязнения воздуха (`air_stations` — ПНЗ Казгидромета,
+    ecodata.kz, задача 2026-08-15 "воздух в location_score" — Task 3,
+    начата после завершения Location Reliability Phase, как явно
+    требовал заказчик). `index_value` = max(факт/ПДК м.р.) по
+    загрязнителям (см. докстринг `pnz_collect.py`) — 1.0 означает РОВНО
+    на пределе допустимой концентрации, не абстрактная шкала 1-10.
+
+    **Проверено перед реализацией, не на веру**: на 2026-08-15 (295
+    строк истории, 10 станций) `index_value` НИ РАЗУ не превысил 0.2 —
+    воздух Астаны по этому индексу сейчас стабильно "в пределах нормы".
+    Значит adj=0 будет ТИПИЧНЫМ результатом прямо сейчас на живых
+    данных — это честное отражение действительности (пороги не
+    занижены искусственно под текущие цифры, взяты из спеки заказчика
+    как есть), фактор станет содержательным при реальном ухудшении
+    (напр. отопительный сезон/смог) без единой правки кода.
+
+    `air_stations` — TIME SERIES (295 строк на 10 станций, ~30 записей
+    на станцию, копится почасовым таймером `krisha-air-stations.timer`)
+    — берём САМОЕ СВЕЖЕЕ измерение КАЖДОЙ станции (DISTINCT ON), потом
+    ищем ближайшую из них, а не наоборот (наивный ORDER BY расстояние
+    LIMIT 1 по всей таблице рисковал бы вернуть старую запись ближней
+    станции вместо её же свежей)."""
+    from bot.db.pg import fetchrow
+    try:
+        row = await fetchrow("""
+            SELECT station_name, index_value, index_pollutant,
+                   (((lat - $1) * 111.0)^2 + ((lon - $2) * 111.0 * 0.63)^2) AS d2
+            FROM (
+                SELECT DISTINCT ON (station_name) station_name, lat, lon,
+                       index_value, index_pollutant, fetched_at
+                FROM air_stations
+                ORDER BY station_name, fetched_at DESC
+            ) latest
+            ORDER BY d2 LIMIT 1
+        """, lat, lon)
+    except Exception as exc:
+        logger.warning("air_stations lookup failed: %s", exc)
+        row = None
+    if not row:
+        return {"adj": 0, "reason": "нет данных air_stations рядом"}
+
+    import math
+    dist_m = math.sqrt(row["d2"]) * 1000
+    if dist_m > 5000:
+        return {"adj": 0, "reason": "нет станции в радиусе"}
+
+    index_value = row["index_value"]
+    if index_value is None:
+        return {"adj": 0, "reason": f"ближайшая станция {row['station_name']} без данных индекса"}
+    index_value = float(index_value)
+
+    if index_value < 1.0:
+        adj = 0
+    elif index_value < 2.0:
+        adj = -1
+    elif index_value < 5.0:
+        adj = -2
+    else:
+        adj = -3
+
+    reason = (f"Ближайшая станция: {row['station_name']} ({dist_m:.0f}м), "
+              f"индекс {index_value} ({row['index_pollutant']})")
+    return {"adj": adj, "reason": reason}
+
+
 def _building_age_factor(year_built: int | None) -> dict:
     """НЕ вызывается из compute_complex_location_score() с 2026-08-15
     ("Location Reliability Phase", коммит "двойные школы + building_age")
@@ -527,16 +603,19 @@ async def compute_complex_location_score(
     # Точные DB-факторы (не Overpass — общий pg pool, дешёво) идут ПЕРВЫМИ,
     # раньше OSM-слоёв ниже — их результат нужен, чтобы решить, в каком
     # режиме звать OSM-слой "schools" (см. ниже про double-counting).
-    hex_factors, demolition_result, schools_result, kindergartens_result = await asyncio.gather(
+    hex_factors, demolition_result, schools_result, kindergartens_result, air_quality_result = await asyncio.gather(
         _transport_hex_factors(lat, lon),
         _demolition_factor(lat, lon),
         _schools_factor(lat, lon),
         _kindergartens_factor(lat, lon),
+        _air_quality_factor(lat, lon),
     )
     factors["lrt_access"] = {**hex_factors["lrt_access"], "label": "🚈 ЛРТ рядом"}
     factors["road_access"] = {**hex_factors["road_access"], "label": "🚗 Доступность на авто"}
     factors["route_connectivity"] = {**hex_factors["route_connectivity"], "label": "🔀 Маршрутная связность"}
     factors["demolition"] = {**demolition_result, "label": "🚧 Снос по соседству"}
+    # air_quality — задача 2026-08-15 "воздух в location_score" (Task 3).
+    factors["air_quality"] = {**air_quality_result, "label": "💨 Качество воздуха"}
     # school_access/kindergarten_access — задача 2026-08-15, ТОЧНЫЙ сигнал
     # по расстоянию+типу (astana_schools/astana_kindergartens) —
     # PRIMARY-источник, вытесняет школьно-садиковую часть OSM-слоя

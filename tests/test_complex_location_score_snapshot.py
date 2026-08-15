@@ -65,6 +65,7 @@ def _fake_factors(**overrides) -> dict:
         "road_access": {"adj": 0, "label": "🚗", "reason": "нет данных"},
         "route_connectivity": {"adj": 0, "label": "🔀", "reason": "нет данных"},
         "demolition": {"adj": 0, "label": "🚧", "reason": "нет объектов"},
+        "air_quality": {"adj": 0, "label": "💨", "reason": "нет данных air_stations рядом"},
         "bank": {"adj": 0, "label": "🌉", "reason": "район не определён"},
     }
     for k, v in overrides.items():
