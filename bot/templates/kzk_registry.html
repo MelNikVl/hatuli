@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">📋 Реестр КЖК <small>developers.kz/market/proverit-zastroyshika — сверка с нашими застройщиками/ЖК (задача 2026-08-15)</small></div>
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px;">
+  <div style="flex:1 1 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Всего в реестре</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;">{{ summary.total }}</div>
+  </div>
+  <div style="flex:1 1 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Резолвлено на developers</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;color:#16a34a;">{{ summary.resolved }}</div>
+  </div>
+  <div style="flex:1 1 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">На ревью (fuzzy-кандидат)</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;color:#f59e0b;">{{ summary.review_pending }}</div>
+  </div>
+  <div style="flex:1 1 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Не резолвлено</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;">{{ summary.unresolved }}</div>
+  </div>
+  <div style="flex:1 1 160px;background:var(--surface);border:1px solid rgba(239,68,68,.3);border-radius:10px;padding:14px 18px;">
+    <div style="font-size:12px;color:#ef4444;text-transform:uppercase;letter-spacing:.5px;">🚫 Чёрный список</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;color:#ef4444;">{{ summary.blacklisted }}</div>
+  </div>
+</div>
+
+<form method="get" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+  <input type="text" name="q" value="{{ q }}" placeholder="Поиск по бренду/юрлицу"
+         style="padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;min-width:220px;">
+  <select name="status" style="padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;">
+    <option value="" {{ 'selected' if not status }}>Все статусы матчинга</option>
+    <option value="resolved" {{ 'selected' if status == 'resolved' }}>Резолвлено</option>
+    <option value="review" {{ 'selected' if status == 'review' }}>На ревью</option>
+    <option value="unresolved" {{ 'selected' if status == 'unresolved' }}>Не резолвлено</option>
+  </select>
+  <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;">
+    <input type="checkbox" name="blacklisted" value="1" {{ 'checked' if blacklisted == '1' }}> только чёрный список
+  </label>
+  <button type="submit" style="padding:7px 16px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-weight:600;font-size:13px;cursor:pointer;">Фильтр</button>
+  {% if q or status or blacklisted %}<a href="/admin/kzk-registry" style="font-size:12.5px;color:var(--muted);">сбросить</a>{% endif %}
+</form>
+
+<div class="tbl-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:13px;">
+  <thead>
+    <tr style="border-bottom:2px solid var(--border);text-align:left;">
+      <th style="padding:9px 12px;">БИН</th>
+      <th style="padding:9px 12px;">Застройщик (реестр)</th>
+      <th style="padding:9px 12px;">Схема гарантии</th>
+      <th style="padding:9px 12px;">Города / ЖК</th>
+      <th style="padding:9px 12px;">Матч на developers</th>
+      <th style="padding:9px 12px;">ЖК-совпадения</th>
+      <th style="padding:9px 12px;">Действия</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr id="kzk-row-{{ r.id }}" style="border-bottom:1px solid var(--border);{% if r.is_blacklisted %}background:rgba(239,68,68,.06);{% endif %}">
+      <td style="padding:8px 12px;font-family:monospace;font-size:12px;">{{ r.bin }}</td>
+      <td style="padding:8px 12px;">
+        <b>{{ r.developer_brand or r.developer_legal }}</b>
+        {% if r.developer_brand and r.developer_legal and r.developer_brand != r.developer_legal %}
+        <div style="font-size:11px;color:var(--muted);">{{ r.developer_legal }}</div>
+        {% endif %}
+        {% if r.is_blacklisted %}<div style="margin-top:3px;"><span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:rgba(239,68,68,.15);color:#ef4444;">🚫 чёрный список</span>{% if r.in_registry %} <span style="font-size:10.5px;color:var(--muted);">(формально в реестре)</span>{% endif %}</div>{% endif %}
+      </td>
+      <td style="padding:8px 12px;">{{ r.warranty_scheme or '—' }}</td>
+      <td style="padding:8px 12px;font-size:12px;color:var(--muted);">
+        {{ (r.cities or [])|join(', ') }}{% if r.zhk_count %} · {{ r.zhk_count }} ЖК{% endif %}
+      </td>
+      <td style="padding:8px 12px;">
+        {% if r.developer_match_method == 'bin' %}
+          <span style="color:#16a34a;font-weight:700;">✅ по БИН</span><br><span style="font-size:11.5px;">{{ r.matched_developer_name }}</span>
+        {% elif r.developer_match_method == 'manual_confirmed' %}
+          <span style="color:#16a34a;font-weight:700;">✅ подтверждено вручную</span><br><span style="font-size:11.5px;">{{ r.matched_developer_name }}</span>
+        {% elif r.developer_match_method == 'name_fuzzy_auto' %}
+          <span style="color:#16a34a;font-weight:700;">✅ авто (имя)</span><br><span style="font-size:11.5px;">{{ r.matched_developer_name }}</span>
+        {% elif r.developer_match_method == 'name_fuzzy_review' %}
+          <span style="color:#f59e0b;font-weight:700;">🟡 кандидат: {{ r.matched_developer_name }}</span><br>
+          <button type="button" onclick="kzkConfirm({{ r.id }})" style="margin-top:4px;padding:3px 10px;border-radius:6px;border:none;background:#16a34a;color:#fff;font-size:11.5px;cursor:pointer;">Подтвердить</button>
+          <button type="button" onclick="kzkReject({{ r.id }})" style="margin-top:4px;padding:3px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">Отклонить</button>
+        {% else %}
+          <span style="color:var(--muted);">— не резолвлено</span>
+        {% endif %}
+      </td>
+      <td style="padding:8px 12px;font-size:11.5px;">
+        {% for m in (r.zhk_matches or []) %}
+          <div title="уверенность {{ m.confidence }}">
+            {% if m.complex_id %}{% if m.method == 'auto' %}✅{% else %}🟡{% endif %}{% else %}❔{% endif %}
+            {{ m.name }}{% if m.complex_id %} → #{{ m.complex_id }}{% endif %}
+          </div>
+        {% endfor %}
+      </td>
+      <td style="padding:8px 12px;">
+        {% if r.developer_match_method in ('bin', 'manual_confirmed', 'name_fuzzy_auto') %}
+        <button type="button" onclick="kzkReject({{ r.id }})" style="padding:3px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:11.5px;cursor:pointer;">Отвязать</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" style="padding:16px;color:var(--muted);text-align:center;">Ничего не найдено по текущему фильтру</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<script>
+function kzkConfirm(id) {
+  fetch('/admin/api/kzk-registry/' + id + '/confirm', {method: 'POST'})
+    .then(r => r.json()).then(d => { if (d.ok) location.reload(); else alert(d.error || 'ошибка'); });
+}
+function kzkReject(id) {
+  fetch('/admin/api/kzk-registry/' + id + '/reject', {method: 'POST'})
+    .then(r => r.json()).then(d => { if (d.ok) location.reload(); else alert(d.error || 'ошибка'); });
+}
+</script>
+{% endblock %}

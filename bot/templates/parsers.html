@@ -3,6 +3,16 @@
 {% include "_analytics_tabs.html" with context %}
 <div class="page-title">🎛 Парсеры <small>вкл/выкл + статистика по каждому парсеру, общие данные — отдельной вкладкой</small></div>
 
+<!-- Реестр КЖК (задача 2026-08-15) — отдельная страница со своим
+     фильтруемым списком/ревью matching'а, не вкладка этого hub'а (см.
+     комментарий у роута в terminal_extras.py) — ссылка сюда, чтобы
+     была видна из раздела "Парсеры", как просили в задаче. -->
+<div style="margin-bottom:16px;">
+  <a href="/admin/kzk-registry" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:inherit;text-decoration:none;font-size:13px;font-weight:600;">
+    📋 Реестр КЖК (developers.kz) — сверка застройщиков/ЖК →
+  </a>
+</div>
+
 <style>
 .prs-wrap { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
 .prs-card { flex:1 1 0; min-width:340px; max-width:480px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }

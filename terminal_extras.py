@@ -3155,6 +3155,71 @@ def make_extras_router(templates) -> APIRouter:
         return {"by_developer": by_developer, "by_complex": by_complex,
                 "all_developers": all_developers, "chart_nb": chart_nb}
 
+    # ── Реестр КЖК (задача 2026-08-15, блок 7 docs/liquidity_model_
+    # design.md) — сверка developers.kz/market/proverit-zastroyshika с
+    # нашими developers/complexes. Логика в bot/core/kzk_registry_admin.py
+    # ("роут не знает SQL"). Отдельная страница, не вкладка /admin/parsers
+    # (та — hub со сложной табличной маршрутизацией по PARSERS_HUB_TABS,
+    # интегрировать туда для одной новой сущности избыточно) — ссылка на
+    # неё добавлена в шапку /admin/parsers (см. ниже).
+    @router.get("/admin/kzk-registry", response_class=HTMLResponse)
+    async def kzk_registry_page(request: Request, q: str = "", status: str = "", blacklisted: str = ""):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.core.kzk_registry_admin import build_kzk_registry_summary, list_kzk_registry
+        summary = await build_kzk_registry_summary()
+        rows = await list_kzk_registry(
+            developer_query=q or None,
+            match_status=status or None,
+            blacklisted_only=(blacklisted == "1"),
+        )
+        return templates.TemplateResponse("kzk_registry.html", {
+            "request": request, "atab": "parsers",
+            "summary": summary, "rows": rows,
+            "q": q, "status": status, "blacklisted": blacklisted,
+        })
+
+    @router.post("/admin/api/kzk-registry/{kzk_id}/confirm")
+    async def kzk_registry_confirm(request: Request, kzk_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.kzk_registry_admin import confirm_match, KzkRegistryNotFound
+        try:
+            await confirm_match(kzk_id)
+        except KzkRegistryNotFound:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True})
+
+    @router.post("/admin/api/kzk-registry/{kzk_id}/reject")
+    async def kzk_registry_reject(request: Request, kzk_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.kzk_registry_admin import reject_match, KzkRegistryNotFound
+        try:
+            await reject_match(kzk_id)
+        except KzkRegistryNotFound:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse({"ok": True})
+
+    @router.post("/admin/api/kzk-registry/{kzk_id}/manual-match")
+    async def kzk_registry_manual_match(request: Request, kzk_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.kzk_registry_admin import set_manual_match, KzkRegistryNotFound
+        body = await request.json()
+        developer_id = body.get("developer_id")
+        if not developer_id:
+            return JSONResponse({"error": "developer_id required"}, status_code=400)
+        try:
+            await set_manual_match(kzk_id, int(developer_id))
+        except KzkRegistryNotFound:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True})
+
     @router.get("/admin/parsers", response_class=HTMLResponse)
     async def parsers_page(request: Request, tab: str = "general", days: int = 1, developer: int = 0):
         if not is_authed(request):
