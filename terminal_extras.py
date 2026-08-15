@@ -4764,6 +4764,72 @@ def make_extras_router(templates) -> APIRouter:
     # ── Зоны приоритета: карта с рисованием полигонов ────────────────────
 
 
+
+    @router.get("/admin/developer-reviews", response_class=HTMLResponse)
+    async def developer_reviews_page(request: Request, sentiment: str = ""):
+        """Отзывы на ЖК (2GIS): сводка, топ застройщиков по негативу, фильтр,
+        ручная переклассификация."""
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.db.pg import fetch as pg_fetch
+        stats = {
+            "total": 0, "neg": 0, "pos": 0, "spam": 0, "jk": 0,
+        }
+        try:
+            r = await pg_fetch("""
+                SELECT count(*) AS total,
+                       count(*) FILTER (WHERE sentiment='negative') AS neg,
+                       count(*) FILTER (WHERE sentiment='positive') AS pos,
+                       count(*) FILTER (WHERE sentiment='spam') AS spam,
+                       count(DISTINCT complex_id) AS jk
+                FROM developer_reviews WHERE review_text != ''""")
+            if r:
+                stats = dict(r[0])
+            top_neg = await pg_fetch("""
+                SELECT COALESCE(d.name, 'без застройщика') AS name,
+                       count(*) FILTER (WHERE dr.sentiment='negative') AS neg,
+                       count(*) FILTER (WHERE dr.sentiment='positive') AS pos,
+                       count(*) FILTER (WHERE dr.sentiment='spam') AS spam
+                FROM developer_reviews dr LEFT JOIN developers d ON d.id = dr.developer_id
+                WHERE dr.review_text != ''
+                GROUP BY 1 ORDER BY neg DESC, pos DESC LIMIT 10""")
+            if sentiment:
+                rows = await pg_fetch("""
+                    SELECT dr.id, dr.review_text, dr.sentiment, dr.topics, dr.review_date,
+                           dr.complex_id, c.name AS cx_name, d.name AS dev_name
+                    FROM developer_reviews dr
+                    LEFT JOIN complexes c ON c.id = dr.complex_id
+                    LEFT JOIN developers d ON d.id = dr.developer_id
+                    WHERE dr.review_text != '' AND dr.sentiment = %s
+                    ORDER BY dr.id DESC LIMIT 300""", sentiment)
+            else:
+                rows = await pg_fetch("""
+                    SELECT dr.id, dr.review_text, dr.sentiment, dr.topics, dr.review_date,
+                           dr.complex_id, c.name AS cx_name, d.name AS dev_name
+                    FROM developer_reviews dr
+                    LEFT JOIN complexes c ON c.id = dr.complex_id
+                    LEFT JOIN developers d ON d.id = dr.developer_id
+                    WHERE dr.review_text != ''
+                    ORDER BY (dr.sentiment='negative') DESC, dr.id DESC LIMIT 300""")
+        except Exception:
+            top_neg, rows = [], []
+        return templates.TemplateResponse("developer_reviews.html",
+            {"request": request, "stats": stats, "top_neg": top_neg or [],
+             "rows": rows or [], "sentiment": sentiment})
+
+    @router.post("/admin/developer-reviews/update")
+    async def developer_reviews_update(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        form = await request.form()
+        rid = form.get("id", "")
+        sentiment = form.get("sentiment", "")
+        if rid and sentiment in ('positive', 'negative', 'neutral', 'spam'):
+            from bot.db.pg import execute as pg_exec
+            await pg_exec("UPDATE developer_reviews SET sentiment = %s WHERE id = %s",
+                          sentiment, int(rid))
+        return RedirectResponse(url="/admin/developer-reviews", status_code=302)
+
     @router.get("/admin/renovation", response_class=HTMLResponse)
     async def renovation_page(request: Request):
         """Реновация Астаны — район ТД Артём: сводка по сносу цеха и планам
@@ -5664,6 +5730,18 @@ def make_extras_router(templates) -> APIRouter:
         pending_split_candidate = await fetchval(
             "SELECT id FROM split_candidates WHERE complex_id = $1 AND status = 'review'", complex_id)
 
+        # Отзывы ЖК (2GIS): топ-5 (негатив и позитив вперемешку, спам исключён)
+        from bot.db.pg import fetch as pg_fetch
+        try:
+            cx_reviews = await pg_fetch("""
+                SELECT review_text, sentiment, topics, review_date, author
+                FROM developer_reviews
+                WHERE complex_id = $1 AND review_text != '' AND sentiment != 'spam'
+                ORDER BY (sentiment='negative') DESC, (sentiment='positive') DESC, id DESC
+                LIMIT 5""", complex_id)
+        except Exception:
+            cx_reviews = []
+
         return templates.TemplateResponse("complex_detail.html", {
             "request": request,
             "cx": dict(cx),
@@ -5673,6 +5751,7 @@ def make_extras_router(templates) -> APIRouter:
             "house_unknown_count": house_unknown_count,
             "attribution_breakdown": attribution_breakdown,
             "pending_split_candidate": pending_split_candidate,
+            "cx_reviews": cx_reviews,
             "cx_sources": cx_sources,
             "geo": {"lat": centroid[0], "lon": centroid[1]} if centroid else None,
             "cx_address": addr_row["address"] if addr_row else None,

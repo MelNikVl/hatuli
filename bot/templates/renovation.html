@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🏗 Реновация Астаны — район ТД Артём</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:16px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+    <div style="font-size:13px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">📍 Район ТД Артём (Астаналык базар)</div>
+    <div style="font-size:13.5px;line-height:1.55;">
+      <b>Снос:</b> неработающий Целиноградский цех (у Астаналык базара, Сейфуллина 47).<br>
+      <b>Вместо него:</b> школа, 2 детских сада и ЖК — 2 дома Г-образной формы.<br>
+      <b>Координаты:</b> 51.173266, 71.436377
+    </div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+    <div style="font-size:13px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">📊 Генплан Астаны до 2035</div>
+    <div style="font-size:13.5px;line-height:1.55;">
+      • Новое жильё: <b>33 млн м²</b> (всего ~68.3 млн м² к 2035)<br>
+      • Снос: <b>1.7 млн м²</b> (1,713 млн м²); ~95% — усадебная застройка (частный сектор)<br>
+      • Этапы: до 2030 — 484 тыс. м²; до 2035 — 1.7 млн м²<br>
+      • Школы — в шаговой доступности в каждом районе; ЛРТ соединит районы
+    </div>
+  </div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:16px;">
+  <div style="font-size:13px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🗞 Источники</div>
+  <div style="font-size:13.5px;line-height:1.7;">
+    • <a href="https://www.tiktok.com/@yerlansakenov/video/7270770578863246610" target="_blank" style="color:var(--accent2);">Е. Сакенов (TikTok, 2023): «Каким будет район ТД Артём? Здесь будет реновация»</a> — снос частного сектора у Джангильдина, ЖК + школы<br>
+    • <a href="https://informburo.kz/stati/novyi-genplan-astany-cto-snesut-gde-budut-novye-skoly-i-kakie-raiony-soedinit-lrt_1668593083" target="_blank" style="color:var(--accent2);">Informburo: «Новый генплан Астаны: что снесут, где будут новые школы…»</a><br>
+    • <a href="https://krisha.kz/content/news/2026/2026-kak-izmenitsya-astana-do-2035-goda" target="_blank" style="color:var(--accent2);">Крыша: «Как изменится Астана до 2035 года»</a> — 33 млн м² жилья, снос 1.7 млн м²<br>
+    • <a href="https://www.youtube.com/watch?v=3BrKah8HHwY" target="_blank" style="color:var(--accent2);">Astana TV (EN): скандал вокруг программы реновации ветхого жилья</a><br>
+    • <a href="https://www.instagram.com/reel/CwUSTqtM5jr/?hl=en" target="_blank" style="color:var(--accent2);">Instagram: обсуждение реновации ТД Артём (комментарии жителей)</a><br>
+    • <a href="https://www.tiktok.com/discover/снос-артем-район-астана" target="_blank" style="color:var(--accent2);">TikTok Discover: «Снос Артем район Астана»</a> — планы сноса до 2035
+  </div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+  <div style="font-size:13px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🔥 Хайп-локация на карте</div>
+  {% if loc %}
+  <table style="font-size:13.5px;border-collapse:collapse;">
+    <tr><td style="padding:4px 14px 4px 0;color:#888;">Название</td><td><b>{{ loc.name }}</b></td></tr>
+    <tr><td style="padding:4px 14px 4px 0;color:#888;">Рейтинг</td><td><b>{{ loc.rating }}</b> / 100 (тональность {{ loc.sentiment }})</td></tr>
+    <tr><td style="padding:4px 14px 4px 0;color:#888;">Координаты</td><td>{{ '%.6f'|format(loc.lat) }}, {{ '%.6f'|format(loc.lon) }}</td></tr>
+    {% if loc.reason %}<tr><td style="padding:4px 14px 4px 0;color:#888;vertical-align:top;">Причина</td><td>{{ loc.reason }}</td></tr>{% endif %}
+  </table>
+  {% else %}
+  <div style="font-size:13.5px;color:#888;">Локация на карте хайпа не найдена.</div>
+  {% endif %}
+  <div style="margin-top:10px;font-size:13px;"><a href="/admin/analytics/hype" style="color:var(--accent2);">→ Открыть карту хайпа</a></div>
+</div>
+
+<div style="margin-top:12px;font-size:12px;color:#888;">Собрано: 2026-08-14. Данные из открытых источников + сообщений местных сообществ; детали проекта (школа/2 садика/ЖК) требуют подтверждения официальным проектом планировки.</div>
+{% endblock %}

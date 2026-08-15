@@ -469,8 +469,89 @@ async def _demolition_factor(lat: float, lon: float) -> dict:
 
 _SCHOOL_BONUS_TYPES = {"лицей", "гимназия", "международная/частная", "ниш"}
 
+# Свежесть строки complex_walkability, при которой walking-дистанция
+# считается актуальной (Фаза L3, задача 2026-08-15). Снапшот ежемесячный
+# (krisha-complex-walkability.timer, 1-е число) — 45 дней покрывает один
+# пропущенный прогон; старше — фолбэк на прямую линию.
+_WALKABILITY_MAX_AGE_DAYS = 45
 
-async def _schools_factor(lat: float, lon: float) -> dict:
+
+async def _walkability_row(complex_id: int | None, destination_type: str):
+    """Свежая (< _WALKABILITY_MAX_AGE_DAYS) строка complex_walkability для
+    ЖК/типа назначения (Фаза L3 walkability, миграция 075, писатель —
+    complex_walkability_snapshot.py). None — нет complex_id (вызов по
+    голым координатам), строки нет/устарела или сбой БД: вызывающий код
+    фолбэкается на прямую линию (мягкая деградация, как везде здесь)."""
+    if complex_id is None:
+        return None
+    from bot.db.pg import fetchrow
+    try:
+        return await fetchrow("""
+            SELECT walking_distance_m, haversine_distance_m, barrier,
+                   dest_name, dest_lat, dest_lon, no_route_reason
+            FROM complex_walkability
+            WHERE complex_id = $1 AND destination_type = $2
+              AND computed_at > now() - ($3 || ' days')::interval
+            ORDER BY computed_at DESC LIMIT 1
+        """, complex_id, destination_type, str(_WALKABILITY_MAX_AGE_DAYS))
+    except Exception as exc:
+        logger.warning("complex_walkability lookup failed: %s", exc)
+        return None
+
+
+async def _school_type_rating_at(lat: float, lon: float) -> dict:
+    """type/rating_2gis школы ПО КООРДИНАТАМ назначения из walking-строки
+    (ближайшая пешком школа может отличаться от ближайшей по прямой —
+    тип/рейтинг надо брать у той, до которой реально довёл маршрут;
+    dest_*) пришёл из самой astana_schools, поэтому ближайшая к dest
+    запись — это она и есть)."""
+    from bot.db.pg import fetchrow
+    try:
+        row = await fetchrow("""
+            SELECT type, rating_2gis FROM astana_schools
+            WHERE lat IS NOT NULL AND lon IS NOT NULL
+            ORDER BY (lat - $1)^2 + (lon - $2)^2 LIMIT 1
+        """, lat, lon)
+    except Exception as exc:
+        logger.warning("astana_schools type lookup failed: %s", exc)
+        row = None
+    return {"type": (row["type"] or "").strip() if row else "",
+            "rating_2gis": row["rating_2gis"] if row else None}
+
+
+def _school_adj_from_distance(dist_m: float, school_type: str, rating,
+                              walk_note: str) -> dict:
+    """Общая градация school_access по расстоянию + бонусы/штрафы за
+    рейтинг 2GIS и тип (выделено из _schools_factor при добавлении
+    walking-ветки, Фаза L3 — пороги НЕ менялись, меняется только смысл
+    dist_m: маршрут пешком вместо прямой, если есть complex_walkability).
+    walk_note — пометка источника расстояния для reason ('пешком' /
+    '(по прямой...)')."""
+    if dist_m <= 300:
+        base_adj = 3
+    elif dist_m <= 500:
+        base_adj = 2
+    elif dist_m <= 1000:
+        base_adj = 1
+    else:
+        return {"adj": 0, "reason": f"ближайшая школа дальше 1км ({dist_m:.0f}м{walk_note})"}
+
+    adj = base_adj
+    rating_note = ""
+    if rating is not None:
+        if rating >= 4.5:
+            adj += 1
+            rating_note = f", рейтинг 2GIS {rating} — отличный"
+        elif rating < 3.5:
+            adj -= 1
+            rating_note = f", рейтинг 2GIS {rating} — низкий"
+
+    if school_type.lower() in _SCHOOL_BONUS_TYPES:
+        return {"adj": adj + 1, "reason": f"школа в {dist_m:.0f}м{walk_note} ({school_type}, углублённая программа){rating_note}"}
+    return {"adj": adj, "reason": f"школа в {dist_m:.0f}м{walk_note} ({school_type or 'тип не указан'}){rating_note}"}
+
+
+async def _schools_factor(lat: float, lon: float, complex_id: int | None = None) -> dict:
     """Точный фактор по ближайшей школе (`astana_schools`, 160 строк на
     2026-08-15: 73 общеобразовательная / 43 лицей / 35 гимназия / 7
     международная-частная / 2 НИШ) — расстояние + бонус за тип с
@@ -492,11 +573,39 @@ async def _schools_factor(lat: float, lon: float) -> dict:
     для `astana_schools` (заведена вручную/внешним источником один раз,
     без таймера) — актуальность не гарантируется, в отличие от
     `transport_hexes`/`demolition_houses` выше.
+
+    **Фаза L3 walkability (задача 2026-08-15, миграция 075)**: при
+    наличии `complex_id` расстояние берётся из свежей (<45 дней) строки
+    `complex_walkability` — реальный пешеходный маршрут OSRM foot вместо
+    прямой (complex_walkability_snapshot.py, ежемесячно). Ближайшая
+    ПЕШКОМ школа может отличаться от ближайшей по прямой (река/трасса) —
+    тип/рейтинг тогда добираются по координатам назначения из walking-
+    строки, не по точке ЖК. Маршрут не построен (walking=NULL) →
+    хаверсин из той же строки с честной пометкой. Строки нет/устарела/
+    нет complex_id → прежняя SQL-аппроксимация ниже (мягкая деградация).
+    Пороги 300/500/1000м НЕ менялись — меняется только смысл dist_m.
     """
+    w = await _walkability_row(complex_id, "school")
+    if w is not None:
+        if w["dest_lat"] is not None:
+            meta = await _school_type_rating_at(w["dest_lat"], w["dest_lon"])
+        else:
+            meta = {"type": "", "rating_2gis": None}
+        if w["walking_distance_m"] is not None:
+            note = " пешком"
+            if w["barrier"]:
+                note += (f" (по прямой {w['haversine_distance_m']:.0f}м — "
+                         f"⚠️ вероятный барьер: река/трасса)")
+            return _school_adj_from_distance(
+                w["walking_distance_m"], meta["type"], meta["rating_2gis"], note)
+        return _school_adj_from_distance(
+            w["haversine_distance_m"], meta["type"], meta["rating_2gis"],
+            " по прямой (маршрут не построен)")
+
     from bot.db.pg import fetchrow
     try:
         row = await fetchrow("""
-            SELECT type,
+            SELECT type, rating_2gis,
                    (((lat - $1) * 111.0)^2 + ((lon - $2) * 111.0 * 0.63)^2) AS d2
             FROM astana_schools
             WHERE lat IS NOT NULL AND lon IS NOT NULL
@@ -510,29 +619,37 @@ async def _schools_factor(lat: float, lon: float) -> dict:
 
     import math
     dist_m = math.sqrt(row["d2"]) * 1000
-    school_type = (row["type"] or "").strip()
-
-    if dist_m <= 300:
-        base_adj = 3
-    elif dist_m <= 500:
-        base_adj = 2
-    elif dist_m <= 1000:
-        base_adj = 1
-    else:
-        return {"adj": 0, "reason": f"ближайшая школа дальше 1км ({dist_m:.0f}м)"}
-
-    if school_type.lower() in _SCHOOL_BONUS_TYPES:
-        return {"adj": base_adj + 1, "reason": f"школа в {dist_m:.0f}м ({school_type}, углублённая программа)"}
-    return {"adj": base_adj, "reason": f"школа в {dist_m:.0f}м ({school_type or 'тип не указан'})"}
+    return _school_adj_from_distance(
+        dist_m, (row["type"] or "").strip(), row["rating_2gis"], "")
 
 
-async def _kindergartens_factor(lat: float, lon: float) -> dict:
+async def _kindergartens_factor(lat: float, lon: float, complex_id: int | None = None) -> dict:
     """Точный фактор по ближайшему садику (`astana_kindergartens`, 131
     строка на 2026-08-15). Только расстояние — без бонуса за тип: колонка
     `type` в этой таблице на 100% пустая (в отличие от `astana_schools`),
     бонусировать нечем. См. докстринг `_schools_factor()` выше про
-    осознанное частичное двойное взвешивание с OSM-слоем schools и про
-    ограничение свежести (нет скрипта-писателя)."""
+    осознанное частичное двойное взвешивание с OSM-слоем schools, про
+    ограничение свежести (нет скрипта-писателя) и про Фазу L3
+    walkability — при наличии `complex_id` расстояние берётся из свежей
+    строки `complex_walkability` (пешком, OSRM) вместо прямой, пороги
+    300/500м не менялись."""
+    w = await _walkability_row(complex_id, "kindergarten")
+    if w is not None:
+        if w["walking_distance_m"] is not None:
+            dist_m = w["walking_distance_m"]
+            note = " пешком"
+            if w["barrier"]:
+                note += (f" (по прямой {w['haversine_distance_m']:.0f}м — "
+                         f"⚠️ вероятный барьер: река/трасса)")
+        else:
+            dist_m = w["haversine_distance_m"]
+            note = " по прямой (маршрут не построен)"
+        if dist_m <= 300:
+            return {"adj": 2, "reason": f"садик в {dist_m:.0f}м{note}"}
+        if dist_m <= 500:
+            return {"adj": 1, "reason": f"садик в {dist_m:.0f}м{note}"}
+        return {"adj": 0, "reason": f"ближайший садик дальше 500м ({dist_m:.0f}м{note})"}
+
     from bot.db.pg import fetchrow
     try:
         row = await fetchrow("""
@@ -656,6 +773,7 @@ def _bank_factor(district: str | None) -> dict:
 async def compute_complex_location_score(
     lat: float | None, lon: float | None,
     year_built: int | None = None, district: str | None = None,
+    complex_id: int | None = None,
 ) -> dict | None:
     """Итог: {"total": int, "factors": {key: {"adj","label","reason"}}}.
     None, если нет координат (ЖК с невыясненной геолокацией — см. задачу
@@ -667,7 +785,12 @@ async def compute_complex_location_score(
     менять не требовалось), но с 2026-08-15 ("Location Reliability
     Phase", коммит "двойные школы + building_age") ВНУТРИ этой функции
     не используется вовсе — building_age убран из location score (см.
-    докстринг _building_age_factor() выше, почему)."""
+    докстринг _building_age_factor() выше, почему).
+
+    `complex_id` — Фаза L3 walkability (задача 2026-08-15, миграция 075):
+    при наличии school_access/kindergarten_access берут расстояние из
+    свежей строки complex_walkability (реальный маршрут пешком, OSRM)
+    вместо прямой; None (вызов по голым координатам) — прежний путь."""
     if not lat or not lon:
         return None
     listing = {"lat": lat, "lon": lon}
@@ -679,8 +802,8 @@ async def compute_complex_location_score(
     hex_factors, demolition_result, schools_result, kindergartens_result, air_quality_result = await asyncio.gather(
         _transport_hex_factors(lat, lon),
         _demolition_factor(lat, lon),
-        _schools_factor(lat, lon),
-        _kindergartens_factor(lat, lon),
+        _schools_factor(lat, lon, complex_id),
+        _kindergartens_factor(lat, lon, complex_id),
         _air_quality_factor(lat, lon),
     )
     factors["lrt_access"] = {**hex_factors["lrt_access"], "label": "🚈 ЛРТ рядом"}

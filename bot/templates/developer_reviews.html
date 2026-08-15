@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">💬 Отзывы на ЖК (2GIS)</div>
+
+<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:130px;">
+    <div style="font-size:24px;font-weight:800;">{{ stats.total }}</div>
+    <div style="font-size:12px;color:#888;">всего</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:130px;">
+    <div style="font-size:24px;font-weight:800;color:#dc2626;">{{ stats.neg }}</div>
+    <div style="font-size:12px;color:#888;">негативных</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:130px;">
+    <div style="font-size:24px;font-weight:800;color:#16a34a;">{{ stats.pos }}</div>
+    <div style="font-size:12px;color:#888;">позитивных</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:130px;">
+    <div style="font-size:24px;font-weight:800;color:#888;">{{ stats.spam }}</div>
+    <div style="font-size:12px;color:#888;">спам</div>
+  </div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 18px;min-width:130px;">
+    <div style="font-size:24px;font-weight:800;">{{ stats.jk }}</div>
+    <div style="font-size:12px;color:#888;">ЖК с отзывами</div>
+  </div>
+</div>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:14px;">
+  <div style="font-size:13px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;">🔴 Топ застройщиков по негативу</div>
+  <table style="font-size:13px;border-collapse:collapse;width:100%;">
+    <tr style="border-bottom:1px solid var(--border);"><th style="text-align:left;padding:4px 8px;">Застройщик</th><th style="padding:4px 8px;">негатив</th><th style="padding:4px 8px;">позитив</th><th style="padding:4px 8px;">спам</th></tr>
+    {% for d in top_neg %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:4px 8px;">{{ d.name or '—' }}</td>
+      <td style="padding:4px 8px;text-align:center;color:#dc2626;">{{ d.neg }}</td>
+      <td style="padding:4px 8px;text-align:center;color:#16a34a;">{{ d.pos }}</td>
+      <td style="padding:4px 8px;text-align:center;color:#888;">{{ d.spam }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<form method="get" action="/admin/developer-reviews" style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
+  <select name="sentiment" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);">
+    <option value="">все сентименты</option>
+    {% for s in ['negative','positive','neutral','spam'] %}
+    <option value="{{ s }}" {{ 'selected' if sentiment == s }}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);cursor:pointer;">Фильтр</button>
+</form>
+
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;">
+  <table style="font-size:12.5px;border-collapse:collapse;width:100%;">
+    <tr style="border-bottom:1px solid var(--border);">
+      <th style="text-align:left;padding:5px 8px;">ЖК</th><th style="text-align:left;padding:5px 8px;">Застройщик</th>
+      <th style="text-align:left;padding:5px 8px;">Отзыв</th><th style="padding:5px 8px;">Sentiment</th><th style="padding:5px 8px;">Топики</th>
+      <th style="padding:5px 8px;">Дата</th><th style="padding:5px 8px;">Переклассиф.</th>
+    </tr>
+    {% for r in rows %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:5px 8px;">{% if r.complex_id %}<a href="/complex/{{ r.complex_id }}" style="color:var(--accent2);">{{ r.cx_name }}</a>{% else %}—{% endif %}</td>
+      <td style="padding:5px 8px;">{{ r.dev_name or '—' }}</td>
+      <td style="padding:5px 8px;max-width:420px;">{{ r.review_text[:220] }}</td>
+      <td style="padding:5px 8px;text-align:center;">
+        <span style="{% if r.sentiment=='negative' %}color:#dc2626;{% elif r.sentiment=='positive' %}color:#16a34a;{% elif r.sentiment=='spam' %}color:#888;{% endif %}">{{ r.sentiment }}</span>
+      </td>
+      <td style="padding:5px 8px;color:#888;">{{ (r.topics or [])|join(', ') }}</td>
+      <td style="padding:5px 8px;">{{ r.review_date or '—' }}</td>
+      <td style="padding:5px 8px;">
+        <form method="post" action="/admin/developer-reviews/update" style="display:flex;gap:4px;">
+          <input type="hidden" name="id" value="{{ r.id }}">
+          <select name="sentiment" style="padding:3px 6px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:12px;">
+            {% for s in ['negative','positive','neutral','spam'] %}
+            <option value="{{ s }}" {{ 'selected' if r.sentiment == s }}>{{ s }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" style="padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);cursor:pointer;font-size:12px;">✓</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if not rows %}<div style="padding:10px;color:#888;font-size:13px;">Отзывов нет — запусти парсер (2gis_reviews_collect.py).</div>{% endif %}
+</div>
+{% endblock %}
