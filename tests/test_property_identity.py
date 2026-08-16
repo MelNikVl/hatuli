@@ -124,7 +124,12 @@ async def test_different_address_gives_different_property(db):
 async def test_fuzzy_match_within_tolerance_gives_confidence_below_one(db):
     """Тот же ЖК+этаж, площадь в пределах ±1м², но другое написание
     адреса (другой address_hash) -> fuzzy-match, confidence < 1.0
-    (задача, пункт 5, тест 3)."""
+    (задача, пункт 5, тест 3). match_mode="fuzzy" ЯВНО — задача
+    2026-08-16 ("безопасный exact-only property linker") сменила
+    ДЕФОЛТ на "exact_only" (см. bot/identity/property_linker.py
+    докстринг про "false positive merge хуже false negative duplicate"),
+    fuzzy теперь только явный opt-in, этот тест — регрессия ИМЕННО
+    fuzzy-режима (match_mode="fuzzy"), не дефолта."""
     from bot.identity.property_linker import link_listing_to_property, compute_address_hash
 
     cid = await _insert_complex("__test_pid_fuzzy_complex__")
@@ -135,13 +140,46 @@ async def test_fuzzy_match_within_tolerance_gives_confidence_below_one(db):
     h2 = compute_address_hash("Тлендиева, дом 21", 7, 60.8)
     try:
         r1 = await link_listing_to_property({"id": lid_a, "address": "Тлендиева 21", "floor": 7,
-                                              "area": 60.0, "rooms": None, "complex_name": "__test_pid_fuzzy_complex__"})
+                                              "area": 60.0, "rooms": None, "complex_name": "__test_pid_fuzzy_complex__"},
+                                             match_mode="fuzzy")
         r2 = await link_listing_to_property({"id": lid_b, "address": "Тлендиева, дом 21", "floor": 7,
-                                              "area": 60.8, "rooms": None, "complex_name": "__test_pid_fuzzy_complex__"})
+                                              "area": 60.8, "rooms": None, "complex_name": "__test_pid_fuzzy_complex__"},
+                                             match_mode="fuzzy")
         assert r1["created"] is True
         assert r2["method"] == "fuzzy"
         assert r2["property_id"] == r1["property_id"]
         assert r2["confidence"] is not None and r2["confidence"] < 1.0
+    finally:
+        await _cleanup(lid_a, lid_b, complex_ids=[cid], address_hashes=[h1, h2])
+
+
+@pytest.mark.asyncio
+async def test_exact_only_default_does_not_fuzzy_link_but_reports_candidate(db):
+    """Задача 2026-08-16 ("безопасный exact-only property linker") —
+    ТОТ ЖЕ сценарий, что test_fuzzy_match_within_tolerance выше, но БЕЗ
+    match_mode (дефолт) — НЕ связывает fuzzy, создаёт ОТДЕЛЬНУЮ property,
+    но возвращает fuzzy_candidate для лога/будущей ручной проверки
+    ("никаких greedy fuzzy assignments", но "можно залогировать")."""
+    from bot.identity.property_linker import link_listing_to_property, compute_address_hash
+
+    cid = await _insert_complex("__test_pid_exactonly_complex__")
+    lid_a, lid_b = "__test_pid_exactonly_a__", "__test_pid_exactonly_b__"
+    await _insert_listing(lid_a, address="Тлендиева 21", floor=7, area=60.0, complex_name="__test_pid_exactonly_complex__")
+    await _insert_listing(lid_b, address="Тлендиева, дом 21", floor=7, area=60.8, complex_name="__test_pid_exactonly_complex__")
+    h1 = compute_address_hash("Тлендиева 21", 7, 60.0)
+    h2 = compute_address_hash("Тлендиева, дом 21", 7, 60.8)
+    try:
+        r1 = await link_listing_to_property({"id": lid_a, "address": "Тлендиева 21", "floor": 7,
+                                              "area": 60.0, "rooms": None, "complex_name": "__test_pid_exactonly_complex__"})
+        r2 = await link_listing_to_property({"id": lid_b, "address": "Тлендиева, дом 21", "floor": 7,
+                                              "area": 60.8, "rooms": None, "complex_name": "__test_pid_exactonly_complex__"})
+        assert r1["match_mode"] == "exact_only"  # дефолт без явного параметра
+        assert r2["method"] == "auto"
+        assert r2["created"] is True
+        assert r2["property_id"] != r1["property_id"]  # НЕ связаны — отдельные properties
+        assert r2["fuzzy_candidate"] is not None
+        assert r2["fuzzy_candidate"]["confidence"] < 1.0
+        assert r2["fuzzy_candidate"]["area_diff"] == pytest.approx(0.8, abs=0.01)
     finally:
         await _cleanup(lid_a, lid_b, complex_ids=[cid], address_hashes=[h1, h2])
 
@@ -182,7 +220,15 @@ async def test_missing_area_is_skipped_not_guessed(db):
     try:
         r = await link_listing_to_property({"id": lid, "address": "Тлендиева 21", "floor": 5,
                                              "area": None, "rooms": None, "complex_name": None})
-        assert r == {"property_id": None, "method": "skipped", "confidence": None, "created": False}
+        # Точечные ключи, не полное равенство словаря — задача 2026-08-16
+        # добавила match_mode/fuzzy_candidate в результат (см. докстринг
+        # link_listing_to_property), полное "r == {...}" стало бы хрупким
+        # к каждому будущему новому полю результата.
+        assert r["property_id"] is None
+        assert r["method"] == "skipped"
+        assert r["confidence"] is None
+        assert r["created"] is False
+        assert r["fuzzy_candidate"] is None
     finally:
         await _cleanup(lid)
 
