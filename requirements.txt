@@ -35,6 +35,10 @@ pytest-asyncio==0.24.0
 
 # PostgreSQL (основная БД — без этого не запустится вообще ничего)
 asyncpg==0.29.0
+# psycopg2 — синхронные коллекторы (2gis_reviews_collect.py, developer_reputation.py):
+# были в venv (psycopg2-binary), но не в requirements.txt — не ловилось локально
+# (venv уже стоял), всплыло бы только в CI (2026-08-16, "P0 — Integrity").
+psycopg2-binary==2.9.12
 
 # Google Sheets sync
 gspread==6.1.2
