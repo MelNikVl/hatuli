@@ -38,13 +38,22 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    # ПРАВКА (первый прогон 2026-08-16 был красным ДО старта единственного
+    # job — "Invalid workflow file: Unrecognized named-value: 'env'"):
+    # контекст `env` НЕДОСТУПЕН внутри блоков `env:` вообще нигде (ни в
+    # services.*.env, ни в jobs.*.env) — только в шагах (run/with/if).
+    # services.postgres.env ниже поэтому повторяет secrets-с-фолбэком
+    # напрямую (не через `env.TEST_DB_USER`), а DATABASE_URL вообще не
+    # блок env:, а отдельный шаг "Compose DATABASE_URL" (см. ниже) —
+    # $GITHUB_ENV, стандартный способ прокинуть вычисленное значение в
+    # последующие шаги, там ограничения на `env`-контекст нет.
     services:
       postgres:
         image: postgres:15
         env:
-          POSTGRES_USER: ${{ env.TEST_DB_USER }}
-          POSTGRES_PASSWORD: ${{ env.TEST_DB_PASSWORD }}
-          POSTGRES_DB: ${{ env.TEST_DB_NAME }}
+          POSTGRES_USER: ${{ secrets.TEST_DB_USER || 'krisha' }}
+          POSTGRES_PASSWORD: ${{ secrets.TEST_DB_PASSWORD || 'krisha_ci_pw' }}
+          POSTGRES_DB: ${{ secrets.TEST_DB_NAME || 'hatuli_test' }}
         ports:
           - 5432:5432
         # pg_isready — ждём готовности контейнера перед миграциями, не
@@ -54,9 +63,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-
-    env:
-      DATABASE_URL: postgresql://${{ env.TEST_DB_USER }}:${{ env.TEST_DB_PASSWORD }}@${{ env.TEST_DB_HOST }}:5432/${{ env.TEST_DB_NAME }}
 
     steps:
       - uses: actions/checkout@v4
@@ -70,14 +76,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Compose DATABASE_URL
+        run: echo "DATABASE_URL=postgresql://$TEST_DB_USER:$TEST_DB_PASSWORD@$TEST_DB_HOST:5432/$TEST_DB_NAME" >> "$GITHUB_ENV"
+
       - name: Apply all migrations from scratch (тот же механизм, что прод)
         run: |
           python -c "
-          import asyncio
+          import asyncio, os
           from bot.db.pg import init_pool, close_pool
 
           async def main():
-              await init_pool('${{ env.DATABASE_URL }}')
+              await init_pool(os.environ['DATABASE_URL'])
               print('migrations applied OK')
               await close_pool()
 
