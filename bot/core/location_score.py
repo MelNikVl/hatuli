@@ -320,14 +320,46 @@ _SOURCE_QUALITY: dict[str, float] = {
 #   "manual"   — ручной/разовый сбор без таймера (demolition_houses,
 #                astana_schools/kindergartens — см. их докстринги про
 #                отсутствие writer-скрипта)
+#
+# noise/schools/transit_stops/amenities/parks: "live" -> "periodic"
+# (задача 2026-08-16, "Локальный OSM-слой") — bot/score_layers/{noise,
+# schools,poi} теперь читают city_poi (наполняется city-poi-sync.timer,
+# еженедельно), Overpass — только фолбэк на ещё не синхронизированную
+# категорию (редкий случай, см. bot/score_layers/osm.py::local_poi_near).
+# Статическая метка не различает "прямо сейчас сходили в local" от
+# редкого live-фолбэка — сознательное упрощение (см. докстринг
+# _apply_freshness_confidence_penalty ниже: РЕАЛЬНАЯ деградация
+# уверенности идёт по фактическому возрасту city_poi.updated_at, не по
+# этой метке — метка тут чисто описательная, для UI).
 _FRESHNESS: dict[str, str] = {
-    "noise": "live", "schools": "live", "transit_stops": "live", "amenities": "live", "parks": "live",
+    "noise": "periodic", "schools": "periodic", "transit_stops": "periodic",
+    "amenities": "periodic", "parks": "periodic",
     "lrt_access": "periodic", "road_access": "periodic", "route_connectivity": "periodic",
     "demolition": "manual",
     "school_access": "manual", "kindergarten_access": "manual",
     "air_quality": "periodic",  # krisha-air-stations.timer, почасово
     "bank": "manual",
 }
+
+# Задача 2026-08-16 ("Локальный OSM-слой", п.4 "Graceful degradation") —
+# ключи factors, чей source_quality зависит от свежести city_poi (не
+# статическая константа выше — читается ФАКТИЧЕСКОЕ MIN(updated_at) по
+# категориям, которыми они пользуются, см. _apply_freshness_confidence_
+# penalty). demolition/*_access/air_quality/bank — НЕ отсюда: у каждого
+# своя, отдельная от city_poi таблица-источник.
+_OSM_LOCAL_FACTOR_KEYS = ("noise", "schools", "transit_stops", "amenities", "parks")
+# kind-набор city_poi, которым СОВОКУПНО пользуются факторы выше (см.
+# bot/score_layers/schools.py::_LOCAL_KINDS, poi.py::_LOCAL_KIND_MAP,
+# noise.py::_LOCAL_KINDS_MAJOR/_SECONDARY) — самая старая запись СРЕДИ
+# ВСЕХ этих kind определяет свежесть всей группы (см. докстринг
+# city_poi_freshness_days в osm.py: берём MIN, не среднее/MAX).
+_OSM_LOCAL_KINDS = [
+    "school", "kindergarten", "university", "bus_stop", "shop", "mall",
+    "pharmacy", "clinic", "hospital", "food", "park",
+    "road_major", "road_secondary",
+]
+_STALE_CONFIDENCE_MULT_14D = 0.8
+_STALE_CONFIDENCE_MULT_30D = 0.5
 
 # precision — насколько детализирован сигнал:
 #   "exact"     — точное расстояние/число (метры, count маршрутов)
@@ -354,17 +386,38 @@ def _annotate_factor_metadata(factors: dict) -> None:
         f["precision"] = _PRECISION.get(key, "unknown")
 
 
+def _effective_source_quality(key: str, factors: dict) -> float:
+    """source_quality ФАКТИЧЕСКИ используемого измерения этого фактора —
+    задача 2026-08-16 ("Локальный OSM-слой", п.4 graceful degradation).
+    Если фактор уже прошёл _annotate_factor_metadata() (и, может быть,
+    ДОПОЛНИТЕЛЬНО уценён _apply_freshness_confidence_penalty() за
+    устаревший city_poi) — берём f["source_quality"] как есть; иначе
+    (тесты/вызовы без предварительной аннотации — прежнее поведение)
+    статический дефолт схемы, как раньше было ЕДИНСТВЕННЫМ источником
+    здесь."""
+    f = factors.get(key)
+    if f is not None and "source_quality" in f:
+        return f["source_quality"]
+    return _SOURCE_QUALITY.get(key, 0.2)
+
+
 def _compute_confidence(factors: dict) -> int:
     """0-100, взвешено по source_quality (см. докстринг модуля) — ЗАМЕНЯЕТ
     старый плоский "доля посчитанных факторов" (каждый весил одинаково
     независимо от качества источника). Это ОБЩИЙ confidence на всю
     локацию — см. _group_confidence() ниже для confidence КАЖДОГО из
-    пяти свойств отдельно (задача 2026-08-15 v2, коммит "Confidence")."""
+    пяти свойств отдельно (задача 2026-08-15 v2, коммит "Confidence").
+
+    total_weight (знаменатель) СОЗНАТЕЛЬНО берётся по статическому
+    _SOURCE_QUALITY (максимум качества "по схеме"), а не по фактическому
+    — иначе устаревание city_poi обесценивало бы числитель и знаменатель
+    ОДИНАКОВО и confidence не менялся бы вовсе (см. _effective_source_
+    quality/_apply_freshness_confidence_penalty)."""
     total_weight = sum(_SOURCE_QUALITY.get(k, 0.2) for k in factors)
     if total_weight <= 0:
         return 0
     available_weight = sum(
-        _SOURCE_QUALITY.get(k, 0.2) for k, f in factors.items() if _is_available(f))
+        _effective_source_quality(k, factors) for k, f in factors.items() if _is_available(f))
     return round(100 * available_weight / total_weight)
 
 
@@ -383,12 +436,43 @@ def _group_confidence(group: str, factors: dict) -> int:
     раньше деления на ноль) — Unknown ≠ average, не 50%/нейтрально, а
     честный ноль: "мы вообще не можем это измерить сейчас"."""
     keys = _GROUPS[group]
-    total_weight = sum(_SOURCE_QUALITY.get(k, 0.2) for k in keys)
+    total_weight = sum(_SOURCE_QUALITY.get(k, 0.2) for k in keys)  # знаменатель — см. _compute_confidence
     if total_weight <= 0:
         return 0
     available_weight = sum(
-        _SOURCE_QUALITY.get(k, 0.2) for k in keys if k in factors and _is_available(factors[k]))
+        _effective_source_quality(k, factors) for k in keys if k in factors and _is_available(factors[k]))
     return round(100 * available_weight / total_weight)
+
+
+async def _apply_freshness_confidence_penalty(factors: dict) -> None:
+    """Задача 2026-08-16 ("Локальный OSM-слой", п.4 "Graceful
+    degradation") — мутирует factors IN PLACE, уценивая source_quality
+    OSM-факторов (_OSM_LOCAL_FACTOR_KEYS) пропорционально возрасту
+    city_poi (MIN(updated_at) среди _OSM_LOCAL_KINDS — см. докстринг
+    bot/score_layers/osm.py::city_poi_freshness_days). НЕ блокирует
+    скоринг ни при каких обстоятельствах — только снижает доверие:
+    >14 дней ×0.8, >30 дней ×0.5 (не перемножаются — берётся более
+    строгий порог). None (city_poi по этим kind ещё вообще не
+    синхронизирована — другой кейс, не "устарела", а "никогда не была")
+    -> ничего не трогаем, эти факторы и так идут по live Overpass-
+    фолбэку внутри bot/score_layers/*.py, а не по этой метрике."""
+    from bot.score_layers.osm import city_poi_freshness_days
+    age_days = await city_poi_freshness_days(_OSM_LOCAL_KINDS)
+    if age_days is None:
+        return
+    mult = 1.0
+    if age_days > 30:
+        mult = _STALE_CONFIDENCE_MULT_30D
+    elif age_days > 14:
+        mult = _STALE_CONFIDENCE_MULT_14D
+    if mult == 1.0:
+        return
+    logger.warning("city_poi stale, fetched_at≈%.1f дней назад (source_quality ×%.1f для %s)",
+                   age_days, mult, ", ".join(_OSM_LOCAL_FACTOR_KEYS))
+    for key in _OSM_LOCAL_FACTOR_KEYS:
+        f = factors.get(key)
+        if f is not None and "source_quality" in f:
+            f["source_quality"] = round(f["source_quality"] * mult, 3)
 
 
 async def _transport_hex_factors(lat: float, lon: float) -> dict:
@@ -867,6 +951,11 @@ async def compute_complex_location_score(
     # "Location Reliability Phase", коммит "Confidence" (см. докстринг
     # модуля). Заменяет старый плоский "доля посчитанных факторов".
     _annotate_factor_metadata(factors)
+    # Graceful degradation по свежести city_poi (задача 2026-08-16,
+    # "Локальный OSM-слой", п.4) — ПОСЛЕ _annotate_factor_metadata (нужен
+    # уже проставленный f["source_quality"], который она уценивает), ДО
+    # _compute_confidence/_group_confidence (которые его читают).
+    await _apply_freshness_confidence_penalty(factors)
     total = sum(f["adj"] for f in factors.values())
     confidence = _compute_confidence(factors)
     # group_scores/group_confidence — задача 2026-08-15 v2, коммит

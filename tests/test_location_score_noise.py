@@ -103,7 +103,10 @@ async def test_noise_factor_present_with_full_metadata(db, monkeypatch):
     assert f["label"] == "🔇 Шум (магистрали)"
     assert f["available"] is True
     assert f["source_quality"] == pytest.approx(0.6)
-    assert f["freshness"] == "live"
+    # "periodic" с задачи 2026-08-16 ("Локальный OSM-слой") — noise.py
+    # теперь читает city_poi (city-poi-sync.timer), а не Overpass на
+    # каждый запрос; "live" был для старого поведения ДО этой задачи.
+    assert f["freshness"] == "periodic"
     assert f["precision"] == "presence"
     # noise входит в группу environment (_GROUPS) — участвует в её score.
     assert "environment" in result["group_scores"]

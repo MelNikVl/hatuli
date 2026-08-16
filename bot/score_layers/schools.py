@@ -39,36 +39,29 @@ out tags center 50;
 """
 
 
+# Задача 2026-08-16 ("Локальный OSM-слой") — kind-набор, которым
+# наполняет эти три категории scripts/sync_city_poi.py (еженедельно) и
+# poi_import.py (ручной разовый импорт, тот же kind).
+_LOCAL_KINDS = ["school", "kindergarten", "university"]
+
+
 async def _from_local_table(lat: float, lon: float, university_only: bool = False) -> tuple[int, str] | None:
-    """Если справочник city_poi наполнен (poi_import.py) — считаем по нему:
-    без сетевых запросов, без лимитов Overpass. Иначе None -> фолбэк."""
-    from bot.db.pg import fetch
-    from bot.score_layers.osm import haversine_m
-    try:
-        # bbox ~800м вокруг точки, точное расстояние — хаверсином
-        rows = await fetch("""
-            SELECT kind, lat, lon FROM city_poi
-            WHERE lat BETWEEN $1 - 0.008 AND $1 + 0.008
-              AND lon BETWEEN $2 - 0.013 AND $2 + 0.013
-        """, lat, lon)
-    except Exception:
-        return None
+    """Если city_poi наполнена ИМЕННО по school/kindergarten/university
+    (scripts/sync_city_poi.py или ручной poi_import.py) — считаем по ней:
+    без сетевых запросов, без лимитов Overpass. None -> фолбэк на
+    overpass_cached() (bot/score_layers/osm.py::local_poi_near — bbox +
+    haversine, ПРОВЕРКА ИМЕННО ПО ЭТИМ kind, не "city_poi вообще не
+    пуста": после появления в city_poi десятков других категорий
+    (дороги/магазины/парки и т.п., см. sync_city_poi.py) старая проверка
+    "SELECT COUNT(*) FROM city_poi" стала бы ложно-уверенной — нашла бы
+    непустую таблицу и ошибочно доверилась бы 0 школам, хотя школы могли
+    быть вообще не синхронизированы)."""
+    from bot.score_layers.osm import local_poi_near
+    rows = await local_poi_near(lat, lon, _LOCAL_KINDS, 700)
     if rows is None:
         return None
-    kinds = set()
-    for r in rows:
-        if haversine_m(lat, lon, r["lat"], r["lon"]) <= 700:
-            kinds.add(r["kind"])
+    kinds = {r["kind"] for r in rows}
     if not kinds:
-        # Пустой результат по локальной таблице достоверен, только если
-        # таблица вообще наполнена — иначе честнее сходить в Overpass
-        from bot.db.pg import fetchval
-        try:
-            total = await fetchval("SELECT COUNT(*) FROM city_poi")
-        except Exception:
-            return None
-        if not total:
-            return None
         return 0, ("вузов в 700м не найдено" if university_only else "школ/садиков в 700м не найдено")
     has_school, has_kg, has_uni = "school" in kinds, "kindergarten" in kinds, "university" in kinds
     if university_only:
@@ -92,21 +85,16 @@ async def fetch_schools_poi(lat: float, lon: float) -> list[dict] | None:
     эта функция параллельна ей, тем же путём (city_poi -> Overpass-кэш),
     но возвращает список, а не решение. None, если оба источника
     недоступны (не путать с пустым списком — "искали, не нашли")."""
-    from bot.db.pg import fetch as pg_fetch
-    from bot.score_layers.osm import haversine_m, overpass_cached, element_coords
+    from bot.score_layers.osm import overpass_cached, element_coords, local_poi_near
 
-    try:
-        rows = await pg_fetch("""
-            SELECT kind, lat, lon FROM city_poi
-            WHERE lat BETWEEN $1 - 0.008 AND $1 + 0.008
-              AND lon BETWEEN $2 - 0.013 AND $2 + 0.013
-              AND kind IN ('school', 'kindergarten', 'university')
-        """, lat, lon)
-    except Exception:
-        rows = None
-    if rows:
-        return [{"kind": r["kind"], "lat": r["lat"], "lon": r["lon"]}
-                for r in rows if haversine_m(lat, lon, r["lat"], r["lon"]) <= 700]
+    # local_poi_near — [] (синхронизировано, реально пусто) отличается от
+    # None (категория ещё не синхронизирована) — раньше здесь было
+    # "if rows:", что не различало эти два случая и на легитимно пустом
+    # районе всё равно шло в Overpass (задача 2026-08-16, "Локальный
+    # OSM-слой" — тот же класс бага, что был у _from_local_table выше).
+    rows = await local_poi_near(lat, lon, _LOCAL_KINDS, 700)
+    if rows is not None:
+        return rows
 
     data = await overpass_cached(lat, lon, "schools", _QUERY.format(lat=lat, lon=lon))
     if data is None:

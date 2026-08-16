@@ -1,0 +1,15 @@
+[Unit]
+Description=Таймер еженедельного дампа city_poi (Локальный OSM-слой, задача 2026-08-16)
+
+[Timer]
+# Воскресенье 04:00 — тихое время, до утренних циклов скоринга/снапшотов
+# буднего дня (см. krisha-complex-walkability.timer — тот же принцип:
+# фоновая инфраструктурная задача до того, как её результат кому-то
+# понадобится в течение дня).
+OnCalendar=Sun *-*-* 04:00:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=city-poi-sync.service
+
+[Install]
+WantedBy=timers.target

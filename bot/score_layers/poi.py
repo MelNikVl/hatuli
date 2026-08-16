@@ -21,7 +21,7 @@ parks.py использует их, чтобы точечно (по id) доза
 """
 from __future__ import annotations
 
-from bot.score_layers.osm import overpass_cached, haversine_m, element_coords
+from bot.score_layers.osm import overpass_cached, haversine_m, element_coords, local_poi_near
 
 _QUERY = """
 [out:json][timeout:25];
@@ -36,10 +36,31 @@ _QUERY = """
 out tags center 120;
 """
 
+# Задача 2026-08-16 ("Локальный OSM-слой") — city_poi kind -> bucket этой
+# функции. "service" (marketplace/bank) сюда НЕ входит: у amenities.py
+# (единственный потребитель bucket "service") этот bucket уже был мёртвым
+# кодом — попадал в near/kinds, но НИ ОДНА ветка score не читала его
+# (см. git blame amenities.py) — не переносим мёртвый вес в city_poi.
+_LOCAL_KIND_MAP: dict[str, str] = {
+    "bus_stop": "bus_stop",
+    "shop": "shop", "mall": "shop",
+    "pharmacy": "health", "clinic": "health", "hospital": "health",
+    "food": "food",
+    "park": "park",
+}
+
 
 async def fetch_poi(lat: float, lon: float) -> list[dict] | None:
-    """Список [{kind, dist_m, lat, lon, id, type}] или None если OSM
-    недоступен."""
+    """Список [{kind, dist_m, lat, lon, id, type}] — city_poi (без сети),
+    фолбэк на overpass_cached() только если ни одна из _LOCAL_KIND_MAP
+    категорий ещё не синхронизирована (см. bot/score_layers/osm.py::
+    local_poi_near). None если ОБА источника недоступны."""
+    local = await local_poi_near(lat, lon, list(_LOCAL_KIND_MAP), 700)
+    if local is not None:
+        return [{"kind": _LOCAL_KIND_MAP[r["kind"]], "dist_m": haversine_m(lat, lon, r["lat"], r["lon"]),
+                  "lat": r["lat"], "lon": r["lon"], "id": None, "type": None}
+                 for r in local]
+
     data = await overpass_cached(lat, lon, "poi700", _QUERY.format(lat=lat, lon=lon))
     if data is None:
         return None
