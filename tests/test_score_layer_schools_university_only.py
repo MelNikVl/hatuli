@@ -94,10 +94,45 @@ async def test_default_behavior_unchanged_school_and_kindergarten(db):
 
 
 @pytest.mark.asyncio
-async def test_university_only_no_poi_nearby(db):
-    from bot.score_layers.schools import compute
+async def test_university_only_no_poi_nearby(db, monkeypatch):
+    """Найдено при разборе падения CI PR #1 (задача 2026-08-16, "Исправь
+    падение CI"): на CI-раннере city_poi пустая (свежая БД без сид-данных)
+    -> compute() уходит в фолбэк bot.score_layers.osm.overpass_cached,
+    а реальные зеркала Overpass недетерминированно отвечают 504/406/
+    timeout -> тест ловил ветку "OSM недоступен", а не сценарий "POI
+    рядом нет", который должен проверять. Мокаем overpass_cached
+    фиксированным пустым ответом — тест детерминирован независимо от
+    сети И от того, наполнена ли city_poi в конкретном окружении (если
+    наполнена — сработает более ранняя ветка _from_local_table, тоже
+    "вузов не найдено", ассерт тот же). Тест реального Overpress —
+    test_university_only_no_poi_nearby_live_overpass ниже, live_data."""
+    from bot.score_layers import schools
+
+    async def _fake_overpass_cached(lat, lon, key, query):
+        return {"elements": []}
+
+    monkeypatch.setattr(schools, "overpass_cached", _fake_overpass_cached)
+
     # Точка без синтетических соседей — далеко и от реальных POI Астаны,
     # и от других тестовых точек этого файла.
+    adj, reason = await schools.compute({"lat": REF_LAT + 0.5, "lon": REF_LON + 0.5}, university_only=True)
+    assert adj == 0
+    assert "вуз" in reason
+    # "OSM недоступен" — сигнал сетевого сбоя, не "POI не найдено" — не
+    # должен проходить как допустимый результат этого теста (иначе тест
+    # снова маскирует падение сети вместо проверки логики).
+    assert "недоступен" not in reason.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_data
+async def test_university_only_no_poi_nearby_live_overpass(db):
+    """Тот же сценарий, но без мока — реальный поход в Overpass (сеть,
+    внешний сервис). Не гоняется в CI (см. pytest.ini live_data и
+    .github/workflows/ci.yml — `-m "not live_data"`): зеркала Overpass
+    отвечают недетерминированно (504/406/timeout), падение здесь не
+    значит регрессию в коде. Локально: venv/bin/pytest -m live_data -v."""
+    from bot.score_layers.schools import compute
     adj, reason = await compute({"lat": REF_LAT + 0.5, "lon": REF_LON + 0.5}, university_only=True)
     assert adj == 0
     assert "нет" in reason.lower() or "не найдено" in reason.lower() or "вуз" in reason
