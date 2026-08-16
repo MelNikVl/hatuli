@@ -1,0 +1,15 @@
+[Unit]
+Description=Еженедельный дамп POI Астаны из Overpass в city_poi (Локальный OSM-слой, задача 2026-08-16)
+After=network.target postgresql.service
+# Плановый сборщик — bot/score_layers/{schools,poi,noise}.py читают
+# city_poi синхронно (без сети) на каждый расчёт; этот юнит — ЕДИНСТВЕННОЕ
+# место, где сеть до Overpass реально нужна на постоянной основе.
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+TimeoutSec=3600
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/scripts/sync_city_poi.py
+StandardOutput=append:/home/nik/krisha_bot/sync_city_poi.log
+StandardError=append:/home/nik/krisha_bot/sync_city_poi.log
