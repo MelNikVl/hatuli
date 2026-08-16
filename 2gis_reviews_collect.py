@@ -11,7 +11,16 @@
 
 Запуск: cd ~/krisha_bot && venv/bin/python 2gis_reviews_collect.py --limit 50 [--fast]
 Таблица: developer_reviews (complex_id, source='2gis', source_entity_id=geo_id, ...)
-"""
+
+Конфиг — DATABASE_URL/DEEPSEEK_API_KEY читаются из os.environ (задача
+2026-08-16, "P0 — Integrity", найдено CI: раньше был жёстко зашитый
+абсолютный путь /home/nik/krisha_bot/.env, читаемый вручную построчно —
+падало FileNotFoundError на любой машине без этого конкретного пути,
+включая GitHub Actions runner). load_dotenv() ниже — тот же паттерн, что
+уже используется по всему проекту (2gis_schools_rating_collect.py,
+tests/*.py и т.д.): .env — необязательный локальный фолбэк (тихо
+no-op'ает, если файла нет — python-dotenv никогда не бросает исключение
+на отсутствующий файл), не обязательное условие для запуска."""
 import argparse
 import json
 import os
@@ -21,11 +30,12 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from pathlib import Path
 
 import psycopg2
+from dotenv import load_dotenv
 
-BASE = Path('/home/nik/krisha_bot')
+load_dotenv()
+
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
 SPAM_RE = re.compile(
@@ -194,14 +204,8 @@ def main():
     args = ap.parse_args()
     sleep_s = args.sleep or (15 if args.fast else 60)
 
-    dsn = 'postgresql://krisha@localhost/krisha_bot'
-    for line in (BASE / '.env').read_text(encoding='utf-8').splitlines():
-        if line.startswith('DATABASE_URL='):
-            dsn = line.split('=', 1)[1].strip()
-    api_key = ''
-    for line in (BASE / '.env').read_text(encoding='utf-8').splitlines():
-        if line.startswith('DEEPSEEK_API_KEY='):
-            api_key = line.split('=', 1)[1].strip()
+    dsn = os.getenv('DATABASE_URL', 'postgresql://krisha@localhost/krisha_bot')
+    api_key = os.getenv('DEEPSEEK_API_KEY', '')
 
     conn = psycopg2.connect(dsn)
     cur = conn.cursor()

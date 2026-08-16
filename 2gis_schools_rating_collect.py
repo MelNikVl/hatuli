@@ -9,19 +9,25 @@ XHR). Используем headless Chromium (Playwright, уже стоит в v
   3. rating + reviews_count с карточки geo (SSR-часть)
 
 Запуск: cd ~/krisha_bot && venv/bin/python 2gis_schools_rating_collect.py --limit 80 [--fast]
-"""
+
+Конфиг — DATABASE_URL из os.environ (задача 2026-08-16, "P0 —
+Integrity" — тот же фикс, что 2gis_reviews_collect.py: раньше жёстко
+зашитый абсолютный путь /home/nik/krisha_bot/.env падал
+FileNotFoundError на любой машине без него, включая CI)."""
 import argparse
 import math
+import os
 import re
 import sys
 import time
 import urllib.parse
 import urllib.request
-from pathlib import Path
 
 import psycopg2
+from dotenv import load_dotenv
 
-BASE = Path('/home/nik/krisha_bot')
+load_dotenv()
+
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 GEO_RE = re.compile(r'href="/astana/geo/(\d+)"[^>]*>(?:\s*<[^>]+>)*\s*([^<]{2,90})<', re.S)
 
@@ -140,10 +146,7 @@ def main():
     args = ap.parse_args()
     sleep_s = 5 if args.fast else 15
 
-    dsn = 'postgresql://krisha@localhost/krisha_bot'
-    for line in (BASE / '.env').read_text(encoding='utf-8').splitlines():
-        if line.startswith('DATABASE_URL='):
-            dsn = line.split('=', 1)[1].strip()
+    dsn = os.getenv('DATABASE_URL', 'postgresql://krisha@localhost/krisha_bot')
     conn = psycopg2.connect(dsn)
     cur = conn.cursor()
 

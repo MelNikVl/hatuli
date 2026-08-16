@@ -10,16 +10,24 @@ top_issues / top_strengths — самые частые topics[] среди не�
 отзывов (fallback: по тексту, если topics пусты).
 
 CLI:  venv/bin/python developer_reputation.py [--top 5] [--json]
+
+Конфиг — DATABASE_URL из os.environ (задача 2026-08-16, "P0 —
+Integrity" — тот же фикс, что 2gis_reviews_collect.py: раньше жёстко
+зашитый абсолютный путь /home/nik/krisha_bot/.env падал
+FileNotFoundError на любой машине без него, включая CI).
 """
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter, defaultdict
 from datetime import date, timedelta
-from pathlib import Path
 
 import psycopg2
+from dotenv import load_dotenv
+
+load_dotenv()
 
 SOURCE_TRUST = {
     '2gis': 1.0,
@@ -33,12 +41,8 @@ DEFAULT_TRUST = 0.7
 SENTIMENT_VALUE = {'positive': 1.0, 'negative': -1.0, 'neutral': 0.0}
 
 
-def _dsn(base: Path = None) -> str:
-    base = base or Path('/home/nik/krisha_bot')
-    for line in (base / '.env').read_text(encoding='utf-8').splitlines():
-        if line.startswith('DATABASE_URL='):
-            return line.split('=', 1)[1].strip()
-    return 'postgresql://krisha@localhost/krisha_bot'
+def _dsn() -> str:
+    return os.getenv('DATABASE_URL', 'postgresql://krisha@localhost/krisha_bot')
 
 
 def _recency_weight(d: date | None, ref: date | None = None) -> float:

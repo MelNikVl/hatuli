@@ -15,6 +15,11 @@
 
 Запуск (CLI, для разовой проверки):
     cd ~/krisha_bot && venv/bin/python sentiment_analyzer.py --text "отзыв..."
+
+Конфиг — DEEPSEEK_API_KEY из os.environ (задача 2026-08-16, "P0 —
+Integrity" — тот же фикс, что 2gis_reviews_collect.py: раньше жёстко
+зашитый абсолютный путь /home/nik/krisha_bot/.env падал
+FileNotFoundError на любой машине без него, включая CI).
 """
 
 import argparse
@@ -25,6 +30,10 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 ASPECTS = [
     'качество_строительства',
@@ -47,12 +56,8 @@ def is_spam(text: str) -> bool:
     return bool(_SPAM_HINTS.search(text or ''))
 
 
-def load_api_key(base: Path = None) -> str:
-    base = base or Path('/home/nik/krisha_bot')
-    for line in (base / '.env').read_text(encoding='utf-8').splitlines():
-        if line.startswith('DEEPSEEK_API_KEY='):
-            return line.split('=', 1)[1].strip()
-    return ''
+def load_api_key() -> str:
+    return os.getenv('DEEPSEEK_API_KEY', '')
 
 
 def _llm_call(url: str, data: bytes, headers: dict):
