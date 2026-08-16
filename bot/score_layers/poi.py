@@ -10,6 +10,14 @@ lat/lon в каждом элементе (Фаза L2, docs/location_product_des
 (bot/core/complex_location_detail.py); transit.py/amenities.py/parks.py
 как использовали только kind/dist_m, так и продолжают — обратная
 совместимость не нарушена, поля просто раньше не читались.
+
+id/type (задача 2026-08-15, "детализация parks.py" — площадь ближайшего
+парка в га) — тот же приём: id/type у элемента Overpass есть ВСЕГДА,
+независимо от verbosity `out`-запроса (не только у geometry-запросов),
+добавление этих двух полей ничего не меняет для существующих читателей.
+parks.py использует их, чтобы точечно (по id) дозапросить геометрию
+ИМЕННО ближайшего парка — не всех парков в радиусе, чтобы не раздувать
+этот общий 700м-запрос ради данных, нужных только одному слою.
 """
 from __future__ import annotations
 
@@ -30,7 +38,8 @@ out tags center 120;
 
 
 async def fetch_poi(lat: float, lon: float) -> list[dict] | None:
-    """Список [{kind, dist_m}] или None если OSM недоступен."""
+    """Список [{kind, dist_m, lat, lon, id, type}] или None если OSM
+    недоступен."""
     data = await overpass_cached(lat, lon, "poi700", _QUERY.format(lat=lat, lon=lon))
     if data is None:
         return None
@@ -55,5 +64,6 @@ async def fetch_poi(lat: float, lon: float) -> list[dict] | None:
         else:
             continue
         out.append({"kind": kind, "dist_m": haversine_m(lat, lon, coords[0], coords[1]),
-                     "lat": coords[0], "lon": coords[1]})
+                     "lat": coords[0], "lon": coords[1],
+                     "id": el.get("id"), "type": el.get("type")})
     return out
