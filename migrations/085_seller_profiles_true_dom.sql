@@ -1,0 +1,14 @@
+-- Property Identity, первое практическое применение (задача 2026-08-16,
+-- "P1 — Property Identity", пункт 6) — seller_profiles.avg_true_dom_days:
+-- честный срок экспозиции ФИЗИЧЕСКОЙ квартиры (properties.last_seen_at -
+-- properties.first_seen_at по УНИКАЛЬНЫМ properties продавца, не по
+-- отдельным listing_id — иначе relist той же квартиры считался бы
+-- отдельным, каждый раз "новым" сроком с нуля, ровно та путаница,
+-- которую весь слой property_id должен устранить).
+--
+-- NULL, пока bot.identity.property_linker/scripts/backfill_property_ids.py
+-- не отработали хотя бы раз на объявлениях этого продавца (property_
+-- listings пуст до backfill'а, по решению задачи — не запускается
+-- автоматически) — Unknown ≠ average, не 0 и не avg_days_to_sell как
+-- заглушка.
+ALTER TABLE seller_profiles ADD COLUMN IF NOT EXISTS avg_true_dom_days NUMERIC;

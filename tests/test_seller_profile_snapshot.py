@@ -16,12 +16,15 @@ NOW = datetime(2026, 8, 15, tzinfo=timezone.utc)
 
 
 def _listing(id, seller_name, seller_type="owner", is_active=True, last_seen=NOW,
-             bargain_discount_pct=None, relisted_within_60d=None, time_on_market=None):
+             bargain_discount_pct=None, relisted_within_60d=None, time_on_market=None,
+             property_id=None, property_first_seen_at=None, property_last_seen_at=None):
     return {
         "id": id, "seller_name": seller_name, "seller_type": seller_type,
         "is_active": is_active, "last_seen": last_seen,
         "bargain_discount_pct": bargain_discount_pct,
         "relisted_within_60d": relisted_within_60d, "time_on_market": time_on_market,
+        "property_id": property_id, "property_first_seen_at": property_first_seen_at,
+        "property_last_seen_at": property_last_seen_at,
     }
 
 
@@ -155,3 +158,36 @@ def test_ambiguous_name_suppresses_motivated_and_high_relist():
     assert p["relist_rate"] == pytest.approx(1.0)
     assert p["is_high_relist_rate"] is False
     assert p["is_motivated_seller"] is False
+
+
+def test_avg_true_dom_days_dedupes_by_property_not_by_listing():
+    """Property Identity (задача 2026-08-16, "P1 — Property Identity",
+    пункт 6) — та же физическая квартира (property_id=1), перевыставленная
+    продавцом ПОД ДВУМЯ listing_id, должна дать ОДИН срок экспозиции, не
+    два. Второй, самостоятельный property (property_id=2) добавляет свой
+    срок отдельной строкой."""
+    first_at_1 = NOW - timedelta(days=40)
+    last_at_1 = NOW - timedelta(days=10)   # true DOM property 1: 30 дней
+    first_at_2 = NOW - timedelta(days=100)
+    last_at_2 = NOW - timedelta(days=95)   # true DOM property 2: 5 дней
+    listings = [
+        _listing("1", "Продавец Дом", property_id=1,
+                 property_first_seen_at=first_at_1, property_last_seen_at=last_at_1),
+        _listing("2", "Продавец Дом", property_id=1,  # relist той же квартиры — НЕ считается второй раз
+                 property_first_seen_at=first_at_1, property_last_seen_at=last_at_1),
+        _listing("3", "Продавец Дом", property_id=2,
+                 property_first_seen_at=first_at_2, property_last_seen_at=last_at_2),
+    ]
+    p = _aggregate(listings, {}, NOW)[0]
+    # среднее (30 + 5) / 2 = 17.5, НЕ (30+30+5)/3 — вот в чём была бы
+    # разница, если бы дедупликации по property_id не было.
+    assert p["avg_true_dom_days"] == pytest.approx(17.5)
+
+
+def test_avg_true_dom_days_none_before_backfill():
+    """property_id ещё NULL у всех листингов (backfill_property_ids.py
+    не запускался) -> avg_true_dom_days=None, не 0 и не avg_days_to_sell
+    как заглушка (Unknown ≠ average)."""
+    listings = [_listing("1", "Продавец Без Property")]
+    p = _aggregate(listings, {}, NOW)[0]
+    assert p["avg_true_dom_days"] is None
