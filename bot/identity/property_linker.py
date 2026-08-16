@@ -12,7 +12,47 @@ Identity") — стабильный property_id для ФИЗИЧЕСКОЙ кв
 проверяемая версия; более умный fuzzy/ML-матчинг — кандидат на будущее,
 не эта задача.
 
-Три уровня попытки связать listing_id с property_id:
+## match_mode (задача 2026-08-16, "безопасный deterministic exact-only
+property linker" — прямое следствие scripts/audit_property_linker_fuzzy.py:
+на реальных данных текущее fuzzy-правило complex+floor+area±1м² дало
+76.9% high-risk совпадений, 94.4% пар были одновременно активны на
+рынке (сигнал ДВУХ разных квартир, не одного relist), и КРИТИЧЕСКИЙ
+дефект — 6.9-7.6% итоговых assignments зависели от порядка обработки
+listing'ов. Полный отчёт см. в PR "audit(property-linker): read-only
+fuzzy match quality audit".)
+
+ПРИНЦИП (дан явно в задаче, это не моя эвристика): false positive merge
+хуже false negative duplicate. Склеить две разные квартиры в один
+property_id — испортить true DOM/price timeline/relist_count молча и
+навсегда (нет способа автоматически расклеить задним числом, кто был
+кем). Не связать relist (оставить его отдельной property) — это
+дешевле: аналитика недосчитывает несколько relist'ов, но НИЧЕГО не лжёт.
+
+  match_mode="exact_only" (ДЕФОЛТ, безопасный) — линкуем ТОЛЬКО по
+    точному address_hash. Fuzzy-кандидат (тот же complex+floor+area в
+    допуске) по-прежнему ВЫЧИСЛЯЕТСЯ и возвращается в result["fuzzy_
+    candidate"] (задача: "fuzzy-кандидат можно залогировать... но не
+    должен мешать созданию отдельного property") — для будущей ручной
+    проверки/property_match_candidates (см. docs/property_match_
+    candidates_proposal.md), НО НИКОГДА не используется, чтобы связать
+    listing с существующей property. Если exact hash не нашёлся —
+    ВСЕГДА создаём НОВУЮ property (даже если fuzzy-кандидат есть) —
+    "никаких greedy fuzzy assignments" (задача). Из 11245 fuzzy-
+    listing'ов предыдущего прогона НИ ОДИН не должен уйти в skipped
+    здесь — skipped остаётся ТОЛЬКО за настоящей нехваткой данных
+    (адрес/этаж/площадь), см. п.4 ниже.
+  match_mode="fuzzy" (LEGACY, НЕБЕЗОПАСНЫЙ — только явный opt-in,
+    НИКОГДА не дефолт ни здесь, ни в scripts/backfill_property_ids.py)
+    — старое поведение до этой задачи: fuzzy-кандидат СВЯЗЫВАЕТ, greedy,
+    подвержено order-dependency (см. аудит выше). Оставлен для
+    исследования/сравнения, не для прод-записи.
+
+Уровни попытки связать listing_id с property_id (address_hash ниже —
+см. ТАКЖЕ scripts/audit_address_hash_exact.py: exact hash НЕ содержит
+apartment_number/complex_id/rooms — НЕ гарантированно идентифицирует
+физическую квартиру САМ ПО СЕБЕ, особенно в многоподъездных ЖК с
+повторяющейся планировкой; exact-only СУЩЕСТВЕННО снижает риск
+ложного объединения относительно fuzzy, но не обнуляет его полностью):
   1. Уже связан (property_listings.listing_id) — короткое замыкание,
      возвращаем существующий property_id без пересчёта (идемпотентность
      backfill'а: повторный прогон не переоценивает уже принятые решения,
@@ -20,17 +60,18 @@ Identity") — стабильный property_id для ФИЗИЧЕСКОЙ кв
      apartment_listings).
   2. Точный hash (address_hash = SHA1(норм_адрес|этаж|площадь)) уже есть
      в properties — та же квартира, method='auto', confidence=1.0.
-  3. Fuzzy: тот же complex_id + тот же floor + area_sqm в пределах ±1м²
-     — вероятно та же квартира, адрес просто записан по-другому
-     (опечатка/сокращение) — method='fuzzy', confidence < 1.0. Только
-     когда complex_id известен (без ЖК-якоря сигнал слишком слабый).
-  4. Ничего не нашли — НОВАЯ квартира, INSERT в properties,
+  3. Fuzzy-кандидат вычисляется ВСЕГДА (для result["fuzzy_candidate"]),
+     но СВЯЗЫВАЕТ только при match_mode="fuzzy". При "exact_only" —
+     чисто информационный, идёт в лог/будущую candidates-таблицу.
+  4. Ничего не связали — НОВАЯ квартира, INSERT в properties,
      method='auto', confidence=1.0 (первое появление — не с чем
      конфликтовать, неопределённости нет).
 
 Адрес/этаж/площадь неизвестны (хотя бы один) -> НЕ линкуем вовсе
 (method='skipped') — Unknown ≠ average (verdict_strategy.md §3.1): без
-всех трёх компонентов хэш ненадёжен, гадать не будем.
+всех трёх компонентов хэш ненадёжен, гадать не будем. ЭТО единственная
+причина skipped — недостаток fuzzy-кандидата НЕ является причиной
+skipped ни в одном режиме.
 """
 from __future__ import annotations
 
@@ -156,6 +197,21 @@ async def _find_fuzzy_candidate(complex_id: int, floor: int, area: float) -> dic
     )
 
 
+def _skip_reason(address: str | None, floor: int | None, area: float | None) -> str:
+    """Задача 2026-08-16 ("безопасный exact-only property linker"), тест
+    "недостаточно данных -> skipped с причиной" — какое ИМЕННО поле не
+    хватило (адрес после нормализации пуст / floor None / area None),
+    не просто общее 'skipped'."""
+    missing = []
+    if not normalize_address(address):
+        missing.append("address")
+    if floor is None:
+        missing.append("floor")
+    if area is None:
+        missing.append("area")
+    return "missing: " + ", ".join(missing) if missing else "unknown"
+
+
 def _fuzzy_confidence(area: float, candidate_area: float) -> float:
     """confidence < 1.0, линейно убывает с разницей площадей внутри
     допуска (0 расхождения -> 0.9, полный допуск ±1м² -> 0.6) — сама
@@ -165,15 +221,35 @@ def _fuzzy_confidence(area: float, candidate_area: float) -> float:
     return round(max(0.6, 0.9 - diff * 0.3), 2)
 
 
+_VALID_MATCH_MODES = frozenset({"exact_only", "fuzzy"})
+
+
 async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
-                                    dry_run_cache: "DryRunCache | None" = None) -> dict:
+                                    dry_run_cache: "DryRunCache | None" = None,
+                                    match_mode: str = "exact_only") -> dict:
     """Основная точка входа. listing_row — строка apartment_listings (или
     dict с теми же ключами): id, address, floor, area, rooms, complex_name.
 
+    match_mode — см. докстринг модуля ("false positive merge хуже false
+    negative duplicate"): "exact_only" (ДЕФОЛТ, безопасный — единственный
+    режим для прод-записи) | "fuzzy" (LEGACY, только явный opt-in,
+    НИКОГДА не дефолт — задача: "старый unsafe fuzzy режим нельзя
+    случайно включить по умолчанию"). ValueError на любое другое
+    значение — опечатка в вызывающем коде не должна тихо деградировать
+    в непонятный режим.
+
     Возвращает {"property_id": int | None, "method": str, "confidence":
-    float | None, "created": bool}. method: 'already_linked' (шаг 1
-    докстринга модуля) | 'auto' (точный хэш или новая квартира) |
-    'fuzzy' | 'skipped' (адрес/этаж/площадь неизвестны — property_id=None).
+    float | None, "created": bool, "match_mode": str, "fuzzy_candidate":
+    dict | None}. method: 'already_linked' (шаг 1 докстринга модуля) |
+    'auto' (точный хэш или новая квартира) | 'fuzzy' (СВЯЗАЛ — только
+    возможно при match_mode="fuzzy") | 'skipped' (адрес/этаж/площадь
+    неизвестны — property_id=None). fuzzy_candidate — {"candidate_
+    property_id", "confidence", "area_diff", "cache_only"} | None:
+    заполнен, когда при match_mode="exact_only" был БЫ fuzzy-кандидат,
+    но связывание НЕ произошло (см. докстринг модуля, п.3) — для лога/
+    будущей property_match_candidates; при match_mode="fuzzy" остаётся
+    None (кандидат либо стал реальной связью method='fuzzy', либо его
+    не было вовсе).
 
     Пишет в property_listings (INSERT ... ON CONFLICT (listing_id) DO
     NOTHING — идемпотентно: параллельный/повторный вызов на тот же
@@ -206,6 +282,9 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
     снято, иначе последнее "видели живым"). GREATEST/LEAST ниже
     накапливают эти границы по мере линковки новых listing_id к уже
     существующей квартире, независимо от порядка обработки backfill'ом."""
+    if match_mode not in _VALID_MATCH_MODES:
+        raise ValueError(f"match_mode должен быть одним из {sorted(_VALID_MATCH_MODES)}, получено {match_mode!r}")
+
     from bot.db.pg import execute, fetchrow, fetchval
 
     listing_id = listing_row["id"]
@@ -213,7 +292,8 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
     already = await fetchval(
         "SELECT property_id FROM property_listings WHERE listing_id = $1", listing_id)
     if already is not None:
-        return {"property_id": already, "method": "already_linked", "confidence": None, "created": False}
+        return {"property_id": already, "method": "already_linked", "confidence": None,
+                "created": False, "match_mode": match_mode, "fuzzy_candidate": None, "skip_reason": None}
 
     address = listing_row.get("address")
     floor = listing_row.get("floor")
@@ -225,16 +305,21 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
 
     address_hash = compute_address_hash(address, floor, area)
     if address_hash is None:
-        return {"property_id": None, "method": "skipped", "confidence": None, "created": False}
+        return {"property_id": None, "method": "skipped", "confidence": None, "created": False,
+                "match_mode": match_mode, "fuzzy_candidate": None,
+                "skip_reason": _skip_reason(address, floor, area)}
 
     complex_id = await _resolve_complex_id(complex_name)
 
     # Шаг 2: точный хэш — либо реальная строка в properties, либо (только
     # dry-run) хэш, который УЖЕ "создан" бы этим же прогоном раньше
-    # (см. dry_run_cache в докстринге).
+    # (см. dry_run_cache в докстринге). Тот же путь для ОБОИХ match_mode
+    # — exact hash безопасен, риск (см. scripts/audit_address_hash_exact.py)
+    # ниже, чем у fuzzy, но не предмет match_mode.
     exact = await fetchrow("SELECT property_id FROM properties WHERE address_hash = $1", address_hash)
     if exact is None and dry_run and dry_run_cache is not None and dry_run_cache.has_hash(address_hash):
-        return {"property_id": None, "method": "auto", "confidence": 1.0, "created": False}
+        return {"property_id": None, "method": "auto", "confidence": 1.0,
+                "created": False, "match_mode": match_mode, "fuzzy_candidate": None, "skip_reason": None}
     if exact is not None:
         if not dry_run:
             await execute(
@@ -249,12 +334,19 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
                 "VALUES ($1, $2, 'auto', 1.0) ON CONFLICT (listing_id) DO NOTHING",
                 exact["property_id"], listing_id,
             )
-        return {"property_id": exact["property_id"], "method": "auto", "confidence": 1.0, "created": False}
+        return {"property_id": exact["property_id"], "method": "auto", "confidence": 1.0,
+                "created": False, "match_mode": match_mode, "fuzzy_candidate": None, "skip_reason": None}
 
-    # Шаг 3: fuzzy (только при известном complex_id) — реальная БД
-    # (candidate) плюс, в dry-run, ещё и dry_run_cache (см. класс
-    # DryRunCache про то, почему без него dry-run никогда не находит
-    # fuzzy-совпадений вообще).
+    # Шаг 3: fuzzy-кандидат (только при известном complex_id) — ВСЕГДА
+    # ВЫЧИСЛЯЕТСЯ (реальная БД + dry_run_cache, см. класс DryRunCache),
+    # НЕЗАВИСИМО от match_mode. СВЯЗЫВАЕТ (INSERT в property_listings)
+    # только при match_mode="fuzzy" — задача, п.4: "fuzzy-кандидат можно
+    # залогировать как candidate, но он не должен мешать созданию
+    # отдельного property" — при "exact_only" кандидат уходит в
+    # fuzzy_candidate результата, НЕ в UPDATE/INSERT, и код проваливается
+    # к шагу 4 (новая property) независимо от того, нашёлся кандидат
+    # или нет — "никаких greedy fuzzy assignments".
+    fuzzy_candidate_info = None
     if complex_id is not None and floor is not None and area is not None:
         candidate = await _find_fuzzy_candidate(complex_id, floor, area)
         cache_only = False
@@ -265,27 +357,39 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
                 cache_only = True
         if candidate is not None:
             confidence = _fuzzy_confidence(area, candidate["area_sqm"])
-            if not dry_run:
-                await execute(
-                    "UPDATE properties SET "
-                    "  first_seen_at = LEAST(first_seen_at, COALESCE($2, first_seen_at)), "
-                    "  last_seen_at = GREATEST(last_seen_at, COALESCE($3, last_seen_at)) "
-                    "WHERE property_id = $1",
-                    candidate["property_id"], listing_first_seen, listing_evidence_at,
-                )
-                await execute(
-                    "INSERT INTO property_listings (property_id, listing_id, link_method, confidence) "
-                    "VALUES ($1, $2, 'fuzzy', $3) ON CONFLICT (listing_id) DO NOTHING",
-                    candidate["property_id"], listing_id, confidence,
-                )
-            return {"property_id": None if cache_only else candidate["property_id"],
-                    "method": "fuzzy", "confidence": confidence, "created": False}
+            area_diff = round(abs(area - candidate["area_sqm"]), 3)
+            if match_mode == "fuzzy":
+                if not dry_run:
+                    await execute(
+                        "UPDATE properties SET "
+                        "  first_seen_at = LEAST(first_seen_at, COALESCE($2, first_seen_at)), "
+                        "  last_seen_at = GREATEST(last_seen_at, COALESCE($3, last_seen_at)) "
+                        "WHERE property_id = $1",
+                        candidate["property_id"], listing_first_seen, listing_evidence_at,
+                    )
+                    await execute(
+                        "INSERT INTO property_listings (property_id, listing_id, link_method, confidence) "
+                        "VALUES ($1, $2, 'fuzzy', $3) ON CONFLICT (listing_id) DO NOTHING",
+                        candidate["property_id"], listing_id, confidence,
+                    )
+                return {"property_id": None if cache_only else candidate["property_id"],
+                        "method": "fuzzy", "confidence": confidence, "created": False,
+                        "match_mode": match_mode, "fuzzy_candidate": None, "skip_reason": None}
+            # exact_only: НЕ связываем — только запоминаем для результата,
+            # проваливаемся к шагу 4.
+            fuzzy_candidate_info = {
+                "candidate_property_id": None if cache_only else candidate["property_id"],
+                "confidence": confidence, "area_diff": area_diff, "cache_only": cache_only,
+            }
 
-    # Шаг 4: новая квартира.
+    # Шаг 4: новая квартира (exact_only — ВСЕГДА сюда, если шаг 2 не
+    # связал, даже при наличии fuzzy_candidate_info; fuzzy — только если
+    # шаг 3 не нашёл кандидата вовсе).
     if dry_run:
         if dry_run_cache is not None:
             dry_run_cache.add(address_hash, complex_id, floor, area)
-        return {"property_id": None, "method": "auto", "confidence": 1.0, "created": True}
+        return {"property_id": None, "method": "auto", "confidence": 1.0, "created": True,
+                "match_mode": match_mode, "fuzzy_candidate": fuzzy_candidate_info, "skip_reason": None}
 
     # ON CONFLICT (address_hash) — гонка с другим прогоном/листингом на
     # тот же хэш между шагом 2 и этой вставкой не создаёт дубль (DO
@@ -311,4 +415,5 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
         "VALUES ($1, $2, 'auto', 1.0) ON CONFLICT (listing_id) DO NOTHING",
         new_id, listing_id,
     )
-    return {"property_id": new_id, "method": "auto", "confidence": 1.0, "created": True}
+    return {"property_id": new_id, "method": "auto", "confidence": 1.0, "created": True,
+            "match_mode": match_mode, "fuzzy_candidate": fuzzy_candidate_info, "skip_reason": None}
