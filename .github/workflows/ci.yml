@@ -113,9 +113,22 @@ jobs:
       # Проверено эмпирически (2026-08-16, подготовка этого workflow) — без
       # --deselect ниже job красный на первом же прогоне не из-за CI, а по
       # этим двум причинам.
+      #
+      # ПРАВКА (второй прогон, 9ef8411, был красным на этом шаге — pytest
+      # exit 2, "Interrupted: 1 error during collection"): голый `pytest`
+      # без пути сканирует ВЕСЬ корень репозитория, не только tests/ — и
+      # цепляет test_server_search.py (ручной diagnostic-скрипт "Test if
+      # DuckDuckGo search works from the server", НЕ тест, просто случайно
+      # назван с префиксом test_), который импортирует ddgs — пакет, не
+      # объявленный в requirements.txt (локально работал только потому,
+      # что случайно стоял в персональном venv). Явный путь `tests/` ниже
+      # — тот же скоуп, что использовался ВЕСЬ этот проход задачи (везде
+      # "634 passed" в этой сессии — от `pytest tests/`, не голого pytest).
+      # test_server_search.py не переименовывал/не трогал — не в рамках
+      # "минимальный CI", отдельная мелкая находка.
       - name: pytest (полный suite, без параллельных флагов)
         run: >
-          pytest -q --tb=short
+          pytest tests/ -q --tb=short
           --deselect tests/test_archive_check_pools.py::test_cold_confirm_only_for_listings_missed_this_circle
           --deselect tests/test_deal_score_as_of_filters.py::test_as_of_backtest_does_not_write_to_db
           --deselect tests/test_entity_resolution_phase.py::test_family_nest_base_vs_letter_block_capped_to_review
