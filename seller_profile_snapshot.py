@@ -96,18 +96,29 @@ def _normalize_name(raw: str) -> str:
 
 async def _load_listing_base() -> list[dict]:
     """Одна строка на объявление с непустым seller_name — seller_type,
-    активность, bargain_discount_pct (для median_discount_pct) и outcome
-    labels (relist/time_on_market) уже присоединены — дальше группировка
+    активность, bargain_discount_pct (для median_discount_pct), outcome
+    labels (relist/time_on_market) и property_id/даты property (для
+    avg_true_dom_days — Property Identity, задача 2026-08-16, "P1 —
+    Property Identity", пункт 6) уже присоединены — дальше группировка
     в Python (тот же паттерн, что complex_walkability_snapshot.py:
     таблицы небольшие по числу СУЩНОСТЕЙ (продавцы), полный проход
-    дешевле, чем 8000+ отдельных запросов по продавцу)."""
+    дешевле, чем 8000+ отдельных запросов по продавцу).
+
+    property_id/property_first_seen_at/property_last_seen_at — NULL, пока
+    scripts/backfill_property_ids.py не отработал на этом listing_id
+    (property_listings пуст до backfill'а — он не запускается
+    автоматически, см. докстринг миграции 085) — честно, не гадаем."""
     from bot.db.pg import fetch
     rows = await fetch("""
         SELECT al.id, al.seller_name, al.seller_type, al.is_active, al.last_seen,
                al.bargain_discount_pct,
-               ol.relisted_within_60d, ol.time_on_market
+               ol.relisted_within_60d, ol.time_on_market,
+               p.property_id, p.first_seen_at AS property_first_seen_at,
+               p.last_seen_at AS property_last_seen_at
         FROM apartment_listings al
         LEFT JOIN outcome_labels ol ON ol.listing_id = al.id
+        LEFT JOIN property_listings pl ON pl.listing_id = al.id
+        LEFT JOIN properties p ON p.property_id = pl.property_id
         WHERE al.seller_name IS NOT NULL AND btrim(al.seller_name) != ''
     """)
     return [dict(r) for r in rows]
@@ -171,6 +182,27 @@ def _aggregate(listings: list[dict], cuts_by_listing: dict[str, list[dict]],
         tom_values = [l["time_on_market"] for l in group if l.get("time_on_market") is not None]
         avg_days_to_sell = round(statistics.mean(tom_values), 1) if tom_values else None
 
+        # avg_true_dom_days (Property Identity, задача 2026-08-16, "P1 —
+        # Property Identity", пункт 6 — первое практическое применение
+        # property_id) — по УНИКАЛЬНЫМ properties продавца, не по
+        # отдельным listing_id: та же физическая квартира, перевыставленная
+        # продавцом 3 раза, должна дать ОДИН срок экспозиции (первое
+        # появление -> последнее), не три "новых с нуля" — ровно та
+        # путаница, которую весь слой property_id устраняет. NULL, пока
+        # backfill_property_ids.py не отработал на объявлениях этого
+        # продавца (property_id у всех NULL до этого — не гадаем).
+        seen_property_ids: set[int] = set()
+        true_dom_values: list[int] = []
+        for l in group:
+            pid = l.get("property_id")
+            if pid is None or pid in seen_property_ids:
+                continue
+            seen_property_ids.add(pid)
+            first_at, last_at = l.get("property_first_seen_at"), l.get("property_last_seen_at")
+            if first_at is not None and last_at is not None:
+                true_dom_values.append((last_at - first_at).days)
+        avg_true_dom_days = round(statistics.mean(true_dom_values), 1) if true_dom_values else None
+
         discount_values = [float(l["bargain_discount_pct"]) for l in group
                             if l.get("bargain_discount_pct") is not None]
         median_discount_pct = round(statistics.median(discount_values), 2) if discount_values else None
@@ -201,6 +233,7 @@ def _aggregate(listings: list[dict], cuts_by_listing: dict[str, list[dict]],
             "relist_count": relist_count, "relist_rate": relist_rate,
             "price_cut_count": price_cut_count, "price_cut_rate": price_cut_rate,
             "avg_days_to_sell": avg_days_to_sell, "median_discount_pct": median_discount_pct,
+            "avg_true_dom_days": avg_true_dom_days,
             "is_high_relist_rate": is_high_relist_rate, "is_motivated_seller": is_motivated_seller,
             "is_ambiguous": is_ambiguous,
         })
@@ -221,9 +254,9 @@ async def run_snapshot() -> dict:
             INSERT INTO seller_profiles (
                 seller_name, seller_type, active_listings_count, total_listings_count,
                 relist_count, relist_rate, price_cut_count, price_cut_rate,
-                avg_days_to_sell, median_discount_pct,
+                avg_days_to_sell, median_discount_pct, avg_true_dom_days,
                 is_high_relist_rate, is_motivated_seller, is_ambiguous, computed_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
             ON CONFLICT (seller_name) DO UPDATE SET
                 seller_type = EXCLUDED.seller_type,
                 active_listings_count = EXCLUDED.active_listings_count,
@@ -234,6 +267,7 @@ async def run_snapshot() -> dict:
                 price_cut_rate = EXCLUDED.price_cut_rate,
                 avg_days_to_sell = EXCLUDED.avg_days_to_sell,
                 median_discount_pct = EXCLUDED.median_discount_pct,
+                avg_true_dom_days = EXCLUDED.avg_true_dom_days,
                 is_high_relist_rate = EXCLUDED.is_high_relist_rate,
                 is_motivated_seller = EXCLUDED.is_motivated_seller,
                 is_ambiguous = EXCLUDED.is_ambiguous,
@@ -241,7 +275,7 @@ async def run_snapshot() -> dict:
         """,
             p["seller_name"], p["seller_type"], p["active_listings_count"], p["total_listings_count"],
             p["relist_count"], p["relist_rate"], p["price_cut_count"], p["price_cut_rate"],
-            p["avg_days_to_sell"], p["median_discount_pct"],
+            p["avg_days_to_sell"], p["median_discount_pct"], p["avg_true_dom_days"],
             p["is_high_relist_rate"], p["is_motivated_seller"], p["is_ambiguous"],
         )
 
