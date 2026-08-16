@@ -78,7 +78,12 @@ def test_compute_address_hash_none_when_field_missing():
 @pytest.mark.asyncio
 async def test_same_address_floor_area_gives_same_property(db):
     """Два listing с одинаковым адресом+этажом+площадью -> один
-    property_id (задача, пункт 5, тест 1)."""
+    property_id (задача, пункт 5, тест 1). match_mode="exact_only"
+    ЯВНО — задача 2026-08-16 ("безопасная инфраструктура кандидатов")
+    сменила ДЕФОЛТ на "candidate_only" (bootstrap ВСЕГДА создаёт
+    отдельную property, даже на точный хэш) — этот тест регрессия
+    ИМЕННО exact_only-режима, не дефолта (см. tests/test_property_
+    linker_candidate_only.py для дефолтного поведения)."""
     from bot.identity.property_linker import link_listing_to_property, compute_address_hash
 
     lid_a, lid_b = "__test_pid_same_a__", "__test_pid_same_b__"
@@ -87,9 +92,11 @@ async def test_same_address_floor_area_gives_same_property(db):
     h = compute_address_hash("Тлендиева 21", 5, 60.5)
     try:
         r1 = await link_listing_to_property({"id": lid_a, "address": "Тлендиева 21", "floor": 5,
-                                              "area": 60.5, "rooms": 2, "complex_name": None})
+                                              "area": 60.5, "rooms": 2, "complex_name": None},
+                                             match_mode="exact_only")
         r2 = await link_listing_to_property({"id": lid_b, "address": "Тлендиева 21", "floor": 5,
-                                              "area": 60.5, "rooms": 2, "complex_name": None})
+                                              "area": 60.5, "rooms": 2, "complex_name": None},
+                                             match_mode="exact_only")
         assert r1["property_id"] == r2["property_id"]
         assert r1["created"] is True
         assert r2["created"] is False
@@ -154,12 +161,14 @@ async def test_fuzzy_match_within_tolerance_gives_confidence_below_one(db):
 
 
 @pytest.mark.asyncio
-async def test_exact_only_default_does_not_fuzzy_link_but_reports_candidate(db):
-    """Задача 2026-08-16 ("безопасный exact-only property linker") —
-    ТОТ ЖЕ сценарий, что test_fuzzy_match_within_tolerance выше, но БЕЗ
-    match_mode (дефолт) — НЕ связывает fuzzy, создаёт ОТДЕЛЬНУЮ property,
-    но возвращает fuzzy_candidate для лога/будущей ручной проверки
-    ("никаких greedy fuzzy assignments", но "можно залогировать")."""
+async def test_exact_only_explicit_does_not_fuzzy_link_but_reports_candidate(db):
+    """ТОТ ЖЕ сценарий, что test_fuzzy_match_within_tolerance выше, но
+    match_mode="exact_only" ЯВНО (задача 2026-08-16, "безопасная
+    инфраструктура кандидатов" сменила ДЕФОЛТ на "candidate_only" —
+    exact_only больше не дефолт нигде, см. переименование теста) — НЕ
+    связывает fuzzy, создаёт ОТДЕЛЬНУЮ property, но возвращает fuzzy_
+    candidate для лога/будущей ручной проверки ("никаких greedy fuzzy
+    assignments", но "можно залогировать")."""
     from bot.identity.property_linker import link_listing_to_property, compute_address_hash
 
     cid = await _insert_complex("__test_pid_exactonly_complex__")
@@ -170,10 +179,12 @@ async def test_exact_only_default_does_not_fuzzy_link_but_reports_candidate(db):
     h2 = compute_address_hash("Тлендиева, дом 21", 7, 60.8)
     try:
         r1 = await link_listing_to_property({"id": lid_a, "address": "Тлендиева 21", "floor": 7,
-                                              "area": 60.0, "rooms": None, "complex_name": "__test_pid_exactonly_complex__"})
+                                              "area": 60.0, "rooms": None, "complex_name": "__test_pid_exactonly_complex__"},
+                                             match_mode="exact_only")
         r2 = await link_listing_to_property({"id": lid_b, "address": "Тлендиева, дом 21", "floor": 7,
-                                              "area": 60.8, "rooms": None, "complex_name": "__test_pid_exactonly_complex__"})
-        assert r1["match_mode"] == "exact_only"  # дефолт без явного параметра
+                                              "area": 60.8, "rooms": None, "complex_name": "__test_pid_exactonly_complex__"},
+                                             match_mode="exact_only")
+        assert r1["match_mode"] == "exact_only"
         assert r2["method"] == "auto"
         assert r2["created"] is True
         assert r2["property_id"] != r1["property_id"]  # НЕ связаны — отдельные properties
@@ -199,9 +210,11 @@ async def test_fuzzy_match_outside_tolerance_creates_new_property(db):
     h2 = compute_address_hash("Тлендиева, дом 21", 7, 63.0)
     try:
         r1 = await link_listing_to_property({"id": lid_a, "address": "Тлендиева 21", "floor": 7,
-                                              "area": 60.0, "rooms": None, "complex_name": "__test_pid_nofuzzy_complex__"})
+                                              "area": 60.0, "rooms": None, "complex_name": "__test_pid_nofuzzy_complex__"},
+                                             match_mode="exact_only")
         r2 = await link_listing_to_property({"id": lid_b, "address": "Тлендиева, дом 21", "floor": 7,
-                                              "area": 63.0, "rooms": None, "complex_name": "__test_pid_nofuzzy_complex__"})
+                                              "area": 63.0, "rooms": None, "complex_name": "__test_pid_nofuzzy_complex__"},
+                                             match_mode="exact_only")
         assert r2["method"] == "auto"
         assert r2["created"] is True
         assert r1["property_id"] != r2["property_id"]
@@ -268,7 +281,7 @@ async def test_dry_run_writes_nothing(db):
     try:
         r = await link_listing_to_property(
             {"id": lid, "address": "Гагарина 30", "floor": 3, "area": 45.0, "rooms": None, "complex_name": None},
-            dry_run=True, dry_run_cache=DryRunCache(),
+            dry_run=True, dry_run_cache=DryRunCache(), match_mode="exact_only",
         )
         assert r["created"] is True
         assert r["property_id"] is None  # dry-run: ничего реально не вставлено
@@ -295,10 +308,10 @@ async def test_dry_run_cache_avoids_double_counting_new_property(db):
         cache = DryRunCache()
         r1 = await link_listing_to_property(
             {"id": lid_a, "address": "Сатпаева 9", "floor": 2, "area": 50.0, "rooms": None, "complex_name": None},
-            dry_run=True, dry_run_cache=cache)
+            dry_run=True, dry_run_cache=cache, match_mode="exact_only")
         r2 = await link_listing_to_property(
             {"id": lid_b, "address": "Сатпаева 9", "floor": 2, "area": 50.0, "rooms": None, "complex_name": None},
-            dry_run=True, dry_run_cache=cache)
+            dry_run=True, dry_run_cache=cache, match_mode="exact_only")
         assert r1["created"] is True
         assert r2["created"] is False
     finally:
@@ -318,11 +331,11 @@ async def test_backfill_idempotent_no_duplicate_links(db):
     await _insert_listing(lid_a, address="Кенесары 40", floor=9, area=72.0)
     await _insert_listing(lid_b, address="Момышулы 12", floor=1, area=38.0)
     try:
-        first = await run_backfill(listing_ids=[lid_a, lid_b])
+        first = await run_backfill(listing_ids=[lid_a, lid_b], match_mode="exact_only")
         assert first["auto_new"] == 2
         assert first["already_linked"] == 0
 
-        second = await run_backfill(listing_ids=[lid_a, lid_b])
+        second = await run_backfill(listing_ids=[lid_a, lid_b], match_mode="exact_only")
         assert second["already_linked"] == 2
         assert second["auto_new"] == 0
 
@@ -369,12 +382,12 @@ async def test_property_dates_reflect_real_listing_history_not_backfill_run_time
             "id": lid_old, "address": "Байтурсынова 5", "floor": 4, "area": 55.0,
             "rooms": None, "complex_name": None,
             "first_seen": old_first, "last_seen": old_archived, "archived_at": old_archived,
-        })
+        }, match_mode="exact_only")
         r2 = await link_listing_to_property({
             "id": lid_new, "address": "Байтурсынова 5", "floor": 4, "area": 55.0,
             "rooms": None, "complex_name": None,
             "first_seen": new_first, "last_seen": new_last, "archived_at": None,
-        })
+        }, match_mode="exact_only")
         assert r1["property_id"] == r2["property_id"]
 
         prop = await fetchrow(

@@ -28,31 +28,57 @@ property_id — испортить true DOM/price timeline/relist_count молч
 кем). Не связать relist (оставить его отдельной property) — это
 дешевле: аналитика недосчитывает несколько relist'ов, но НИЧЕГО не лжёт.
 
-  match_mode="exact_only" (ДЕФОЛТ, безопасный) — линкуем ТОЛЬКО по
-    точному address_hash. Fuzzy-кандидат (тот же complex+floor+area в
-    допуске) по-прежнему ВЫЧИСЛЯЕТСЯ и возвращается в result["fuzzy_
-    candidate"] (задача: "fuzzy-кандидат можно залогировать... но не
-    должен мешать созданию отдельного property") — для будущей ручной
-    проверки/property_match_candidates (см. docs/property_match_
-    candidates_proposal.md), НО НИКОГДА не используется, чтобы связать
-    listing с существующей property. Если exact hash не нашёлся —
-    ВСЕГДА создаём НОВУЮ property (даже если fuzzy-кандидат есть) —
-    "никаких greedy fuzzy assignments" (задача). Из 11245 fuzzy-
-    listing'ов предыдущего прогона НИ ОДИН не должен уйти в skipped
-    здесь — skipped остаётся ТОЛЬКО за настоящей нехваткой данных
-    (адрес/этаж/площадь), см. п.4 ниже.
-  match_mode="fuzzy" (LEGACY, НЕБЕЗОПАСНЫЙ — только явный opt-in,
-    НИКОГДА не дефолт ни здесь, ни в scripts/backfill_property_ids.py)
-    — старое поведение до этой задачи: fuzzy-кандидат СВЯЗЫВАЕТ, greedy,
-    подвержено order-dependency (см. аудит выше). Оставлен для
-    исследования/сравнения, не для прод-записи.
+## Эволюция режимов (2026-08-16, три задачи подряд)
 
-Уровни попытки связать listing_id с property_id (address_hash ниже —
-см. ТАКЖЕ scripts/audit_address_hash_exact.py: exact hash НЕ содержит
-apartment_number/complex_id/rooms — НЕ гарантированно идентифицирует
-физическую квартиру САМ ПО СЕБЕ, особенно в многоподъездных ЖК с
-повторяющейся планировкой; exact-only СУЩЕСТВЕННО снижает риск
-ложного объединения относительно fuzzy, но не обнуляет его полностью):
+  match_mode="candidate_only" (ТЕКУЩИЙ ДЕФОЛТ, задача "безопасная
+    инфраструктура кандидатов" — прямое следствие scripts/audit_
+    property_match_signals.py: даже exact_only даёт 4.3% доказанных
+    rejected-пар, значит "безопасный" exact-only тоже недостаточно
+    безопасен для АВТОМАТИЧЕСКОГО hard-link). НИКАКОЙ сигнал (exact
+    hash, fuzzy, bot/core/dedup_listings.py's is_duplicate/duplicate_of)
+    не создаёт hard link САМ ПО СЕБЕ. Вместо этого:
+      - listing → ВСЕГДА своя provisional property (deterministic
+        bootstrap, НЕ поиск существующей — см. docs/property_identity_
+        v2_architecture_audit.md §7: "не ставить match confidence=1.0
+        только за одинаковый address_hash" — здесь bootstrap-confidence
+        1.0 означает СОВСЕМ ДРУГОЕ: "этот listing точно равен
+        только что созданной ИЗ НЕГО property", тавтология, не
+        совпадение с чем-то ДРУГИМ);
+      - все три сигнала (exact_hash/fuzzy/dedup_listings) генерируют
+        property_match_candidates строки (не пишут property_listings) —
+        задача "Property Identity v2" уже показала, что даже exact_hash
+        не гарантирован, значит НИ ОДИН сигнал не имеет права молча
+        слить две property.
+    См. классы/функции ниже: BootstrapIndex, classify_relationship,
+    _conflict_reasons, _generate_candidates.
+  match_mode="exact_only" (LEGACY с этой задачи — был дефолтом ДО неё,
+    остаётся для исследования/сравнения, БОЛЬШЕ НЕ прод-дефолт нигде).
+    Линкует ТОЛЬКО по точному address_hash, fuzzy — информационно (см.
+    докстринг ниже, поведение НЕ изменилось).
+  match_mode="fuzzy" (LEGACY, НЕБЕЗОПАСНЫЙ — только явный opt-in,
+    НИКОГДА не дефолт) — старое greedy-поведение, order-dependent (см.
+    аудит выше). Оставлен для исследования/сравнения, не для прод-записи.
+
+### exact_only (сохранено как есть — детали режима)
+
+  match_mode="exact_only" — линкуем ТОЛЬКО по точному address_hash.
+    Fuzzy-кандидат (тот же complex+floor+area в допуске) по-прежнему
+    ВЫЧИСЛЯЕТСЯ и возвращается в result["fuzzy_candidate"] (задача:
+    "fuzzy-кандидат можно залогировать... но не должен мешать созданию
+    отдельного property") — для будущей ручной проверки/property_match_
+    candidates, НО НИКОГДА не используется, чтобы связать listing с
+    существующей property. Если exact hash не нашёлся — ВСЕГДА создаём
+    НОВУЮ property (даже если fuzzy-кандидат есть) — "никаких greedy
+    fuzzy assignments". skipped остаётся ТОЛЬКО за настоящей нехваткой
+    данных (адрес/этаж/площадь), см. ниже.
+
+Уровни попытки связать listing_id с property_id для exact_only/fuzzy
+(address_hash — см. ТАКЖЕ scripts/audit_address_hash_exact.py: exact
+hash НЕ содержит apartment_number/complex_id/rooms — НЕ гарантированно
+идентифицирует физическую квартиру САМ ПО СЕБЕ, особенно в
+многоподъездных ЖК с повторяющейся планировкой; exact-only СУЩЕСТВЕННО
+снижает риск ложного объединения относительно fuzzy, но не обнуляет
+его полностью, см. §4.3% rejected в audit_property_match_signals.py):
   1. Уже связан (property_listings.listing_id) — короткое замыкание,
      возвращаем существующий property_id без пересчёта (идемпотентность
      backfill'а: повторный прогон не переоценивает уже принятые решения,
@@ -71,7 +97,7 @@ apartment_number/complex_id/rooms — НЕ гарантированно иден
 (method='skipped') — Unknown ≠ average (verdict_strategy.md §3.1): без
 всех трёх компонентов хэш ненадёжен, гадать не будем. ЭТО единственная
 причина skipped — недостаток fuzzy-кандидата НЕ является причиной
-skipped ни в одном режиме.
+skipped ни в одном режиме, ВКЛЮЧАЯ candidate_only.
 """
 from __future__ import annotations
 
@@ -221,18 +247,482 @@ def _fuzzy_confidence(area: float, candidate_area: float) -> float:
     return round(max(0.6, 0.9 - diff * 0.3), 2)
 
 
-_VALID_MATCH_MODES = frozenset({"exact_only", "fuzzy"})
+# ── candidate_only: bootstrap + candidate generation (задача 2026-08-16,
+# "безопасная инфраструктура кандидатов" — миграция 086) ────────────────
+
+_MATCHER_VERSION = "candidate_only_v1"
+_PRICE_SEVERE_DIFF_PCT = 0.30  # >30% — прямое противоречие, тот же порог,
+# что scripts/audit_property_match_signals.py (не откалибровано на
+# ground truth, локальная эвристика этого matcher_version).
+
+# Best-effort номер дома — та же эвристика, что была в scripts/audit_
+# property_linker_fuzzy.py::extract_house_number, теперь КАНОНИЧЕСКАЯ
+# здесь (нужна production candidate-generation коду, не только аудиту).
+_HOUSE_NUMBER_RE = re.compile(r"(\d+[а-яА-Яa-zA-Z]?(?:[/\-]\d+[а-яА-Яa-zA-Z]?)?)\s*,?\s*$")
+
+
+def extract_house_number(address: str | None) -> str | None:
+    """Последняя группа "число(+буква/дробь)" в конце СЫРОГО адреса.
+    Эвристика для candidate-сигналов, НЕ участвует в самом address_hash
+    (compute_address_hash его не трогает — см. её докстринг)."""
+    if not address:
+        return None
+    m = _HOUSE_NUMBER_RE.search(address.strip())
+    return m.group(1).lower() if m else None
+
+
+def _normalize_seller_name(raw: str | None) -> str | None:
+    """trim+lower+схлопнутые пробелы — тот же нормализатор, что
+    seller_profile_snapshot.py::_normalize_name, ЛОКАЛЬНО продублирован
+    (не импортируем repo-root скрипт из bot/-пакета — обратная
+    архитектурная зависимость, сама функция — одна строка)."""
+    if not raw:
+        return None
+    return re.sub(r"\s+", " ", raw.strip()).lower()
+
+
+def _active_overlap(a: dict, b: dict) -> bool | None:
+    """Пересекались ли a/b по времени экспозиции — None, если дат не
+    хватает. Та же логика, что в read-only аудитах этой ветки задач
+    (scripts/audit_property_match_signals.py::_active_overlap)."""
+    from datetime import datetime, timezone
+    a_start, b_start = a.get("first_seen"), b.get("first_seen")
+    if a_start is None or b_start is None:
+        return None
+    a_end = a.get("archived_at") or datetime.now(timezone.utc)
+    b_end = b.get("archived_at") or datetime.now(timezone.utc)
+    return a_start <= b_end and b_start <= a_end
+
+
+def _conflict_reasons(anchor: dict, candidate: dict) -> list[str]:
+    """Прямые структурные противоречия — задача 2026-08-16 (мид-ту-
+    уточнение): "simultaneous activity НЕ безусловный конфликт" —
+    ПОЭТОМУ её здесь НЕТ. Только rooms/номер дома/цена — то же, что
+    scripts/audit_property_match_signals.py::classify_tier() считало
+    'rejected', но БЕЗ simultaneously_active (тот аудит-скрипт не
+    трогаем, он read-only историческая находка; здесь — production
+    правило, сознательно уже правильное)."""
+    reasons = []
+    a_rooms, c_rooms = anchor.get("rooms"), candidate.get("rooms")
+    if a_rooms is not None and c_rooms is not None and a_rooms != c_rooms:
+        reasons.append(f"rooms mismatch: {a_rooms} vs {c_rooms}")
+
+    a_hn, c_hn = extract_house_number(anchor.get("address")), extract_house_number(candidate.get("address"))
+    if a_hn is not None and c_hn is not None and a_hn != c_hn:
+        reasons.append(f"house_number mismatch: {a_hn} vs {c_hn}")
+
+    a_price, c_price = anchor.get("price"), candidate.get("price")
+    if a_price and c_price:
+        diff_pct = abs(a_price - c_price) / max(a_price, c_price)
+        if diff_pct > _PRICE_SEVERE_DIFF_PCT:
+            reasons.append(f"price differs {diff_pct * 100:.0f}% (>{_PRICE_SEVERE_DIFF_PCT * 100:.0f}%)")
+    return reasons
+
+
+def classify_relationship(anchor: dict, candidate: dict) -> str:
+    """concurrent_duplicate | relist | possible_same_property | unknown
+    — задача 2026-08-16, мид-ту-уточнение: "Одна физическая квартира
+    может одновременно продаваться через 5 агентов с разными listing_id
+    ... это concurrent_duplicate, а не разные квартиры" — ОТДЕЛЬНО от
+    status (pending/accepted/rejected), НЕ влияет на conflict_reasons.
+
+    strong_evidence сейчас — ТОЛЬКО совпадение номера дома (photo-сигнал
+    — задача явно откладывает perceptual matching на следующий PR, evidence
+    JSONB готов принять его позже, см. migrations/086, но здесь не
+    считается)."""
+    overlap = _active_overlap(anchor, candidate)
+
+    a_hn, c_hn = extract_house_number(anchor.get("address")), extract_house_number(candidate.get("address"))
+    strong_evidence = a_hn is not None and a_hn == c_hn
+
+    a_seller = _normalize_seller_name(anchor.get("seller_name"))
+    c_seller = _normalize_seller_name(candidate.get("seller_name"))
+    seller_equal = (a_seller == c_seller) if (a_seller and c_seller) else None
+    some_evidence = strong_evidence or seller_equal is True
+
+    if overlap is True:
+        if strong_evidence:
+            return "concurrent_duplicate"
+        if some_evidence:
+            return "possible_same_property"
+        return "unknown"
+    if overlap is False:
+        if strong_evidence or some_evidence:
+            return "relist"
+        return "unknown"
+    return "unknown"
+
+
+def _exact_hash_match_score(sibling_count: int) -> float:
+    """НЕ 1.0 просто за совпадение address_hash (задача, явно: "Не
+    ставить match confidence=1.0 только за одинаковый address_hash") —
+    понижается по числу "соседей" (других properties того же (complex_id,
+    floor) в допуске площади — структурный риск многоподъездного ЖК с
+    повторяющейся планировкой, см. docs/property_identity_v2_
+    architecture_audit.md)."""
+    base = 0.9
+    penalty = min(sibling_count, 3) * 0.1
+    return round(max(0.5, base - penalty), 2)
+
+
+_DEDUP_METHOD_SCORE = {"addr_area": 0.8, "addr_price": 0.75, "geo": 0.65, "photo": 0.9}
+
+
+def _dedup_match_score(dup_match: str | None) -> float:
+    """bot/core/dedup_listings.py's dup_match правило -> базовый score —
+    "независимый evidence, но НЕ автоматическое подтверждение" (задача,
+    явно) — попадает в match_score, НЕ форсирует status='accepted'."""
+    return _DEDUP_METHOD_SCORE.get(dup_match, 0.7)
+
+
+class BootstrapIndex:
+    """"Виртуальные" (dry-run) properties этого прохода — та же
+    мотивация, что DryRunCache выше (docstring класса): без него второй
+    listing ТОЙ ЖЕ ещё не виденной квартиры в одном dry-run прогоне не
+    нашёл бы кандидата вовсе (реальная properties за dry-run не
+    меняется). В отличие от DryRunCache — хранит СПИСКИ (не "видели ли
+    вообще"), т.к. candidate_only генерирует МНОЖЕСТВЕННЫЕ кандидаты,
+    не выбирает одного "победителя"."""
+
+    def __init__(self) -> None:
+        self._by_hash: dict[str, list[dict]] = {}
+        self._by_complex_floor: dict[tuple, list[dict]] = {}
+        self._by_listing_id: dict[str, dict] = {}
+
+    def add(self, listing_row: dict, address_hash: str, complex_id: int | None,
+            floor: int | None, area: float | None) -> None:
+        self._by_hash.setdefault(address_hash, []).append(listing_row)
+        if complex_id is not None and floor is not None and area is not None:
+            self._by_complex_floor.setdefault((complex_id, floor), []).append(listing_row)
+        self._by_listing_id[listing_row["id"]] = listing_row
+
+    def find_exact(self, address_hash: str) -> list[dict]:
+        return self._by_hash.get(address_hash, [])
+
+    def find_listing(self, listing_id: str) -> dict | None:
+        """Задача, dedup_listings-сигнал в dry-run: находит "своя ли
+        provisional property" у ДРУГОГО listing'а, если он УЖЕ обработан
+        РАНЬШЕ в этом же проходе — property_listings (реальная БД) за
+        dry-run не меняется, тот же класс проблемы, что и у find_exact/
+        find_fuzzy выше. Листинг, ещё не дошедший до обработки в этом
+        проходе (или обработанный ПОЗЖЕ по текущему порядку), НЕ
+        находится — то же фундаментальное ограничение имел бы и
+        РЕАЛЬНЫЙ (не dry-run) прогон при том же порядке (нельзя увидеть
+        будущее), не отдельный баг dry-run."""
+        return self._by_listing_id.get(listing_id)
+
+    def find_fuzzy(self, complex_id: int, floor: int, area: float, tolerance: float) -> list[dict]:
+        return [r for r in self._by_complex_floor.get((complex_id, floor), [])
+                if r.get("area") is not None and abs(r["area"] - area) <= tolerance]
+
+
+async def _find_exact_hash_properties(address_hash: str) -> list[dict]:
+    """properties с этим address_hash (МОЖЕТ быть несколько — UNIQUE
+    снят миграцией 086) + данные listing'а, из которого КАЖДАЯ была
+    bootstrap'нута (JOIN через property_listings — на данный момент
+    ВСЕГДА 1:1, merge-процесс — следующий PR, см. migrations/086
+    докстринг; если это когда-то перестанет быть 1:1, здесь появятся
+    дубли строк на одну property — не проблема этого PR)."""
+    from bot.db.pg import fetch
+    return await fetch("""
+        SELECT p.property_id, al.id AS listing_id, al.address, al.floor, al.area, al.rooms,
+               al.seller_name, al.price, al.first_seen, al.last_seen, al.archived_at
+        FROM properties p
+        JOIN property_listings pl ON pl.property_id = p.property_id
+        JOIN apartment_listings al ON al.id = pl.listing_id
+        WHERE p.address_hash = $1
+    """, address_hash)
+
+
+async def _find_fuzzy_properties(complex_id: int, floor: int, area: float, tolerance: float) -> list[dict]:
+    """properties того же (complex_id, floor) с area_sqm в допуске —
+    МНОЖЕСТВЕННЫЕ кандидаты (не "ближайший один", в отличие от legacy
+    _find_fuzzy_candidate выше — candidate_only логирует ВСЕ, решение
+    не принимает сам)."""
+    from bot.db.pg import fetch
+    return await fetch("""
+        SELECT p.property_id, al.id AS listing_id, al.address, al.floor, al.area, al.rooms,
+               al.seller_name, al.price, al.first_seen, al.last_seen, al.archived_at
+        FROM properties p
+        JOIN property_listings pl ON pl.property_id = p.property_id
+        JOIN apartment_listings al ON al.id = pl.listing_id
+        WHERE p.complex_id = $1 AND p.floor = $2
+          AND p.area_sqm BETWEEN $3::real - $4::real AND $3::real + $4::real
+    """, complex_id, floor, area, tolerance)
+
+
+async def _find_dedup_candidate_property(listing_row: dict,
+                                          bootstrap_index: "BootstrapIndex | None" = None) -> dict | None:
+    """bot/core/dedup_listings.py's is_duplicate/duplicate_of — живой,
+    независимый прод-сигнал (задача 2026-08-16, "Property Identity v2"
+    нашла: 29.5% apartment_listings уже так помечены, property_linker
+    их не консультировал вовсе). Симметрично: либо ЭТОТ listing
+    указывает duplicate_of на другой, либо какой-то ДРУГОЙ listing
+    указывает duplicate_of на ЭТОТ.
+
+    bootstrap_index — НАЙДЕНО на реальном dry-run прогоне (та же
+    ошибка, что уже была у exact_hash/fuzzy выше): "другой" listing
+    ищется через property_listings, а она в dry-run НИКОГДА не меняется
+    — реальный прогон на 50352 строках дал dedup_candidates=0, хотя
+    29.5% listing'ов помечены is_duplicate. Раз bootstrap_index
+    передан — ищем виртуальную provisional property "другого" listing'а
+    там (если он УЖЕ обработан РАНЬШЕ в этом же проходе); иначе (prod
+    без dry-run) — обычный DB JOIN, как раньше."""
+    from bot.db.pg import fetchrow
+    listing_id = listing_row["id"]
+    duplicate_of = listing_row.get("duplicate_of")
+
+    other_id = None
+    dup_match = listing_row.get("dup_match")
+    if duplicate_of:
+        other_id = duplicate_of
+    else:
+        row = await fetchrow(
+            "SELECT id, dup_match FROM apartment_listings WHERE duplicate_of = $1 LIMIT 1", listing_id)
+        if row:
+            other_id, dup_match = row["id"], row["dup_match"]
+
+    if other_id is None:
+        return None
+
+    if bootstrap_index is not None:
+        other_row = bootstrap_index.find_listing(other_id)
+        if other_row is None:
+            return None
+        result = dict(other_row)
+        result["property_id"] = None  # виртуальная — см. _build_candidate_record
+        result["_dup_match"] = dup_match
+        return result
+
+    row = await fetchrow("""
+        SELECT p.property_id, al.id AS listing_id, al.address, al.floor, al.area, al.rooms,
+               al.seller_name, al.price, al.first_seen, al.last_seen, al.archived_at
+        FROM property_listings pl
+        JOIN properties p ON p.property_id = pl.property_id
+        JOIN apartment_listings al ON al.id = pl.listing_id
+        WHERE pl.listing_id = $1
+    """, other_id)
+    if row is None:
+        return None
+    result = dict(row)
+    result["_dup_match"] = dup_match
+    return result
+
+
+def _build_candidate_record(listing_row: dict, candidate_row: dict, match_method: str,
+                             match_score: float) -> dict:
+    """Одна запись-кандидат (для INSERT в property_match_candidates или
+    для dry-run статистики) — evidence/conflict_reasons/relationship_type
+    все посчитаны здесь, единая точка правды для ВСЕХ трёх источников
+    сигнала (exact_hash/fuzzy/dedup_listings) — задача: "переиспользовать
+    существующие механизмы, не писать четвёртый matcher" — это НЕ
+    четвёртый matcher, это ОБЩАЯ evidence-обвязка над уже существующими
+    тремя источниками (address_hash/fuzzy tolerance из этого модуля,
+    is_duplicate/duplicate_of из bot/core/dedup_listings.py)."""
+    conflict_reasons = _conflict_reasons(listing_row, candidate_row)
+    relationship_type = classify_relationship(listing_row, candidate_row)
+    overlap = _active_overlap(listing_row, candidate_row)
+    a_hn, c_hn = extract_house_number(listing_row.get("address")), extract_house_number(candidate_row.get("address"))
+    a_seller = _normalize_seller_name(listing_row.get("seller_name"))
+    c_seller = _normalize_seller_name(candidate_row.get("seller_name"))
+
+    evidence = {
+        "rooms_a": listing_row.get("rooms"), "rooms_b": candidate_row.get("rooms"),
+        "house_number_a": a_hn, "house_number_b": c_hn,
+        "seller_equal": (a_seller == c_seller) if (a_seller and c_seller) else None,
+        "price_a": listing_row.get("price"), "price_b": candidate_row.get("price"),
+        "simultaneously_active": overlap,
+        # Perceptual photo-matching — СЛЕДУЮЩИЙ PR (задача, явно: "не
+        # реализовывать автоматический photo merge в текущем PR, но не
+        # закладывать в схему ошибочное правило simultaneous_active =
+        # rejected" — ключи зарезервированы, метод пока не реализован;
+        # URL фотографий СОЗНАТЕЛЬНО не используется как идентификатор
+        # здесь, см. migrations/086 докстринг).
+        "photo_signal": {"method": "not_implemented", "shared_rare_photo_count": None,
+                          "shared_common_photo_count": None},
+    }
+    if match_method == "dedup_listings":
+        evidence["dedup_dup_match"] = candidate_row.get("_dup_match")
+
+    is_rejected_by_conflict = bool(conflict_reasons)
+
+    return {
+        "listing_id": listing_row["id"],
+        "candidate_property_id": candidate_row["property_id"],
+        "match_method": match_method,
+        "match_score": match_score,
+        "relationship_type": relationship_type,
+        "evidence": evidence,
+        "conflict_reasons": conflict_reasons or None,
+        "matcher_version": _MATCHER_VERSION,
+        "status": "rejected" if is_rejected_by_conflict else "pending",
+        "rejected_by_conflict": is_rejected_by_conflict,
+    }
+
+
+async def _generate_candidates(listing_row: dict, address_hash: str, complex_id: int | None,
+                                bootstrap_index: "BootstrapIndex | None") -> list[dict]:
+    """Собирает кандидатов из ВСЕХ трёх источников сигнала для ОДНОГО
+    listing'а против УЖЕ СУЩЕСТВУЮЩИХ properties (см. вызывающий код —
+    candidate-generation идёт ДО bootstrap'а этого же listing'а, чтобы
+    его собственная property не попала в кандидаты сама к себе)."""
+    listing_id = listing_row["id"]
+    floor, area, rooms = listing_row.get("floor"), listing_row.get("area"), listing_row.get("rooms")
+    candidates: list[dict] = []
+    seen_property_ids: set[int | None] = set()
+
+    # exact_hash
+    exact_rows = list(await _find_exact_hash_properties(address_hash))
+    if bootstrap_index is not None:
+        exact_rows += [{"property_id": None, **r} for r in bootstrap_index.find_exact(address_hash)
+                       if r["id"] != listing_id]
+    sibling_count = max(len(exact_rows) - 1, 0)
+    for row in exact_rows:
+        row = dict(row)
+        if row.get("listing_id", row.get("id")) == listing_id:
+            continue
+        pid = row.get("property_id")
+        key = pid if pid is not None else ("virtual", row.get("listing_id") or row.get("id"))
+        if key in seen_property_ids:
+            continue
+        seen_property_ids.add(key)
+        row.setdefault("id", row.get("listing_id"))
+        # НАЙДЕНО на первом реальном dry-run прогоне: "if pid is not
+        # None" здесь молча выбрасывал ВСЕ виртуальные (bootstrap_index,
+        # ещё не вставленные в БД) кандидаты из результата — тот же
+        # класс бага, что уже дважды ловили в этой ветке задач
+        # (DryRunCache для fuzzy в P1, потом exact_only) — dry-run
+        # candidate_only показывал 0 exact/fuzzy кандидатов на ВСЕЙ базе
+        # (50352 строк), хотя предыдущие read-only аудиты нашли тысячи.
+        # candidate_property_id=None для виртуальных — их и так никогда
+        # не вставляют в БД (см. _link_candidate_only: INSERT кандидатов
+        # только в НЕ-dry-run ветке, где bootstrap_index всегда None,
+        # pid всегда реальный) — здесь они нужны ТОЛЬКО для честной
+        # dry-run статистики.
+        candidates.append(_build_candidate_record(
+            listing_row, row, "exact_hash", _exact_hash_match_score(sibling_count)))
+
+    # fuzzy (только с известным complex_id — тот же принцип, что exact_only)
+    if complex_id is not None and floor is not None and area is not None:
+        fuzzy_rows = list(await _find_fuzzy_properties(complex_id, floor, area, _FUZZY_AREA_TOLERANCE))
+        if bootstrap_index is not None:
+            fuzzy_rows += [{"property_id": None, **r}
+                           for r in bootstrap_index.find_fuzzy(complex_id, floor, area, _FUZZY_AREA_TOLERANCE)
+                           if r["id"] != listing_id]
+        for row in fuzzy_rows:
+            row = dict(row)
+            listing_key = row.get("listing_id", row.get("id"))
+            if listing_key == listing_id:
+                continue
+            pid = row.get("property_id")
+            key = pid if pid is not None else ("virtual", listing_key)
+            if key in seen_property_ids:
+                continue
+            seen_property_ids.add(key)
+            row.setdefault("id", listing_key)
+            # Тот же фикс, что выше в exact_hash — виртуальные (dry-run)
+            # кандидаты тоже считаются, не только реальные.
+            score = _fuzzy_confidence(area, row.get("area") or area)
+            candidates.append(_build_candidate_record(listing_row, row, "fuzzy", score))
+
+    # dedup_listings — bootstrap_index передаём (см. _find_dedup_candidate_
+    # property докстринг: реальная property_listings за dry-run не
+    # меняется, тот же класс бага, что уже был у exact_hash/fuzzy).
+    dedup_row = await _find_dedup_candidate_property(listing_row, bootstrap_index)
+    if dedup_row is not None:
+        pid = dedup_row.get("property_id")
+        key = pid if pid is not None else ("virtual", dedup_row.get("listing_id"))
+        if key not in seen_property_ids:
+            seen_property_ids.add(key)
+            score = _dedup_match_score(dedup_row.get("_dup_match"))
+            candidates.append(_build_candidate_record(listing_row, dedup_row, "dedup_listings", score))
+
+    return candidates
+
+
+_VALID_MATCH_MODES = frozenset({"candidate_only", "exact_only", "fuzzy"})
+
+
+async def _link_candidate_only(listing_row: dict, address_hash: str, complex_id: int | None,
+                                dry_run: bool, bootstrap_index: "BootstrapIndex | None") -> dict:
+    """match_mode="candidate_only" — задача 2026-08-16, "безопасная
+    инфраструктура кандидатов". listing → ВСЕГДА своя provisional
+    property (bootstrap, НЕ поиск существующей); exact_hash/fuzzy/
+    dedup_listings сигналы генерируют property_match_candidates строки,
+    НИКОГДА не создают hard link (задача: "exact address_hash НЕ
+    создаёт hard link... все совпадения становятся property_match_
+    candidates"). bootstrap_index — BootstrapIndex (НЕ DryRunCache —
+    разный тип по дизайну, candidate_only генерирует множественных
+    кандидатов, не выбирает "победителя" как exact_only/fuzzy режимы)."""
+    from bot.db.pg import execute, fetchval
+    import json
+
+    listing_id = listing_row["id"]
+    floor, area, rooms = listing_row.get("floor"), listing_row.get("area"), listing_row.get("rooms")
+    listing_first_seen = listing_row.get("first_seen")
+    listing_evidence_at = listing_row.get("archived_at") or listing_row.get("last_seen")
+
+    # Кандидаты — ПРОТИВ уже существующих properties, ДО bootstrap'а
+    # ЭТОГО listing'а (иначе его собственная новая property попала бы
+    # в кандидаты сама к себе).
+    candidates = await _generate_candidates(listing_row, address_hash, complex_id, bootstrap_index)
+
+    if dry_run:
+        if bootstrap_index is not None:
+            bootstrap_index.add(listing_row, address_hash, complex_id, floor, area)
+        return {"property_id": None, "method": "bootstrap", "confidence": 1.0, "created": True,
+                "match_mode": "candidate_only", "fuzzy_candidate": None, "skip_reason": None,
+                "candidates": candidates}
+
+    # НЕТ ON CONFLICT на address_hash — UNIQUE снят миграцией 086,
+    # bootstrap ВСЕГДА создаёт НОВУЮ строку, никогда не находит/апсертит
+    # существующую (задача: "новый listing → отдельная provisional
+    # property").
+    new_id = await fetchval(
+        """
+        INSERT INTO properties (complex_id, address_hash, floor, area_sqm, rooms, first_seen_at, last_seen_at)
+        VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()), COALESCE($7, $6, now()))
+        RETURNING property_id
+        """,
+        complex_id, address_hash, floor, area, rooms, listing_first_seen, listing_evidence_at,
+    )
+    await execute(
+        "INSERT INTO property_listings (property_id, listing_id, link_method, confidence, matcher_version) "
+        "VALUES ($1, $2, 'bootstrap', 1.0, $3) ON CONFLICT (listing_id) DO NOTHING",
+        new_id, listing_id, _MATCHER_VERSION,
+    )
+    for c in candidates:
+        await execute(
+            """
+            INSERT INTO property_match_candidates
+                (listing_id, candidate_property_id, match_method, match_score, relationship_type,
+                 evidence, conflict_reasons, matcher_version, status)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
+            ON CONFLICT (listing_id, candidate_property_id) DO NOTHING
+            """,
+            c["listing_id"], c["candidate_property_id"], c["match_method"], c["match_score"],
+            c["relationship_type"], json.dumps(c["evidence"], default=str, ensure_ascii=False),
+            json.dumps(c["conflict_reasons"], ensure_ascii=False) if c["conflict_reasons"] else None,
+            c["matcher_version"], c["status"],
+        )
+
+    return {"property_id": new_id, "method": "bootstrap", "confidence": 1.0, "created": True,
+            "match_mode": "candidate_only", "fuzzy_candidate": None, "skip_reason": None,
+            "candidates": candidates}
 
 
 async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
-                                    dry_run_cache: "DryRunCache | None" = None,
-                                    match_mode: str = "exact_only") -> dict:
+                                    dry_run_cache: "DryRunCache | BootstrapIndex | None" = None,
+                                    match_mode: str = "candidate_only") -> dict:
     """Основная точка входа. listing_row — строка apartment_listings (или
     dict с теми же ключами): id, address, floor, area, rooms, complex_name.
 
     match_mode — см. докстринг модуля ("false positive merge хуже false
-    negative duplicate"): "exact_only" (ДЕФОЛТ, безопасный — единственный
-    режим для прод-записи) | "fuzzy" (LEGACY, только явный opt-in,
+    negative duplicate"): "candidate_only" (ДЕФОЛТ, задача 2026-08-16
+    "безопасная инфраструктура кандидатов" — единственный режим для
+    прод-записи) | "exact_only" (LEGACY с этой задачи, только явный
+    opt-in — линкует по точному address_hash, БЕЗ candidate-таблицы) |
+    "fuzzy" (LEGACY, только явный opt-in,
     НИКОГДА не дефолт — задача: "старый unsafe fuzzy режим нельзя
     случайно включить по умолчанию"). ValueError на любое другое
     значение — опечатка в вызывающем коде не должна тихо деградировать
@@ -310,6 +800,9 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
                 "skip_reason": _skip_reason(address, floor, area)}
 
     complex_id = await _resolve_complex_id(complex_name)
+
+    if match_mode == "candidate_only":
+        return await _link_candidate_only(listing_row, address_hash, complex_id, dry_run, dry_run_cache)
 
     # Шаг 2: точный хэш — либо реальная строка в properties, либо (только
     # dry-run) хэш, который УЖЕ "создан" бы этим же прогоном раньше
@@ -391,21 +884,23 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
         return {"property_id": None, "method": "auto", "confidence": 1.0, "created": True,
                 "match_mode": match_mode, "fuzzy_candidate": fuzzy_candidate_info, "skip_reason": None}
 
-    # ON CONFLICT (address_hash) — гонка с другим прогоном/листингом на
-    # тот же хэш между шагом 2 и этой вставкой не создаёт дубль (DO
-    # UPDATE вместо DO NOTHING — нужен property_id результата независимо
-    # от того, эта ли вставка выиграла гонку; та же LEAST/GREATEST-логика
-    # на случай, если конкурент уже вставил строку с другими датами).
-    # COALESCE(..., now()) в INSERT — если у listing вообще нет
-    # first_seen/last_seen (в теории невозможно, DEFAULT now() на самой
-    # колонке, но не полагаемся на это молча).
+    # НАЙДЕНО задачей 2026-08-16 ("безопасная инфраструктура кандидатов",
+    # миграция 086): UNIQUE(address_hash) СНЯТ (сознательно — она
+    # структурно запрещала 2 properties с одинаковым хэшем даже когда
+    # это 2 реальные разные квартиры, см. migrations/086 докстринг) —
+    # "ON CONFLICT (address_hash)" больше НЕ РАБОТАЕТ (нет unique/
+    # exclusion constraint на эту колонку, Postgres ошибается
+    # InvalidColumnReferenceError). exact_only/fuzzy — LEGACY-режимы с
+    # этой же задачи (research-only, НЕ прод-дефолт, single-process
+    # backfill без конкурентной записи) — race-condition защита была
+    # чисто оборонительной на случай конкурентного прогона, которого
+    # штатно не бывает; терять её здесь — приемлемый, задокументированный
+    # компромисс, не переносим её обратно как отдельный UNIQUE-индекс
+    # (это откатило бы миграцию 086 наполовину). Простой INSERT.
     new_id = await fetchval(
         """
         INSERT INTO properties (complex_id, address_hash, floor, area_sqm, rooms, first_seen_at, last_seen_at)
         VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()), COALESCE($7, $6, now()))
-        ON CONFLICT (address_hash) DO UPDATE SET
-          first_seen_at = LEAST(properties.first_seen_at, COALESCE($6, properties.first_seen_at)),
-          last_seen_at = GREATEST(properties.last_seen_at, COALESCE($7, properties.last_seen_at))
         RETURNING property_id
         """,
         complex_id, address_hash, floor, area, rooms, listing_first_seen, listing_evidence_at,
