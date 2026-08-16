@@ -423,9 +423,18 @@ async def _cleanup(complex_id, *listing_ids):
 async def test_simulation_matches_real_linker_dry_run(db):
     """simulate_linking(RULES["A_baseline"]) на listing_id ASC должно
     дать ТЕ ЖЕ auto_new/fuzzy/auto_existing/skipped, что реальный
-    bot.identity.property_linker.link_listing_to_property(dry_run=True) —
-    единственная гарантия, что весь остальной аудит (агрегаты/risk/
-    rule-сравнение) не строится на разошедшейся копии правил."""
+    bot.identity.property_linker.link_listing_to_property(dry_run=True,
+    match_mode="fuzzy") — единственная гарантия, что весь остальной
+    аудит (агрегаты/risk/rule-сравнение) не строится на разошедшейся
+    копии ИМЕННО LEGACY fuzzy-алгоритма (RULES["A_baseline"] здесь =
+    старое greedy fuzzy-поведение, задача "аудит property linker fuzzy
+    matching"). match_mode ЯВНО "fuzzy" — задача 2026-08-16 ("безопасный
+    exact-only property linker") сменила ДЕФОЛТ линковщика на
+    "exact_only"; без явного match_mode этот тест сравнивал бы
+    RULES["A_baseline"] (fuzzy-алгоритм) с ДРУГИМ, безопасным режимом —
+    несопоставимые вещи, тест был бы не про то, что заявлен (найдено
+    при разборе падения CI PR #5, задача "минимальный интеграционный
+    фикс")."""
     from audit_property_linker_fuzzy import simulate_linking, RULES
     from bot.identity.property_linker import link_listing_to_property, DryRunCache
 
@@ -463,7 +472,7 @@ async def test_simulation_matches_real_linker_dry_run(db):
             result = await link_listing_to_property(
                 {"id": lid, "address": address, "floor": floor, "area": area, "rooms": rooms,
                  "complex_name": complex_name},
-                dry_run=True, dry_run_cache=dry_run_cache,
+                dry_run=True, dry_run_cache=dry_run_cache, match_mode="fuzzy",
             )
             if result["method"] == "skipped":
                 real_stats["skipped"] += 1
