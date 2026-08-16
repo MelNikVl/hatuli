@@ -1,8 +1,20 @@
 """Регрессия для Фазы B, п.3 вердикт-стратегии (docs/verdict_strategy.md,
 задача 2026-08-14): housing_class_model_recompute.py — обучение +
-применение класс-модели на реальной БД. Полный прогон дешёвый (~2097
-complexes, ~3с, не апартаменты) — отдельного listing_ids-скоупинга не
-требуется, в отличие от apartment_listings-масштабных скриптов."""
+применение класс-модели. На РЕАЛЬНОЙ dev-БД обучающая выборка уже есть
+(~2097 complexes, часть с ручной меткой housing_class) — но тесты не
+должны молча на неё рассчитывать: на пустой БД (CI, задача 2026-08-16,
+"P0 — Integrity", закрытие --deselect) `labeled` пуст, GaussianNB не
+обучается ни на одном классе, predict()/evaluate_holdout() честно
+возвращают None (Unknown ≠ average — bot/core/housing_class_model.py
+не гадает без обучающих данных, это НЕ баг). training_pool ниже сеет
+свою МИНИМАЛЬНУЮ синтетическую обучающую выборку (2 класса x 5 строк —
+evaluate_holdout() кладёt классы <5 примеров целиком в train, без
+holdout; 5 — минимум для непустого holdout хотя бы по одному классу),
+не полагаясь ни на объём, ни на состав реальных данных. Тесты не
+проверяют ТОЧНОСТЬ модели (даже на реальной БД две фичи — цена/год —
+осознанно слабый сигнал, см. докстринг housing_class_model.py) — только
+то, что пайплайн размечает/предсказывает/считает holdout-метрику вообще,
+это тестируемо на любой, в т.ч. крошечной, обучающей выборке."""
 import os
 import sys
 
@@ -23,6 +35,30 @@ async def db():
     await init_pool(DATABASE_URL)
     yield
     await close_pool()
+
+
+@pytest_asyncio.fixture
+async def training_pool(db):
+    """Минимальная синтетическая обучающая выборка — 2 класса x 5
+    строк, с намеренно далеко разнесёнными (price, year), чтобы
+    GaussianNB тренировался устойчиво независимо от того, что ещё есть
+    в complexes (0 строк на CI, ~2097 на dev — работает в обоих
+    случаях)."""
+    ids = []
+    # "элит": дорого, недавно построено.
+    for i in range(5):
+        ids.append(await _insert_complex(
+            f"__test_hcm_train_elite_{i}__", housing_class="элит",
+            avg_price_m2=1_100_000 + i * 10_000, year_built=2022 + (i % 3)))
+    # "эконом": дёшево, старая застройка.
+    for i in range(5):
+        ids.append(await _insert_complex(
+            f"__test_hcm_train_econ_{i}__", housing_class="эконом",
+            avg_price_m2=280_000 + i * 5_000, year_built=1975 + (i % 20)))
+    try:
+        yield ids
+    finally:
+        await _cleanup(*ids)
 
 
 async def _insert_complex(name, housing_class=None, avg_price_m2=None, year_built=None):
@@ -60,7 +96,7 @@ async def test_manual_label_preserved_not_overwritten_by_prediction(db):
 
 
 @pytest.mark.asyncio
-async def test_unlabeled_with_known_features_gets_prediction(db):
+async def test_unlabeled_with_known_features_gets_prediction(db, training_pool):
     from housing_class_model_recompute import run_recompute
     from bot.db.pg import fetchrow
     cid = await _insert_complex("__test_hcm_predict__", housing_class=None,
@@ -97,7 +133,7 @@ async def test_missing_features_gets_null_source_not_guessed(db):
 
 
 @pytest.mark.asyncio
-async def test_unmappable_manual_label_treated_as_no_manual_label(db):
+async def test_unmappable_manual_label_treated_as_no_manual_label(db, training_pool):
     # "премиум" не входит в 4-тиерную таксономию -> normalize_label даёт
     # None -> НЕ считается ручной меткой для целей source='manual', сам
     # complex получает предсказание, как если бы housing_class был пуст
@@ -116,7 +152,7 @@ async def test_unmappable_manual_label_treated_as_no_manual_label(db):
 
 
 @pytest.mark.asyncio
-async def test_recompute_returns_summary_counts(db):
+async def test_recompute_returns_summary_counts(db, training_pool):
     from housing_class_model_recompute import run_recompute
     summary = await run_recompute()
     assert summary["total"] == summary["manual"] + summary["predicted"] + summary["unknown"]

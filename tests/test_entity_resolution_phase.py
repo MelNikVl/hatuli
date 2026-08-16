@@ -10,7 +10,22 @@
 Требует живой Postgres (DATABASE_URL/.env, как у остальных скриптов
 проекта) — score_match() считает pg_trgm similarity() в БД, не в
 Python. Запуск: venv/bin/pytest tests/test_entity_resolution_phase.py -v
-"""
+
+Часть тестов ниже (Family Nest/Tandau — помечены @pytest.mark.live_data,
+задача 2026-08-16, "P0 — Integrity") читают КОНКРЕТНЫЕ строки прод-БД по
+id (3743/2481/2217) — они принципиально не CI-совместимы (CI не
+исключение, GitHub-hosted раннер физически не видит домашний Postgres),
+см. pytest.ini про сам маркер. Сознательно НЕ переписаны на синтетические
+значения (в отличие от соседних test_different_letter_blocks_never_auto/
+test_darmen_*, которые уже используют выдуманные гео/имена для ДРУГОГО
+класса проверки — общей логики letter/phase-token, не конкретной
+исторической границы): эти конкретные тройки нашли РЕАЛЬНУЮ, некруглую
+границу confidence (например 0.81 auto ДО фикса на Family Nest F) — сама
+идея этого файла ("живые данные, не выдуманные числа") в том, что
+подобранные вручную синтетические гео/адрес/застройщик рискуют либо
+тривиально всегда проходить, либо не воспроизвести именно ту грань,
+ради которой тест написан. Изменение этого решения — отдельная задача,
+не часть закрытия --deselect."""
 import os
 import sys
 
@@ -190,6 +205,7 @@ async def test_sibling_pair_never_auto(db, base_name, base_lat, base_lon, base_d
 #    тот же класс ошибки, что Darmen/Nur Aspan, просто литерой вместо
 #    номера. ────────────────────────────────────────────────────────
 
+@pytest.mark.live_data
 @pytest.mark.asyncio
 async def test_family_nest_base_vs_letter_block_capped_to_review(db):
     """Безномерная 'Family Nest' против буквенного блока 'Family Nest F' —
@@ -213,6 +229,7 @@ async def test_family_nest_base_vs_letter_block_capped_to_review(db):
     assert "block:f" in method and "?~implicit" in method, method
 
 
+@pytest.mark.live_data
 @pytest.mark.asyncio
 async def test_same_letter_block_matches_auto(db):
     """Тот же блок 'F' с двух разных источников — номера/буквы совпадают,
@@ -259,6 +276,7 @@ async def test_different_letter_blocks_never_auto(db):
 #    без единого сигнала фазы/блока (никакого phase_* в methods).
 # ────────────────────────────────────────────────────────────────────
 
+@pytest.mark.live_data
 @pytest.mark.asyncio
 async def test_tandau_translit_matches_auto(db):
     """Tandau (id=2217) vs Тандау (id=2563, до слияния) — прямой pg_trgm

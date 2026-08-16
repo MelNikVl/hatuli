@@ -139,6 +139,18 @@ async def _select_candidates(limit: int) -> list[dict]:
 
     remaining = limit - len(candidates)
     if remaining > 0:
+        # БАГ (найден 2026-08-16 тестом на пустой/малонаселённой БД —
+        # test_cold_confirm_only_for_listings_missed_this_circle, на
+        # реальных 42к+ строк маскировался объёмом данных): backlog ниже
+        # отбирает по archive_checked_at IS NULL — тому же признаку, что
+        # и cold_confirm выше (тот тоже допускает archive_checked_at IS
+        # NULL через OR). Без исключения id, уже отобранных cold_confirm,
+        # одна и та же строка попадала в candidates ДВАЖДЫ — с меткой
+        # 'cold_confirm', следом с 'backlog' (бюджет цикла тратился на
+        # неё дважды, а вызывающий код, строящий {id: pool}, молча терял
+        # первую запись). "id != ALL(...)" ниже исключает уже отобранные
+        # hot/cold_confirm id из выборки backlog.
+        candidate_ids = [c["id"] for c in candidates]
         # Страховка: круга каталога ещё не было (первый запуск после
         # деплоя) ИЛИ hot+cold-confirm не выбрали весь бюджет цикла —
         # добираем никогда не проверенных (старый бэклог, 34983 на
@@ -147,9 +159,10 @@ async def _select_candidates(limit: int) -> list[dict]:
             SELECT id, url, 'backlog' AS pool FROM apartment_listings
             WHERE is_active IS NOT FALSE AND url IS NOT NULL AND score_total < $2
               AND archive_checked_at IS NULL
+              AND id != ALL($3::text[])
             ORDER BY first_seen ASC NULLS FIRST
             LIMIT $1
-        """, remaining, HOT_SCORE_THRESHOLD)
+        """, remaining, HOT_SCORE_THRESHOLD, candidate_ids)
         candidates += list(backlog)
 
     return candidates

@@ -1,0 +1,24 @@
+-- Правка default-дрейфа (задача 2026-08-16, "P0 — Integrity", закрытие
+-- --deselect в CI) — apartment_listings.score_total: migrations/000_
+-- core_tables.sql объявляет "score_total INTEGER DEFAULT 0", но на
+-- живой БД у этой колонки НЕТ default (NULL для только что вставленной
+-- строки, до первого скоринга) — найдено тестом test_deal_score_as_of_
+-- filters.py::test_as_of_backtest_does_not_write_to_db на пустой CI-БД
+-- (там DEFAULT 0 из 000_core_tables.sql реально сработал бы, поэтому
+-- падало "assert 0 is None").
+--
+-- NULL — правильное, НЕ 0 — то же "Unknown ≠ average" (verdict_
+-- strategy.md §3.1), которым весь проект уже руководствуется
+-- повсеместно: 0 неотличим от настоящего катастрофического скора,
+-- значит "ещё не посчитан" обязан быть NULL, не 0. Кто-то уже снял
+-- default на проде раньше (сама причина, почему тест написан именно
+-- так), просто миграция это никогда не фиксировала — тот же класс
+-- долга, что закрывали migrations/000_baseline_*.sql/039b_baseline_
+-- missing_columns.sql, только на уровень DEFAULT, не CREATE.
+--
+-- DROP DEFAULT безопасен и идемпотентен сам по себе (не ошибка, если
+-- default уже отсутствует) — НЕ трогает уже существующие строки (их
+-- текущее значение score_total, будь то 0 или посчитанное число,
+-- остаётся как есть; влияет только на БУДУЩИЕ INSERT без явного
+-- score_total).
+ALTER TABLE apartment_listings ALTER COLUMN score_total DROP DEFAULT;

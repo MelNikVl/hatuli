@@ -127,7 +127,30 @@ async def test_hot_ordered_by_staleness_within_pool(db):
 async def test_cold_confirm_only_for_listings_missed_this_circle(listings):
     """Круг стартовал 25ч назад. cold_stale (last_seen 30ч назад, до
     начала круга) — кандидат с меткой cold_confirm; cold_fresh (last_seen
-    сейчас, внутри круга) — НЕ кандидат вовсе (не пропадал из каталога)."""
+    сейчас, внутри круга) — НЕ должен получить метку cold_confirm (не
+    пропадал из каталога, "подтверждать" тут нечего).
+
+    cold_fresh МОЖЕТ легитимно оказаться в backlog — это не баг и не
+    противоречие: backlog, по докстрингу archive_check.py и Adaptive
+    Recheck Plan (docs/adaptive_recheck_plan.md), это "страховка: круга
+    ещё не было, или бюджет остался" — добирает НИКОГДА НЕ ПРОВЕРЯВШИЕСЯ
+    объявления (archive_checked_at IS NULL) на свободный бюджет цикла,
+    независимо от того, попало ли объявление в текущий круг каталога —
+    это два ортогональных сигнала (точечная проверка НЕ то же самое, что
+    присутствие в каталожной выдаче). Раньше эта функция утверждала
+    обратное ("НЕ кандидат вовсе") — снято 2026-08-16: то было over-
+    specification, не описанное ни в docstring archive_check.py, ни в
+    плане фичи, и не то, что тест реально был обязан проверять.
+
+    ОТДЕЛЬНЫЙ найденный здесь баг (исправлен в archive_check.py,
+    _select_candidates): backlog-запрос раньше НЕ исключал id, уже
+    отобранные cold_confirm (тот же признак archive_checked_at IS NULL
+    подходит под оба пула) — одна и та же строка попадала в candidates
+    ДВАЖДЫ, и cold_stale реально получал бы 'backlog' вместо
+    'cold_confirm' (последняя запись в {id: pool} побеждает). На
+    реальных 42к+ строк это маскировалось объёмом данных — cold_confirm
+    обычно выбирал весь remaining-бюджет ДО backlog, эта строка ниже
+    ловит регресс на любом размере БД."""
     from bot.core.archive_check import _select_candidates
     from bot.db import settings as app_settings
 
@@ -137,7 +160,8 @@ async def test_cold_confirm_only_for_listings_missed_this_circle(listings):
         cands = await _select_candidates(BIG_LIMIT)
         by_id = {c["id"]: c["pool"] for c in cands}
         assert by_id.get("__test_cold_stale__") == "cold_confirm"
-        assert "__test_cold_fresh__" not in by_id, "видели в этом круге — не должно быть кандидатом"
+        assert by_id.get("__test_cold_fresh__") != "cold_confirm", (
+            "видели в этом круге — не должно 'подтверждаться' как пропавшее")
     finally:
         await _set_circle_started(app_settings, None)
 

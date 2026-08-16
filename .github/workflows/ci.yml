@@ -93,26 +93,32 @@ jobs:
           asyncio.run(main())
           "
 
-      # 10 тестов из 634 намеренно исключены ТОЛЬКО здесь (файлы тестов НЕ
-      # трогали — на рабочей БД с реальными данными они как проходили, так
-      # и проходят, 634/634). 9 из 10 сами документируют в assert-сообщении/
-      # докстринге, что требуют конкретные строки живого прода (напр.
-      # "фикстура предполагает id=3743 'Family Nest' в БД", "~2097
-      # complexes" для housing_class-модели) — данные, не структура.
-      #
-      # test_as_of_backtest_does_not_write_to_db — ИНОЕ по природе: ловит
-      # реальное расхождение схемы (apartment_listings.score_total имеет
-      # DEFAULT 0 в migrations/000_core_tables.sql, но НЕ имеет default на
-      # проде — там NULL до первого скоринга) — синтетическая вставка
-      # получает 0 вместо ожидаемого NULL. Потенциально чинится одной
-      # строкой (ALTER COLUMN score_total DROP DEFAULT), но это уже другой
-      # класс дрейфа (значение по умолчанию, не отсутствие таблицы/
-      # колонки) — сознательно вне этого блока (baseline закрывал именно
-      # "таблица/колонка не существует", не "default не совпадает").
-      #
-      # Проверено эмпирически (2026-08-16, подготовка этого workflow) — без
-      # --deselect ниже job красный на первом же прогоне не из-за CI, а по
-      # этим двум причинам.
+      # ИСТОРИЯ (задача 2026-08-16, "P0 — Integrity", закрытие --deselect):
+      # изначально здесь стоял список из 10 --deselect (см. git-историю
+      # этого файла) — временная затычка, назначенная "кладбищем тестов".
+      # Разобраны по одному:
+      #   - 2 были РЕАЛЬНЫМИ БАГАМИ, замаскированными объёмом данных на
+      #     dev-БД (bot/core/archive_check.py::_select_candidates — backlog
+      #     не исключал уже отобранные cold_confirm id; apartment_listings.
+      #     score_total — DEFAULT 0 в 000_core_tables.sql расходился с
+      #     продом, migrations/082_score_total_no_default.sql) — исправлены
+      #     в коде/миграции, тесты снова в общем прогоне ниже.
+      #   - 5 требовали не конкретных ПРОДОВЫХ строк, а вообще ЛЮБЫХ
+      #     синтетических (housing_class-модели — обучающая выборка;
+      #     entity_resolution record_link — любые 2 complex_id) — получили
+      #     свои seed-фикстуры, тоже снова в общем прогоне.
+      #   - 3 (Family Nest/Tandau, tests/test_entity_resolution_phase.py)
+      #     остаются live-only — калибровка на КОНКРЕТНЫХ исторических
+      #     находках (docs/entity_resolution_plan.md), не воспроизводимая
+      #     синтетикой без риска перестать защищать то, ради чего написана
+      #     (см. докстринг файла). Помечены @pytest.mark.live_data
+      #     (регистрация — pytest.ini) — `-m "not live_data"` ниже, а не
+      #     хардкод трёх имён: новый live-only тест просто получает тот же
+      #     маркер, без правки этого workflow. GitHub-hosted раннер (ЭТОТ
+      #     job) не self-hosted и не может достучаться до Postgres на
+      #     домашнем сервере — не "отдельный CI-job", который переносил бы
+      #     эти 3 теста в CI, а честно НЕ в CI вовсе, только
+      #     `venv/bin/pytest -m live_data` локально/руками.
       #
       # ПРАВКА (второй прогон, 9ef8411, был красным на этом шаге — pytest
       # exit 2, "Interrupted: 1 error during collection"): голый `pytest`
@@ -127,18 +133,7 @@ jobs:
       # test_server_search.py не переименовывал/не трогал — не в рамках
       # "минимальный CI", отдельная мелкая находка.
       - name: pytest (полный suite, без параллельных флагов)
-        run: >
-          pytest tests/ -q --tb=short
-          --deselect tests/test_archive_check_pools.py::test_cold_confirm_only_for_listings_missed_this_circle
-          --deselect tests/test_deal_score_as_of_filters.py::test_as_of_backtest_does_not_write_to_db
-          --deselect tests/test_entity_resolution_phase.py::test_family_nest_base_vs_letter_block_capped_to_review
-          --deselect tests/test_entity_resolution_phase.py::test_same_letter_block_matches_auto
-          --deselect tests/test_entity_resolution_phase.py::test_tandau_translit_matches_auto
-          --deselect tests/test_entity_resolution_record_link.py::test_already_linked_same_complex_no_queue_write
-          --deselect tests/test_entity_resolution_record_link.py::test_conflict_on_different_complex_still_routes_to_queue
-          --deselect tests/test_housing_class_model_recompute.py::test_unlabeled_with_known_features_gets_prediction
-          --deselect tests/test_housing_class_model_recompute.py::test_unmappable_manual_label_treated_as_no_manual_label
-          --deselect tests/test_housing_class_model_recompute.py::test_recompute_returns_summary_counts
+        run: pytest tests/ -q --tb=short -m "not live_data"
 
       - name: Import smoke test
         run: |
