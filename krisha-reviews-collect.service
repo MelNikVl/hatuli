@@ -1,0 +1,11 @@
+[Unit]
+Description=Ежедневный сбор отзывов из всех источников в reviews_raw (reviews_pipeline.py) — задача 2026-08-16
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/reviews_pipeline.py --limit 100
+StandardOutput=append:/home/nik/krisha_bot/reviews_pipeline.log
+StandardError=append:/home/nik/krisha_bot/reviews_pipeline.log

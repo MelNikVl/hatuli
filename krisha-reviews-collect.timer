@@ -1,0 +1,14 @@
+[Unit]
+Description=Таймер ежедневного сбора отзывов (reviews_pipeline.py -> reviews_raw) — задача 2026-08-16
+
+[Timer]
+# 03:00 — ночное окно между бэкапом и утренними джобами; per-ЖК
+# инкрементальность (refresh-окно 25 дн) внутри reviews_pipeline.py,
+# ежедневный запуск лишь догоняет очередь порцией --limit 100.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=10m
+Persistent=true
+Unit=krisha-reviews-collect.service
+
+[Install]
+WantedBy=timers.target
