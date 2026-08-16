@@ -75,10 +75,10 @@ async def test_two_apartments_same_complex_floor_area_not_merged_by_default(db):
     try:
         r1 = await link_listing_to_property(
             {"id": lid_a, "address": "Момышулы 10", "floor": 5, "area": 45.0, "rooms": 2,
-             "complex_name": "__test_eo_complex1__"})
+             "complex_name": "__test_eo_complex1__"}, match_mode="exact_only")
         r2 = await link_listing_to_property(
             {"id": lid_b, "address": "Кабанбай батыра 20", "floor": 5, "area": 45.5, "rooms": 2,
-             "complex_name": "__test_eo_complex1__"})
+             "complex_name": "__test_eo_complex1__"}, match_mode="exact_only")
         assert r1["property_id"] != r2["property_id"]
         assert r2["method"] == "auto"
         assert r2["created"] is True
@@ -108,7 +108,7 @@ async def test_exact_only_creates_new_property_for_each_previously_fuzzy_listing
         for lid, addr in zip(lids, addrs):
             r = await link_listing_to_property(
                 {"id": lid, "address": addr, "floor": 8, "area": 60.0, "rooms": 2,
-                 "complex_name": "__test_eo_complex2__"})
+                 "complex_name": "__test_eo_complex2__"}, match_mode="exact_only")
             results.append(r)
         assert all(r["method"] == "auto" and r["created"] for r in results)
         assert len({r["property_id"] for r in results}) == 3  # 3 РАЗНЫХ property, не 1
@@ -129,9 +129,11 @@ async def test_exact_hash_still_links_safe_relist(db):
     h = compute_address_hash("Тлендиева 21", 5, 45.0)
     try:
         r1 = await link_listing_to_property(
-            {"id": lid_a, "address": "Тлендиева 21", "floor": 5, "area": 45.0, "rooms": None, "complex_name": None})
+            {"id": lid_a, "address": "Тлендиева 21", "floor": 5, "area": 45.0, "rooms": None, "complex_name": None},
+            match_mode="exact_only")
         r2 = await link_listing_to_property(
-            {"id": lid_b, "address": "Тлендиева 21", "floor": 5, "area": 45.0, "rooms": None, "complex_name": None})
+            {"id": lid_b, "address": "Тлендиева 21", "floor": 5, "area": 45.0, "rooms": None, "complex_name": None},
+            match_mode="exact_only")
         assert r1["created"] is True
         assert r2["created"] is False
         assert r2["method"] == "auto"
@@ -252,10 +254,10 @@ async def test_fuzzy_candidate_never_writes_property_listings_row_in_exact_only(
     try:
         r1 = await link_listing_to_property(
             {"id": lid_a, "address": "Хардлинк А", "floor": 6, "area": 55.0, "rooms": None,
-             "complex_name": "__test_eo_nohardlink_complex__"})
+             "complex_name": "__test_eo_nohardlink_complex__"}, match_mode="exact_only")
         r2 = await link_listing_to_property(
             {"id": lid_b, "address": "Хардлинк Б", "floor": 6, "area": 55.8, "rooms": None,
-             "complex_name": "__test_eo_nohardlink_complex__"})
+             "complex_name": "__test_eo_nohardlink_complex__"}, match_mode="exact_only")
         assert r2["fuzzy_candidate"] is not None  # кандидат БЫЛ найден
         # Но НИ ОДНОЙ строки property_listings с link_method='fuzzy' —
         # никогда не создавался hard link на его основе.
@@ -273,14 +275,21 @@ async def test_fuzzy_candidate_never_writes_property_listings_row_in_exact_only(
 # ── 8. Старый unsafe fuzzy режим нельзя случайно включить по умолчанию ──
 
 @pytest.mark.asyncio
-async def test_default_match_mode_is_exact_only(db):
+async def test_explicit_exact_only_mode_is_respected(db):
+    """ПЕРЕИМЕНОВАНО (задача 2026-08-16, "безопасная инфраструктура
+    кандидатов" — сменила ДЕФОЛТ на "candidate_only", exact_only больше
+    не дефолт нигде, см. tests/test_property_linker_candidate_only.py::
+    test_default_match_mode_is_candidate_only для актуальной проверки
+    дефолта). Этот тест теперь проверяет, что ЯВНО запрошенный exact_only
+    честно так себя и называет (не тихо деградирует в другой режим)."""
     from bot.identity.property_linker import link_listing_to_property
 
     lid = "__test_eo_default_mode__"
     await _insert_listing(lid, address="Дефолт 1", floor=1, area=30.0)
     try:
         r = await link_listing_to_property(
-            {"id": lid, "address": "Дефолт 1", "floor": 1, "area": 30.0, "rooms": None, "complex_name": None})
+            {"id": lid, "address": "Дефолт 1", "floor": 1, "area": 30.0, "rooms": None, "complex_name": None},
+            match_mode="exact_only")
         assert r["match_mode"] == "exact_only"
     finally:
         from bot.identity.property_linker import compute_address_hash
@@ -301,11 +310,13 @@ async def test_invalid_match_mode_raises_value_error(db):
         )
 
 
-def test_backfill_cli_default_match_mode_is_exact_only():
-    """CLI --match-mode дефолт (argparse) — та же гарантия, что для
-    самой функции линковщика, но на уровне entrypoint'а."""
-    import backfill_property_ids as mod
-    import inspect
+def test_exact_only_remains_a_valid_explicit_choice():
+    """ПЕРЕИМЕНОВАНО (см. test_explicit_exact_only_mode_is_respected
+    выше) — дефолт entrypoint'а теперь "candidate_only"
+    (tests/test_property_linker_candidate_only.py проверяет ЭТО),
+    "exact_only" остаётся валидным ЯВНЫМ выбором (не удалён из
+    _VALID_MATCH_MODES при смене дефолта)."""
+    from bot.identity.property_linker import _VALID_MATCH_MODES
 
-    sig = inspect.signature(mod.run_backfill)
-    assert sig.parameters["match_mode"].default == "exact_only"
+    assert "exact_only" in _VALID_MATCH_MODES
+    assert "fuzzy" in _VALID_MATCH_MODES
