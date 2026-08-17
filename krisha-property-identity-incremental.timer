@@ -1,0 +1,17 @@
+[Unit]
+Description=Таймер инкрементального Property Identity (каждые 15 минут) — задача 2026-08-17
+
+[Timer]
+# Каждые 15 минут (задача, явно) — тот же паттерн периодичности, что
+# hatuli-update.timer (OnBootSec + OnUnitActiveSec, не OnCalendar —
+# это не суточное задание, а постоянный догоняющий процесс). Небольшой
+# RandomizedDelaySec — не тик-в-тик с другими 15-минутными задачами,
+# без реальной необходимости синхронизации с чем-либо конкретным.
+OnBootSec=2min
+OnUnitActiveSec=15min
+RandomizedDelaySec=1min
+Persistent=true
+Unit=krisha-property-identity-incremental.service
+
+[Install]
+WantedBy=timers.target
