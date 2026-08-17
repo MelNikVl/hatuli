@@ -190,20 +190,28 @@ async def check_archived(limit: int = 20) -> dict:
                 continue
             checked += 1
             pool_counts[r["pool"]] = pool_counts.get(r["pool"], 0) + 1
-            if result == "deleted":
-                # Страницы больше нет — удаляем и из нашей базы (правило:
-                # архив = остаётся в БД / скрыт из Sheets; удалено = удаляем везде)
+            if result in ("deleted", "archived"):
+                # НАЙДЕНО (задача 2026-08-17, scripts/audit_orphan_properties.py,
+                # коммит 181636e): DELETE FROM apartment_listings на "deleted"
+                # каскадом убирал property_listings (FK ON DELETE CASCADE), но
+                # НЕ properties (родитель) — 15/17 осиротевших properties на
+                # проде согласовывались именно с этим. property_listings,
+                # price timeline, true DOM — вся история, завязанная на
+                # listing_id, терялась НАВСЕГДА в момент DELETE, без recovery.
+                # Правило теперь: "объявления больше нет" (404/410) и "Krisha
+                # сама пометила архивом" — ОДНО и то же действие с нашей
+                # стороны (мягкая архивация, ничего физически не удаляется),
+                # различаются только archive_reason (migrations/089) — для
+                # отчётности/дебага, не для поведения.
                 archived += 1
-                await execute("DELETE FROM apartment_listings WHERE id = $1", r["id"])
-                logger.info("deleted (страница удалена, pool=%s): %s", r["pool"], r["url"])
-            elif result == "archived":
-                archived += 1
+                archive_reason = "confirmed_gone" if result == "deleted" else "archived_badge"
                 await execute("""
                     UPDATE apartment_listings
-                    SET is_active = FALSE, archived_at = now(), archive_checked_at = now()
+                    SET is_active = FALSE, archived_at = now(), archive_checked_at = now(),
+                        archive_reason = $2
                     WHERE id = $1
-                """, r["id"])
-                logger.info("archived (pool=%s): %s", r["pool"], r["url"])
+                """, r["id"], archive_reason)
+                logger.info("archived (%s, pool=%s): %s", archive_reason, r["pool"], r["url"])
             else:
                 await execute(
                     "UPDATE apartment_listings SET archive_checked_at = now() WHERE id = $1",
@@ -245,18 +253,21 @@ async def check_archived_rentals(limit: int = 20) -> dict:
             if result is None:
                 continue
             checked += 1
-            if result == "deleted":
+            if result in ("deleted", "archived"):
+                # Тот же фикс, что check_archived() выше (задача 2026-08-17,
+                # "никаких физических DELETE — только архивирование, вся
+                # история сохраняется") — тот же класс потери истории
+                # возможен и здесь, хотя у rental_listings нет property_
+                # listings, принцип "не удалять безвозвратно" тот же.
                 archived += 1
-                await execute("DELETE FROM rental_listings WHERE id = $1", r["id"])
-                logger.info("rental deleted (страница удалена): %s", r["url"])
-            elif result == "archived":
-                archived += 1
+                archive_reason = "confirmed_gone" if result == "deleted" else "archived_badge"
                 await execute("""
                     UPDATE rental_listings
-                    SET is_active = FALSE, archived_at = now(), archive_checked_at = now()
+                    SET is_active = FALSE, archived_at = now(), archive_checked_at = now(),
+                        archive_reason = $2
                     WHERE id = $1
-                """, r["id"])
-                logger.info("rental archived: %s", r["url"])
+                """, r["id"], archive_reason)
+                logger.info("rental archived (%s): %s", archive_reason, r["url"])
             else:
                 await execute(
                     "UPDATE rental_listings SET archive_checked_at = now() WHERE id = $1",
