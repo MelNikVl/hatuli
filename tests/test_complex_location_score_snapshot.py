@@ -436,5 +436,47 @@ def test_cli_has_canary_flags():
     import inspect
     import complex_location_score_snapshot as snap
     src = inspect.getsource(snap.main)
-    for flag in ("--complex-ids", "--limit", "--dry-run"):
+    for flag in ("--complex-ids", "--limit", "--dry-run", "--only-missing"):
         assert flag in src
+
+
+@pytest.mark.asyncio
+async def test_only_missing_skips_complex_with_todays_row(db, monkeypatch):
+    """Задача 2026-08-17 ("завершение Location Score без повторного
+    пересчёта уже свежих") — ЖК, у которого уже есть строка с computed_at
+    сегодня, --only-missing пропускает целиком (даже не вызывает
+    compute_complex_location_score), другой (без сегодняшней строки) —
+    обрабатывает как обычно."""
+    import complex_location_score_snapshot as snap
+    import bot.core.location_score as location_score_module
+
+    called_for = []
+
+    async def _fake_compute(lat, lon, year_built=None, district=None, complex_id=None):
+        called_for.append(complex_id)
+        return {"total": 0, "factors": _fake_factors(), "confidence": 50}
+
+    monkeypatch.setattr(location_score_module, "compute_complex_location_score", _fake_compute)
+
+    already_done = await _insert_complex_with_listing("__test_cls_om_done__", 51.50, 71.50)
+    still_missing = await _insert_complex_with_listing("__test_cls_om_missing__", 51.51, 71.51)
+    cid_done, lid_done = already_done
+    cid_missing, lid_missing = still_missing
+    try:
+        # симулируем "уже посчитан сегодня" — прямая запись, без прогона через snap
+        from bot.db.pg import execute
+        await execute("""
+            INSERT INTO complex_location_scores
+                (complex_id, score, confidence, transport_score, infra_score,
+                 noise_score, green_score, risk_score, lat, lon, breakdown,
+                 score_version, git_commit)
+            VALUES ($1, 50, 50, 0, 0, 0, 0, 0, 51.50, 71.50, '{}'::jsonb, 'loc_v1', 'test')
+        """, cid_done)
+
+        result = await snap.run_snapshot(complex_ids=[cid_done, cid_missing], only_missing=True)
+        assert result["processed"] == 1
+        assert cid_missing in called_for
+        assert cid_done not in called_for
+    finally:
+        await _cleanup(cid_done, lid_done)
+        await _cleanup(cid_missing, lid_missing)

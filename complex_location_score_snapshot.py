@@ -191,12 +191,24 @@ async def _process_one(r: dict, commit: str, sem: asyncio.Semaphore, dry_run: bo
 
 
 async def run_snapshot(complex_ids: list[int] | None = None, limit: int | None = None,
-                        dry_run: bool = False) -> dict:
+                        dry_run: bool = False, only_missing: bool = False) -> dict:
     """complex_ids — опциональный скоуп (canary/тесты — тот же паттерн,
     что deal_score_snapshot.py/hex_market_stats_snapshot.py); limit —
     ограничить выборку сверху (задача 2026-08-17, canary-режим); без
     обоих — прод-путь, все complexes с координатами. dry_run — см.
     _process_one.
+
+    only_missing (задача 2026-08-17, "завершение Location Score без
+    повторного пересчёта уже свежих") — исключает complexes, у которых
+    УЖЕ есть строка complex_location_scores с computed_at СЕГОДНЯШНИМ
+    числом (не привязано к конкретному git_commit/score_version — код
+    между прерванным утренним прогоном и этим дозапуском менялся
+    (roads/parks в city_poi), но сам смысл "уже свежий результат
+    СЕГОДНЯ" не должен тянуть пересчёт того, что уже посчитано в рамках
+    того же операционного окна). Резюме прерванного прогона: ровно этот
+    сценарий — сначала полный прогон остановлен по ETA-порогу на
+    1178/2130, потом добит --only-missing без повторной траты времени
+    на уже готовые 1178.
 
     Возвращает и СТАРЫЕ ключи (written/no_coords/drifted/total — тесты
     уже на них завязаны), и НОВЫЕ (processed/succeeded/failed/skipped/
@@ -210,6 +222,9 @@ async def run_snapshot(complex_ids: list[int] | None = None, limit: int | None =
     if complex_ids is not None:
         params.append(complex_ids)
         where += f" AND id = ANY(${len(params)}::int[])"
+    if only_missing:
+        where += (" AND NOT EXISTS (SELECT 1 FROM complex_location_scores s "
+                   "WHERE s.complex_id = complexes.id AND s.computed_at::date = CURRENT_DATE)")
     order_limit = " ORDER BY id"
     if limit:
         order_limit += f" LIMIT {int(limit)}"
@@ -261,13 +276,17 @@ async def main() -> None:
                      help="через запятую — точечный пересчёт (canary/отладка), без флага — все ЖК")
     ap.add_argument("--limit", type=int, default=None, help="ограничить выборку сверху (canary)")
     ap.add_argument("--dry-run", action="store_true", help="считать, но не писать в complex_location_scores")
+    ap.add_argument("--only-missing", action="store_true",
+                     help="пропустить ЖК, у которых уже есть строка complex_location_scores "
+                          "с computed_at сегодняшним числом (докатка прерванного прогона)")
     args = ap.parse_args()
     complex_ids = [int(x) for x in args.complex_ids.split(",")] if args.complex_ids else None
 
     from bot.db.pg import init_pool, close_pool
     await init_pool(DATABASE_URL)
     try:
-        result = await run_snapshot(complex_ids=complex_ids, limit=args.limit, dry_run=args.dry_run)
+        result = await run_snapshot(complex_ids=complex_ids, limit=args.limit, dry_run=args.dry_run,
+                                     only_missing=args.only_missing)
     finally:
         await close_pool()
     print(result)
