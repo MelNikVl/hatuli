@@ -443,3 +443,177 @@ async def test_decide_endpoint_records_decision_and_no_physical_merge(simple_can
 
     pl_after = await fetchval("SELECT count(*) FROM property_listings")
     assert pl_after == pl_before  # НИКАКОГО физического merge через HTTP-путь тоже
+
+
+# ── UI: layout order, lightbox markup, photo attribution (задача
+#    2026-08-17, follow-up — "перестроить /admin/property-match-review" +
+#    "полноэкранный просмотр фотографий"). Браузерных инструментов в этой
+#    среде нет — тесты проверяют РЕАЛЬНЫЙ рендер страницы (настоящий ASGI-
+#    запрос) на уровне разметки/данных, которые JS использует: порядок
+#    блоков, отсутствие dashboard-grid классов, корректную привязку фото
+#    к стороне в embedded JSON, наличие клавиатурных обработчиков и т.д.
+#    Не эмулируют клики/анимацию — этого browser automation не даёт. ─────
+
+@pytest_asyncio.fixture
+async def candidate_with_photos(db):
+    from bot.db.pg import execute, fetchval
+    lid_a, lid_b = "__test_pmr_photos_a__", "__test_pmr_photos_b__"
+    photos_a = ["https://example.com/a1.jpg", "https://example.com/a2.jpg"]
+    photos_b = ["https://example.com/b1.jpg", "https://example.com/b2.jpg", "https://example.com/b3.jpg"]
+    await _insert_listing(lid_a, address="Фото Адрес, 1", floor=5, area=45.0, photos=photos_a)
+    await _insert_listing(lid_b, address="Фото Адрес, 1", floor=5, area=45.0, photos=photos_b)
+    prop_b = await fetchval(
+        "INSERT INTO properties (address_hash, floor, area_sqm) VALUES ('__test_pmr_photos_hash__', 5, 45.0) "
+        "RETURNING property_id")
+    await execute(
+        "INSERT INTO property_listings (property_id, listing_id, link_method, confidence) "
+        "VALUES ($1, $2, 'bootstrap', 1.0)", prop_b, lid_b)
+    candidate_id = await fetchval("""
+        INSERT INTO property_match_candidates
+            (listing_id, candidate_property_id, match_method, match_score, matcher_version, status)
+        VALUES ($1, $2, 'exact_hash', 0.9, 'candidate_only_v2', 'pending')
+        RETURNING candidate_id
+    """, lid_a, prop_b)
+    try:
+        yield {"candidate_id": candidate_id, "listing_a": lid_a, "listing_b": lid_b,
+               "photos_a": photos_a, "photos_b": photos_b, "property_id": prop_b}
+    finally:
+        await _cleanup(lid_a, lid_b, property_ids=[prop_b])
+
+
+async def _get_review_page(admin_client, candidate_id):
+    admin_client.cookies.set("admin_auth", "1")
+    admin_client.cookies.set("admin_user", "pytest")
+    r = await admin_client.get(f"/admin/property-match-review?candidate_id={candidate_id}")
+    assert r.status_code == 200
+    return r.text
+
+
+@pytest.mark.asyncio
+async def test_lightbox_markup_and_controls_present(candidate_with_photos, admin_client):
+    """Модальный просмотрщик, стрелки, счётчик, кнопка закрытия, ссылка
+    "Открыть оригинал" — всё в разметке одним запросом."""
+    html = await _get_review_page(admin_client, candidate_with_photos["candidate_id"])
+    assert 'id="pmr-lightbox"' in html
+    assert "hidden" in html  # закрыт по умолчанию
+    assert 'pmr-lightbox-prev' in html
+    assert 'pmr-lightbox-next' in html
+    assert 'pmr-lightbox-counter' in html
+    assert 'pmr-lightbox-close' in html
+    assert "Открыть оригинал" in html
+    assert 'id="pmr-lightbox-original"' in html and 'target="_blank"' in html
+
+
+@pytest.mark.asyncio
+async def test_lightbox_keyboard_navigation_wired(candidate_with_photos, admin_client):
+    """←/→ и Esc — задача, явно: клавиатурная навигация."""
+    html = await _get_review_page(admin_client, candidate_with_photos["candidate_id"])
+    assert "ArrowLeft" in html
+    assert "ArrowRight" in html
+    assert "Escape" in html
+    assert "pmrNavLightbox(-1)" in html
+    assert "pmrNavLightbox(1)" in html
+
+
+@pytest.mark.asyncio
+async def test_lightbox_backdrop_click_closes(candidate_with_photos, admin_client):
+    """Клик по затемнённому фону закрывает просмотр — задача, явно."""
+    html = await _get_review_page(admin_client, candidate_with_photos["candidate_id"])
+    assert "pmrCloseLightbox()" in html
+    # обработчик на самом overlay (id=pmr-lightbox), не на его детях —
+    # проверка event.target.id === 'pmr-lightbox' явно в разметке.
+    assert "event.target.id==='pmr-lightbox'" in html or "event.target.id === 'pmr-lightbox'" in html
+
+
+@pytest.mark.asyncio
+async def test_photo_attribution_does_not_mix_between_sides(candidate_with_photos, admin_client):
+    """ГЛАВНЫЙ тест задачи: "фотографии двух объявлений не должны
+    случайно смешиваться при навигации" — фото стороны A НЕ попадают в
+    JS-массив стороны B и наоборот."""
+    html = await _get_review_page(admin_client, candidate_with_photos["candidate_id"])
+
+    start = html.find("var PMR_PHOTOS = {")
+    end = html.find("};", start) + 1
+    block = html[start:end]
+    a_section = block[block.find("A:"):block.find("B:")]
+    b_section = block[block.find("B:"):]
+
+    for url in candidate_with_photos["photos_a"]:
+        assert url in a_section
+        assert url not in b_section
+    for url in candidate_with_photos["photos_b"]:
+        assert url in b_section
+        assert url not in a_section
+
+
+@pytest.mark.asyncio
+async def test_thumbnails_not_wrapped_in_anchor_no_new_tab_on_click(candidate_with_photos, admin_client):
+    """Задача, явно: "обычный клик не должен открывать новую вкладку" —
+    миниатюры кликабельны через onclick (JS-модалка), НЕ через
+    <a target="_blank"><img ...></a>."""
+    import re
+    html = await _get_review_page(admin_client, candidate_with_photos["candidate_id"])
+    assert re.search(r'<a[^>]*>\s*<img[^>]*onclick="pmrOpenLightbox', html) is None
+    # но сами миниатюры реально кликабельны (onclick есть на <img>)
+    assert re.search(r'<img[^>]+onclick="pmrOpenLightbox\(', html) is not None
+
+
+@pytest.mark.asyncio
+async def test_layout_order_compare_then_actions_then_details_then_filters(candidate_with_photos, admin_client):
+    """Задача, явно, порядок сверху вниз: сравнение -> кнопки решения ->
+    технические детали -> фильтры (внизу)."""
+    html = await _get_review_page(admin_client, candidate_with_photos["candidate_id"])
+    idx_compare = html.find("pmr-compare")
+    idx_actions = html.find("pmr-actions")
+    idx_details = html.find("pmr-details")
+    idx_filters = html.find("pmr-filters")
+    assert -1 < idx_compare < idx_actions < idx_details < idx_filters
+
+
+@pytest.mark.asyncio
+async def test_filters_are_collapsible_and_at_bottom(candidate_with_photos, admin_client):
+    """Задача: "Фильтры — в самом низу страницы, желательно в
+    сворачиваемом блоке" — нативный <details>, свёрнут по умолчанию (нет
+    атрибута open)."""
+    html = await _get_review_page(admin_client, candidate_with_photos["candidate_id"])
+    assert '<details class="pmr-filters"' in html
+    assert '<details class="pmr-filters" open' not in html  # свёрнут по умолчанию
+
+
+@pytest.mark.asyncio
+async def test_page_does_not_use_dashboard_grid_classes(candidate_with_photos, admin_client):
+    """Задача: "убрать стандартную раскладку админки на шесть
+    информационных блоков" — base.html::BLOCK_SEL ('.chart-block,
+    .admin-block, .tbl-wrap') сгребает такие элементы в 3×2-сетку с
+    видимыми пустыми ячейками; страница не должна использовать ни один
+    из этих трёх классов НА ЭЛЕМЕНТАХ (сами CSS-правила в <style>
+    base.html упоминают их всегда — проверяем именно class="...")."""
+    import re
+    html = await _get_review_page(admin_client, candidate_with_photos["candidate_id"])
+    classes_used = set(" ".join(re.findall(r'class="([^"]*)"', html)).split())
+    assert "admin-block" not in classes_used
+    assert "chart-block" not in classes_used
+    assert "tbl-wrap" not in classes_used
+
+
+@pytest.mark.asyncio
+async def test_decide_redirect_has_no_url_fragment_for_fresh_page_top(candidate_with_photos, admin_client):
+    """Задача: "следующая пара должна открываться с самого верха
+    страницы, без сохранения предыдущей позиции прокрутки" — обычный
+    редирект БЕЗ #fragment — браузер грузит страницу с нуля и скроллит
+    в начало по умолчанию, если сама страница не восстанавливает позицию
+    (она не восстанавливает — нет relevant JS)."""
+    admin_client.cookies.set("admin_auth", "1")
+    admin_client.cookies.set("admin_user", "pytest")
+    r = await admin_client.post(
+        f"/admin/property-match-review/{candidate_with_photos['candidate_id']}/decide",
+        data={"decision": "skip"}, follow_redirects=False)
+    assert r.status_code in (302, 303)
+    location = r.headers.get("location", "")
+    assert "#" not in location
+
+    # И сама страница не содержит scrollTo/scroll-restoration логики,
+    # которая могла бы восстановить прошлую позицию прокрутки.
+    html = await _get_review_page(admin_client, candidate_with_photos["candidate_id"])
+    assert "scrollRestoration" not in html
+    assert "scrollTo(" not in html
