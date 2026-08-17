@@ -1,0 +1,19 @@
+[Unit]
+Description=Инкрементальное поддержание Property Identity (bot/jobs/property_identity_incremental.py) — задача 2026-08-17, "поддерживать Property Identity инкрементально после production backfill"
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+# advisory lock (pg_try_advisory_lock, см. докстринг job'а) — основная
+# защита от параллельного запуска, действует ДАЖЕ если systemd почему-то
+# всё же стартовал второй экземпляр параллельно (например ручной
+# `systemctl start` поверх уже идущего таймерного запуска). TimeoutStartSec
+# ниже — вторичная защита (safe margin): интервал таймера 15 минут
+# (см. .timer), таймаут заметно меньше, чтобы зависший прогон не
+# столкнулся со следующим тиком.
+TimeoutStartSec=600
+ExecStart=/home/nik/krisha_bot/venv/bin/python -m bot.jobs.property_identity_incremental
+StandardOutput=append:/home/nik/krisha_bot/property_identity_incremental.log
+StandardError=append:/home/nik/krisha_bot/property_identity_incremental.log
