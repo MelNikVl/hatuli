@@ -250,10 +250,46 @@ def _fuzzy_confidence(area: float, candidate_area: float) -> float:
 # ── candidate_only: bootstrap + candidate generation (задача 2026-08-16,
 # "безопасная инфраструктура кандидатов" — миграция 086) ────────────────
 
-_MATCHER_VERSION = "candidate_only_v1"
+_MATCHER_VERSION = "candidate_only_v2"  # v1 -> v2 задача 2026-08-17, "photo
+# evidence + review": house_number/price перестали быть БЕЗУСЛОВНЫМ
+# auto-reject (см. _is_hard_conflict ниже) — правило, которым НАЙДЕН
+# candidate, не изменилось (тот же exact_hash/fuzzy/dedup_listings), но
+# правило, которым РЕШАЕТСЯ rejected/pending, изменилось — тот же
+# constant, что используется и для property_listings.matcher_version
+# (bootstrap link_method, см. докстринг класса выше "версия правил,
+# которыми НАЙДЕН кандидат") — сознательно один counter на оба назначения,
+# отдельного не заводим (bootstrap сам не изменился, но версионировать
+# конфликт-правила ОТДЕЛЬНО от matcher_version усложнило бы схему без
+# явной задачи на это).
 _PRICE_SEVERE_DIFF_PCT = 0.30  # >30% — прямое противоречие, тот же порог,
 # что scripts/audit_property_match_signals.py (не откалибровано на
 # ground truth, локальная эвристика этого matcher_version).
+
+# Задача 2026-08-17, D: "rooms mismatch пока оставить сильным конфликтом;
+# house_number mismatch перестать использовать как безусловный auto-reject
+# — сделать его soft conflict/manual review... price difference >30% также
+# не должна безусловно побеждать сильное совпадение уникальных фотографий".
+# HARD — единственная причина, по которой _build_candidate_record() ставит
+# status='rejected' автоматически. SOFT (house_number, price) ОСТАЮТСЯ в
+# conflict_reasons (видны в evidence, задача: "house_number mismatch
+# остаётся reviewable" — reviewable значит ВИДЕН на /admin/property-match-
+# review, не спрятан) — но НЕ форсируют rejected, кандидат остаётся
+# 'pending' и виден в очереди на ручную проверку. concurrent activity
+# (simultaneously_active) сюда НЕ входит вообще — она и раньше не была
+# частью conflict_reasons (см. _conflict_reasons ниже, было верно ДО этой
+# задачи, не менялось).
+_HARD_CONFLICT_PREFIXES = ("rooms mismatch",)
+
+
+def _is_hard_conflict(conflict_reasons: list[str]) -> bool:
+    """True -> auto-reject (status='rejected'). False -> conflict ВИДЕН
+    (conflict_reasons не пуст), но кандидат остаётся 'pending' — задача,
+    явно: read-only impact-audit ПЕРЕД массовым пересмотром уже
+    существующих 'rejected' строк — см. scripts/audit_conflict_
+    reclassification_impact.py, эта функция только про НОВЫЕ кандидаты
+    (существующие строки в БД этим изменением сами по себе не трогаются,
+    их status меняется только явным UPDATE, которого этот PR не делает)."""
+    return any(r.startswith(_HARD_CONFLICT_PREFIXES) for r in conflict_reasons)
 
 # Best-effort номер дома — та же эвристика, что была в scripts/audit_
 # property_linker_fuzzy.py::extract_house_number, теперь КАНОНИЧЕСКАЯ
@@ -537,14 +573,22 @@ def _build_candidate_record(listing_row: dict, candidate_row: dict, match_method
         # закладывать в схему ошибочное правило simultaneous_active =
         # rejected" — ключи зарезервированы, метод пока не реализован;
         # URL фотографий СОЗНАТЕЛЬНО не используется как идентификатор
-        # здесь, см. migrations/086 докстринг).
-        "photo_signal": {"method": "not_implemented", "shared_rare_photo_count": None,
-                          "shared_common_photo_count": None},
+        # здесь, см. migrations/086 докстринг). Задача 2026-08-17, "photo
+        # evidence + review": сама evidence теперь СЧИТАЕТСЯ (bot/identity/
+        # photo_evidence.py), но живёт в ОТДЕЛЬНОЙ таблице (property_
+        # candidate_photo_evidence, 1:1 с candidate_id) — не здесь, потому
+        # что считается ПОСЛЕ создания кандидата, отдельным (переиспользуемым
+        # для будущих пересчётов) прогоном, не на создании строки. Этот
+        # placeholder остаётся нейтральным — "смотри отдельную таблицу", не
+        # дублирует её содержимое здесь (задача C: "не создавать несколько
+        # строк на одну пару" — дублирование evidence в двух местах тоже
+        # создало бы риск рассинхронизации).
+        "photo_signal": {"method": "see_property_candidate_photo_evidence_table"},
     }
     if match_method == "dedup_listings":
         evidence["dedup_dup_match"] = candidate_row.get("_dup_match")
 
-    is_rejected_by_conflict = bool(conflict_reasons)
+    is_rejected_by_conflict = _is_hard_conflict(conflict_reasons)
 
     return {
         "listing_id": listing_row["id"],
@@ -1219,3 +1263,142 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
     )
     return {"property_id": new_id, "method": "auto", "confidence": 1.0, "created": True,
             "match_mode": match_mode, "fuzzy_candidate": fuzzy_candidate_info, "skip_reason": None}
+
+
+# ── corroborating_methods (задача 2026-08-17, "photo evidence + review",
+# часть C) ────────────────────────────────────────────────────────────────
+#
+# Проблема, задача формулирует явно: одна пара listing/property может
+# попасть в property_match_candidates только с ОДНИМ match_method — не
+# потому что остальные сигналы не сработали, а потому что _generate_
+# candidates/generate_all_candidates используют seen_property_ids/found{}
+# ИМЕННО чтобы не создать ВТОРУЮ строку на ту же пару (UNIQUE(listing_id,
+# candidate_property_id) в migrations/086) — если exact_hash уже нашёл
+# пару, fuzzy/dedup_listings для НЕЁ ЖЕ молча пропускаются, даже если они
+# бы тоже согласились. Задача: "одна пара — одна candidate row, но все
+# сработавшие методы должны быть видны" — НЕ через восстановление второй/
+# третьей попытки внутри generate_all_candidates (это переписало бы
+# order-independence гарантии, которые уже отдельно протестированы и
+# задокументированы, см. блок-докстринг выше про две фазы), а ОТДЕЛЬНЫМ,
+# идемпотентным, версионированным пересчётом ПОСЛЕ того, как строка уже
+# существует — recompute_corroborating_methods() ниже.
+#
+# "Идемпотентный и версионированный" (задача, явно): пересчёт всегда
+# заново определяет, какие из ШЕСТИ методов согласились бы с этой парой
+# ПРЯМО СЕЙЧАС (не читает "что было записано раньше"), пишет результат +
+# _CORROBORATION_VERSION в evidence JSONB. Повторный вызов на ту же
+# пару без изменения данных даёт тот же список — чистая функция текущего
+# состояния БД, не накопительный журнал.
+_CORROBORATION_VERSION = "corroboration_v1"
+_METHOD_ORDER = ("exact_hash", "fuzzy", "dedup_listings", "photo_exact", "photo_perceptual", "photo_ai")
+
+
+async def _property_row(property_id: int) -> dict | None:
+    from bot.db.pg import fetchrow
+    row = await fetchrow(
+        "SELECT property_id, complex_id, address_hash, floor, area_sqm FROM properties WHERE property_id = $1",
+        property_id,
+    )
+    return dict(row) if row else None
+
+
+async def _corroborating_base_methods(listing_row: dict, prop: dict) -> list[str]:
+    """exact_hash/fuzzy/dedup_listings — независимые булевы проверки
+    ПРОТИВ ОДНОЙ конкретной property (не полная candidate-генерация,
+    которая ищет ВСЕ properties — здесь пара уже известна, вопрос только
+    "согласился бы этот метод с ЭТОЙ парой")."""
+    methods: list[str] = []
+    address_hash = compute_address_hash(
+        listing_row.get("address"), listing_row.get("floor"), listing_row.get("area"))
+    if address_hash is not None and address_hash == prop.get("address_hash"):
+        methods.append("exact_hash")
+
+    complex_id = await _resolve_complex_id(listing_row.get("complex_name"))
+    floor, area = listing_row.get("floor"), listing_row.get("area")
+    if (complex_id is not None and prop.get("complex_id") == complex_id
+            and prop.get("floor") == floor and floor is not None
+            and area is not None and prop.get("area_sqm") is not None
+            and abs(prop["area_sqm"] - area) <= _FUZZY_AREA_TOLERANCE):
+        methods.append("fuzzy")
+
+    partners = await _find_all_dedup_partners(listing_row)
+    if partners:
+        from bot.db.pg import fetchval
+        partner_ids = [p["id"] for p in partners]
+        linked_to_this_property = await fetchval(
+            "SELECT 1 FROM property_listings WHERE property_id = $1 AND listing_id = ANY($2::text[])",
+            prop["property_id"], partner_ids,
+        )
+        if linked_to_this_property:
+            methods.append("dedup_listings")
+    return methods
+
+
+async def _corroborating_photo_methods(candidate_id: int) -> list[str]:
+    """photo_exact/photo_perceptual/photo_ai — из property_candidate_
+    photo_evidence (bot/identity/photo_evidence.py), если она уже
+    посчитана для этого candidate_id. Пустой список, если evidence ещё
+    не считалась (не ошибка — просто "фото ещё не сравнивались")."""
+    from bot.db.pg import fetchrow
+    row = await fetchrow(
+        "SELECT exact_shared_count, perceptual_shared_count, ai_similar_count "
+        "FROM property_candidate_photo_evidence WHERE candidate_id = $1",
+        candidate_id,
+    )
+    if row is None:
+        return []
+    methods = []
+    if (row["exact_shared_count"] or 0) > 0:
+        methods.append("photo_exact")
+    if (row["perceptual_shared_count"] or 0) > 0:
+        methods.append("photo_perceptual")
+    if (row["ai_similar_count"] or 0) > 0:
+        methods.append("photo_ai")
+    return methods
+
+
+async def recompute_corroborating_methods(candidate_id: int) -> list[str]:
+    """Точка входа (scripts/recompute_candidate_corroboration.py). Пишет
+    evidence->corroborating_methods (+ corroboration_version/
+    corroboration_computed_at) ОДНИМ UPDATE через jsonb-конкатенацию —
+    НЕ трогает match_method/match_score/status/conflict_reasons ни при
+    каких условиях (задача C — это ТОЛЬКО про видимость, не про решение).
+    Возвращает посчитанный список (задача — детерминированный, порядок
+    ВСЕГДА _METHOD_ORDER, не порядок обнаружения)."""
+    import json
+
+    from bot.db.pg import execute, fetchrow
+
+    c = await fetchrow(
+        "SELECT candidate_id, listing_id, candidate_property_id FROM property_match_candidates "
+        "WHERE candidate_id = $1", candidate_id,
+    )
+    if c is None:
+        raise ValueError(f"candidate_id {candidate_id} не найден")
+
+    listing_row = await fetchrow(
+        "SELECT id, address, floor, area, complex_name, duplicate_of, dup_match "
+        "FROM apartment_listings WHERE id = $1", c["listing_id"],
+    )
+    prop = await _property_row(c["candidate_property_id"])
+    if listing_row is None or prop is None:
+        found: list[str] = []
+    else:
+        base = await _corroborating_base_methods(dict(listing_row), prop)
+        photo = await _corroborating_photo_methods(candidate_id)
+        found_set = set(base) | set(photo)
+        found = [m for m in _METHOD_ORDER if m in found_set]  # детерминированный порядок
+
+    await execute(
+        """
+        UPDATE property_match_candidates
+        SET evidence = COALESCE(evidence, '{}'::jsonb) || jsonb_build_object(
+            'corroborating_methods', $2::jsonb,
+            'corroboration_version', $3::text,
+            'corroboration_computed_at', now()::text
+        )
+        WHERE candidate_id = $1
+        """,
+        candidate_id, json.dumps(found), _CORROBORATION_VERSION,
+    )
+    return found
