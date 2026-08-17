@@ -168,134 +168,174 @@ async def _select_candidates(limit: int) -> list[dict]:
     return candidates
 
 
-async def reactivate_reappeared_listings(listing_ids: list[str] | None = None) -> list[str]:
-    """Задача 2026-08-17 (follow-up): "объявление реактивируется, если
-    появилось снова, archive_reason очищается". Проверено ПЕРЕД тем, как
-    писать этот код: service_apartments.py::run_cycle() при повторном
-    появлении listing'а (совпадение по id — та же строка, что архивная)
-    делает `UPDATE apartment_listings SET ... last_seen=NOW() WHERE
-    id=$1` — last_seen ВСЕГДА двигается вперёд на каждый re-parse, ДАЖЕ
-    для уже архивных строк (запрос "exists" не фильтрует по is_active),
-    но is_active/archived_at/archive_reason парсер не трогает вовсе — до
-    этой функции архивная строка так и оставалась is_active=FALSE
-    НАВСЕГДА, даже если объявление реально снова живо на Крыше.
+# Сколько кандидатов на реактивацию реально ПРОВЕРЯЕМ по сети за один
+# вызов verify_reactivation_candidates() (задача 2026-08-17, "safe
+# reactivation" follow-up) — НЕ растягиваем бюджет запросов check_archived()
+# ради этого: реальный HTTP-чек, та же нагрузка, что и обычная архивная
+# проверка ниже, поэтому небольшая отдельная константа, не "все сразу".
+_REACTIVATION_CHECK_BATCH = 10
 
-    Не трогает service_apartments.py напрямую (не лезем в 900-строчный
-    run_cycle ради трёх колонок) — вместо этого: "is_active=FALSE, но
-    last_seen ПОЗЖЕ archived_at" ЕСТЬ ровно тот факт, что кто-то (парсер)
-    видел объявление ПОСЛЕ того, как мы его архивировали — самодостаточный
-    сигнал реактивации, не требующий знать, кто именно last_seen подвинул.
-    Вызывается в начале check_archived() (тот же периодический цикл,
-    что и архивация — реактивация и архивация теперь два конца одного
-    и того же процесса, не два независимых).
 
-    ## Что именно очищается/меняется на apartment_listings (задача,
-    явно просит показать)
-      is_active           FALSE -> TRUE
-      archived_at          <старое значение> -> NULL
-      archive_reason       <старое значение> -> NULL
-      archive_checked_at   <старое значение> -> NULL (см. ниже, ПОЧЕМУ)
-    НЕ трогает: last_seen, ничего больше.
-
-    ## НАЙДЕНО read-only аудитом ПЕРЕД тем, как этот код стал финальным
-    (scripts/audit_reactivation_candidates.py, 20 примеров, реальный HTTP
-    GET на живых прод-строках): "last_seen > archived_at" ПОДТВЕРДИЛО
-    реактивацию (сейчас реально 'alive') только у 10 из 20 (50%) — у
-    ОСТАЛЬНЫХ 10 страница СЕЙЧАС снова показывает архивный бейдж или 404,
-    хотя last_seen когда-то БЫЛ позже archived_at. Причина структурная,
-    не баг: is_active=FALSE исключает строку из _select_candidates()
-    НАВСЕГДА (WHERE is_active IS NOT FALSE) — если объявление вернулось
-    живым НА МОМЕНТ T2 (last_seen сдвинулся), а потом СНОВА пропало к
-    моменту T3 (когда его проверяет аудит/деплой), наша система об этом
-    втором исчезновении узнать не могла: is_active уже FALSE, значит
-    archive_check.py эту строку больше не трогает и не перепроверяет.
-    "last_seen > archived_at" — это ДОКАЗАТЕЛЬСТВО "было живым В КАКОЙ-ТО
-    момент после архивации", а НЕ доказательство "живо ПРЯМО СЕЙЧАС".
-
-    Из-за этого reactivate_reappeared_listings() НЕ ставит is_active=TRUE
-    как окончательный вердикт — она ставит его как ГИПОТЕЗУ, требующую
-    немедленной перепроверки, и специально обнуляет archive_checked_at
-    (а не оставляет старое значение) — это единственный способ ЗАСТАВИТЬ
-    _select_candidates() снова взять эту строку в оборот (backlog-ветка
-    там явно фильтрует archive_checked_at IS NULL) на САМОМ БЛИЖАЙШЕМ
-    цикле check_archived(), а не ждать своей очереди неопределённо долго.
-    Самокоррекция: если гипотеза неверна (объявление снова archived/
-    deleted) — check_archived() это обнаружит и заново заархивирует на
-    следующем реальном проходе, без ручного вмешательства.
-
-    ## История НЕ теряется (задача, follow-up: "archived_at/archive_reason
-    очищаются — добавь append-only историю")
-    Перед очисткой СТАРЫЕ archived_at/archive_reason сохраняются ОДНОЙ
-    строкой в listing_archive_history (migrations/090) — один завершённый
-    цикл "архивация -> реактивация" = одна строка (archived_at/
-    archive_reason — какими они были ДО очистки, reactivated_at — когда
-    обнаружена реактивация). CTE ниже делает SELECT кандидатов + INSERT в
-    историю + UPDATE apartment_listings ОДНИМ атомарным запросом (не
-    отдельными SELECT/INSERT/UPDATE — исключает гонку "нашли кандидата,
-    другой процесс успел его тронуть до нашего UPDATE").
-
-    ## Идемпотентность (задача, явно)
-    Повторный вызов без изменений в БД между вызовами находит 0
-    кандидатов вторым разом — реактивированная строка (is_active=TRUE)
-    больше не проходит WHERE is_active = FALSE, значит НЕ реактивируется
-    и НЕ логируется в историю дважды. Не отдельный флаг/лок, а прямое
-    следствие того, что WHERE проверяет ТЕКУЩЕЕ состояние, не факт "уже
-    обрабатывали".
-
-    ПРОВЕРЕНО на реальных данных перед этим коммитом: 211 строк на проде
-    прямо сейчас подходят под это условие (архивны, но last_seen ушёл
-    вперёд archived_at) — реальный, не гипотетический бэклог, который эта
-    функция начнёт разбирать на первом же цикле после деплоя (ставя
-    гипотезу + сразу отправляя на перепроверку, см. выше — НЕ "тихо и
-    окончательно помечает активными без проверки"). Не запускалась вручную
-    на всю таблицу в рамках этой задачи (то же правило, что и для
-    остального: массовые изменения существующих данных — не в этом PR,
-    только код, который правильно ведёт себя дальше).
-
-    listing_ids — опциональный скоуп ТОЛЬКО для тестов (тот же приём, что
-    bot/jobs/property_identity_incremental.py::_fetch_unlinked): без него
-    тест задел бы реальный бэклог из 211 строк на dev-БД, не только
-    тестовые listing'и."""
+async def _select_reactivation_candidates(limit: int, listing_ids: list[str] | None) -> list[dict]:
+    """Кандидаты "last_seen ушёл вперёд archived_at" — ТОЛЬКО кандидаты
+    на проверку (задача, явно, п.1: "last_seen > archived_at только
+    добавляет объявление в очередь повторной проверки"). is_active тут
+    НЕ трогается вообще — это чистое SELECT. ORDER BY archive_checked_at
+    ASC NULLS FIRST — справедливая ротация: непроверенные и давно не
+    проверявшиеся идут первыми, не одни и те же строки на каждый вызов."""
     from bot.db.pg import fetch
-    scope_clause = ""
+    sql = ("SELECT id, url, archived_at, archive_reason FROM apartment_listings "
+           "WHERE is_active = FALSE AND archived_at IS NOT NULL "
+           "AND last_seen IS NOT NULL AND last_seen > archived_at")
     params: list = []
     if listing_ids is not None:
         params.append(listing_ids)
-        scope_clause = f" AND id = ANY(${len(params)}::text[])"
-    sql = f"""
-        WITH candidates AS (
+        sql += f" AND id = ANY(${len(params)}::text[])"
+    params.append(limit)
+    sql += f" ORDER BY archive_checked_at ASC NULLS FIRST LIMIT ${len(params)}"
+    rows = await fetch(sql, *params)
+    return [dict(r) for r in rows]
+
+
+async def _confirm_reactivation(listing_id: str) -> bool:
+    """Единственное место, где is_active реально становится TRUE —
+    ОДНИМ атомарным CTE (SELECT старых archived_at/archive_reason + INSERT
+    в listing_archive_history + UPDATE apartment_listings), тот же приём,
+    что был раньше на всю пачку разом — здесь на одну ПОДТВЕРЖДЁННУЮ
+    строку, вызывается ТОЛЬКО после реального 'alive' с Крыши (задача,
+    п.4: "если объявление действительно снова доступно"). Возвращает
+    False, если строка уже не подходит под условие (кто-то её тронул
+    между SELECT-кандидатов и этим вызовом, или уже реактивирована
+    параллельным вызовом — идемпотентность и здесь, не только на уровне
+    всей функции)."""
+    from bot.db.pg import fetchrow
+    row = await fetchrow("""
+        WITH candidate AS (
             SELECT id, archived_at, archive_reason FROM apartment_listings
-            WHERE is_active = FALSE AND archived_at IS NOT NULL
+            WHERE id = $1 AND is_active = FALSE AND archived_at IS NOT NULL
               AND last_seen IS NOT NULL AND last_seen > archived_at
-              {scope_clause}
             FOR UPDATE
         ), logged AS (
             INSERT INTO listing_archive_history (listing_id, archived_at, archive_reason)
-            SELECT id, archived_at, archive_reason FROM candidates
+            SELECT id, archived_at, archive_reason FROM candidate
             RETURNING listing_id
         )
         UPDATE apartment_listings
         SET is_active = TRUE, archived_at = NULL, archive_reason = NULL, archive_checked_at = NULL
-        WHERE id IN (SELECT listing_id FROM logged)
+        WHERE id = (SELECT listing_id FROM logged)
         RETURNING id
-    """
-    rows = await fetch(sql, *params)
-    ids = [r["id"] for r in rows]
-    # "Добавь в лог количество реактивированных listing ID" (задача, явно)
-    # — count ОТДЕЛЬНО от самого списка, не только внутри %s-подстановки.
-    logger.info("reactivate_reappeared_listings: count=%d ids=%s", len(ids), ids)
-    return ids
+    """, listing_id)
+    return row is not None
+
+
+async def verify_reactivation_candidates(limit: int = _REACTIVATION_CHECK_BATCH,
+                                          listing_ids: list[str] | None = None) -> dict:
+    """Задача 2026-08-17, "safe reactivation — только после фактической
+    проверки". ЗАМЕНЯЕТ прежнюю reactivate_reappeared_listings() (которая
+    ставила is_active=TRUE СРАЗУ по одному условию last_seen > archived_at
+    — read-only аудит, scripts/audit_reactivation_candidates.py, нашёл
+    50% ложных срабатываний из 20 реально проверенных примеров: страница
+    ВСЁ ЕЩЁ archived/404 у половины). Новый процесс, ровно как в задаче:
+      1. last_seen > archived_at — ТОЛЬКО кандидат на проверку
+         (_select_reactivation_candidates), is_active НЕ трогается;
+      2. до проверки is_active остаётся FALSE — ложный кандидат НИ НА
+         МГНОВЕНИЕ не появляется в активной выдаче (нет отдельного шага
+         "поставить TRUE, потом откатить" — is_active меняется РОВНО
+         ОДИН РАЗ, ВНУТРИ _confirm_reactivation, и только на 'alive');
+      3. проверка — ТОТ ЖЕ _check_one/HEADERS, что использует check_
+         archived() ниже (не вторая копия HTTP-логики);
+      4. 'alive' -> _confirm_reactivation(): атомарно история +
+         is_active=TRUE + archived_at/archive_reason/archive_checked_at
+         очищены;
+      5. 'archived'/'deleted' (страница подтверждает, что ОБЪЯВЛЕНИЯ ВСЁ
+         ЕЩЁ нет) -> is_active остаётся FALSE, ТОЛЬКО archive_checked_at
+         = now() (задача, явно: "не записывать ложную реактивацию в
+         историю") — archived_at/archive_reason НЕ трогаются, ORDER BY
+         archive_checked_at ASC в следующем вызове эту строку отодвигает
+         в конец очереди (не долбим один и тот же ложный кандидат на
+         каждом цикле, честная ротация по всем 211+).
+      None ('alive' не определился — сеть/несетевая ошибка _check_one)
+        -> ничего не меняем вообще, строка остаётся кандидатом со старым
+        archive_checked_at, попробуем снова в следующий раз.
+      RuntimeError (заблокировали 403/429) -> прерываем батч сразу же,
+        тот же принцип, что check_archived() ниже.
+
+    last_seen НЕ трогается нигде в этой функции (задача, явно).
+
+    Идемпотентность: и на уровне выборки (_select_reactivation_candidates
+    не находит уже реактивированную is_active=TRUE строку повторно), и на
+    уровне самого _confirm_reactivation (WHERE внутри CTE проверяет
+    условие ЗАНОВО на момент своего выполнения — гонка с параллельным
+    вызовом даёт False, не двойную реактивацию/двойную запись в историю).
+
+    Вызывается в начале check_archived() с небольшим _REACTIVATION_CHECK_
+    BATCH — реальные HTTP-запросы, тот же бюджет цикла, что и обычная
+    архивная проверка, не отдельный неограниченный проход по всем 213.
+
+    ПРОВЕРЕНО на реальных данных: 213 строк на проде прямо сейчас
+    подходят как КАНДИДАТЫ (не как "уже реактивированные" — ни одна не
+    трогается, пока функция ФАКТИЧЕСКИ не проверит её по HTTP). Не
+    запускалась вручную на всю таблицу в рамках этой задачи.
+
+    listing_ids — опциональный скоуп ТОЛЬКО для тестов (тот же приём, что
+    bot/jobs/property_identity_incremental.py::_fetch_unlinked)."""
+    from bot.db.pg import execute
+
+    candidates = await _select_reactivation_candidates(limit, listing_ids)
+    checked_ids: list[str] = []
+    reactivated_ids: list[str] = []
+    remained_archived_ids: list[str] = []
+
+    async with httpx.AsyncClient(headers=HEADERS, timeout=25.0, follow_redirects=True) as client:
+        for c in candidates:
+            await asyncio.sleep(random.uniform(2.5, 5.0))
+            try:
+                result = await _check_one(client, c["url"])
+            except RuntimeError:
+                logger.warning("verify_reactivation_candidates: заблокировали, останавливаю батч")
+                break
+            if result is None:
+                continue  # сеть подвела — не трогаем строку, попробуем в другой раз
+
+            checked_ids.append(c["id"])
+            if result == "alive":
+                if await _confirm_reactivation(c["id"]):
+                    reactivated_ids.append(c["id"])
+                # else: кто-то другой уже реактивировал/тронул строку
+                # между SELECT и этим моментом — идемпотентность, не
+                # ошибка, просто не наш реактивированный список.
+            else:  # 'archived' | 'deleted' — подтверждённо всё ещё недоступно
+                await execute(
+                    "UPDATE apartment_listings SET archive_checked_at = now() WHERE id = $1",
+                    c["id"])
+                remained_archived_ids.append(c["id"])
+
+    # Задача, явно: "добавь в лог количество... и ID проверенных/
+    # реактивированных/оставшихся архивными".
+    logger.info(
+        "verify_reactivation_candidates: checked=%d ids=%s reactivated=%d ids=%s "
+        "remained_archived=%d ids=%s",
+        len(checked_ids), checked_ids, len(reactivated_ids), reactivated_ids,
+        len(remained_archived_ids), remained_archived_ids,
+    )
+    return {
+        "checked": len(checked_ids), "checked_ids": checked_ids,
+        "reactivated": len(reactivated_ids), "reactivated_ids": reactivated_ids,
+        "remained_archived": len(remained_archived_ids), "remained_archived_ids": remained_archived_ids,
+    }
 
 
 async def check_archived(limit: int = 20) -> dict:
     """
     Проверить до limit объявлений по приоритету hot -> cold-confirm ->
     backlog (см. докстринг модуля, _select_candidates). В начале —
-    reactivate_reappeared_listings() (см. её докстринг).
+    verify_reactivation_candidates() (см. её докстринг — ТОЛЬКО после
+    реальной HTTP-проверки, не по одному last_seen > archived_at).
     Возвращает {"checked", "archived", "hot_checked", "cold_confirm_checked",
-    "backlog_checked", "reactivated"}.
+    "backlog_checked", "reactivated", "reactivation_checked",
+    "reactivation_remained_archived"}.
     """
-    reactivated = await reactivate_reappeared_listings()
+    reactivation_report = await verify_reactivation_candidates()
     rows = await _select_candidates(limit)
     pool_counts = {"hot": 0, "cold_confirm": 0, "backlog": 0}
 
@@ -338,7 +378,7 @@ async def check_archived(limit: int = 20) -> dict:
                 # не то же самое, что archived_at ("когда архивировали
                 # впервые"). last_seen эта функция не трогает вообще (не в
                 # SET) — обновляет его ТОЛЬКО парсер при повторном появлении
-                # объявления в выдаче, см. reactivate_reappeared_listings().
+                # объявления в выдаче, см. verify_reactivation_candidates().
                 await execute("""
                     UPDATE apartment_listings
                     SET is_active = FALSE, archived_at = COALESCE(archived_at, now()),
@@ -355,7 +395,10 @@ async def check_archived(limit: int = 20) -> dict:
                 checked, archived, pool_counts["hot"], pool_counts["cold_confirm"], pool_counts["backlog"])
     result = {"checked": checked, "archived": archived,
               "hot_checked": pool_counts["hot"], "cold_confirm_checked": pool_counts["cold_confirm"],
-              "backlog_checked": pool_counts["backlog"], "reactivated": len(reactivated)}
+              "backlog_checked": pool_counts["backlog"],
+              "reactivated": reactivation_report["reactivated"],
+              "reactivation_checked": reactivation_report["checked"],
+              "reactivation_remained_archived": reactivation_report["remained_archived"]}
     LAST_CHECK_RESULT.clear()
     LAST_CHECK_RESULT.update(result)
     return result
