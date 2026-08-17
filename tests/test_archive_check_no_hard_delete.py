@@ -66,11 +66,17 @@ async def _cleanup(*listing_ids, property_ids=()):
 async def _run_check_archived_for(row, result):
     """check_archived(), но _select_candidates подменена на ОДНУ заданную
     строку и _check_one — на заданный результат, БЕЗ реальной сети и БЕЗ
-    риска задеть реальные production-строки."""
+    риска задеть реальные production-строки. reactivate_reappeared_
+    listings() ТОЖЕ подменена (no-op) — иначе check_archived() своим
+    ПЕРВЫМ шагом реально реактивировал бы реальный прод-бэклог (211 строк
+    на момент написания, is_active=FALSE И last_seen > archived_at) на
+    каждый вызов этого хелпера; реактивация тестируется ОТДЕЛЬНО, см.
+    test_reactivate_reappeared_listings_* ниже, через listing_ids-скоуп."""
     from bot.core import archive_check
 
     with patch.object(archive_check, "_select_candidates", new=AsyncMock(return_value=[row])), \
          patch.object(archive_check, "_check_one", new=AsyncMock(return_value=result)), \
+         patch.object(archive_check, "reactivate_reappeared_listings", new=AsyncMock(return_value=[])), \
          patch.object(archive_check.asyncio, "sleep", new=AsyncMock()):
         return await archive_check.check_archived(limit=1)
 
@@ -220,3 +226,137 @@ async def test_rental_deleted_result_soft_archives_not_hard_deletes(db):
         assert row["archive_reason"] == "confirmed_gone"
     finally:
         await execute("DELETE FROM rental_listings WHERE id = $1", lid)
+
+
+# ── Идемпотентность: повторный confirmed-404/badge НЕ двигает archived_at
+#    вперёд, last_seen эта функция вообще не трогает (задача, явно) ───────
+
+@pytest.mark.asyncio
+async def test_repeated_confirmed_404_does_not_move_archived_at_or_last_seen(db):
+    from datetime import datetime, timedelta, timezone
+    from bot.db.pg import execute, fetchrow
+
+    lid = "__test_ac_idempotent__"
+    first_seen_last_seen = datetime.now(timezone.utc) - timedelta(days=5)
+    await execute(
+        "INSERT INTO apartment_listings (id, url, is_active, last_seen) VALUES ($1, $2, TRUE, $3) "
+        "ON CONFLICT (id) DO UPDATE SET is_active = TRUE, archived_at = NULL, archive_reason = NULL, "
+        "last_seen = $3",
+        lid, f"https://krisha.kz/test/{lid}", first_seen_last_seen,
+    )
+    try:
+        # Первое подтверждение "объявления больше нет" — archived_at ставится.
+        await _run_check_archived_for({"id": lid, "url": f"https://krisha.kz/test/{lid}", "pool": "hot"}, "deleted")
+        row1 = await fetchrow(
+            "SELECT archived_at, last_seen, archive_checked_at FROM apartment_listings WHERE id = $1", lid)
+        first_archived_at = row1["archived_at"]
+        assert first_archived_at is not None
+        assert row1["last_seen"] == first_seen_last_seen  # не тронут архивацией вообще
+
+        # Второе подтверждение той же самой строки (тест намеренно зовёт
+        # check_archived() ещё раз на ту же строку напрямую — в норме
+        # _select_candidates её бы уже не выбрала, is_active IS NOT FALSE
+        # её исключает, но UPDATE обязан быть идемпотентным сам по себе,
+        # не полагаясь только на выборку выше).
+        await _run_check_archived_for({"id": lid, "url": f"https://krisha.kz/test/{lid}", "pool": "hot"}, "deleted")
+        row2 = await fetchrow(
+            "SELECT archived_at, last_seen, archive_checked_at FROM apartment_listings WHERE id = $1", lid)
+
+        assert row2["archived_at"] == first_archived_at  # НЕ сдвинут вторым подтверждением
+        assert row2["last_seen"] == first_seen_last_seen  # по-прежнему не тронут
+        assert row2["archive_checked_at"] >= row1["archive_checked_at"]  # это поле ОБНОВЛЯЕТСЯ, и это ожидаемо
+    finally:
+        await _cleanup(lid)
+
+
+# ── Реактивация: объявление снова появилось (last_seen продвинулся мимо
+#    archived_at) -> is_active=TRUE, archived_at/archive_reason очищены ──
+
+@pytest.mark.asyncio
+async def test_reactivate_reappeared_listings_reactivates_and_clears_reason(db):
+    from datetime import datetime, timedelta, timezone
+    from bot.core.archive_check import reactivate_reappeared_listings
+    from bot.db.pg import execute, fetchrow
+
+    lid = "__test_ac_reappeared__"
+    archived_at = datetime.now(timezone.utc) - timedelta(days=2)
+    last_seen = datetime.now(timezone.utc)  # ПОЗЖЕ archived_at — парсер видел его снова
+    await execute("""
+        INSERT INTO apartment_listings (id, url, is_active, archived_at, archive_reason, last_seen)
+        VALUES ($1, $2, FALSE, $3, 'confirmed_gone', $4)
+        ON CONFLICT (id) DO UPDATE SET is_active = FALSE, archived_at = $3,
+            archive_reason = 'confirmed_gone', last_seen = $4
+    """, lid, f"https://krisha.kz/test/{lid}", archived_at, last_seen)
+    try:
+        reactivated = await reactivate_reappeared_listings(listing_ids=[lid])
+        assert reactivated == [lid]
+
+        row = await fetchrow(
+            "SELECT is_active, archived_at, archive_reason, last_seen FROM apartment_listings WHERE id = $1", lid)
+        assert row["is_active"] is True
+        assert row["archived_at"] is None
+        assert row["archive_reason"] is None
+        assert row["last_seen"] == last_seen  # реактивация last_seen не меняет, только читает его
+    finally:
+        await _cleanup(lid)
+
+
+@pytest.mark.asyncio
+async def test_reactivate_leaves_still_gone_listing_untouched(db):
+    """last_seen НЕ продвинулся мимо archived_at (никто не видел
+    объявление снова) — реактивации не происходит, остаётся архивным."""
+    from datetime import datetime, timedelta, timezone
+    from bot.core.archive_check import reactivate_reappeared_listings
+    from bot.db.pg import execute, fetchrow
+
+    lid = "__test_ac_still_gone__"
+    now = datetime.now(timezone.utc)
+    last_seen = now - timedelta(days=5)   # последний раз видели ДО архивации
+    archived_at = now - timedelta(days=2)  # архивировано ПОЗЖЕ last_seen
+    await execute("""
+        INSERT INTO apartment_listings (id, url, is_active, archived_at, archive_reason, last_seen)
+        VALUES ($1, $2, FALSE, $3, 'confirmed_gone', $4)
+        ON CONFLICT (id) DO UPDATE SET is_active = FALSE, archived_at = $3,
+            archive_reason = 'confirmed_gone', last_seen = $4
+    """, lid, f"https://krisha.kz/test/{lid}", archived_at, last_seen)
+    try:
+        reactivated = await reactivate_reappeared_listings(listing_ids=[lid])
+        assert reactivated == []
+
+        row = await fetchrow(
+            "SELECT is_active, archived_at, archive_reason FROM apartment_listings WHERE id = $1", lid)
+        assert row["is_active"] is False
+        assert row["archived_at"] == archived_at
+        assert row["archive_reason"] == "confirmed_gone"
+    finally:
+        await _cleanup(lid)
+
+
+@pytest.mark.asyncio
+async def test_reactivate_scoped_by_listing_ids_ignores_others(db):
+    """listing_ids-скоуп — не задевает другие подходящие под условие
+    строки (задача: тесты не должны трогать реальный прод-бэклог, 211
+    строк на момент написания уже подходят под условие реактивации без
+    скоупа)."""
+    from datetime import datetime, timedelta, timezone
+    from bot.core.archive_check import reactivate_reappeared_listings
+    from bot.db.pg import execute, fetchrow
+
+    lid_scoped, lid_other = "__test_ac_scope_a__", "__test_ac_scope_b__"
+    archived_at = datetime.now(timezone.utc) - timedelta(days=2)
+    last_seen = datetime.now(timezone.utc)
+    for lid in (lid_scoped, lid_other):
+        await execute("""
+            INSERT INTO apartment_listings (id, url, is_active, archived_at, archive_reason, last_seen)
+            VALUES ($1, $2, FALSE, $3, 'confirmed_gone', $4)
+            ON CONFLICT (id) DO UPDATE SET is_active = FALSE, archived_at = $3,
+                archive_reason = 'confirmed_gone', last_seen = $4
+        """, lid, f"https://krisha.kz/test/{lid}", archived_at, last_seen)
+    try:
+        reactivated = await reactivate_reappeared_listings(listing_ids=[lid_scoped])
+        assert reactivated == [lid_scoped]
+
+        other = await fetchrow("SELECT is_active FROM apartment_listings WHERE id = $1", lid_other)
+        assert other["is_active"] is False  # вне скоупа — не тронут, даже хотя подходил бы
+    finally:
+        await _cleanup(lid_scoped, lid_other)

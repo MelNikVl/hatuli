@@ -168,13 +168,66 @@ async def _select_candidates(limit: int) -> list[dict]:
     return candidates
 
 
+async def reactivate_reappeared_listings(listing_ids: list[str] | None = None) -> list[str]:
+    """Задача 2026-08-17 (follow-up): "объявление реактивируется, если
+    появилось снова, archive_reason очищается". Проверено ПЕРЕД тем, как
+    писать этот код: service_apartments.py::run_cycle() при повторном
+    появлении listing'а (совпадение по id — та же строка, что архивная)
+    делает `UPDATE apartment_listings SET ... last_seen=NOW() WHERE
+    id=$1` — last_seen ВСЕГДА двигается вперёд на каждый re-parse, ДАЖЕ
+    для уже архивных строк (запрос "exists" не фильтрует по is_active),
+    но is_active/archived_at/archive_reason парсер не трогает вовсе — до
+    этой функции архивная строка так и оставалась is_active=FALSE
+    НАВСЕГДА, даже если объявление реально снова живо на Крыше.
+
+    Не трогает service_apartments.py напрямую (не лезем в 900-строчный
+    run_cycle ради трёх колонок) — вместо этого: "is_active=FALSE, но
+    last_seen ПОЗЖЕ archived_at" ЕСТЬ ровно тот факт, что кто-то (парсер)
+    видел объявление ПОСЛЕ того, как мы его архивировали — самодостаточный
+    сигнал реактивации, не требующий знать, кто именно last_seen подвинул.
+    Вызывается в начале check_archived() (тот же периодический цикл,
+    что и архивация — реактивация и архивация теперь два конца одного
+    и того же процесса, не два независимых).
+
+    ПРОВЕРЕНО на реальных данных перед этим коммитом: 211 строк на проде
+    прямо сейчас подходят под это условие (архивны, но last_seen ушёл
+    вперёд archived_at) — реальный, не гипотетический бэклог неправильно
+    архивных объявлений, который эта функция исправит на первом же цикле
+    после деплоя. Не запускалась вручную на всю таблицу в рамках этой
+    задачи (то же правило, что и для остального: массовые изменения
+    существующих данных — не в этом PR, только код, который правильно
+    ведёт себя дальше).
+
+    listing_ids — опциональный скоуп ТОЛЬКО для тестов (тот же приём, что
+    bot/jobs/property_identity_incremental.py::_fetch_unlinked): без него
+    тест задел бы реальный бэклог из 211 строк на dev-БД, не только
+    тестовые listing'и."""
+    from bot.db.pg import fetch
+    sql = ("UPDATE apartment_listings "
+           "SET is_active = TRUE, archived_at = NULL, archive_reason = NULL "
+           "WHERE is_active = FALSE AND archived_at IS NOT NULL "
+           "AND last_seen IS NOT NULL AND last_seen > archived_at")
+    params: list = []
+    if listing_ids is not None:
+        params.append(listing_ids)
+        sql += f" AND id = ANY(${len(params)}::text[])"
+    sql += " RETURNING id"
+    rows = await fetch(sql, *params)
+    ids = [r["id"] for r in rows]
+    if ids:
+        logger.info("reactivated (снова видели после архивации): %d — %s", len(ids), ids[:20])
+    return ids
+
+
 async def check_archived(limit: int = 20) -> dict:
     """
     Проверить до limit объявлений по приоритету hot -> cold-confirm ->
-    backlog (см. докстринг модуля, _select_candidates).
+    backlog (см. докстринг модуля, _select_candidates). В начале —
+    reactivate_reappeared_listings() (см. её докстринг).
     Возвращает {"checked", "archived", "hot_checked", "cold_confirm_checked",
-    "backlog_checked"}.
+    "backlog_checked", "reactivated"}.
     """
+    reactivated = await reactivate_reappeared_listings()
     rows = await _select_candidates(limit)
     pool_counts = {"hot": 0, "cold_confirm": 0, "backlog": 0}
 
@@ -205,10 +258,23 @@ async def check_archived(limit: int = 20) -> dict:
                 # отчётности/дебага, не для поведения.
                 archived += 1
                 archive_reason = "confirmed_gone" if result == "deleted" else "archived_badge"
+                # archived_at = COALESCE(archived_at, now()) — задача, явно:
+                # повторный confirmed-404/badge на УЖЕ архивной строке не
+                # должен двигать archived_at вперёд (в норме такая строка и
+                # не должна попадать в _select_candidates заново, WHERE
+                # is_active IS NOT FALSE её исключает — но UPDATE защищается
+                # сам по себе, а не полагается только на выборку выше; и
+                # если строку когда-нибудь передадут сюда напрямую — первая
+                # дата архивации остаётся первой). archive_checked_at
+                # ("когда последний раз проверяли") ОБНОВЛЯЕТСЯ всегда — это
+                # не то же самое, что archived_at ("когда архивировали
+                # впервые"). last_seen эта функция не трогает вообще (не в
+                # SET) — обновляет его ТОЛЬКО парсер при повторном появлении
+                # объявления в выдаче, см. reactivate_reappeared_listings().
                 await execute("""
                     UPDATE apartment_listings
-                    SET is_active = FALSE, archived_at = now(), archive_checked_at = now(),
-                        archive_reason = $2
+                    SET is_active = FALSE, archived_at = COALESCE(archived_at, now()),
+                        archive_checked_at = now(), archive_reason = $2
                     WHERE id = $1
                 """, r["id"], archive_reason)
                 logger.info("archived (%s, pool=%s): %s", archive_reason, r["pool"], r["url"])
@@ -221,7 +287,7 @@ async def check_archived(limit: int = 20) -> dict:
                 checked, archived, pool_counts["hot"], pool_counts["cold_confirm"], pool_counts["backlog"])
     result = {"checked": checked, "archived": archived,
               "hot_checked": pool_counts["hot"], "cold_confirm_checked": pool_counts["cold_confirm"],
-              "backlog_checked": pool_counts["backlog"]}
+              "backlog_checked": pool_counts["backlog"], "reactivated": len(reactivated)}
     LAST_CHECK_RESULT.clear()
     LAST_CHECK_RESULT.update(result)
     return result
@@ -261,10 +327,12 @@ async def check_archived_rentals(limit: int = 20) -> dict:
                 # listings, принцип "не удалять безвозвратно" тот же.
                 archived += 1
                 archive_reason = "confirmed_gone" if result == "deleted" else "archived_badge"
+                # Тот же archived_at = COALESCE(...) идемпотентности фикс,
+                # что check_archived() выше — та же причина.
                 await execute("""
                     UPDATE rental_listings
-                    SET is_active = FALSE, archived_at = now(), archive_checked_at = now(),
-                        archive_reason = $2
+                    SET is_active = FALSE, archived_at = COALESCE(archived_at, now()),
+                        archive_checked_at = now(), archive_reason = $2
                     WHERE id = $1
                 """, r["id"], archive_reason)
                 logger.info("rental archived (%s): %s", archive_reason, r["url"])
