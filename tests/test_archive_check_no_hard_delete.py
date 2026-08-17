@@ -281,6 +281,59 @@ async def test_reactivate_reappeared_listings_reactivates_and_clears_reason(db):
     lid = "__test_ac_reappeared__"
     archived_at = datetime.now(timezone.utc) - timedelta(days=2)
     last_seen = datetime.now(timezone.utc)  # ПОЗЖЕ archived_at — парсер видел его снова
+    old_checked_at = archived_at
+    await execute("""
+        INSERT INTO apartment_listings (id, url, is_active, archived_at, archive_reason, last_seen,
+                                         archive_checked_at)
+        VALUES ($1, $2, FALSE, $3, 'confirmed_gone', $4, $5)
+        ON CONFLICT (id) DO UPDATE SET is_active = FALSE, archived_at = $3,
+            archive_reason = 'confirmed_gone', last_seen = $4, archive_checked_at = $5
+    """, lid, f"https://krisha.kz/test/{lid}", archived_at, last_seen, old_checked_at)
+    try:
+        reactivated = await reactivate_reappeared_listings(listing_ids=[lid])
+        assert reactivated == [lid]
+
+        row = await fetchrow(
+            "SELECT is_active, archived_at, archive_reason, last_seen, archive_checked_at "
+            "FROM apartment_listings WHERE id = $1", lid)
+        assert row["is_active"] is True
+        assert row["archived_at"] is None
+        assert row["archive_reason"] is None
+        assert row["last_seen"] == last_seen  # реактивация last_seen не меняет, только читает его
+        # archive_checked_at ОБНУЛЯЕТСЯ (не оставлен старым) — задача,
+        # найдено read-only аудитом: "last_seen > archived_at" подтвердило
+        # реактивацию только у 50% реальных примеров (см. докстринг функции)
+        # -> реактивация ставит ГИПОТЕЗУ и форсирует немедленную реальную
+        # перепроверку через backlog-ветку _select_candidates (та явно
+        # фильтрует archive_checked_at IS NULL), а не тихо считает вопрос
+        # решённым по одному устаревшему сравнению дат.
+        assert row["archive_checked_at"] is None
+
+        # История прежней архивации НЕ потеряна (задача, follow-up) —
+        # старые archived_at/archive_reason сохранены в listing_archive_history.
+        hist = await fetchrow(
+            "SELECT archived_at, archive_reason, reactivated_at FROM listing_archive_history WHERE listing_id = $1",
+            lid)
+        assert hist is not None
+        assert hist["archived_at"] == archived_at
+        assert hist["archive_reason"] == "confirmed_gone"
+        assert hist["reactivated_at"] is not None
+    finally:
+        await _cleanup(lid)
+
+
+@pytest.mark.asyncio
+async def test_reactivate_is_idempotent_no_duplicate_history(db):
+    """Задача, явно: "сделай операцию идемпотентной" — повторный вызов
+    на ту же (уже реактивированную) строку не находит кандидатов и не
+    пишет вторую строку истории."""
+    from datetime import datetime, timedelta, timezone
+    from bot.core.archive_check import reactivate_reappeared_listings
+    from bot.db.pg import execute, fetchval
+
+    lid = "__test_ac_reactivate_idempotent__"
+    archived_at = datetime.now(timezone.utc) - timedelta(days=2)
+    last_seen = datetime.now(timezone.utc)
     await execute("""
         INSERT INTO apartment_listings (id, url, is_active, archived_at, archive_reason, last_seen)
         VALUES ($1, $2, FALSE, $3, 'confirmed_gone', $4)
@@ -288,15 +341,14 @@ async def test_reactivate_reappeared_listings_reactivates_and_clears_reason(db):
             archive_reason = 'confirmed_gone', last_seen = $4
     """, lid, f"https://krisha.kz/test/{lid}", archived_at, last_seen)
     try:
-        reactivated = await reactivate_reappeared_listings(listing_ids=[lid])
-        assert reactivated == [lid]
+        first = await reactivate_reappeared_listings(listing_ids=[lid])
+        assert first == [lid]
+        second = await reactivate_reappeared_listings(listing_ids=[lid])
+        assert second == []  # уже реактивирован — второй вызов не находит кандидата
 
-        row = await fetchrow(
-            "SELECT is_active, archived_at, archive_reason, last_seen FROM apartment_listings WHERE id = $1", lid)
-        assert row["is_active"] is True
-        assert row["archived_at"] is None
-        assert row["archive_reason"] is None
-        assert row["last_seen"] == last_seen  # реактивация last_seen не меняет, только читает его
+        hist_count = await fetchval(
+            "SELECT count(*) FROM listing_archive_history WHERE listing_id = $1", lid)
+        assert hist_count == 1  # ровно одна запись истории, не задвоена
     finally:
         await _cleanup(lid)
 

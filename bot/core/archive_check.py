@@ -189,33 +189,101 @@ async def reactivate_reappeared_listings(listing_ids: list[str] | None = None) -
     что и архивация — реактивация и архивация теперь два конца одного
     и того же процесса, не два независимых).
 
+    ## Что именно очищается/меняется на apartment_listings (задача,
+    явно просит показать)
+      is_active           FALSE -> TRUE
+      archived_at          <старое значение> -> NULL
+      archive_reason       <старое значение> -> NULL
+      archive_checked_at   <старое значение> -> NULL (см. ниже, ПОЧЕМУ)
+    НЕ трогает: last_seen, ничего больше.
+
+    ## НАЙДЕНО read-only аудитом ПЕРЕД тем, как этот код стал финальным
+    (scripts/audit_reactivation_candidates.py, 20 примеров, реальный HTTP
+    GET на живых прод-строках): "last_seen > archived_at" ПОДТВЕРДИЛО
+    реактивацию (сейчас реально 'alive') только у 10 из 20 (50%) — у
+    ОСТАЛЬНЫХ 10 страница СЕЙЧАС снова показывает архивный бейдж или 404,
+    хотя last_seen когда-то БЫЛ позже archived_at. Причина структурная,
+    не баг: is_active=FALSE исключает строку из _select_candidates()
+    НАВСЕГДА (WHERE is_active IS NOT FALSE) — если объявление вернулось
+    живым НА МОМЕНТ T2 (last_seen сдвинулся), а потом СНОВА пропало к
+    моменту T3 (когда его проверяет аудит/деплой), наша система об этом
+    втором исчезновении узнать не могла: is_active уже FALSE, значит
+    archive_check.py эту строку больше не трогает и не перепроверяет.
+    "last_seen > archived_at" — это ДОКАЗАТЕЛЬСТВО "было живым В КАКОЙ-ТО
+    момент после архивации", а НЕ доказательство "живо ПРЯМО СЕЙЧАС".
+
+    Из-за этого reactivate_reappeared_listings() НЕ ставит is_active=TRUE
+    как окончательный вердикт — она ставит его как ГИПОТЕЗУ, требующую
+    немедленной перепроверки, и специально обнуляет archive_checked_at
+    (а не оставляет старое значение) — это единственный способ ЗАСТАВИТЬ
+    _select_candidates() снова взять эту строку в оборот (backlog-ветка
+    там явно фильтрует archive_checked_at IS NULL) на САМОМ БЛИЖАЙШЕМ
+    цикле check_archived(), а не ждать своей очереди неопределённо долго.
+    Самокоррекция: если гипотеза неверна (объявление снова archived/
+    deleted) — check_archived() это обнаружит и заново заархивирует на
+    следующем реальном проходе, без ручного вмешательства.
+
+    ## История НЕ теряется (задача, follow-up: "archived_at/archive_reason
+    очищаются — добавь append-only историю")
+    Перед очисткой СТАРЫЕ archived_at/archive_reason сохраняются ОДНОЙ
+    строкой в listing_archive_history (migrations/090) — один завершённый
+    цикл "архивация -> реактивация" = одна строка (archived_at/
+    archive_reason — какими они были ДО очистки, reactivated_at — когда
+    обнаружена реактивация). CTE ниже делает SELECT кандидатов + INSERT в
+    историю + UPDATE apartment_listings ОДНИМ атомарным запросом (не
+    отдельными SELECT/INSERT/UPDATE — исключает гонку "нашли кандидата,
+    другой процесс успел его тронуть до нашего UPDATE").
+
+    ## Идемпотентность (задача, явно)
+    Повторный вызов без изменений в БД между вызовами находит 0
+    кандидатов вторым разом — реактивированная строка (is_active=TRUE)
+    больше не проходит WHERE is_active = FALSE, значит НЕ реактивируется
+    и НЕ логируется в историю дважды. Не отдельный флаг/лок, а прямое
+    следствие того, что WHERE проверяет ТЕКУЩЕЕ состояние, не факт "уже
+    обрабатывали".
+
     ПРОВЕРЕНО на реальных данных перед этим коммитом: 211 строк на проде
     прямо сейчас подходят под это условие (архивны, но last_seen ушёл
-    вперёд archived_at) — реальный, не гипотетический бэклог неправильно
-    архивных объявлений, который эта функция исправит на первом же цикле
-    после деплоя. Не запускалась вручную на всю таблицу в рамках этой
-    задачи (то же правило, что и для остального: массовые изменения
-    существующих данных — не в этом PR, только код, который правильно
-    ведёт себя дальше).
+    вперёд archived_at) — реальный, не гипотетический бэклог, который эта
+    функция начнёт разбирать на первом же цикле после деплоя (ставя
+    гипотезу + сразу отправляя на перепроверку, см. выше — НЕ "тихо и
+    окончательно помечает активными без проверки"). Не запускалась вручную
+    на всю таблицу в рамках этой задачи (то же правило, что и для
+    остального: массовые изменения существующих данных — не в этом PR,
+    только код, который правильно ведёт себя дальше).
 
     listing_ids — опциональный скоуп ТОЛЬКО для тестов (тот же приём, что
     bot/jobs/property_identity_incremental.py::_fetch_unlinked): без него
     тест задел бы реальный бэклог из 211 строк на dev-БД, не только
     тестовые listing'и."""
     from bot.db.pg import fetch
-    sql = ("UPDATE apartment_listings "
-           "SET is_active = TRUE, archived_at = NULL, archive_reason = NULL "
-           "WHERE is_active = FALSE AND archived_at IS NOT NULL "
-           "AND last_seen IS NOT NULL AND last_seen > archived_at")
+    scope_clause = ""
     params: list = []
     if listing_ids is not None:
         params.append(listing_ids)
-        sql += f" AND id = ANY(${len(params)}::text[])"
-    sql += " RETURNING id"
+        scope_clause = f" AND id = ANY(${len(params)}::text[])"
+    sql = f"""
+        WITH candidates AS (
+            SELECT id, archived_at, archive_reason FROM apartment_listings
+            WHERE is_active = FALSE AND archived_at IS NOT NULL
+              AND last_seen IS NOT NULL AND last_seen > archived_at
+              {scope_clause}
+            FOR UPDATE
+        ), logged AS (
+            INSERT INTO listing_archive_history (listing_id, archived_at, archive_reason)
+            SELECT id, archived_at, archive_reason FROM candidates
+            RETURNING listing_id
+        )
+        UPDATE apartment_listings
+        SET is_active = TRUE, archived_at = NULL, archive_reason = NULL, archive_checked_at = NULL
+        WHERE id IN (SELECT listing_id FROM logged)
+        RETURNING id
+    """
     rows = await fetch(sql, *params)
     ids = [r["id"] for r in rows]
-    if ids:
-        logger.info("reactivated (снова видели после архивации): %d — %s", len(ids), ids[:20])
+    # "Добавь в лог количество реактивированных listing ID" (задача, явно)
+    # — count ОТДЕЛЬНО от самого списка, не только внутри %s-подстановки.
+    logger.info("reactivate_reappeared_listings: count=%d ids=%s", len(ids), ids)
     return ids
 
 
