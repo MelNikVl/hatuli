@@ -97,7 +97,7 @@ async def test_run_collect_inserts_new_entries(db):
     html = _make_html([_NORMAL_ENTRY])
     try:
         result = await run_collect(html=html)
-        assert result["new"] == 1
+        assert result["created"] == 1
         assert result["updated"] == 0
         assert result["snapshot_date"] == "2026-07-29"
 
@@ -122,7 +122,7 @@ async def test_run_collect_upsert_updates_not_duplicates(db):
         changed = dict(_NORMAL_ENTRY, scheme="Гарантия КЖК", objects=99)
         result = await run_collect(html=_make_html([changed]))
 
-        assert result["new"] == 0
+        assert result["created"] == 0
         assert result["updated"] == 1
         rows = await fetch("SELECT warranty_scheme, objects_count FROM kzk_registry WHERE bin=$1",
                             "__test_bin_normal__")
@@ -182,4 +182,89 @@ async def test_run_collect_skips_entries_without_bin(db):
     broken = {k: v for k, v in _NORMAL_ENTRY.items() if k != "bin"}
     result = await run_collect(html=_make_html([broken]))
     assert result["total"] == 1
-    assert result["new"] == 0  # без bin — пропущена, не упала с ошибкой
+    assert result["created"] == 0  # без bin — пропущена, не упала с ошибкой
+    assert result["skipped"] == 1
+
+
+# ── dry-run: живой парсинг, но НЕ пишет (задача 2026-08-17, "KZK
+#    registry нужен... сначала dry-run/canary") ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_dry_run_does_not_write_but_reports_would_be_counts(db):
+    from kzk_registry_collect import run_collect
+    from bot.db.pg import fetchrow
+
+    try:
+        result = await run_collect(html=_make_html([_NORMAL_ENTRY]), dry_run=True)
+        assert result["dry_run"] is True
+        assert result["created"] == 1
+        row = await fetchrow("SELECT bin FROM kzk_registry WHERE bin=$1", "__test_bin_normal__")
+        assert row is None  # ничего не записано
+    finally:
+        await _cleanup("__test_bin_normal__")
+
+
+@pytest.mark.asyncio
+async def test_dry_run_after_real_run_reports_unchanged(db):
+    """dry-run поверх УЖЕ существующей, НЕ изменившейся записи ->
+    unchanged, не created/updated (иначе canary перед реальным прогоном
+    не отличил бы "ничего не изменилось" от "перезаписал бы всё")."""
+    from kzk_registry_collect import run_collect
+
+    try:
+        await run_collect(html=_make_html([_NORMAL_ENTRY]))
+        result = await run_collect(html=_make_html([_NORMAL_ENTRY]), dry_run=True)
+        assert result["created"] == 0
+        assert result["updated"] == 0
+        assert result["unchanged"] == 1
+    finally:
+        await _cleanup("__test_bin_normal__")
+
+
+@pytest.mark.asyncio
+async def test_real_run_after_change_reports_updated_not_unchanged(db):
+    from kzk_registry_collect import run_collect
+
+    try:
+        await run_collect(html=_make_html([_NORMAL_ENTRY]))
+        changed = dict(_NORMAL_ENTRY, scheme="Гарантия КЖК", objects=99)
+        result = await run_collect(html=_make_html([changed]), dry_run=True)
+        assert result["updated"] == 1
+        assert result["unchanged"] == 0
+    finally:
+        await _cleanup("__test_bin_normal__")
+
+
+# ── ошибка одной записи не должна ронять весь прогон ──────────────────
+
+@pytest.mark.asyncio
+async def test_one_bad_entry_does_not_abort_whole_batch(db):
+    """Одна запись с некорректным типом поля (objects_count — TEXT
+    вместо INT/None, INSERT упадёт на этой строке) НЕ должна помешать
+    остальным записям того же снапшота записаться — errors считается
+    отдельно, cbatch продолжается (задача, неявно: "покажи errors" =>
+    они возможны и не фатальны)."""
+    from kzk_registry_collect import run_collect
+    from bot.db.pg import fetchrow
+
+    broken = dict(_NORMAL_ENTRY, bin="__test_bin_broken__", objects="не число")
+    good = dict(_BLACKLIST_ENTRY)
+    try:
+        result = await run_collect(html=_make_html([broken, good]))
+        assert result["errors"] == 1
+        assert result["created"] == 1  # good всё равно записалась
+        assert len(result["error_samples"]) == 1
+
+        good_row = await fetchrow("SELECT bin FROM kzk_registry WHERE bin=$1", "__test_bin_blacklist__")
+        assert good_row is not None
+        broken_row = await fetchrow("SELECT bin FROM kzk_registry WHERE bin=$1", "__test_bin_broken__")
+        assert broken_row is None  # кривая запись не записалась, но и не уронила остальные
+    finally:
+        await _cleanup("__test_bin_broken__", "__test_bin_blacklist__")
+
+
+def test_cli_has_dry_run_flag():
+    import inspect
+    from kzk_registry_collect import main
+    src = inspect.getsource(main)
+    assert "--dry-run" in src

@@ -26,8 +26,10 @@ import json
 import os
 import random
 import re
+import socket
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -35,6 +37,47 @@ import psycopg2
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+# ── Ошибки источника — задача 2026-08-17 ("ложный sentinel"): раньше
+# get()/find_geo_id()/fetch_reviews() ловили ЛЮБОЕ исключение и молча
+# возвращали None/[] — reviews_pipeline.py не мог отличить "2GIS
+# ответил: у ЖК нет отзывов" от "запрос к 2GIS упал" (timeout/5xx/429/
+# ошибка парсинга), и писал sentinel «отзывов нет» в ОБОИХ случаях —
+# ЖК с временным сбоем не проверялся заново ~25 дней (_REFRESH_DAYS в
+# reviews_pipeline.py). Теперь ошибка сети/HTTP ПРОПАГИРУЕТСЯ как один
+# из двух типов ниже, а не проглатывается — sentinel пишет ТОЛЬКО
+# reviews_pipeline.py, и ТОЛЬКО когда источник ответил успешно (см. его
+# докстринг/collect_one_complex).
+class TransientFetchError(Exception):
+    """Timeout/5xx/429/сетевая ошибка — стоит повторить (см. _get_with_
+    retry: несколько попыток с backoff УЖЕ здесь, до того как ошибка
+    вообще дойдёт до caller'а); если и после retry не удалось —
+    caller (reviews_pipeline.py) НЕ пишет sentinel, ЖК останется в
+    очереди на следующий прогон (ежедневный таймер = естественный
+    backoff между попытками, отдельного расписания не заводим)."""
+
+
+class PermanentFetchError(Exception):
+    """4xx (кроме 429) — retry бессмысленен (тот же запрос даст тот же
+    результат), но это ТОЖЕ не "успешный ответ": sentinel не пишем (та
+    же причина, что для transient — задача, явно: "sentinel писать
+    только после успешного ответа источника"), просто НЕ повторяем
+    ускоренно, обычный refresh-цикл подхватит его сам."""
+
+
+def _classify_http_error(exc: BaseException) -> Exception:
+    """urllib-исключение -> Transient/PermanentFetchError. Неизвестные
+    (не HTTPError/URLError/timeout) — тоже Transient: безопасный дефолт
+    (лучше лишний раз повторить, чем ошибочно списать в "постоянная",
+    навсегда потеряв шанс когда-нибудь получить данные)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 429 or exc.code >= 500:
+            return TransientFetchError(f"HTTP {exc.code}")
+        return PermanentFetchError(f"HTTP {exc.code}")
+    if isinstance(exc, (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError)):
+        return TransientFetchError(str(exc))
+    return TransientFetchError(f"{type(exc).__name__}: {exc}")
 
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
@@ -61,14 +104,33 @@ def norm(s):
     return n
 
 
-def get(url):
+def get(url, retries=2, backoff=2.0):
+    """GET с retry+backoff на TransientFetchError (задача 2026-08-17:
+    "назначить retry с backoff") — PermanentFetchError НЕ повторяется
+    (тот же запрос даст тот же результат, ждать бессмысленно)."""
     req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept-Language': 'ru'})
-    with urllib.request.urlopen(req, timeout=40) as r:
-        return r.read().decode('utf-8', 'ignore')
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=40) as r:
+                return r.read().decode('utf-8', 'ignore')
+        except Exception as exc:
+            classified = _classify_http_error(exc)
+            if isinstance(classified, PermanentFetchError):
+                raise classified from exc
+            last_exc = classified
+            if attempt < retries:
+                time.sleep(backoff * (2 ** attempt))
+    raise last_exc
 
 
 def find_geo_id(name):
-    """Поиск geo_id по названию ЖК. Возвращает (geo_id, title) или None."""
+    """Поиск geo_id по названию ЖК. Возвращает (geo_id, title) — найден;
+    None — запрос(ы) УСПЕШНО выполнились, совпадения нет (это и есть
+    "успешный ответ с нулём результата", задача 2026-08-17); поднимает
+    TransientFetchError/PermanentFetchError, если запрос вообще не
+    удалось выполнить (ни для одного варианта имени) — caller ДОЛЖЕН
+    отличать это от "не найдено" (иначе тот самый ложный sentinel)."""
     variants = [name]
     n0 = re.sub(r'^(жк|кг|кд|мжк)\s+', '', name.strip(), flags=re.I)
     if n0 != name:
@@ -77,26 +139,35 @@ def find_geo_id(name):
     if len(words) > 2:
         variants.append(' '.join(words[:2]))
     variants = list(dict.fromkeys(variants))  # уникальные
+
+    n = norm(name)
+    last_fetch_error = None
+    any_fetch_succeeded = False
     for v in variants:
         try:
             h = get('https://2gis.kz/astana/search/' + urllib.parse.quote(v))
-        except Exception:
+        except (TransientFetchError, PermanentFetchError) as exc:
+            last_fetch_error = exc
             continue
-        n = norm(name)
+        any_fetch_succeeded = True
         for gid, title in GEO_RE.findall(h):
             t = norm(title.split(',')[0])
             if len(n) < 5:
                 continue
             if n in t or (t in n and len(t) >= 0.7 * len(n)):
                 return gid, title
+    if not any_fetch_succeeded and last_fetch_error is not None:
+        # НИ ОДИН вариант имени не удалось даже запросить — это не
+        # "не найдено", это сбой запроса целиком.
+        raise last_fetch_error
     return None
 
 
 def fetch_reviews(geo_id):
-    try:
-        h = get('https://2gis.kz/astana/geo/%s/tab/reviews' % geo_id)
-    except Exception:
-        return []
+    """Возвращает [] на "успешно получили страницу, отзывов нет"; ЭТА
+    функция поднимает TransientFetchError/PermanentFetchError, если
+    сам запрос не удался (см. find_geo_id докстринг — тот же принцип)."""
+    h = get('https://2gis.kz/astana/geo/%s/tab/reviews' % geo_id)
     pairs = REVIEW_RE.findall(h)
     dates = DATE_RE.findall(h)
     # даты в JSON идут в обратном порядке к SSR-отзывам; если кол-во совпадает — привязываем reverse

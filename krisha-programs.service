@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly developer purchase programs check
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/developer_programs_check.py

@@ -340,3 +340,101 @@ async def test_snapshot_processes_multiple_complexes_concurrently_without_mixing
     finally:
         for cid, lid in pairs:
             await _cleanup(cid, lid)
+
+
+# ── Задача 2026-08-17: canary-режим (--complex-ids/--limit/--dry-run,
+#    изоляция ошибок по ЖК, processed/succeeded/failed/skipped) ─────────
+
+@pytest.mark.asyncio
+async def test_dry_run_does_not_write(db, monkeypatch):
+    import complex_location_score_snapshot as snap
+    import bot.core.location_score as location_score_module
+
+    async def _fake_compute(lat, lon, year_built=None, district=None, complex_id=None):
+        factors = _fake_factors(schools=2)
+        return {"total": 2, "factors": factors, "confidence": 80}
+
+    monkeypatch.setattr(location_score_module, "compute_complex_location_score", _fake_compute)
+
+    cid, lid = await _insert_complex_with_listing("__test_cls_dryrun__", 51.16, 71.46)
+    try:
+        result = await snap.run_snapshot(complex_ids=[cid], dry_run=True)
+        assert result["dry_run"] is True
+        assert result["written"] == 1  # посчитал бы, но не вставил
+        assert result["succeeded"] == 1
+
+        from bot.db.pg import fetchval
+        count = await fetchval("SELECT count(*) FROM complex_location_scores WHERE complex_id=$1", cid)
+        assert count == 0
+    finally:
+        await _cleanup(cid, lid)
+
+
+@pytest.mark.asyncio
+async def test_one_complex_failure_does_not_abort_batch(db, monkeypatch):
+    """Задача: "ошибка одного ЖК не должна прекращать весь batch" —
+    раньше asyncio.gather() без return_exceptions=True роняло ВЕСЬ
+    прогон на первом же исключении."""
+    import complex_location_score_snapshot as snap
+    import bot.core.location_score as location_score_module
+
+    async def _flaky_compute(lat, lon, year_built=None, district=None, complex_id=None):
+        if round(lat, 2) == 51.30:
+            raise RuntimeError("симулированный сбой Overpass")
+        factors = _fake_factors(schools=2)
+        return {"total": 2, "factors": factors, "confidence": 80}
+
+    monkeypatch.setattr(location_score_module, "compute_complex_location_score", _flaky_compute)
+
+    pairs = [
+        await _insert_complex_with_listing("__test_cls_fail_a__", 51.30, 71.30),  # упадёт
+        await _insert_complex_with_listing("__test_cls_fail_b__", 51.31, 71.31),  # ок
+        await _insert_complex_with_listing("__test_cls_fail_c__", 51.32, 71.32),  # ок
+    ]
+    cids = [p[0] for p in pairs]
+    try:
+        result = await snap.run_snapshot(complex_ids=cids)
+        assert result["failed"] == 1
+        assert result["succeeded"] == 2
+        assert result["processed"] == 3
+        assert len(result["failed_ids"]) == 1
+        assert result["failed_ids"][0]["complex_id"] == cids[0]
+
+        from bot.db.pg import fetchval
+        written_count = await fetchval(
+            "SELECT count(*) FROM complex_location_scores WHERE complex_id = ANY($1::int[])", cids)
+        assert written_count == 2  # b и c записались несмотря на падение a
+    finally:
+        for cid, lid in pairs:
+            await _cleanup(cid, lid)
+
+
+@pytest.mark.asyncio
+async def test_limit_caps_scope(db, monkeypatch):
+    import complex_location_score_snapshot as snap
+    import bot.core.location_score as location_score_module
+
+    async def _fake_compute(lat, lon, year_built=None, district=None, complex_id=None):
+        return {"total": 0, "factors": _fake_factors(), "confidence": 50}
+
+    monkeypatch.setattr(location_score_module, "compute_complex_location_score", _fake_compute)
+
+    pairs = [
+        await _insert_complex_with_listing("__test_cls_limit_a__", 51.40, 71.40),
+        await _insert_complex_with_listing("__test_cls_limit_b__", 51.41, 71.41),
+    ]
+    cids = [p[0] for p in pairs]
+    try:
+        result = await snap.run_snapshot(complex_ids=cids, limit=1)
+        assert result["processed"] == 1
+    finally:
+        for cid, lid in pairs:
+            await _cleanup(cid, lid)
+
+
+def test_cli_has_canary_flags():
+    import inspect
+    import complex_location_score_snapshot as snap
+    src = inspect.getsource(snap.main)
+    for flag in ("--complex-ids", "--limit", "--dry-run"):
+        assert flag in src

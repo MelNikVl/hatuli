@@ -106,14 +106,22 @@ def dedupe_reviews(reviews: list[dict]) -> list[dict]:
 # ── Источники ─────────────────────────────────────────────────────────────
 # Контракт коллектора: async (complex_row) -> list[dict] с ключами
 # source, source_entity_id, author, review_date, rating, text, source_url,
-# raw (dict|None). Пустой список — валидный ответ («нет отзывов»/«источник
-# недоступен»), НЕ ошибка: конвейер обязан деградировать мягко (тот же
-# принцип, что score_layers/osm.py).
+# raw (dict|None). Пустой список — валидный ОТВЕТ («нет отзывов»), НЕ
+# ошибка: конвейер обязан деградировать мягко (тот же принцип, что
+# score_layers/osm.py). Задача 2026-08-17 ("ложный sentinel") —
+# ВАЖНО отличать это от НЕУДАВШЕГОСЯ запроса: коллектор ДОЛЖЕН поднять
+# исключение (TransientFetchError/PermanentFetchError из 2gis_reviews_
+# collect.py, или любое другое), НЕ возвращать [] молча, если сам
+# запрос не выполнился — collect_one_complex ниже полагается ИМЕННО на
+# это различие, чтобы не писать sentinel «отзывов нет» на временный сбой.
 
 async def collect_2gis(cx: dict) -> list[dict]:
     """2GIS — рабочий коллектор. Синхронный SSR-скрапинг
     (urllib в 2gis_reviews_collect.py) выносится в thread, чтобы не
-    блокировать event loop при параллельном опросе источников."""
+    блокировать event loop при параллельном опросе источников.
+    TransientFetchError/PermanentFetchError ПРОПАГИРУЮТСЯ (не ловим
+    здесь) — collect_one_complex различает их через asyncio.gather(...,
+    return_exceptions=True)."""
     import importlib
     mod = importlib.import_module("2gis_reviews_collect")
     geo = await asyncio.to_thread(mod.find_geo_id, cx["name"])
@@ -152,22 +160,64 @@ async def collect_yandex(cx: dict) -> list[dict]:
 _SOURCES = [collect_2gis, collect_google_maps, collect_yandex]
 
 
+def _classify_exc_status(exc: Exception) -> str:
+    """Тип исключения -> "transient"/"permanent"/"unknown" — только для
+    структурированного лога (задача 2026-08-17: "логировать source/
+    status/error"), поведение (sentinel/нет) от этой строки НЕ зависит —
+    ОБА типа ошибок одинаково НЕ пишут sentinel (см. collect_one_complex
+    ниже), это только для читаемости лога/будущего дашборда."""
+    import importlib
+    mod = importlib.import_module("2gis_reviews_collect")
+    if isinstance(exc, mod.TransientFetchError):
+        return "transient"
+    if isinstance(exc, mod.PermanentFetchError):
+        return "permanent"
+    return "unknown"
+
+
 async def collect_one_complex(cx: dict, developer_id: int | None) -> dict:
     """Все источники параллельно -> дедупликация -> INSERT в reviews_raw.
     Возвращает статистику по ЖК. Классификации здесь НЕТ (задача
-    DeepSeek): sentiment/topics/classified_at остаются NULL."""
+    DeepSeek): sentiment/topics/classified_at остаются NULL.
+
+    Задача 2026-08-17 ("ложный sentinel"): различаем 4 исхода НА
+    УРОВНЕ КАЖДОГО ИСТОЧНИКА, не агрегата по ЖК —
+      - источник вернул N>=1 отзывов -> INSERT реальных строк;
+      - источник УСПЕШНО ответил, вернул [] (0 отзывов) -> sentinel
+        «отзывов нет» (единственный случай, когда sentinel пишется —
+        задача, явно: "sentinel писать только после успешного ответа
+        источника");
+      - источник поднял исключение (timeout/5xx/429/ошибка парсинга —
+        TransientFetchError/PermanentFetchError из 2gis_reviews_
+        collect.py, или любое другое) -> НЕ sentinel, старые данные (по
+        этому source) не трогаются, лог source/status/error, ЖК
+        остаётся в очереди _queue() на следующий прогон (ежедневный
+        таймер = естественный backoff, отдельного расписания не
+        заводим — задача: "назначить retry с backoff", retry с backoff
+        ВНУТРИ одной попытки уже сделан в 2gis_reviews_collect.py::get()).
+    Раньше вся эта логика была НА УРОВНЕ ЖК целиком (`if not reviews:`) —
+    сбой ОДНОГО источника среди прочих (или ошибка, проглоченная внутри
+    find_geo_id/fetch_reviews) неотличимо превращался в sentinel для
+    ВСЕХ источников."""
     from bot.db.pg import execute
 
     per_source = await asyncio.gather(
         *(src(cx) for src in _SOURCES), return_exceptions=True)
+
     reviews: list[dict] = []
     by_source: dict[str, int] = {}
+    empty_sources: list[str] = []
+    failed_sources: list[str] = []
     for src, res in zip(_SOURCES, per_source):
+        name = src.__name__.removeprefix("collect_")
         if isinstance(res, Exception):
-            log.warning("complex_id=%s: источник %s упал: %s",
-                        cx["id"], src.__name__, res)
+            failed_sources.append(name)
+            log.warning("reviews_pipeline: source=%s status=%s complex_id=%s error=%s",
+                        name, _classify_exc_status(res), cx["id"], res)
             continue
-        by_source[src.__name__.removeprefix("collect_")] = len(res)
+        by_source[name] = len(res)
+        if len(res) == 0:
+            empty_sources.append(name)
         reviews.extend(res)
 
     # text_hash считает оркестратор централизованно (не коллекторы) —
@@ -176,14 +226,39 @@ async def collect_one_complex(cx: dict, developer_id: int | None) -> dict:
     for r in reviews:
         r["text_hash"] = text_hash(r["text"])
 
-    if not reviews:
-        # Sentinel-строка «обработано, отзывов нет» (урок старого
-        # 2gis_reviews_collect.py): без неё ЖК с ненайденным geo/нулём
-        # отзывов пересобирался бы КАЖДУЮ ночь вечно. review_text='' +
-        # classified_at=now() — классификатор (задача DeepSeek) такие
-        # строки не подбирает, refresh-окно (25 дн) их обновляет.
-        for src in _SOURCES:
-            name = src.__name__.removeprefix("collect_")
+    cross_dupes = 0
+    inserted = 0
+    if reviews:
+        before = len(reviews)
+        reviews = dedupe_reviews(reviews)
+        cross_dupes = before - len(reviews)
+        for r in reviews:
+            res = await execute("""
+                INSERT INTO reviews_raw (
+                    developer_id, complex_id, source, source_entity_id, author,
+                    review_date, rating, review_text, text_hash, source_url, raw
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+                ON CONFLICT (complex_id, source, text_hash) DO NOTHING
+            """, developer_id, cx["id"], r["source"], r.get("source_entity_id"),
+                r.get("author"), r.get("review_date"), r.get("rating"),
+                r["text"], r["text_hash"], r.get("source_url"),
+                json.dumps(r.get("raw") or {}, ensure_ascii=False))
+            inserted += 1 if res.endswith("1") else 0
+
+    # Sentinel-строка «обработано, отзывов нет» (урок старого 2gis_
+    # reviews_collect.py: без неё ЖК с успешным нулём отзывов
+    # пересобирался бы КАЖДУЮ ночь вечно) — ТОЛЬКО для источников из
+    # empty_sources (успешно ответили, 0 отзывов), И ТОЛЬКО если ВООБЩЕ
+    # никто на этом ЖК не упал (failed_sources пуст). Иначе (например
+    # 2gis упал, а google_maps/yandex — ПОСТОЯННЫЕ заглушки, всегда
+    # "успешно" отвечающие []) sentinel'ы заглушек всё равно поставили
+    # бы свежий fetched_at на ЖК -> _queue() посчитал бы его "недавно
+    # проверенным" и НЕ вернул бы в очередь на ~25 дней, хотя РЕАЛЬНЫЙ
+    # источник (2gis) так и не ответил успешно ни разу — тот же дефект
+    # "ложный sentinel", просто через соседний источник, не напрямую.
+    # Раз кто-то упал — весь ЖК остаётся в очереди без исключений.
+    if not failed_sources:
+        for name in empty_sources:
             await execute("""
                 INSERT INTO reviews_raw (
                     developer_id, complex_id, source, review_text, text_hash,
@@ -191,28 +266,10 @@ async def collect_one_complex(cx: dict, developer_id: int | None) -> dict:
                 ) VALUES ($1, $2, $3, '', $4, '{"empty": true}'::jsonb, now())
                 ON CONFLICT (complex_id, source, text_hash) DO NOTHING
             """, developer_id, cx["id"], name, text_hash(""))
-        return {"complex_id": cx["id"], "by_source": by_source,
-                "cross_dupes": 0, "inserted": 0}
 
-    before = len(reviews)
-    reviews = dedupe_reviews(reviews)
-    cross_dupes = before - len(reviews)
-
-    inserted = 0
-    for r in reviews:
-        res = await execute("""
-            INSERT INTO reviews_raw (
-                developer_id, complex_id, source, source_entity_id, author,
-                review_date, rating, review_text, text_hash, source_url, raw
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
-            ON CONFLICT (complex_id, source, text_hash) DO NOTHING
-        """, developer_id, cx["id"], r["source"], r.get("source_entity_id"),
-            r.get("author"), r.get("review_date"), r.get("rating"),
-            r["text"], r["text_hash"], r.get("source_url"),
-            json.dumps(r.get("raw") or {}, ensure_ascii=False))
-        inserted += 1 if res.endswith("1") else 0
     return {"complex_id": cx["id"], "by_source": by_source,
-            "cross_dupes": cross_dupes, "inserted": inserted}
+            "cross_dupes": cross_dupes, "inserted": inserted,
+            "empty_sources": empty_sources, "failed_sources": failed_sources}
 
 
 async def _queue(complex_id: int | None, developer_id: int | None,

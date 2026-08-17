@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly developer purchase programs check (Tuesday 07:30)
+
+[Timer]
+OnCalendar=Tue *-*-* 07:30:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=krisha-programs.service
+
+[Install]
+WantedBy=timers.target
