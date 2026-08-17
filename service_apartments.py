@@ -72,6 +72,46 @@ def extract_bargain(r: dict) -> dict:
     }
 
 
+# Абсолютные границы — защита от опечатки в app_settings (веб-терминал
+# принимает произвольную строку): 1 минута снизу (иначе цикл длиной
+# ~80-135мин, см. parser_cycle_history за 7 дней, запускался бы почти
+# без паузы вообще — не "интервал", а постоянный стук по Крыше), 6 часов
+# сверху (иначе парсер практически замирает). Задача 2026-08-17,
+# "интервал apartment parser".
+_INTERVAL_ABS_MIN_MINUTES = 1.0
+_INTERVAL_ABS_MAX_MINUTES = 360.0
+_INTERVAL_FALLBACK_MIN, _INTERVAL_FALLBACK_MAX = 30.0, 70.0
+
+
+def _next_cycle_sleep_minutes(app_settings) -> float:
+    """random.uniform(MIN, MAX) минут паузы между циклами — MIN/MAX
+    читаются из app_settings.PARSE_INTERVAL_MIN/MAX (дефолт 30/70, см.
+    bot/db/settings.py::DEFAULTS), настраиваются через /admin/settings
+    без деплоя. Randomization СОХРАНЕНА (задача, явно) — не убираем
+    "человечный" разброс между стартами цикла ради детерминизма.
+
+    Валидация (задача, явно — "min < max и разумные границы"): каждое
+    значение сначала КЛАМПится в [_INTERVAL_ABS_MIN_MINUTES,
+    _INTERVAL_ABS_MAX_MINUTES] (защита от опечатки/дурацкого значения в
+    одном поле), ЗАТЕМ если после клампа min >= max (оба поля указывают
+    на одну и ту же дурацкую конфигурацию, например MIN=100 MAX=50) —
+    откатываемся на дефолт 30/70 целиком, не пытаемся угадать "что
+    хотел администратор" — Unknown ≠ average, тот же принцип, что и
+    везде в скоринге проекта."""
+    import random as _random
+
+    raw_min = app_settings.get_float("PARSE_INTERVAL_MIN", _INTERVAL_FALLBACK_MIN)
+    raw_max = app_settings.get_float("PARSE_INTERVAL_MAX", _INTERVAL_FALLBACK_MAX)
+    lo = min(max(raw_min, _INTERVAL_ABS_MIN_MINUTES), _INTERVAL_ABS_MAX_MINUTES)
+    hi = min(max(raw_max, _INTERVAL_ABS_MIN_MINUTES), _INTERVAL_ABS_MAX_MINUTES)
+    if lo >= hi:
+        log.warning("PARSE_INTERVAL_MIN=%s/MAX=%s некорректны (после границ %s >= %s) "
+                    "— используется дефолт %s-%s мин", raw_min, raw_max, lo, hi,
+                    _INTERVAL_FALLBACK_MIN, _INTERVAL_FALLBACK_MAX)
+        lo, hi = _INTERVAL_FALLBACK_MIN, _INTERVAL_FALLBACK_MAX
+    return _random.uniform(lo, hi)
+
+
 async def run_cycle():
     from bot.core.apartment_parser import analyze_apartments
     from bot.core.sheets_sync import sync_apartments_to_sheets_pg
@@ -1018,7 +1058,13 @@ async def main():
         log.error("First cycle error: %s", e, exc_info=True)
 
     while True:
-        sleep_min = random.uniform(50, 80)  # ~раз в час, рандом
+        # Свежий load() именно ЗДЕСЬ (не полагаемся на load() внутри уже
+        # завершившегося run_cycle()) — тот кеш снят в НАЧАЛЕ цикла, а
+        # цикл (см. parser_cycle_history) идёт 80-135 минут; изменение
+        # PARSE_INTERVAL_MIN/MAX через /admin/settings посреди цикла
+        # иначе подхватилось бы только со следующего после него.
+        await app_settings.load()
+        sleep_min = _next_cycle_sleep_minutes(app_settings)
         log.info("Next cycle in %.0f min...", sleep_min)
         await asyncio.sleep(sleep_min * 60)
         try:
