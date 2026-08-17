@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly air quality (Kazhydromet via data.egov.kz) check
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/usr/bin/python3 /home/nik/krisha_bot/air_collect.py

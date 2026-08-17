@@ -1,0 +1,10 @@
+[Unit]
+Description=2GIS reviews weekly (Сб 05:00)
+
+[Timer]
+OnCalendar=Sat 05:00
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

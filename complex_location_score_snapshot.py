@@ -115,10 +115,24 @@ def _normalize_score(factors: dict) -> int:
     return normalize_group_weighted(factors)
 
 
-async def _process_one(r: dict, commit: str, sem: asyncio.Semaphore) -> str:
-    """Возвращает 'written' | 'no_coords' — статус ОДНОГО ЖК. Ограничено
-    семафором снаружи (_CONCURRENCY) — не более N complexes одновременно
-    бьют в Overpass/БД разом."""
+async def _process_one(r: dict, commit: str, sem: asyncio.Semaphore, dry_run: bool = False) -> str:
+    """Возвращает 'written'/'written_drifted' | 'no_coords' — статус
+    ОДНОГО ЖК. Ограничено семафором снаружи (_CONCURRENCY) — не более N
+    complexes одновременно бьют в Overpass/БД разом.
+
+    Поднимает исключение наверх, если что-то реально сломалось (Overpass/
+    БД/парсинг) — caller (run_snapshot) ловит через asyncio.gather(...,
+    return_exceptions=True) и считает это 'failed', НЕ роняя остальной
+    batch (задача 2026-08-17, "ошибка одного ЖК не должна прекращать
+    весь batch" — раньше gather() был БЕЗ return_exceptions=True, первое
+    же исключение обрывало ВЕСЬ прогон, не только этот ЖК).
+
+    dry_run — задача 2026-08-17, "по возможности --dry-run": Overpass/
+    OSRM/БД читаются как обычно (это и есть "прогон" в смысле проверки),
+    INSERT в complex_location_scores пропускается. Единственный INSERT
+    здесь один, атомарный — ни в dry-run, ни при реальной записи не
+    может получиться ЧАСТИЧНО записанная строка одного ЖК (задача,
+    явно: "никаких частично записанных результатов одного ЖК")."""
     from bot.db.pg import fetchrow, execute
     from bot.core.house_resolution import resolve_complex_geo_centroid
     from bot.core.location_score import compute_complex_location_score
@@ -153,67 +167,110 @@ async def _process_one(r: dict, commit: str, sem: asyncio.Semaphore) -> str:
                 drifted = True
                 log.info("complex_id=%s: координаты сместились на %.0fм с прошлого снимка", r["id"], dist_m)
 
-        await execute("""
-            INSERT INTO complex_location_scores (
-                complex_id, score, confidence, transport_score, infra_score,
-                noise_score, green_score, risk_score, lat, lon, breakdown,
-                score_version, git_commit
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
-        """,
-            r["id"], _normalize_score(factors), result["confidence"],
-            _group_sum(factors, _GROUPS["transport"]), _group_sum(factors, _GROUPS["infra"]),
-            # noise_score/green_score — задача 2026-08-15 v2 ("Семантика +
-            # якоря + иерархическая модель"): "noise"/"green" больше НЕ
-            # отдельные ключи _GROUPS (объединены в "environment", см.
-            # location_score.py) — колонки СОХРАНЕНЫ как есть (не тянем
-            # миграцию/переделку UI ради одного захода), считаем явными
-            # tuple вместо _GROUPS[...] — те же самые факторы, что раньше.
-            _group_sum(factors, ("noise",)), _group_sum(factors, ("parks",)),
-            _group_sum(factors, _GROUPS["risk"]), lat, lon,
-            json.dumps(breakdown, ensure_ascii=False), SCORE_VERSION, commit,
-        )
+        if not dry_run:
+            await execute("""
+                INSERT INTO complex_location_scores (
+                    complex_id, score, confidence, transport_score, infra_score,
+                    noise_score, green_score, risk_score, lat, lon, breakdown,
+                    score_version, git_commit
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
+            """,
+                r["id"], _normalize_score(factors), result["confidence"],
+                _group_sum(factors, _GROUPS["transport"]), _group_sum(factors, _GROUPS["infra"]),
+                # noise_score/green_score — задача 2026-08-15 v2 ("Семантика +
+                # якоря + иерархическая модель"): "noise"/"green" больше НЕ
+                # отдельные ключи _GROUPS (объединены в "environment", см.
+                # location_score.py) — колонки СОХРАНЕНЫ как есть (не тянем
+                # миграцию/переделку UI ради одного захода), считаем явными
+                # tuple вместо _GROUPS[...] — те же самые факторы, что раньше.
+                _group_sum(factors, ("noise",)), _group_sum(factors, ("parks",)),
+                _group_sum(factors, _GROUPS["risk"]), lat, lon,
+                json.dumps(breakdown, ensure_ascii=False), SCORE_VERSION, commit,
+            )
         return "written_drifted" if drifted else "written"
 
 
-async def run_snapshot(complex_ids: list[int] | None = None) -> dict:
-    """complex_ids — опциональный скоуп ТОЛЬКО для дешёвых тестов (тот же
-    паттерн, что deal_score_snapshot.py/hex_market_stats_snapshot.py) —
-    прод-путь (None) всегда идёт по всем complexes с координатами."""
+async def run_snapshot(complex_ids: list[int] | None = None, limit: int | None = None,
+                        dry_run: bool = False) -> dict:
+    """complex_ids — опциональный скоуп (canary/тесты — тот же паттерн,
+    что deal_score_snapshot.py/hex_market_stats_snapshot.py); limit —
+    ограничить выборку сверху (задача 2026-08-17, canary-режим); без
+    обоих — прод-путь, все complexes с координатами. dry_run — см.
+    _process_one.
+
+    Возвращает и СТАРЫЕ ключи (written/no_coords/drifted/total — тесты
+    уже на них завязаны), и НОВЫЕ (processed/succeeded/failed/skipped/
+    failed_ids — задача, явно: "итоговый отчёт processed/succeeded/
+    failed/skipped")."""
     from bot.db.pg import fetch
     from bot.git_info import git_hash
 
+    where = "WHERE COALESCE(is_garbage, FALSE) = FALSE AND COALESCE(is_street, FALSE) = FALSE"
+    params: list = []
     if complex_ids is not None:
-        rows = await fetch("""
-            SELECT id, name, year_built, district FROM complexes
-            WHERE COALESCE(is_garbage, FALSE) = FALSE AND COALESCE(is_street, FALSE) = FALSE
-              AND id = ANY($1::int[])
-        """, complex_ids)
-    else:
-        rows = await fetch("""
-            SELECT id, name, year_built, district FROM complexes
-            WHERE COALESCE(is_garbage, FALSE) = FALSE AND COALESCE(is_street, FALSE) = FALSE
-        """)
+        params.append(complex_ids)
+        where += f" AND id = ANY(${len(params)}::int[])"
+    order_limit = " ORDER BY id"
+    if limit:
+        order_limit += f" LIMIT {int(limit)}"
+    rows = await fetch(f"SELECT id, name, year_built, district FROM complexes {where}{order_limit}", *params)
 
     commit = git_hash()
     sem = asyncio.Semaphore(_CONCURRENCY)
-    statuses = await asyncio.gather(*(_process_one(r, commit, sem) for r in rows))
+    # return_exceptions=True — задача 2026-08-17: одно упавшее (Overpass/
+    # БД/парсинг) НЕ должно оборвать asyncio.gather() целиком и потерять
+    # результаты уже посчитанных/ещё считающихся complexes. Раньше
+    # первое же исключение из _process_one пробрасывалось наружу
+    # немедленно — весь batch падал, даже если проблема была ровно в
+    # одном ЖК (например house_resolution не смогла его геокодировать
+    # по редкой причине).
+    outcomes = await asyncio.gather(
+        *(_process_one(r, commit, sem, dry_run) for r in rows), return_exceptions=True)
 
-    written = sum(1 for s in statuses if s.startswith("written"))
-    drifted = sum(1 for s in statuses if s == "written_drifted")
-    no_coords = sum(1 for s in statuses if s == "no_coords")
+    written = drifted = no_coords = failed = 0
+    failed_ids: list[dict] = []
+    for r, outcome in zip(rows, outcomes):
+        if isinstance(outcome, Exception):
+            failed += 1
+            failed_ids.append({"complex_id": r["id"], "name": r["name"], "error": str(outcome)})
+            log.warning("complex_location_score_snapshot: complex_id=%s упал: %s", r["id"], outcome, exc_info=True)
+            continue
+        if outcome == "no_coords":
+            no_coords += 1
+        elif outcome == "written_drifted":
+            written += 1
+            drifted += 1
+        elif outcome == "written":
+            written += 1
 
-    log.info("complex_location_score_snapshot: written=%d no_coords=%d drifted=%d (из %d complexes в скоупе)",
-              written, no_coords, drifted, len(rows))
-    return {"written": written, "no_coords": no_coords, "drifted": drifted, "total": len(rows)}
+    log.info(
+        "complex_location_score_snapshot: written=%d no_coords=%d drifted=%d failed=%d (из %d complexes в скоупе, dry_run=%s)",
+        written, no_coords, drifted, failed, len(rows), dry_run,
+    )
+    return {
+        "written": written, "no_coords": no_coords, "drifted": drifted, "total": len(rows),
+        "processed": len(rows), "succeeded": written, "failed": failed, "skipped": no_coords,
+        "failed_ids": failed_ids, "dry_run": dry_run,
+    }
 
 
 async def main() -> None:
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--complex-ids", default=None,
+                     help="через запятую — точечный пересчёт (canary/отладка), без флага — все ЖК")
+    ap.add_argument("--limit", type=int, default=None, help="ограничить выборку сверху (canary)")
+    ap.add_argument("--dry-run", action="store_true", help="считать, но не писать в complex_location_scores")
+    args = ap.parse_args()
+    complex_ids = [int(x) for x in args.complex_ids.split(",")] if args.complex_ids else None
+
     from bot.db.pg import init_pool, close_pool
     await init_pool(DATABASE_URL)
     try:
-        await run_snapshot()
+        result = await run_snapshot(complex_ids=complex_ids, limit=args.limit, dry_run=args.dry_run)
     finally:
         await close_pool()
+    print(result)
 
 
 if __name__ == "__main__":

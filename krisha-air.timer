@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly air quality check (Wednesday 07:30)
+
+[Timer]
+OnCalendar=Wed *-*-* 07:30:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=krisha-air.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=2GIS reviews collect (ЖК Астаны)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/2gis_reviews_collect.py --limit 500 --sleep 45
+Nice=10
