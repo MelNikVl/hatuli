@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🔍 Property Match Review
+  <small style="font-size:13px;color:var(--muted);font-weight:400;">
+    ручная проверка кандидатов Property Identity — НИЧЕГО не мержится автоматически, кнопки только записывают решение
+  </small>
+</div>
+
+<div class="admin-block" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:18px;">
+  <b style="font-size:13px;">Фильтры</b>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;">
+    {% for key, label in filter_labels.items() %}
+    {% set is_on = key in selected_filters %}
+    <a href="/admin/property-match-review?filters={{ toggle_filters[key] }}"
+       class="btn btn-sm {{ 'btn-primary' if is_on else 'btn-ghost' }}">
+      {{ label }} <span style="opacity:.7;">({{ counts.get(key, 0) }})</span>
+    </a>
+    {% endfor %}
+    {% if selected_filters %}
+    <a href="/admin/property-match-review" class="btn btn-sm btn-ghost">✕ сбросить</a>
+    {% endif %}
+  </div>
+  <div style="font-size:11.5px;color:var(--muted);margin-top:8px;">
+    всего кандидатов: {{ counts.get('total', 0) }} · сортировка очереди: unique photo + другие сигналы →
+    несколько corroborating methods → конфликт адреса/цены → остальные
+  </div>
+</div>
+
+{% if not pair %}
+<div class="card" style="text-align:center;padding:40px;">
+  <div style="font-size:15px;color:var(--muted);">Очередь пуста для выбранных фильтров 🎉</div>
+</div>
+{% else %}
+
+<div class="card" style="margin-bottom:16px;">
+  <div style="font-size:13px;line-height:1.6;">{{ pair.explanation }}</div>
+  <div style="font-size:11.5px;color:var(--muted);margin-top:6px;">
+    candidate_id={{ pair.candidate_id }} · match_method={{ pair.match_method }} ·
+    score={{ "%.2f"|format(pair.match_score) }} · relationship_type={{ pair.relationship_type }} ·
+    matcher_version={{ pair.matcher_version }} · status={{ pair.status }} ·
+    priority_tier={{ pair.priority_tier }}
+    {% if pair.simultaneously_active is not none %}
+      · одновременно активны: {{ "да" if pair.simultaneously_active else "нет" }}
+      {% if pair.simultaneously_active %}(НЕ конфликт — несколько агентов могут продавать одну квартиру){% endif %}
+    {% endif %}
+  </div>
+  <div style="font-size:12px;margin-top:8px;">
+    <b>Сработавшие методы:</b> {{ pair.corroborating_methods | join(', ') }}
+  </div>
+  {% if pair.conflict_reasons %}
+  <div style="font-size:12px;margin-top:6px;color:#c0392b;">
+    <b>⚠ Расхождения (soft — не блокируют проверку, кроме rooms mismatch):</b> {{ pair.conflict_reasons | join('; ') }}
+  </div>
+  {% endif %}
+  <div style="font-size:12px;margin-top:8px;">
+    <b>📷 Photo evidence</b>
+    ({{ pair.photo_processing_status or 'pending' }}):
+    exact={{ pair.exact_shared_count or 0 }} ·
+    perceptual={{ pair.perceptual_shared_count or 0 }} ·
+    ai={{ pair.ai_similar_count or 0 }} ·
+    <b>unit-specific={{ pair.shared_unit_specific_count or 0 }}</b> ·
+    common={{ pair.shared_common_count or 0 }}
+    {% if pair.max_similarity %} · max_similarity={{ "%.3f"|format(pair.max_similarity) }}{% endif %}
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+  {% for card, side in [(pair.listing_a, 'A'), (pair.listing_b, 'B')] %}
+  <div class="card">
+    <div style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin-bottom:6px;">
+      Сторона {{ side }}
+    </div>
+    {% if not card %}
+      <div style="color:var(--muted);">не удалось загрузить объявление</div>
+    {% else %}
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+        {% for photo in card.photos[:12] %}
+        <img src="{{ photo }}" loading="lazy" style="width:88px;height:66px;object-fit:cover;border-radius:6px;border:1px solid var(--border);">
+        {% endfor %}
+        {% if not card.photos %}<div style="color:var(--muted);font-size:12px;">нет фото</div>{% endif %}
+      </div>
+      <div style="font-size:13px;line-height:1.7;">
+        <a href="{{ card.url }}" target="_blank" style="color:var(--accent);font-weight:700;">{{ card.id }} ↗</a>
+        {% if card.is_active is not none %}
+          <span class="btn-sm" style="padding:1px 6px;border-radius:6px;font-size:10.5px;
+                background:{{ '#2ecc71' if card.is_active else '#888' }};color:#fff;">
+            {{ 'активно' if card.is_active else 'неактивно' }}
+          </span>
+        {% endif %}
+        <br>
+        {{ card.complex_name or '—' }}<br>
+        {{ card.address or '—' }}<br>
+        {{ card.rooms or '?' }}-комн · {{ card.area or '?' }} м² · этаж {{ card.floor or '?' }}{% if card.floors_total %}/{{ card.floors_total }}{% endif %}<br>
+        {{ '{:,}'.format(card.price).replace(',', ' ') if card.price else '—' }} ₸<br>
+        {{ '👤 хозяин' if card.is_owner else ('🏢 ' + card.seller_name if card.seller_name else '🏢 риелтор') }}<br>
+        <span style="color:var(--muted);font-size:11.5px;">
+          first_seen: {{ card.first_seen.strftime('%Y-%m-%d') if card.first_seen else '—' }} ·
+          last_seen: {{ card.last_seen.strftime('%Y-%m-%d') if card.last_seen else '—' }}
+        </span>
+      </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<form method="post" action="/admin/property-match-review/{{ pair.candidate_id }}/decide" style="margin-top:18px;">
+  <input type="hidden" name="filters" value="{{ selected_filters | join(',') }}">
+  <textarea name="comment" placeholder="Комментарий (необязательно)" rows="2"
+            style="width:100%;box-sizing:border-box;background:var(--surface2);border:1px solid var(--border);
+                   border-radius:8px;padding:8px 10px;color:var(--text);font-size:13px;margin-bottom:10px;"></textarea>
+  <div style="display:flex;gap:10px;">
+    <button type="submit" name="decision" value="accepted" class="btn btn-success">✅ Одна квартира</button>
+    <button type="submit" name="decision" value="rejected" class="btn btn-danger">❌ Разные квартиры</button>
+    <button type="submit" name="decision" value="skip" class="btn btn-ghost">➡ Недостаточно данных / пропустить</button>
+  </div>
+  <div style="font-size:11px;color:var(--muted);margin-top:8px;">
+    «Одна квартира» записывает решение accepted. Физический merge (перенос property_listings) в этой версии НЕ выполняется.
+  </div>
+</form>
+
+{% endif %}
+{% endblock %}

@@ -641,9 +641,14 @@ async def test_sequential_no_overlap_with_evidence_is_relist_relationship(db):
 
 
 def test_evidence_schema_ready_for_future_photo_matching():
-    """Задача, мид-ту: "perceptual image matching пока можно оставить
-    следующим PR, но схема evidence должна его поддерживать" — ключи
-    зарезервированы уже сейчас, даже если метод пока not_implemented."""
+    """Задача 2026-08-16, мид-ту: "perceptual image matching пока можно
+    оставить следующим PR, но схема evidence должна его поддерживать" —
+    ключ зарезервирован. Задача 2026-08-17 ("photo evidence + review") —
+    ТОТ САМЫЙ следующий PR: photo evidence теперь реально считается
+    (bot/identity/photo_evidence.py), но живёт в ОТДЕЛЬНОЙ таблице
+    (property_candidate_photo_evidence, 1:1 с candidate_id, см. её
+    докстринг) — на этой строке evidence остаётся нейтральной ссылкой,
+    не дублирует содержимое той таблицы."""
     from bot.identity.property_linker import _build_candidate_record
 
     listing = {"id": "L1", "address": "Адрес, 1", "floor": 5, "area": 45.0, "rooms": 2,
@@ -652,9 +657,7 @@ def test_evidence_schema_ready_for_future_photo_matching():
                  "rooms": 2, "seller_name": None, "price": None, "first_seen": None, "archived_at": None}
     record = _build_candidate_record(listing, candidate, "exact_hash", 0.9)
     assert "photo_signal" in record["evidence"]
-    assert record["evidence"]["photo_signal"]["method"] == "not_implemented"
-    assert "shared_rare_photo_count" in record["evidence"]["photo_signal"]
-    assert "shared_common_photo_count" in record["evidence"]["photo_signal"]
+    assert record["evidence"]["photo_signal"]["method"] == "see_property_candidate_photo_evidence_table"
 
 
 def test_relationship_type_never_defaults_to_conflict_on_simultaneous_active_alone():

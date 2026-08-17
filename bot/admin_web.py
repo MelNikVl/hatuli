@@ -376,6 +376,55 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         await db.clear_parse_errors()
         return RedirectResponse(url="/admin/issues", status_code=302)
 
+    # ── Property Identity — photo evidence + ручная проверка кандидатов
+    # (задача 2026-08-17, "Property Identity — photo evidence + admin
+    # review queue", часть E). "Две карточки рядом": одна пара за раз,
+    # приоритет очереди/фильтры — bot/identity/review_decisions.py.
+    # Кнопка "Одна квартира" ТОЛЬКО пишет decision='accepted' — НЕ
+    # переносит property_listings, НЕ удаляет properties (задача, явно:
+    # физический merge — отдельный PR после проверки журнала решений).
+    @app.get("/admin/property-match-review", response_class=HTMLResponse)
+    async def property_match_review_page(request: Request, candidate_id: int | None = None,
+                                          filters: str = ""):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.identity.review_decisions import (
+            normalize_filters, queue_counts, get_candidate_detail, get_next_candidate,
+            QUEUE_FILTER_LABELS,
+        )
+        selected = normalize_filters([f for f in filters.split(",") if f])
+        counts = await queue_counts(selected)
+        pair = await get_candidate_detail(candidate_id) if candidate_id is not None \
+            else await get_next_candidate(selected)
+        # Тогл-URL для каждого чипа считаем ЗДЕСЬ (Python set-арифметика),
+        # НЕ в Jinja2 — у Jinja2 нет литерала множества {x} (парсится как
+        # dict, ':' ожидается — найдено при первом рендере шаблона),
+        # проще посчитать один раз на сервере, чем городить фильтры/циклы
+        # в шаблоне ради set-алгебры.
+        toggle_filters = {
+            key: ",".join(sorted((selected - {key}) if key in selected else (selected | {key})))
+            for key in QUEUE_FILTER_LABELS
+        }
+        return templates.TemplateResponse("property_match_review.html", {
+            "request": request, "pair": pair, "selected_filters": selected,
+            "filters_csv": filters, "counts": counts, "filter_labels": QUEUE_FILTER_LABELS,
+            "toggle_filters": toggle_filters,
+        })
+
+    @app.post("/admin/property-match-review/{candidate_id}/decide")
+    async def property_match_review_decide(request: Request, candidate_id: int,
+                                            decision: str = Form(...), comment: str = Form(default=""),
+                                            filters: str = Form(default="")):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.identity.review_decisions import record_review_decision
+        reviewed_by = request.cookies.get("admin_user") or "admin"
+        result = await record_review_decision(candidate_id, decision, reviewed_by, comment or None)
+        if result is None:
+            return RedirectResponse(url="/admin/property-match-review", status_code=302)
+        qs = f"?filters={filters}" if filters else ""
+        return RedirectResponse(url=f"/admin/property-match-review{qs}", status_code=302)
+
     @app.get("/admin/users/stats", response_class=HTMLResponse)
     async def users_stats_page(request: Request):
         if not is_authed(request):

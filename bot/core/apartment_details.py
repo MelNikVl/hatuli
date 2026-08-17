@@ -12,6 +12,35 @@ logger = logging.getLogger(__name__)
 # и /admin/api/parser-cycle-history) — сбрасывается в service_apartments.run_cycle().
 REQUEST_COUNTS = {"detail": 0}
 
+
+class ListingBlockedError(Exception):
+    """403/429 от krisha.kz на детальной странице — сработала защита от
+    бота (задача 2026-08-17, "Missing floor + orphan audit"). Отдельно от
+    прочих сетевых ошибок — caller'у (scripts/backfill_listing_floors.py)
+    нужно различать "заблокировали, притормози" от "страницы нет"/"сеть
+    моргнула", у них разные retry-стратегии. Поднимается ТОЛЬКО когда
+    caller явно попросил raise_on_error=True (см. ниже) — умолчание не
+    меняется, все существующие вызовы fetch_apartment_details() (parser.py,
+    coord_backfill.py, rental_parser.py) продолжают получать {} как раньше."""
+
+
+async def fetch_apartment_details(url: str, *, raise_on_error: bool = False) -> dict:
+    """
+    Fetch full listing details from krisha.kz listing page.
+    Returns rich dict with all extractable signals.
+
+    raise_on_error — задача 2026-08-17: по умолчанию False (родное
+    поведение НЕ меняется ни для одного существующего вызова — 403/429 и
+    сетевые ошибки по-прежнему тихо возвращают {}). True — caller явно
+    просит различать причины (используется scripts/backfill_listing_
+    floors.py для честной статистики blocked/errors, не новый парсер —
+    та же функция, тот же HTTP-запрос, только не глотает исключение):
+    ListingBlockedError на 403/429, исходное исключение (timeout/DNS/...)
+    пробрасывается как есть на прочих сетевых ошибках.
+    """
+    return await _fetch_apartment_details_impl(url, raise_on_error=raise_on_error)
+
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept-Language": "ru-RU,ru;q=0.9",
@@ -62,11 +91,7 @@ UTILITY_PATTERNS = [
 ]
 
 
-async def fetch_apartment_details(url: str) -> dict:
-    """
-    Fetch full listing details from krisha.kz listing page.
-    Returns rich dict with all extractable signals.
-    """
+async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = False) -> dict:
     await asyncio.sleep(random.uniform(3.0, 6.0))
 
     async with httpx.AsyncClient(headers=HEADERS, timeout=30.0, follow_redirects=True) as c:
@@ -75,10 +100,16 @@ async def fetch_apartment_details(url: str) -> dict:
             REQUEST_COUNTS["detail"] += 1
             if resp.status_code in (403, 429):
                 logger.warning("blocked: %s", url)
+                if raise_on_error:
+                    raise ListingBlockedError(f"{resp.status_code} {url}")
                 return {}
             resp.raise_for_status()
+        except ListingBlockedError:
+            raise
         except Exception as exc:
             logger.warning("fetch_apartment_details failed %s: %s", url, exc)
+            if raise_on_error:
+                raise
             return {}
 
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -138,12 +169,29 @@ async def fetch_apartment_details(url: str) -> dict:
             result["floor_position"] = "middle"
             result["floor_note"] = ""
     else:
-        # Фолбэк: некоторые страницы пишут только "N этаж" (без "из M") —
-        # обычно в заголовке, напр. "· 3 этаж, Жирентаева 13/1". Этажность
-        # дома тогда неизвестна, но сам этаж — важный сигнал, грех терять.
-        floor_only = re.search(r"(\d+)\s*этаж", f"{title} {all_info}".lower())
-        if floor_only:
-            result["floor"] = int(floor_only.group(1))
+        # Фолбэк 1 (найдено задачей 2026-08-17, "Missing floor + orphan
+        # audit" — canary scripts/backfill_listing_floors.py на 40
+        # реальных объявлениях backlog'а дал floor_filled=0/40, хотя
+        # руками на странице (напр. krisha.kz/a/show/1011753552)
+        # offer__info-item буквально пишет "Этаж 7" — БЕЗ "N из M" и БЕЗ
+        # порядка "число, потом слово", который ловит фолбэк 2 ниже):
+        # отдельный info-item "Этаж N" (label, ЗАТЕМ число, этажность
+        # дома НЕ указана вовсе) — на практике оказался ОСНОВНОЙ формой
+        # для существенной доли backlog'а без "из M", не редким
+        # исключением. (?<!\w)этаж\s+(\d+) — НЕ матчит "этажность"/
+        # "этажей" (после "этаж" сразу пробел+цифра, не буква) и не
+        # путает с "N этаж" (число ДО слова — тот сценарий у фолбэка 2).
+        floor_label = re.search(r"(?<!\w)этаж\s+(\d+)(?!\d)", all_info.lower())
+        if floor_label:
+            result["floor"] = int(floor_label.group(1))
+        else:
+            # Фолбэк 2: некоторые страницы пишут только "N этаж" (число
+            # ПЕРЕД словом, без "из M") — обычно в заголовке, напр.
+            # "· 3 этаж, Жирентаева 13/1". Этажность дома тогда
+            # неизвестна, но сам этаж — важный сигнал, грех терять.
+            floor_only = re.search(r"(\d+)\s*этаж", f"{title} {all_info}".lower())
+            if floor_only:
+                result["floor"] = int(floor_only.group(1))
 
     # Year built — раньше ловил только 1980-2029, а немало домов в Астане
     # (особенно панельные/кирпичные хрущёвки) 1950-1970х годов постройки —
