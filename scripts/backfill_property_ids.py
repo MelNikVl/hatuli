@@ -93,8 +93,10 @@ async def run_backfill(dry_run: bool = False, limit: int | None = None,
     listing_ids — опциональный скоуп ТОЛЬКО для дешёвых тестов (тот же
     приём, что complex_walkability_snapshot.py --complex-ids) — прод-путь
     (--limit/весь прогон) им не пользуется."""
-    from bot.db.pg import fetch, fetchval
-    from bot.identity.property_linker import link_listing_to_property, DryRunCache, BootstrapIndex
+    import json
+
+    from bot.db.pg import execute, fetch, fetchval
+    from bot.identity.property_linker import link_listing_to_property, DryRunCache
 
     # price/seller_name/is_duplicate/duplicate_of/dup_match — нужны
     # candidate_only режиму (evidence/dedup_listings-сигнал, задача
@@ -129,15 +131,62 @@ async def run_backfill(dry_run: bool = False, limit: int | None = None,
 
     stats = {"total": len(rows), "already_linked": 0, "auto_existing": 0,
              "auto_new": 0, "fuzzy": 0, "fuzzy_candidates_logged": 0, "skipped": 0}
+
     if match_mode == "candidate_only":
+        # ДВЕ ФАЗЫ (задача 2026-08-16, "последняя проверка детерминированности
+        # candidate graph перед production backfill" — эмпирически найдено:
+        # старый однопроходный цикл ниже, per-listing bootstrap+candidates в
+        # одном шаге через partial BootstrapIndex, давал candidate-граф,
+        # зависящий от order_by — см. bot/identity/property_linker.py блок-
+        # докстринг перед bootstrap_all_provisional/generate_all_candidates
+        # за полным разбором причины и отчёт в PR). order_by здесь по-прежнему
+        # управляет порядком ФАЗЫ A (bootstrap — сам по себе он и раньше был
+        # order-independent, каждый listing получает свою property независимо
+        # от остальных), но НЕ влияет на фазу B — та строит candidate-граф
+        # ДЕТЕРМИНИРОВАННО по listing_id, независимо от порядка обхода.
+        from bot.identity.property_linker import bootstrap_all_provisional, generate_all_candidates
+
         # provisional_created — задача, п.5: "provisional properties to
         # create" — отдельно от auto_new (exact_only/fuzzy семантика
         # "нашли совпадение и НЕ создали") здесь не применима: bootstrap
         # ВСЕГДА создаёт, никогда не находит существующую.
         stats.update({"provisional_created": 0, "exact_candidates": 0,
                       "fuzzy_candidates": 0, "dedup_candidates": 0, "rejected_by_conflict": 0})
-    dry_run_cache = BootstrapIndex() if match_mode == "candidate_only" else DryRunCache()
 
+        mapping = await bootstrap_all_provisional(rows, dry_run)
+        for status_key in ("already_linked", "skipped"):
+            stats[status_key] = sum(1 for m in mapping.values() if m["status"] == status_key)
+        stats["provisional_created"] = sum(1 for m in mapping.values() if m["status"] == "bootstrap")
+
+        candidates = await generate_all_candidates(mapping)
+        for c in candidates:
+            stats[_CANDIDATE_STAT_KEY[c["match_method"]]] += 1
+            if c.get("rejected_by_conflict"):
+                stats["rejected_by_conflict"] += 1
+            if not dry_run:
+                await execute(
+                    """
+                    INSERT INTO property_match_candidates
+                        (listing_id, candidate_property_id, match_method, match_score, relationship_type,
+                         evidence, conflict_reasons, matcher_version, status)
+                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
+                    ON CONFLICT (listing_id, candidate_property_id) DO NOTHING
+                    """,
+                    c["listing_id"], c["candidate_property_id"], c["match_method"], c["match_score"],
+                    c["relationship_type"], json.dumps(c["evidence"], default=str, ensure_ascii=False),
+                    json.dumps(c["conflict_reasons"], ensure_ascii=False) if c["conflict_reasons"] else None,
+                    c["matcher_version"], c["status"],
+                )
+
+        stats["properties_total_after"] = await fetchval("SELECT count(*) FROM properties")
+        if not dry_run:
+            stats["candidates_total_after"] = await fetchval("SELECT count(*) FROM property_match_candidates")
+        return stats
+
+    # exact_only/fuzzy — LEGACY, single-pass (задача, явно: research-only,
+    # order-dependence там ИЗВЕСТНА и задокументирована, не для прод-записи —
+    # см. bot/identity/property_linker.py докстринг модуля).
+    dry_run_cache = DryRunCache()
     for i, row in enumerate(rows, 1):
         result = await link_listing_to_property(
             row, dry_run=dry_run, dry_run_cache=dry_run_cache if dry_run else None,
@@ -148,16 +197,6 @@ async def run_backfill(dry_run: bool = False, limit: int | None = None,
             stats["skipped"] += 1
         elif result["method"] == "fuzzy":
             stats["fuzzy"] += 1
-        elif result["method"] == "bootstrap":
-            stats["provisional_created"] += 1
-            for c in result.get("candidates", []):
-                # match_method 'dedup_listings'/'exact_hash' -> статистика
-                # 'dedup_candidates'/'exact_candidates' (короче для отчёта,
-                # НЕ совпадает буквально с match_method — явная карта,
-                # не строковая конкатенация, которая тут же и разошлась).
-                stats[_CANDIDATE_STAT_KEY[c["match_method"]]] += 1
-                if c.get("rejected_by_conflict"):
-                    stats["rejected_by_conflict"] += 1
         elif result["method"] == "auto":
             stats["auto_new" if result["created"] else "auto_existing"] += 1
             if result.get("fuzzy_candidate") is not None:
@@ -166,8 +205,6 @@ async def run_backfill(dry_run: bool = False, limit: int | None = None,
             log.info("прогресс: %d/%d", i, len(rows))
 
     stats["properties_total_after"] = await fetchval("SELECT count(*) FROM properties")
-    if match_mode == "candidate_only" and not dry_run:
-        stats["candidates_total_after"] = await fetchval("SELECT count(*) FROM property_match_candidates")
     return stats
 
 

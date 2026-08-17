@@ -631,7 +631,18 @@ async def _generate_candidates(listing_row: dict, address_hash: str, complex_id:
     dedup_row = await _find_dedup_candidate_property(listing_row, bootstrap_index)
     if dedup_row is not None:
         pid = dedup_row.get("property_id")
-        key = pid if pid is not None else ("virtual", dedup_row.get("listing_id"))
+        # НАЙДЕНО на прогоне детерминированности (задача 2026-08-16, "последняя
+        # проверка перед production backfill"): виртуальные (bootstrap_index)
+        # dedup-строки несут ключ "id" (см. _find_dedup_candidate_property —
+        # dict(other_row), other_row это исходный listing_row с полем "id",
+        # "listing_id" на нём никогда не было), а НЕ "listing_id" — .get(
+        # "listing_id") здесь всегда молча давал None, значит виртуальный
+        # dedup-ключ всегда был ("virtual", None), не ("virtual", <id>), и не
+        # совпадал с ключом, под которым тот же "другой" listing уже мог быть
+        # добавлен в seen_property_ids шагом exact_hash/fuzzy выше — пара,
+        # совпавшая ОБОИМИ сигналами, задваивалась (exact_hash-строка И
+        # dedup_listings-строка на одну и ту же пару) вместо дедупликации.
+        key = pid if pid is not None else ("virtual", dedup_row.get("listing_id", dedup_row.get("id")))
         if key not in seen_property_ids:
             seen_property_ids.add(key)
             score = _dedup_match_score(dedup_row.get("_dup_match"))
@@ -709,6 +720,302 @@ async def _link_candidate_only(listing_row: dict, address_hash: str, complex_id:
     return {"property_id": new_id, "method": "bootstrap", "confidence": 1.0, "created": True,
             "match_mode": "candidate_only", "fuzzy_candidate": None, "skip_reason": None,
             "candidates": candidates}
+
+
+# ── candidate_only BULK BACKFILL: two-phase deterministic construction
+# (задача 2026-08-16, "последняя проверка детерминированности candidate
+# graph перед production backfill") ─────────────────────────────────────
+#
+# НАЙДЕНО эмпирически (4 порядка: id ASC/DESC/listed_at/shuffled_42 на
+# полной таблице apartment_listings): однопроходный цикл выше
+# (_link_candidate_only + BootstrapIndex, вызываемый scripts/backfill_
+# property_ids.py::run_backfill по одному listing'у за раз) даёт
+# candidate-граф, ЗАВИСЯЩИЙ от порядка обработки. Причина структурная, не
+# в отдельном "баге" какого-то сигнала: candidate-generation для listing'а
+# X происходит ПОСЛЕ bootstrap'а всех РАНЕЕ обработанных listing'ов, но
+# ДО bootstrap'а тех, что будут обработаны позже — значит "видимое" X
+# множество кандидатов = "кто уже успел бутстрапнуться к этому моменту в
+# ЭТОМ конкретном порядке", а не "кто вообще существует". Для exact_hash/
+# fuzzy это ещё даёт ПОЛНЫЙ граф по каждой паре (кто раньше в порядке —
+# тот и не найдёт, кто позже — найдёт, ровно одно ребро на пару, СУММА
+# рёбер по факту не зависит от порядка) — но для dedup_listings это НЕ
+# так: обратный поиск ("кто ссылается duplicate_of на МЕНЯ") идёт
+# ОДНИМ SQL с LIMIT 1 (см. _find_dedup_candidate_property) — если на
+# один "канонический" listing ссылается НЕСКОЛЬКО duplicate_of, LIMIT 1
+# произвольно выбирает ОДНУ фиксированную строку (не зависит от порядка
+# backfill'а сам по себе, это факт физического порядка чтения Postgres),
+# но УСПЕЕТ ли она попасть в bootstrap_index к моменту, когда канонический
+# listing станет anchor'ом — уже зависит от порядка, и если "повезло"
+# выбранной LIMIT 1 строке не быть готовой — пара теряется целиком, хотя
+# forward-путь (у самого duplicate-listing'а) мог бы её найти, будь он
+# обработан позже "канонического" — то есть теряется НЕ в одном порядке,
+# а в другом находится частично, в третьем иначе. Отсюда наблюдаемая
+# order-dependence dedup_candidates (см. отчёт).
+#
+# Фикс — РАЗДЕЛИТЬ backfill на две фазы (задача, явно):
+#   Фаза A (bootstrap_all_provisional) — КАЖДЫЙ listing получает СВОЮ
+#     provisional property, независимо от остальных (bootstrap и раньше
+#     не искал существующую — эта фаза уже была структурно order-
+#     independent, здесь она просто явно завершается ПОЛНОСТЬЮ раньше,
+#     чем начинается фаза B).
+#   Фаза B (generate_all_candidates) — запускается ТОЛЬКО когда mapping
+#     listing→property ПОЛНЫЙ. Ищет кандидатов среди ВСЕХ забутстрапленных
+#     listing'ов (плюс отдельно — среди РЕАЛЬНО уже существующих properties
+#     из ПРЕДЫДУЩИХ прогонов, см. ниже), не только "уже обработанных
+#     раньше в произвольном порядке". Направление ребра (кто anchor)
+#     выбирается ДЕТЕРМИНИРОВАННО по _canonical_rank(listing_id)
+#     (численное сравнение) — ЧИСТАЯ функция двух id, не зависящая от
+#     порядка обхода вообще, поэтому один и тот же listing либо ВСЕГДА
+#     генерит ребро для данной пары, либо НИКОГДА, независимо от order_by.
+#     Обратный dedup-поиск здесь БЕЗ LIMIT 1 (см. _find_all_dedup_partners)
+#     — фикс той же находки: несколько duplicate_of на один канонический
+#     listing теперь все учитываются, не только первый попавшийся.
+#
+# scripts/backfill_property_ids.py::run_backfill вызывает ЭТИ функции для
+# match_mode="candidate_only" (bulk backfill); _link_candidate_only/
+# link_listing_to_property выше НЕ изменены и остаются точкой входа для
+# ЖИВОГО поштучного связывания новых listing'ов (там "порядок обработки"
+# — это реальный порядок появления объявлений, не искусственный выбор
+# backfill-скрипта, и БД к моменту вызова уже содержит всё, что появилось
+# раньше по-настоящему — та же order-independence гарантия, только без
+# двух явных фаз, они там и не нужны).
+
+
+def _canonical_rank(listing_id: str) -> tuple:
+    """Тотальный, ДЕТЕРМИНИРОВАННЫЙ порядок на listing_id для фазы B —
+    ЧИСЛОВОЙ, не строковый: id — TEXT, но исторически числовые krisha
+    listing id разной длины ("7571569" короче "1010897984") —
+    лексикографическое сравнение дало бы другой порядок, чем численное
+    (найдено на реальных данных, см. audit_address_hash_exact.py про
+    разброс длины id). Нечисловые id (на практике не встречались, кроме
+    __test_..__ в тестах) идут ПОСЛЕ всех числовых, сравниваются как
+    строки между собой — важно только чтобы правило было тотальным и
+    одинаковым в любом прогоне, не что оно "естественное"."""
+    try:
+        return (0, int(listing_id))
+    except (TypeError, ValueError):
+        return (1, listing_id)
+
+
+async def bootstrap_all_provisional(rows: list[dict], dry_run: bool) -> dict[str, dict]:
+    """ФАЗА A. Возвращает {listing_id: {"status": "already_linked" |
+    "skipped" | "bootstrap", "property_id": int | None, "row": dict}} —
+    "row" при status="bootstrap" дополнен "_address_hash"/"_complex_id"
+    (посчитаны здесь один раз, фаза B переиспользует, не пересчитывает).
+    property_id реальный при dry_run=False, иначе None (см. DryRunCache/
+    BootstrapIndex докстринги выше — dry-run никогда не вставляет строк)."""
+    from bot.db.pg import execute, fetchval
+
+    mapping: dict[str, dict] = {}
+    for row in rows:
+        listing_id = row["id"]
+        # Проверка "уже связан" — ВСЕГДА (это SELECT, не запись; dry_run
+        # запрещает только WRITE'ы — см. докстринг link_listing_to_property
+        # выше). НАЙДЕНО при ревью: изначально стояло "if not dry_run", из-за
+        # чего dry-run прогон считал КАЖДЫЙ listing бутстрапящимся заново,
+        # даже реально уже связанные предыдущим прогоном — ломало и
+        # already_linked-статистику, и фазу B (см. test_phase_b_finds_
+        # candidates_against_previously_linked_listing).
+        already = await fetchval(
+            "SELECT property_id FROM property_listings WHERE listing_id = $1", listing_id)
+        if already is not None:
+            mapping[listing_id] = {"status": "already_linked", "property_id": already, "row": row}
+            continue
+
+        address = row.get("address")
+        floor, area, rooms = row.get("floor"), row.get("area"), row.get("rooms")
+        address_hash = compute_address_hash(address, floor, area)
+        if address_hash is None:
+            mapping[listing_id] = {"status": "skipped", "property_id": None, "row": row,
+                                    "skip_reason": _skip_reason(address, floor, area)}
+            continue
+
+        complex_id = await _resolve_complex_id(row.get("complex_name"))
+        row = dict(row)
+        row["_address_hash"] = address_hash
+        row["_complex_id"] = complex_id
+
+        if dry_run:
+            mapping[listing_id] = {"status": "bootstrap", "property_id": None, "row": row}
+            continue
+
+        listing_first_seen = row.get("first_seen")
+        listing_evidence_at = row.get("archived_at") or row.get("last_seen")
+        new_id = await fetchval(
+            """
+            INSERT INTO properties (complex_id, address_hash, floor, area_sqm, rooms, first_seen_at, last_seen_at)
+            VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()), COALESCE($7, $6, now()))
+            RETURNING property_id
+            """,
+            complex_id, address_hash, floor, area, rooms, listing_first_seen, listing_evidence_at,
+        )
+        await execute(
+            "INSERT INTO property_listings (property_id, listing_id, link_method, confidence, matcher_version) "
+            "VALUES ($1, $2, 'bootstrap', 1.0, $3) ON CONFLICT (listing_id) DO NOTHING",
+            new_id, listing_id, _MATCHER_VERSION,
+        )
+        mapping[listing_id] = {"status": "bootstrap", "property_id": new_id, "row": row}
+    return mapping
+
+
+async def _find_all_dedup_partners(listing_row: dict) -> list[dict]:
+    """dedup_listings-сигнал БЕЗ LIMIT 1 (см. блок-докстринг выше про
+    находку: обратный поиск "кто ссылается duplicate_of на меня" раньше
+    брал ОДНУ произвольную строку — если на канонический listing
+    ссылались 2+ дубля, остальные молча терялись). Возвращает ВСЕ
+    строки-партнёры {"id", "dup_match"} — forward (на кого ссылается ЭТОТ
+    listing) с dup_match САМОГО listing_row (это ОН объявлен дублем);
+    reverse (кто ссылается на ЭТОТ listing) с dup_match КАЖДОЙ найденной
+    строки (это ОНА объявлена дублем этого listing_row) — то же различие
+    направления dup_match, что было в _find_dedup_candidate_property выше,
+    просто без обрезки reverse-варианта до одной строки."""
+    from bot.db.pg import fetch, fetchrow
+    listing_id = listing_row["id"]
+    duplicate_of = listing_row.get("duplicate_of")
+    partners: list[dict] = []
+    if duplicate_of:
+        row = await fetchrow("SELECT id FROM apartment_listings WHERE id = $1", duplicate_of)
+        if row is not None:
+            partners.append({"id": row["id"], "dup_match": listing_row.get("dup_match")})
+    reverse_rows = await fetch(
+        "SELECT id, dup_match FROM apartment_listings WHERE duplicate_of = $1", listing_id)
+    partners.extend({"id": r["id"], "dup_match": r["dup_match"]} for r in reverse_rows)
+    return partners
+
+
+async def _resolve_real_candidate_row(other_listing_id: str) -> dict | None:
+    """Реальная (уже связанная — из ЭТОГО ИЛИ предыдущего отдельного
+    прогона) property для other_listing_id, для dedup-партнёров,
+    которых нет в mapping ЭТОЙ фазы B (см. generate_all_candidates)."""
+    from bot.db.pg import fetchrow
+    real_row = await fetchrow(
+        """
+        SELECT p.property_id, al.id AS listing_id, al.address, al.floor, al.area, al.rooms,
+               al.seller_name, al.price, al.first_seen, al.last_seen, al.archived_at
+        FROM property_listings pl
+        JOIN properties p ON p.property_id = pl.property_id
+        JOIN apartment_listings al ON al.id = pl.listing_id
+        WHERE pl.listing_id = $1
+        """, other_listing_id)
+    if real_row is None:
+        return None
+    row = dict(real_row)
+    row.setdefault("id", other_listing_id)
+    return row
+
+
+async def generate_all_candidates(mapping: dict[str, dict]) -> list[dict]:
+    """ФАЗА B — вызывать ТОЛЬКО после того, как mapping из bootstrap_all_
+    provisional ПОЛНЫЙ (все listing'и этого backfill-прохода уже
+    забутстрапнуты). Возвращает плоский список candidate-записей (тот же
+    формат, что _build_candidate_record) — caller (run_backfill) решает,
+    писать их в БД или считать dry-run статистику.
+
+    Направление ребра для КАЖДОЙ пары ИЗ ЭТОГО прохода выбирается через
+    _canonical_rank — целиком по идентичности (listing_id vs listing_id),
+    БЕЗ обращения к тому, в каком порядке эта функция сама что-то
+    перебирает: цикл ниже можно было бы гонять хоть в случайном порядке,
+    результат тот же (задача, явно: "candidate generation не должен
+    зависеть от того, какое объявление обработано первым"). Партнёры из
+    ПРЕДЫДУЩИХ (уже завершённых) прогонов backfill'а всегда "раньше" по
+    определению — ранговое сравнение к ним не применяется."""
+    bootstrapped = [(lid, m) for lid, m in mapping.items() if m["status"] == "bootstrap"]
+
+    by_hash: dict[str, list[str]] = {}
+    by_complex_floor: dict[tuple, list[str]] = {}
+    for lid, m in bootstrapped:
+        row = m["row"]
+        by_hash.setdefault(row["_address_hash"], []).append(lid)
+        cid, floor, area = row.get("_complex_id"), row.get("floor"), row.get("area")
+        if cid is not None and floor is not None and area is not None:
+            by_complex_floor.setdefault((cid, floor), []).append(lid)
+
+    candidates: list[dict] = []
+    for lid, m in bootstrapped:
+        anchor_row = m["row"]
+        rank_x = _canonical_rank(lid)
+        address_hash = anchor_row["_address_hash"]
+        cid, floor, area = anchor_row.get("_complex_id"), anchor_row.get("floor"), anchor_row.get("area")
+
+        # found: other_listing_id -> (match_method, extra_for_score,
+        # in_run: bool). Порядок вставки ниже (exact_hash, затем fuzzy,
+        # затем dedup) задаёт приоритет при коллизии на одного и того же
+        # "другого" — тот же приоритет, что в _generate_candidates
+        # (однопроходная версия) выше.
+        found: dict[str, tuple[str, object, bool]] = {}
+
+        # exact_hash — ВСЕ остальные забутстрапленные в ЭТОМ прогоне с тем
+        # же address_hash (полный граф по кластеру, см. блок-докстринг),
+        # ПЛЮС реальные properties из предыдущих прогонов (идемпотентность
+        # повторного/добавочного backfill'а).
+        cluster = by_hash.get(address_hash, [])
+        exact_sibling_count = max(len(cluster) - 1, 0)
+        for other in cluster:
+            if other != lid:
+                found[other] = ("exact_hash", None, True)
+        for real_row in await _find_exact_hash_properties(address_hash):
+            other_lid = real_row["listing_id"]
+            # НЕ "not in mapping" — already_linked ИЗ ЭТОГО ЖЕ mapping (был
+            # уже связан ДО этого прогона, просто входил в rows фазы A) тоже
+            # реальный, тоже должен резолвиться через _resolve_real_candidate_
+            # row ниже, а не молча теряться (найдено при ревью: "not in
+            # mapping" отбрасывал ИМЕННО этот случай, единственный, для
+            # которого cluster выше его не подхватывает — cluster содержит
+            # только status="bootstrap").
+            if other_lid != lid and mapping.get(other_lid, {}).get("status") != "bootstrap":
+                found.setdefault(other_lid, ("exact_hash", None, False))
+
+        # fuzzy — тот же принцип (в проходе + реальные предыдущие).
+        if cid is not None and floor is not None and area is not None:
+            for other in by_complex_floor.get((cid, floor), []):
+                if other == lid:
+                    continue
+                other_area = mapping[other]["row"].get("area")
+                if other_area is not None and abs(other_area - area) <= _FUZZY_AREA_TOLERANCE:
+                    found.setdefault(other, ("fuzzy", None, True))
+            for real_row in await _find_fuzzy_properties(cid, floor, area, _FUZZY_AREA_TOLERANCE):
+                other_lid = real_row["listing_id"]
+                if other_lid != lid and mapping.get(other_lid, {}).get("status") != "bootstrap":
+                    found.setdefault(other_lid, ("fuzzy", None, False))
+
+        # dedup_listings — БЕЗ LIMIT 1 (см. _find_all_dedup_partners).
+        for partner in await _find_all_dedup_partners(anchor_row):
+            other_lid = partner["id"]
+            if other_lid == lid or other_lid in found:
+                continue
+            other_status = mapping.get(other_lid, {}).get("status")
+            if other_status == "skipped":
+                continue  # адрес/этаж/площадь не резолвились -> нет property вовсе, нечего предлагать
+            in_run = other_status == "bootstrap"
+            found[other_lid] = ("dedup_listings", partner.get("dup_match"), in_run)
+
+        for other_lid, (method, extra, in_run) in found.items():
+            if in_run:
+                if _canonical_rank(other_lid) >= rank_x:
+                    continue
+                candidate_row = dict(mapping[other_lid]["row"])
+                candidate_row["property_id"] = mapping[other_lid]["property_id"]
+            else:
+                candidate_row = await _resolve_real_candidate_row(other_lid)
+                if candidate_row is None:
+                    continue
+
+            if method == "exact_hash":
+                score = _exact_hash_match_score(exact_sibling_count)
+            elif method == "fuzzy":
+                score = _fuzzy_confidence(area, candidate_row.get("area") or area)
+            else:
+                score = _dedup_match_score(extra)
+            rec = _build_candidate_record(anchor_row, candidate_row, method, score)
+            # other_listing_id — НЕ часть схемы property_match_candidates
+            # (та каноническая модель — candidate_property_id, см. migrations/
+            # 086 докстринг), но полезна caller'у здесь же (run_backfill не
+            # использует, тесты/аудит детерминированности — используют, чтобы
+            # канонизировать пару listing/listing независимо от направления).
+            rec["other_listing_id"] = candidate_row.get("id", other_lid)
+            candidates.append(rec)
+
+    return candidates
 
 
 async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
