@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
 """Ежедневный сбор новостей о недвижимости Астаны в таблицу news (krisha_bot).
 Источник: Google News RSS (по доменам СМИ) + og:image с страниц статей.
-Молчит при успехе (для no_agent крона)."""
+Молчит при успехе (для no_agent крона).
+
+Запускается извне (SSH-обёртка с хоста, не systemd/cron этого сервера)
+с внешним wall-clock таймаутом ~300с — весь main() укладывается в единый
+бюджет GLOBAL_BUDGET_S (задача 2026-08-17, "global deadline"): каждая
+стадия (RSS-сбор, прямой og:image, 2х Playwright-обогащение) получает
+только то, что осталось от одного общего дедлайна, а не свой независимый
+потолок — раньше сумма независимых потолков стадий (200+48+70+70=388с)
+могла в худшем случае превысить сам внешний таймаут. При исчерпании
+бюджета сбор штатно останавливается на достигнутом (уже найденные
+новости пишутся как обычно), см. main()."""
 import re, sys, json, html, time, urllib.request, urllib.parse
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -262,23 +272,44 @@ def extract_summary(content: str) -> str:
     return text[:600] if text else ""
 
 
-def enrich_images_playwright(items: list[dict], limit: int = 8) -> None:
-    """Достаём og:image и выжимку текста через Playwright (Google News разрезолв).
-    Бюджет времени 150с: при 8+ новостях по ~27с цикл превышал 300с таймаут
-    ssh-обёртки на хосте (news_collect.py Windows) — крон падал в error."""
+# Ниже этого Playwright (запуск браузера + первая навигация) смысла
+# запускать не имеет — тратим время на запуск ради нуля полезной
+# работы. Не преемптивная гарантия (см. докстринг enrich_images_
+# playwright про "между элементами, не вытеснение"), просто отсекает
+# заведомо бессмысленный запуск при почти исчерпанном бюджете.
+_MIN_PLAYWRIGHT_BUDGET_S = 5.0
+
+
+def enrich_images_playwright(items: list[dict], limit: int = 8, budget: float = 150.0) -> int:
+    """Достаём og:image и выжимку текста через Playwright (Google News
+    разрезолв). `budget` — сколько секунд ДАНО этому вызову; вызывающий
+    (main(), задача 2026-08-17 "единый глобальный дедлайн вместо суммы
+    независимых бюджетов") делит один общий бюджет прогона между
+    стадиями и передаёт сюда только то, что осталось — сама функция
+    заново бюджет не выбирает. Возвращает число новостей, для которых
+    реально проставлена картинка (лог trade-off по картинкам в main()).
+
+    Бюджет проверяется МЕЖДУ элементами, не вытесняет уже начатую
+    итерацию: одна "зависшая" страница может выбрать бюджет с запасом
+    до ~16с (timeout=15000мс навигации + wait_for_timeout 1200мс) сверх
+    заявленного — тот же принцип "проверка между шагами, не
+    преемптивная отмена", что и у основного цикла в main(); точная
+    преемптивность здесь избыточна, per-item таймауты и так ограничивают
+    одну итерацию сверху."""
+    if budget <= 0 or not items:
+        return 0
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:
         print(f"# playwright недоступен: {e}", file=sys.stderr)
-        return
-    import time as _time
+        return 0
     done = 0
-    budget_start = _time.monotonic()
+    budget_start = time.monotonic()
     with sync_playwright() as p:
         b = p.chromium.launch(headless=True)
         pg = b.new_page(user_agent=UA)
         for it in items:
-            if _time.monotonic() - budget_start > 150:
+            if time.monotonic() - budget_start > budget:
                 break
             if it.get("image") and it.get("summary"):
                 continue
@@ -299,9 +330,29 @@ def enrich_images_playwright(items: list[dict], limit: int = 8) -> None:
             except Exception:
                 pass
         b.close()
+    return done
+
+
+# Единый бюджет на ВЕСЬ прогон (задача 2026-08-17, "global deadline"):
+# раньше каждая стадия (RSS-цикл, прямой og:image, 2х Playwright-enrich)
+# считала СВОЙ независимый бюджет — сумма потолков (200+48+70+70=388с)
+# превышала внешний 300с ssh-таймаут хоста (см. историю этого файла и
+# докстринг ниже в enrich_images_playwright), то есть даже "исправленная"
+# версия могла в худшем случае вылезти за таймаут. Теперь один
+# монотонный дедлайн на весь main(): каждая стадия получает СТРОГО
+# оставшееся от него время (`_time_left()`), не своё отдельное. Сумма
+# по построению не может превысить GLOBAL_BUDGET_S, независимо от того,
+# сколько стадий и в каком порядке успели захватить время.
+GLOBAL_BUDGET_S = 240.0
 
 
 def main() -> None:
+    run_start = time.monotonic()
+    deadline = run_start + GLOBAL_BUDGET_S
+
+    def _time_left() -> float:
+        return deadline - time.monotonic()
+
     db = conn()
     cur = db.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     # Телеметрия запросов: кто что даёт (для еженедельного ИИ-ревью словаря).
@@ -327,7 +378,22 @@ def main() -> None:
     # Krisha.kz больше НЕ собирается в новости — это классифайд, не СМИ
     # (источник удалён по решению 07.08.2026; см. SOURCE_BLOCK выше).
 
-    for q in load_queries():
+    # Стадия 1 — RSS. Дедлайн проверяется МЕЖДУ запросами (перед стартом
+    # следующего q), не вытесняет уже начатый get_rss() — у него свой
+    # timeout=25с сверху, того же порядка, что и шаг проверки. При
+    # исчерпании бюджета ПРОСТО не начинаем очередной запрос — уже
+    # собранные items идут в обработку и запись ниже как обычно
+    # ("штатно завершает уже собранные результаты", не аварийный выход).
+    all_queries = load_queries()
+    queries_run = 0
+    for q in all_queries:
+        if _time_left() <= 0:
+            print(f"# global budget исчерпан на RSS-стадии: "
+                  f"{queries_run}/{len(all_queries)} запросов выполнено, "
+                  f"{len(items)} новостей собрано — прерываю RSS-цикл, "
+                  f"дальше идут уже собранные", file=sys.stderr)
+            break
+        queries_run += 1
         q_stats = {"total": 0, "new": 0, "dup": 0, "blocked": 0, "err": 0}
         try:
             for it in parse_rss(get_rss(q)):
@@ -358,12 +424,44 @@ def main() -> None:
     # хватало с запасом, но с поимёнными запросами по ~50-80 ЖК (см.
     # load_queries()) 15 сразу же душило самую ценную часть охвата.
     items = items[:100]
-    # сначала простой og:image (для прямых ссылок), потом Playwright для Google News
-    for it in items:
+
+    # Стадия 2 — прямой og:image (для прямых ссылок, до Playwright).
+    # Ограничена И числом (первые 60 из 100 — trade-off: остаток списка
+    # может остаться без картинки в этом прогоне, картинка не блокирует
+    # публикацию новости), И оставшимся глобальным бюджетом — раньше была
+    # ограничена ТОЛЬКО числом, при повальных timeout=12с на каждый
+    # запрос могла сама съесть бюджет всех следующих стадий.
+    stage2_budget = max(0.0, _time_left())
+    stage2_deadline = time.monotonic() + stage2_budget
+    stage2_scope = items[:60]
+    for i, it in enumerate(stage2_scope):
+        if time.monotonic() >= stage2_deadline:
+            print(f"# global budget исчерпан на og:image-стадии: "
+                  f"{i}/{len(stage2_scope)} обработано (из {len(items)} "
+                  f"собранных всего, лимит стадии — первые 60)", file=sys.stderr)
+            break
         if not it["image"] and not it["url"].startswith("https://news.google.com"):
             it["image"] = get_og_image(it["url"])
             time.sleep(0.8)
-    enrich_images_playwright(items, limit=12)
+    # og:image trade-off (items[:60] из до 100 собранных) — ОЖИДАЕМОЕ,
+    # штатное поведение на каждом прогоне почти при полном охвате, не
+    # аномалия: НЕ логируем на каждый запуск (докстринг файла — "молчит
+    # при успехе", cron не должен тревожиться на рутинный случай), сам
+    # trade-off зафиксирован здесь и в PR-описании задачи 2026-08-17.
+
+    # Стадия 3 — Playwright-обогащение основного списка. Получает только
+    # то, что осталось от глобального бюджета (не свой фиксированный 70с).
+    # Печатаем в stderr ТОЛЬКО когда бюджета не хватило (стадия урезана/
+    # пропущена) — это и есть аномалия, которую стоит увидеть в логе
+    # крона; сам факт "хватило" — тихий штатный путь, как и раньше.
+    stage3_budget = max(0.0, _time_left())
+    if stage3_budget < _MIN_PLAYWRIGHT_BUDGET_S:
+        print(f"# global budget почти исчерпан ({stage3_budget:.1f}с) — "
+              f"Playwright-обогащение основного списка ({len(items)} новостей) "
+              f"пропущено, публикуются с уже собранными image/summary", file=sys.stderr)
+    else:
+        enrich_images_playwright(items, limit=8, budget=stage3_budget)
+
     for it in items:
         try:
             cur.execute(
@@ -372,17 +470,30 @@ def main() -> None:
                 (it["title"][:500], it["source"][:100], it["url"], it["image"], (it.get("summary") or None)))
         except Exception as e:
             print(f"# insert error: {e}", file=sys.stderr)
+
     # дозаполняем выжимки у свежих новостей без summary (через Playwright)
     cur.execute(
         "SELECT id, url, image_url FROM news WHERE summary IS NULL AND ts > now() - interval '3 days' LIMIT 12")
     backfill = [{"id": r["id"], "url": r["url"], "image": r["image_url"], "summary": None}
                 for r in cur.fetchall()]
     if backfill:
-        enrich_images_playwright(backfill, limit=12)
+        # Стадия 4 — тот же принцип: остаток общего бюджета, не свой 70с.
+        stage4_budget = max(0.0, _time_left())
+        if stage4_budget < _MIN_PLAYWRIGHT_BUDGET_S:
+            print(f"# global budget почти исчерпан ({stage4_budget:.1f}с) — "
+                  f"backfill-обогащение ({len(backfill)} новостей) пропущено, "
+                  f"эти строки останутся без summary до следующего прогона", file=sys.stderr)
+        else:
+            enrich_images_playwright(backfill, limit=8, budget=stage4_budget)
         for b in backfill:
             if b.get("summary"):
                 cur.execute("UPDATE news SET summary = %s WHERE id = %s",
                             (b["summary"][:600], b["id"]))
+
+    # Уборка старья и закрытие соединения — ВСЕГДА, независимо от того,
+    # на какой стадии кончился бюджет (см. комментарии выше): что уже
+    # собрано — то штатно записывается и коммитится, глобальный дедлайн
+    # только укорачивает СБОР, не прерывает завершение прогона.
     # уборка старья — было 14 дней, поднято до 95 (задача "хайп — 3 месяца
     # вместо 14 дней"): news_analyze.py теперь читает окно в 90 дней для
     # извлечения упоминаний (ARTICLE_WINDOW_DAYS), удаление новостей раньше
