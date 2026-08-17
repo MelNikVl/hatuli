@@ -51,15 +51,34 @@ _LOCAL_KIND_MAP: dict[str, str] = {
 
 
 async def fetch_poi(lat: float, lon: float) -> list[dict] | None:
-    """Список [{kind, dist_m, lat, lon, id, type}] — city_poi (без сети),
-    фолбэк на overpass_cached() только если ни одна из _LOCAL_KIND_MAP
-    категорий ещё не синхронизирована (см. bot/score_layers/osm.py::
-    local_poi_near). None если ОБА источника недоступны."""
+    """Список [{kind, dist_m, lat, lon, id, type, area_ha}] — city_poi
+    (без сети), фолбэк на overpass_cached() только если ни одна из
+    _LOCAL_KIND_MAP категорий ещё не синхронизирована (см.
+    bot/score_layers/osm.py::local_poi_near). None если ОБА источника
+    недоступны.
+
+    id/type/area_ha из локального источника (задача 2026-08-17, "Parks —
+    площадь"): раньше ВСЕГДА None для local-записей (city_poi их не
+    хранил) — bot/score_layers/parks.py::_nearest_park_area_ha из-за
+    этого молча переставал находить площадь для подавляющего большинства
+    ЖК (guard "type != way" всегда срабатывал). Теперь читаем их из
+    city_poi.extra (см. local_poi_near), если sync_city_poi.py их туда
+    положил (сейчас — только для kind='park', см. scripts/sync_city_poi.
+    py::_fetch_park_points_with_area) — для остальных kind extra всегда
+    None, id/type/area_ha остаются None, как раньше."""
     local = await local_poi_near(lat, lon, list(_LOCAL_KIND_MAP), 700)
     if local is not None:
-        return [{"kind": _LOCAL_KIND_MAP[r["kind"]], "dist_m": haversine_m(lat, lon, r["lat"], r["lon"]),
-                  "lat": r["lat"], "lon": r["lon"], "id": None, "type": None}
-                 for r in local]
+        out = []
+        for r in local:
+            extra = r.get("extra") or {}
+            out.append({
+                "kind": _LOCAL_KIND_MAP[r["kind"]],
+                "dist_m": haversine_m(lat, lon, r["lat"], r["lon"]),
+                "lat": r["lat"], "lon": r["lon"],
+                "id": extra.get("osm_id"), "type": extra.get("osm_type"),
+                "area_ha": extra.get("area_ha"),
+            })
+        return out
 
     data = await overpass_cached(lat, lon, "poi700", _QUERY.format(lat=lat, lon=lon))
     if data is None:

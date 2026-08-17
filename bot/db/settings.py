@@ -34,6 +34,13 @@ DEFAULTS: dict[str, str] = {
     "PARSER_MAX_PAGES": "5",
     "PARSER_MAX_PRICE": "80000000",
     "MONETIZATION_ENABLED": "0",
+    # Пауза между циклами service_apartments.py (задача 2026-08-17,
+    # "интервал apartment parser") — random.uniform(MIN, MAX) минут между
+    # завершением одного цикла и стартом следующего; было хардкод 50-80,
+    # сузили до 30-70 (см. service_apartments.py::_next_cycle_sleep_minutes
+    # докстринг про валидацию и абсолютные границы).
+    "PARSE_INTERVAL_MIN": "30",
+    "PARSE_INTERVAL_MAX": "70",
     # Веса компонентов Deal Score (bot/core/deal_score.py) — сумма нормализуется
     # к 1.0 при чтении, так что абсолютные значения не обязаны давать ровно 100.
     "SCORE_W_PRICE": "40",

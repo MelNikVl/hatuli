@@ -189,15 +189,24 @@ async def kinds_synced(kinds: list[str]) -> bool:
 
 async def local_poi_near(lat: float, lon: float, kinds: list[str],
                           radius_m: float) -> list[dict] | None:
-    """city_poi-эквивалент Overpass around:radius_m — [{kind, lat, lon}]
-    в радиусе radius_m от точки, только среди kinds. None — ни одна из
-    kinds ещё не синхронизирована (кандидат на overpass_cached()-фолбэк);
-    [] — синхронизирована, но реально ничего рядом (валидный, не
+    """city_poi-эквивалент Overpass around:radius_m — [{kind, lat, lon,
+    extra}] в радиусе radius_m от точки, только среди kinds. None — ни
+    одна из kinds ещё не синхронизирована (кандидат на overpass_cached()-
+    фолбэк); [] — синхронизирована, но реально ничего рядом (валидный, не
     "ошибочный", результат — Unknown ≠ average: пусто и "не знаем" это
-    РАЗНЫЕ вещи, поэтому None и [] не путаются)."""
+    РАЗНЫЕ вещи, поэтому None и [] не путаются).
+
+    extra — dict|None (задача 2026-08-17, "Parks — площадь"): для
+    большинства kind всегда None (city_poi.extra NULL), для park —
+    {"osm_type":..., "osm_id":..., "area_ha":...}, если sync_city_poi.py
+    его посчитал (см. scripts/sync_city_poi.py::_fetch_park_points_with_
+    area) — читатели (bot/score_layers/poi.py::fetch_poi) сами решают,
+    что с ним делать; сама эта функция общая для всех kind, специфики
+    парков не знает."""
     if not await kinds_synced(kinds):
         return None
     from bot.db.pg import fetch
+    import json
     lat_m, lon_m = _bbox_margin_deg(radius_m)
     try:
         # ::double precision явно — тот же AmbiguousFunctionError, что уже
@@ -205,7 +214,7 @@ async def local_poi_near(lat: float, lon: float, kinds: list[str],
         # (asyncpg не может вывести тип "$2 - $3" без якоря в выражении).
         rows = await fetch(
             """
-            SELECT kind, lat, lon FROM city_poi
+            SELECT kind, lat, lon, extra FROM city_poi
             WHERE kind = ANY($1::text[])
               AND lat BETWEEN $2::double precision - $3::double precision
                           AND $2::double precision + $3::double precision
@@ -217,8 +226,18 @@ async def local_poi_near(lat: float, lon: float, kinds: list[str],
     except Exception as exc:
         logger.warning("city_poi local_poi_near failed: %s", exc)
         return None
-    return [{"kind": r["kind"], "lat": r["lat"], "lon": r["lon"]}
-            for r in rows if haversine_m(lat, lon, r["lat"], r["lon"]) <= radius_m]
+    out = []
+    for r in rows:
+        if haversine_m(lat, lon, r["lat"], r["lon"]) > radius_m:
+            continue
+        extra = r["extra"]
+        if isinstance(extra, str):
+            try:
+                extra = json.loads(extra)
+            except (ValueError, TypeError):
+                extra = None
+        out.append({"kind": r["kind"], "lat": r["lat"], "lon": r["lon"], "extra": extra})
+    return out
 
 
 async def city_poi_freshness_days(kinds: list[str]) -> float | None:

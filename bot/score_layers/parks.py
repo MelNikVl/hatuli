@@ -58,11 +58,26 @@ def _polygon_area_m2(nodes: list[dict]) -> float | None:
 
 
 async def _nearest_park_area_ha(park: dict) -> float | None:
-    """Площадь ближайшего парка в га — точечный Overpass-запрос ЕГО
-    геометрии по OSM id (кешируется по координатам самого парка, не
-    объявления — тот же парк рядом с разными объявлениями бьёт в один и
-    тот же кеш). None — park не way (точка/relation), запрос не удался,
-    геометрия вырождена."""
+    """Площадь ближайшего парка в га.
+
+    Задача 2026-08-17 ("Parks — исправить потерю площади после перехода
+    на локальные точки"): основной путь теперь — area_ha, уже посчитанный
+    ОДИН РАЗ при еженедельной sync_city_poi.py (см. scripts/sync_city_poi
+    .py::_fetch_park_points_with_area, bot/score_layers/poi.py::fetch_poi)
+    и пришедший прямо в `park` из city_poi — БЕЗ сети. Раньше (до этой
+    задачи) единственный путь был точечный live-Overpass-дозапрос
+    геометрии по OSM id на КАЖДОМ расчёте локации — с переходом на
+    city_poi local-записи получали id=None/type=None, поэтому guard
+    "type != way" всегда срабатывал и площадь МОЛЧА переставала
+    находиться почти для всех ЖК (баг, найденный этой же задачей).
+
+    Live-дозапрос ОСТАВЛЕН как fallback ТОЛЬКО для редкого случая, когда
+    fetch_poi() целиком пошёл по live-Overpass пути (park кроме area_ha
+    несёт live id/type, area_ha никогда не приходит с этой ветки) — не
+    вводим сюда сетевой запрос заново для обычного, local-пути (Overpass
+    в критический путь скоринга не возвращается, задача явно)."""
+    if park.get("area_ha") is not None:
+        return park["area_ha"]
     if park.get("type") != "way" or not park.get("id"):
         return None
     from bot.score_layers.osm import overpass_cached

@@ -145,7 +145,22 @@ CATEGORIES: dict[str, list[str]] = {
     "nightlife": ["bar"],
 }
 
-_ROAD_SAMPLE_INTERVAL_M = 150.0
+# Было 150.0 — задача 2026-08-17 ("проверка эквивалентности noise"):
+# сравнение local vs live-Overpass на 25 ЖК нашло 4/25 (16%) системати-
+# ческих расхождений, ВСЕГДА в одну сторону (local занижал: "<250м",
+# live — "<100м", т.е. local НИКОГДА не завышал шум, только недооценивал) —
+# при шаге сэмплинга 150м вдоль дороги ближайшая РЕАЛЬНАЯ точка кривой
+# может быть <100м от ЖК, а ближайшая СЭМПЛИРОВАННАЯ — 100-150м. Первая
+# правка (150->50) закрыла 2/4 случаев; оставшиеся 2 — граничные (реальная
+# дистанция ~85-100м, сэмпл ~111-120м, дорога заметно изгибается между
+# соседними сэмплами — хорда режет угол дуги). 25м — дальнейшее
+# уменьшение худшего случая ("проскочили" <=12.5м вместо <=25м); дальше
+# уходим в диминишинг-ретёрнс (точечная аппроксимация непрерывной кривой
+# принципиально не даёт нулевой погрешности ни при каком конечном шаге,
+# см. §"Проверка эквивалентности noise" в отчёте задачи) — если и на 25м
+# останутся граничные случаи, это документированный остаточный эффект
+# точечной аппроксимации, не баг.
+_ROAD_SAMPLE_INTERVAL_M = 25.0
 
 
 def _point_query(kind: str, timeout_s: int) -> str:
@@ -171,6 +186,48 @@ def _line_query(kind: str, timeout_s: int) -> str:
 );
 out geom 20000;
 """
+
+
+# ── Площадь парков (задача 2026-08-17, "Parks — исправить потерю площади
+# после перехода на локальные точки"): раньше площадь ближайшего парка
+# считалась точечным live-Overpass-дозапросом НА КАЖДОМ расчёте локации
+# (bot/score_layers/parks.py::_nearest_park_area_ha, по OSM id) — c
+# переходом на city_poi у local-записей id/type всегда None (city_poi их
+# не хранил), поэтому этот дозапрос молча ПЕРЕСТАЛ срабатывать почти
+# всегда (guard "type != way" всегда True для локальных данных) —
+# площадь парка не показывалась НИКОМУ, кто шёл локальным путём.
+# Фикс — считаем площадь ОДИН РАЗ здесь, при еженедельной синхронизации
+# (одним batch-запросом `out geom` на ВСЕ парки-way сразу, не по одному
+# id), и кладём в city_poi.extra (JSONB, колонка уже существует —
+# миграция не нужна) вместе с osm_type/osm_id. bot/score_layers/parks.py
+# читает area_ha оттуда напрямую — Overpass в критическом пути НЕ
+# появляется снова.
+
+
+def _park_geom_query(timeout_s: int) -> str:
+    tag_filter = _POINT_KINDS["park"]
+    return f"""
+[out:json][timeout:{timeout_s}];
+{_AREA}
+(
+  way(area.a){tag_filter};
+);
+out geom;
+"""
+
+
+def _compute_park_areas_ha(geom_data: dict) -> dict[int, float]:
+    """{osm way id: area_ha} — переиспользует ту же формулу шнурков, что
+    bot/score_layers/parks.py::_polygon_area_m2 (не дублируем логику)."""
+    from bot.score_layers.parks import _polygon_area_m2
+    out: dict[int, float] = {}
+    for el in geom_data.get("elements", []):
+        if el.get("type") != "way" or el.get("id") is None:
+            continue
+        area_m2 = _polygon_area_m2(el.get("geometry") or [])
+        if area_m2 is not None:
+            out[el["id"]] = area_m2 / 10_000.0
+    return out
 
 
 async def _overpass_request(query: str) -> dict | None:
@@ -208,7 +265,13 @@ def _addr(tags: dict) -> str | None:
     return street or None
 
 
-def _extract_points(kind: str, data: dict) -> list[dict]:
+def _extract_points(kind: str, data: dict, with_osm_ref: bool = False) -> list[dict]:
+    """with_osm_ref — задача 2026-08-17 ("Parks — площадь"): также
+    сохранить osm_type/osm_id на каждой точке (id/type у элемента
+    Overpass есть ВСЕГДА, см. bot/score_layers/poi.py докстринг про то
+    же самое) — нужно ТОЛЬКО для park (чтобы потом смёржить с площадью
+    из _compute_park_areas_ha по id), для остальных kind не запрашивается
+    и не пишется (extra в city_poi остаётся NULL, как раньше)."""
     from bot.score_layers.osm import element_coords
     out, seen = [], set()
     for el in data.get("elements", []):
@@ -221,11 +284,15 @@ def _extract_points(kind: str, data: dict) -> list[dict]:
             continue
         seen.add(key)
         tags = el.get("tags") or {}
-        out.append({
+        point = {
             "kind": kind, "lat": lat, "lon": lon,
             "name": tags.get("name") or tags.get("name:ru") or tags.get("name:kk"),
             "address": _addr(tags),
-        })
+        }
+        if with_osm_ref:
+            point["osm_type"] = el.get("type")
+            point["osm_id"] = el.get("id")
+        out.append(point)
     return out
 
 
@@ -264,6 +331,29 @@ def _extract_line_points(kind: str, data: dict) -> list[dict]:
     return out
 
 
+async def _fetch_park_points_with_area(point_data: dict) -> list[dict]:
+    """Точки парков (park/garden, узлы+центры way) + площадь way-парков
+    ОДНИМ доп. batch-запросом геометрии (задача 2026-08-17, "Parks —
+    площадь", см. докстринг _park_geom_query выше) — не по одному
+    id-запросу на парк, как раньше делал bot/score_layers/parks.py::
+    _nearest_park_area_ha на каждом расчёте локации.
+
+    Площадь — best-effort: если гео-запрос не удался (Overpass лёг
+    именно на этом под-шаге), точки ВСЁ РАВНО пишутся без area_ha —
+    позиция парка важнее площади, тот же принцип "лучше устаревшие/
+    неполные данные, чем вообще ничего", что и у run_sync() в целом."""
+    points = _extract_points("park", point_data, with_osm_ref=True)
+    geom_data = await _overpass_request(_park_geom_query(int(OVERPASS_TIMEOUT_S) - 10))
+    if geom_data is None:
+        log.warning("категория park: геометрия для площади не получена — точки пишутся без area_ha")
+        return points
+    areas = _compute_park_areas_ha(geom_data)
+    for p in points:
+        if p.get("osm_type") == "way" and p.get("osm_id") in areas:
+            p["area_ha"] = areas[p["osm_id"]]
+    return points
+
+
 async def fetch_kind(kind: str) -> list[dict] | None:
     """None — Overpass недоступен после всех попыток (вызывающий должен
     НЕ трогать существующие данные этой kind — см. sync())."""
@@ -271,11 +361,24 @@ async def fetch_kind(kind: str) -> list[dict] | None:
         data = await _overpass_request(_point_query(kind, int(OVERPASS_TIMEOUT_S) - 10))
         if data is None:
             return None
+        if kind == "park":
+            return await _fetch_park_points_with_area(data)
         return _extract_points(kind, data)
     data = await _overpass_request(_line_query(kind, int(OVERPASS_TIMEOUT_S) - 10))
     if data is None:
         return None
     return _extract_line_points(kind, data)
+
+
+def _extra_json(p: dict) -> str | None:
+    """osm_type/osm_id/area_ha -> city_poi.extra (JSONB, колонка уже
+    существовала — не миграция, просто впервые заполняется). Для kind,
+    где _extract_points звался без with_osm_ref и area_ha не считался
+    (все, кроме park) — точка не несёт этих ключей, extra остаётся NULL,
+    поведение не меняется."""
+    import json as _json
+    extra = {k: p[k] for k in ("osm_type", "osm_id", "area_ha") if p.get(k) is not None}
+    return _json.dumps(extra) if extra else None
 
 
 async def save_category(kind: str, points: list[dict]) -> int:
@@ -288,12 +391,13 @@ async def save_category(kind: str, points: list[dict]) -> int:
             await conn.execute("DELETE FROM city_poi WHERE kind = $1", kind)
             if points:
                 await conn.executemany(
-                    """INSERT INTO city_poi (kind, name, lat, lon, address, updated_at)
-                       VALUES ($1, $2, $3, $4, $5, now())
+                    """INSERT INTO city_poi (kind, name, lat, lon, address, extra, updated_at)
+                       VALUES ($1, $2, $3, $4, $5, $6::jsonb, now())
                        ON CONFLICT (kind, lat, lon) DO UPDATE
                          SET name = EXCLUDED.name, address = EXCLUDED.address,
-                             updated_at = now()""",
-                    [(p["kind"], p["name"], p["lat"], p["lon"], p["address"]) for p in points],
+                             extra = EXCLUDED.extra, updated_at = now()""",
+                    [(p["kind"], p["name"], p["lat"], p["lon"], p["address"], _extra_json(p))
+                     for p in points],
                 )
     return len(points)
 
