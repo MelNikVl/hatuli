@@ -305,6 +305,131 @@ async def test_order_independence_via_dry_run(db):
         await _cleanup(*lids, complex_ids=[cid], address_hashes=hashes)
 
 
+# ── 7b. Канонический candidate-граф идентичен ASC/DESC/shuffled (задача
+#        2026-08-16, "последняя проверка детерминированности перед
+#        production backfill") — сильнее теста #7 выше: та проверка
+#        сравнивала только СЧЁТЧИКИ (>= 1), эта — ПОЛНЫЙ канонический
+#        набор рёбер (пара + match_method + relationship_type + status +
+#        conflict_reasons, A→B и B→A считаются ОДНОЙ связью) ────────────
+
+def _canon_reason(r: str):
+    """rooms/house_number mismatch пишет "a vs b" — какое значение a,
+    какое b, зависит от того, кто anchor (см. property_linker.py:
+    _conflict_reasons) — сортируем пару значений, чтобы направление
+    ребра не влияло на сравнение."""
+    import re
+    m = re.match(r"rooms mismatch: (.+) vs (.+)", r)
+    if m:
+        return ("rooms_mismatch", tuple(sorted([m.group(1), m.group(2)])))
+    m = re.match(r"house_number mismatch: (.+) vs (.+)", r)
+    if m:
+        return ("house_number_mismatch", tuple(sorted([m.group(1), m.group(2)])))
+    return ("other", r)
+
+
+def _canonical_edges(candidates):
+    """candidate-записи -> {frozenset({A,B}): (method, type, status,
+    canon_reasons)} — ключ по НЕУПОРЯДОЧЕННОЙ паре listing_id, значение
+    без каких-либо полей, которые ЗАКОННО зависят от направления (score,
+    сырые evidence a/b строки)."""
+    edges = {}
+    for c in candidates:
+        other = c["other_listing_id"]
+        pair = frozenset([c["listing_id"], other])
+        reasons = tuple(sorted(_canon_reason(r) for r in (c["conflict_reasons"] or [])))
+        edges[pair] = (c["match_method"], c["relationship_type"], c["status"], reasons)
+    return edges
+
+
+@pytest.mark.asyncio
+async def test_canonical_candidate_graph_identical_across_orders(db):
+    """Полный candidate-граф (не только счётчики) — байт-в-байт одинаковый
+    набор канонических рёбер при id ASC/DESC/listed_at/shuffled(2 seed'а).
+    Покрывает ровно то, из-за чего однопроходный BootstrapIndex-цикл был
+    order-dependent на реальных данных: (а) exact/fuzzy кластер >2 (не
+    просто пара — sibling_count/направление реально отличались по позиции
+    в проходе), (б) КАНОНИЧЕСКИЙ listing с ДВУМЯ дублями (LIMIT 1 в
+    обратном dedup-поиске терял одного из двух в зависимости от порядка)."""
+    from bot.identity.property_linker import compute_address_hash
+
+    cid = await _insert_complex("__test_co_graph_complex__")
+    lids = [f"__test_co_graph_{i}__" for i in range(7)]
+    (l0, l1, l2, l3, l4, l5, l6) = lids
+    hashes = []
+    try:
+        # Кластер из 3 (exact_hash, полный граф K3 ожидается).
+        for lid in (l0, l1, l2):
+            await _insert_listing(lid, address="Граф Адрес, 1", floor=5, area=45.0, rooms=2,
+                                   complex_name="__test_co_graph_complex__")
+            hashes.append(compute_address_hash("Граф Адрес, 1", 5, 45.0))
+        # Rooms mismatch внутри того же кластера (l3 — тот же адрес/этаж/
+        # площадь, но rooms=3) — conflict_reasons должен быть направление-
+        # независим после канонизации.
+        await _insert_listing(l3, address="Граф Адрес, 1", floor=5, area=45.0, rooms=3,
+                               complex_name="__test_co_graph_complex__")
+        hashes.append(compute_address_hash("Граф Адрес, 1", 5, 45.0))
+        # Канонический listing (l4) с ДВУМЯ дублями (l5, l6) — задача:
+        # найденный LIMIT-1 баг в обратном dedup-поиске терял одного из
+        # них в зависимости от порядка backfill'а.
+        await _insert_listing(l4, address="Совсем Другой Граф Адрес, 2", floor=5, area=45.0)
+        hashes.append(compute_address_hash("Совсем Другой Граф Адрес, 2", 5, 45.0))
+        await _insert_listing(l5, address="Ещё Один Граф Адрес, 3", floor=5, area=45.0,
+                               is_duplicate=True, duplicate_of=l4, dup_match="addr_price")
+        hashes.append(compute_address_hash("Ещё Один Граф Адрес, 3", 5, 45.0))
+        await _insert_listing(l6, address="И Ещё Один Граф Адрес, 4", floor=5, area=45.0,
+                               is_duplicate=True, duplicate_of=l4, dup_match="addr_price")
+        hashes.append(compute_address_hash("И Ещё Один Граф Адрес, 4", 5, 45.0))
+
+        from bot.identity.property_linker import bootstrap_all_provisional, generate_all_candidates
+        from bot.db.pg import fetch
+
+        _COLUMNS = ("id, address, floor, area, rooms, complex_name, first_seen, last_seen, archived_at, "
+                    "price, seller_name, is_duplicate, duplicate_of, dup_match")
+        all_rows = [dict(r) for r in await fetch(
+            f"SELECT {_COLUMNS} FROM apartment_listings WHERE id = ANY($1::text[])", lids)]
+        by_id = {r["id"]: r for r in all_rows}
+
+        orders = {
+            "id_asc": sorted(lids),
+            "id_desc": sorted(lids, reverse=True),
+            "listed_at": list(lids),  # все first_seen ~ одинаковы (now()) — стабильная перестановка не нужна
+            "shuffled_42": list(lids),
+            "shuffled_1337": list(lids),
+        }
+        import random
+        random.Random(42).shuffle(orders["shuffled_42"])
+        random.Random(1337).shuffle(orders["shuffled_1337"])
+
+        graphs = {}
+        for order_name, ordered_ids in orders.items():
+            rows = [by_id[lid] for lid in ordered_ids]
+            mapping = await bootstrap_all_provisional(rows, dry_run=True)
+            candidates = await generate_all_candidates(mapping)
+            graphs[order_name] = _canonical_edges(candidates)
+
+        reference_name, reference = "id_asc", graphs["id_asc"]
+        for order_name, graph in graphs.items():
+            same = set(graph) & set(reference)
+            appeared = set(graph) - set(reference)
+            disappeared = set(reference) - set(graph)
+            changed = {p for p in same if graph[p] != reference[p]}
+            assert not appeared, f"{order_name}: появились рёбра, которых нет в {reference_name}: {appeared}"
+            assert not disappeared, f"{order_name}: пропали рёбра, которые есть в {reference_name}: {disappeared}"
+            assert not changed, f"{order_name}: поменялись атрибуты (method/type/status/reasons): {changed}"
+
+        # Дополнительно — оба дубля l5/l6 присутствуют (регрессия на LIMIT 1).
+        pair_l4_l5 = frozenset([l4, l5])
+        pair_l4_l6 = frozenset([l4, l6])
+        assert pair_l4_l5 in reference, "дубль l5 потерян — регрессия LIMIT 1 в обратном dedup-поиске"
+        assert pair_l4_l6 in reference, "дубль l6 потерян — регрессия LIMIT 1 в обратном dedup-поиске"
+
+        # И полный K3-граф кластера l0/l1/l2 (3 ребра, не 2 и не 1).
+        for a, b in ((l0, l1), (l0, l2), (l1, l2)):
+            assert frozenset([a, b]) in reference, f"неполный exact_hash-кластер: {a}-{b} отсутствует"
+    finally:
+        await _cleanup(*lids, complex_ids=[cid], address_hashes=hashes)
+
+
 # ── 8. accepted/rejected candidate не дублируется ────────────────────────
 
 @pytest.mark.asyncio
@@ -364,6 +489,41 @@ async def test_default_match_mode_is_candidate_only(db):
         assert r["method"] == "bootstrap"  # НЕ 'auto'/'fuzzy' (legacy hard-link методы)
     finally:
         await _cleanup(lid, address_hashes=[h])
+
+
+# ── Фаза B находит кандидатов и против УЖЕ связанных (предыдущим отдельным
+#    прогоном) properties, не только против бутстрапнутых В ЭТОМ ЖЕ проходе
+#    (найдено при ревью двухфазного backfill'а — задача 2026-08-16) ──────
+
+@pytest.mark.asyncio
+async def test_phase_b_finds_candidates_against_previously_linked_listing(db):
+    """lid_a реально связан ПЕРВЫМ (отдельным) прогоном run_backfill;
+    lid_b добавляется ПОЗЖЕ, тем же address_hash — второй (dry-run)
+    прогон должен найти lid_a кандидатом для lid_b, хотя lid_a уже
+    status=already_linked, а не бутстрапится заново в mapping этого
+    прохода (регрессия: exact_hash/fuzzy/dedup-поиск в generate_all_
+    candidates раньше исключал ЛЮБОЙ already_linked listing через
+    "not in mapping", теряя как раз этот сценарий — see review fix)."""
+    from backfill_property_ids import run_backfill
+    from bot.identity.property_linker import compute_address_hash
+
+    lid_a, lid_b = "__test_co_prevrun_a__", "__test_co_prevrun_b__"
+    await _insert_listing(lid_a, address="Прошлый Прогон Адрес, 16", floor=5, area=45.0)
+    h = compute_address_hash("Прошлый Прогон Адрес, 16", 5, 45.0)
+    try:
+        first = await run_backfill(listing_ids=[lid_a], match_mode="candidate_only")
+        assert first["provisional_created"] == 1
+
+        await _insert_listing(lid_b, address="Прошлый Прогон Адрес, 16", floor=5, area=45.0)
+        second = await run_backfill(
+            dry_run=True, listing_ids=[lid_a, lid_b], match_mode="candidate_only")
+        # lid_a теперь already_linked (реально), lid_b — новый provisional.
+        assert second["already_linked"] == 1
+        assert second["provisional_created"] == 1
+        assert second["exact_candidates"] >= 1, \
+            "кандидат против УЖЕ связанного (предыдущим прогоном) listing'а потерян"
+    finally:
+        await _cleanup(lid_a, lid_b, address_hashes=[h])
 
 
 def test_backfill_cli_default_is_candidate_only():
