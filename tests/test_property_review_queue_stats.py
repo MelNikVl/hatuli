@@ -107,16 +107,50 @@ async def stats_pair(db):
 # ── 1. total != remaining ───────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_total_is_not_reported_as_remaining(stats_pair):
+async def test_total_is_not_reported_as_remaining(db):
     """Главный баг задачи: заголовок использовал COUNT(*) по всей таблице
     как "очередь: N", хотя показывал только pending. total (все строки,
     любой статус) НИКОГДА не должен равняться remaining, если в базе есть
-    хоть один accepted/rejected/auto-rejected — а их в проде тысячи (см.
-    read-only audit: accepted=87, rejected=8904)."""
+    хоть один resolved (accepted/rejected/auto-rejected) кандидат.
+
+    НЕ полагается на наполненность БД (задача 2026-08-18, разбор падения
+    в CI: на чистой БД, с одной pending-фикстурой из ДРУГОГО теста,
+    total==remaining==1 — корректный результат для ТОЙ БД, ложный сигнал
+    для этого теста). Тест сам создаёт ровно одну pending И ровно один
+    auto-rejected кандидат и проверяет ДЕЛЬТУ total/remaining до и после
+    — так утверждение верно независимо от того, что уже лежит в БД
+    (production с тысячами строк или пустая CI-Postgres с нуля)."""
     from bot.identity.review_decisions import queue_stats
-    stats = await queue_stats()
-    assert stats["total"] > stats["remaining"]
-    assert stats["total"] >= stats["accepted"] + stats["rejected_manual"] + stats["rejected_auto"]
+
+    lid_pending = "__test_pqs_delta_pending__"
+    lid_auto_rej = "__test_pqs_delta_auto_rej__"
+    lid_target = "__test_pqs_delta_target__"
+    props = []
+    try:
+        await _insert_listing(lid_pending, address="Дельта, 1", floor=5, area=45.0)
+        await _insert_listing(lid_auto_rej, address="Дельта, 1", floor=5, area=45.0)
+        await _insert_listing(lid_target, address="Дельта, 1", floor=5, area=45.0)
+        prop = await _make_property("__test_pqs_delta_hash__")
+        props = [prop]
+        from bot.db.pg import execute
+        await execute("INSERT INTO property_listings (property_id, listing_id, link_method, confidence) "
+                      "VALUES ($1, $2, 'bootstrap', 1.0)", prop, lid_target)
+
+        before = await queue_stats()
+
+        await _make_candidate(lid_pending, prop, status="pending")        # остаётся в remaining
+        await _make_candidate(lid_auto_rej, prop, status="rejected")      # reviewed_by=NULL -> auto, НЕ в remaining
+
+        after = await queue_stats()
+
+        # total вырос на 2 (обе новые строки), remaining — только на 1
+        # (только pending-кандидат) — это и есть "total != remaining",
+        # проверено дельтой, а не абсолютным значением.
+        assert after["total"] - before["total"] == 2
+        assert after["remaining"] - before["remaining"] == 1
+        assert after["total"] > after["remaining"]
+    finally:
+        await _cleanup(lid_pending, lid_auto_rej, lid_target, property_ids=props)
 
 
 # ── 2. remaining исключает accepted/rejected/deferred ───────────────────
