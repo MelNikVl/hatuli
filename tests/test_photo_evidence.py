@@ -460,3 +460,51 @@ def test_confirmed_ad_fingerprints_are_blocked_by_sha_phash_and_url():
     assert not pe.is_blocked_photo_fingerprint({
         "photo_url": "https://cdn.example/real.jpg", "sha256": "real", "phash": "real"
     })
+
+
+# ── 13. Global-frequency guard excludes boilerplate before every tier ──────
+
+def test_global_boilerplate_fingerprint_matches_by_sha_or_phash():
+    assert pe.is_global_boilerplate_fingerprint(
+        {"sha256": "shared", "phash": "unique"}, frequent_sha256=frozenset({"shared"})
+    )
+    assert pe.is_global_boilerplate_fingerprint(
+        {"sha256": "unique", "phash": "shared"}, frequent_phash=frozenset({"shared"})
+    )
+    assert not pe.is_global_boilerplate_fingerprint(
+        {"sha256": "unique", "phash": "unique"}, frequent_sha256=frozenset({"shared"})
+    )
+
+
+@pytest.mark.asyncio
+async def test_global_boilerplate_is_excluded_before_exact_perceptual_and_ai(candidate_pair):
+    """Even byte-identical images must not enter any matching tier once the
+    scoped global-frequency query marks their fingerprint as boilerplate."""
+    from bot.db.pg import execute
+
+    same_bytes = _make_image_bytes(313)
+    url_a = "https://example.com/__test_global_a__.jpg"
+    url_b = "https://example.com/__test_global_b__.jpg"
+    await execute("UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
+                  candidate_pair["listing_a"], f'["{url_a}"]')
+    await execute("UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
+                  candidate_pair["listing_b"], f'["{url_b}"]')
+
+    async def _fake_download(url, http_client=None):
+        return same_bytes
+
+    import hashlib
+    sha256 = hashlib.sha256(same_bytes).hexdigest()
+    with patch("bot.identity.photo_evidence.download_photo", new=_fake_download), \
+         patch.object(pe, "_global_boilerplate_keys", new=AsyncMock(
+             return_value=(frozenset({sha256}), frozenset())
+         )):
+        evidence = await pe.aggregate_candidate_evidence(candidate_pair["candidate_id"], dry_run=True)
+
+    assert evidence["exact_shared_count"] == 0
+    assert evidence["perceptual_shared_count"] == 0
+    assert evidence["ai_similar_count"] == 0
+    assert evidence["global_boilerplate_excluded_count"] == 2
+
+    await execute("DELETE FROM listing_photo_fingerprints WHERE listing_id = ANY($1::text[])",
+                  [candidate_pair["listing_a"], candidate_pair["listing_b"]])

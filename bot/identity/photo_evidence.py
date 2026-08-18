@@ -122,6 +122,12 @@ BLOCKED_PHOTO_SHA256 = frozenset({
 })
 BLOCKED_PHOTO_PHASH = frozenset({"f8f4cf81dc17200f", "e0ce2517dbe40ae9"})
 
+# A photograph reused by this many *named, independent sellers* is marketing
+# boilerplate, not evidence that two listings describe the same apartment.
+# The guard is deliberately conservative: listings without a seller name do
+# not contribute to the threshold, and a photo remains available for audit.
+GLOBAL_FREQUENCY_SELLER_THRESHOLD = 5
+
 _MAX_MATCHED_PHOTOS_STORED = 25  # matched_photos JSONB — не хранить неограниченно
 
 
@@ -140,9 +146,57 @@ def is_blocked_photo_fingerprint(fingerprint: dict, *, blocked_urls: frozenset[s
     )
 
 
+def is_global_boilerplate_fingerprint(
+    fingerprint: dict, *, frequent_sha256: frozenset[str] = frozenset(),
+    frequent_phash: frozenset[str] = frozenset(),
+) -> bool:
+    """True when a fingerprint recurs across enough named sellers to be boilerplate."""
+    return (
+        fingerprint.get("sha256") in frequent_sha256
+        or fingerprint.get("phash") in frequent_phash
+    )
+
+
 async def _blocked_photo_urls() -> frozenset[str]:
     from bot.db.pg import fetch
     return frozenset(row["url"] for row in await fetch("SELECT url FROM blocked_photo_urls"))
+
+
+async def _global_boilerplate_keys(fingerprints: list[dict]) -> tuple[frozenset[str], frozenset[str]]:
+    """Return only keys relevant to this pair that are global boilerplate.
+
+    This bounded query counts distinct normalized seller names across all
+    saved fingerprints.  It is called after local fingerprinting but before
+    *any* exact, perceptual, or semantic comparison for the candidate pair.
+    """
+    from bot.db.pg import fetch
+
+    sha256s = sorted({fp["sha256"] for fp in fingerprints if fp.get("sha256")})
+    phashes = sorted({fp["phash"] for fp in fingerprints if fp.get("phash")})
+    if not sha256s and not phashes:
+        return frozenset(), frozenset()
+
+    rows = await fetch(
+        """
+        SELECT 'sha256' AS kind, lpf.sha256 AS key
+        FROM listing_photo_fingerprints lpf
+        JOIN apartment_listings al ON al.id = lpf.listing_id
+        WHERE lpf.fetch_status = 'ok' AND lpf.sha256 = ANY($1::text[])
+        GROUP BY lpf.sha256
+        HAVING COUNT(DISTINCT NULLIF(regexp_replace(lower(btrim(al.seller_name)), '\\s+', ' ', 'g'), '')) >= $3
+        UNION ALL
+        SELECT 'phash' AS kind, lpf.phash AS key
+        FROM listing_photo_fingerprints lpf
+        JOIN apartment_listings al ON al.id = lpf.listing_id
+        WHERE lpf.fetch_status = 'ok' AND lpf.phash = ANY($2::text[])
+        GROUP BY lpf.phash
+        HAVING COUNT(DISTINCT NULLIF(regexp_replace(lower(btrim(al.seller_name)), '\\s+', ' ', 'g'), '')) >= $3
+        """,
+        sha256s, phashes, GLOBAL_FREQUENCY_SELLER_THRESHOLD,
+    )
+    frequent_sha256 = frozenset(row["key"] for row in rows if row["kind"] == "sha256")
+    frequent_phash = frozenset(row["key"] for row in rows if row["kind"] == "phash")
+    return frequent_sha256, frequent_phash
 
 
 def pack_embedding(vec: "np.ndarray") -> bytes:
@@ -500,7 +554,14 @@ async def aggregate_candidate_evidence(candidate_id: int, *, http_client=None, d
     ok_a = [f for f in fps_a if f["fetch_status"] == "ok"]
     ok_b = [f for f in fps_b if f["fetch_status"] == "ok"]
 
-    evidence = compare_fingerprints(ok_a, ok_b)
+    frequent_sha256, frequent_phash = await _global_boilerplate_keys(ok_a + ok_b)
+    eligible_a = [fp for fp in ok_a if not is_global_boilerplate_fingerprint(
+        fp, frequent_sha256=frequent_sha256, frequent_phash=frequent_phash)]
+    eligible_b = [fp for fp in ok_b if not is_global_boilerplate_fingerprint(
+        fp, frequent_sha256=frequent_sha256, frequent_phash=frequent_phash)]
+
+    evidence = compare_fingerprints(eligible_a, eligible_b)
+    evidence["global_boilerplate_excluded_count"] = (len(ok_a) - len(eligible_a)) + (len(ok_b) - len(eligible_b))
     if not dry_run:
         await save_candidate_evidence(candidate_id, len(fps_a), len(fps_b), evidence)
     return evidence
