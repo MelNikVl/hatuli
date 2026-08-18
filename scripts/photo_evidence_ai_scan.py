@@ -189,10 +189,14 @@ def main() -> None:
     conn = db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT id, listing_id, photo_url FROM listing_photo_fingerprints
-        WHERE fetch_status = 'ok' AND embedding IS NULL
-        ORDER BY id LIMIT %s
-    """, (args.limit,))
+        SELECT lpf.id, lpf.listing_id, lpf.photo_url FROM listing_photo_fingerprints lpf
+        LEFT JOIN blocked_photo_urls bpu ON bpu.url = lpf.photo_url
+        WHERE lpf.fetch_status = 'ok' AND lpf.embedding IS NULL
+          AND bpu.url IS NULL
+          AND NOT (lpf.sha256 = ANY(%s))
+          AND NOT (lpf.phash = ANY(%s))
+        ORDER BY lpf.id LIMIT %s
+    """, (list(BLOCKED_PHOTO_SHA256), list(BLOCKED_PHOTO_PHASH), args.limit))
     rows = cur.fetchall()
     print(f"Фото к AI-классификации: {len(rows)}", flush=True)
 

@@ -110,6 +110,15 @@ _UNIT_SPECIFIC_TYPES = frozenset({"interior", "view"})
 _COMMON_TYPES = frozenset({"floorplan", "building_common", "render", "other"})
 _ALL_PHOTO_TYPES = _UNIT_SPECIFIC_TYPES | _COMMON_TYPES
 
+# Рекламные/заглушечные изображения, подтверждённые аудитом 2026-08-18.
+# CDN перекодирует байты, поэтому проверяем и sha256, и pHash; URL берём
+# динамически из blocked_photo_urls. Это hard exclusion на всех стадиях.
+BLOCKED_PHOTO_SHA256 = frozenset({
+    "db30b8758249cf797d8df5afe308ef91b8dae2c5f863d486dc6b6b4c3a280862",
+    "76d0d8ef35582c03ec57fc74a4fcfd6ca942093d94b9cfb344639ba955fc6bfa",
+})
+BLOCKED_PHOTO_PHASH = frozenset({"f8f4cf81dc17200f", "e0ce2517dbe40ae9"})
+
 _MAX_MATCHED_PHOTOS_STORED = 25  # matched_photos JSONB — не хранить неограниченно
 
 
@@ -117,6 +126,20 @@ def cache_path(url: str) -> Path:
     """Буквально та же формула, что floorplan_scan.py::cache_path — файлы
     делятся между пайплайнами, см. докстринг модуля, часть A."""
     return PHOTO_CACHE / (hashlib.sha256(url.encode()).hexdigest() + ".jpg")
+
+
+def is_blocked_photo_fingerprint(fingerprint: dict, *, blocked_urls: frozenset[str] = frozenset()) -> bool:
+    """True для рекламного фото по URL или известному fingerprint."""
+    return (
+        fingerprint.get("photo_url") in blocked_urls
+        or fingerprint.get("sha256") in BLOCKED_PHOTO_SHA256
+        or fingerprint.get("phash") in BLOCKED_PHOTO_PHASH
+    )
+
+
+async def _blocked_photo_urls() -> frozenset[str]:
+    from bot.db.pg import fetch
+    return frozenset(row["url"] for row in await fetch("SELECT url FROM blocked_photo_urls"))
 
 
 def pack_embedding(vec: "np.ndarray") -> bytes:
@@ -200,6 +223,13 @@ async def fingerprint_listing_photos(listing_id: str, *, http_client=None, delay
     if not urls:
         return {"listing_id": listing_id, "photo_count": 0, "fetched": 0, "failed": 0}
 
+    blocked_urls = await _blocked_photo_urls()
+    urls = [url for url in urls if not is_blocked_photo_fingerprint(
+        {"photo_url": url}, blocked_urls=blocked_urls)]
+    if not urls:
+        return {"listing_id": listing_id, "photo_count": 0, "fetched": 0, "failed": 0,
+                "skipped_blocked": True}
+
     already = await fetch(
         "SELECT photo_url FROM listing_photo_fingerprints "
         "WHERE listing_id = $1 AND fetch_status = 'ok' AND computed_at IS NOT NULL",
@@ -217,6 +247,10 @@ async def fingerprint_listing_photos(listing_id: str, *, http_client=None, delay
             data = await download_photo(url, http_client=http_client)
             sha256 = hashlib.sha256(data).hexdigest()
             phash = compute_image_hash(data)
+            if is_blocked_photo_fingerprint(
+                {"photo_url": url, "sha256": sha256, "phash": phash}, blocked_urls=blocked_urls):
+                logger.info("fingerprint_listing_photos: skipped blocked photo %s", url)
+                continue
             await execute(
                 """
                 INSERT INTO listing_photo_fingerprints
@@ -251,7 +285,11 @@ async def _fingerprints_for(listing_id: str) -> list[dict]:
         "FROM listing_photo_fingerprints WHERE listing_id = $1",
         listing_id,
     )
-    return [dict(r) for r in rows]
+    blocked_urls = await _blocked_photo_urls()
+    return [
+        fp for fp in (dict(r) for r in rows)
+        if not is_blocked_photo_fingerprint(fp, blocked_urls=blocked_urls)
+    ]
 
 
 def _photo_tier(a: dict, b: dict) -> str | None:

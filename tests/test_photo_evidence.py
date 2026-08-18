@@ -408,3 +408,25 @@ async def test_aggregate_candidate_evidence_dry_run_does_not_persist(candidate_p
 
     await execute("DELETE FROM listing_photo_fingerprints WHERE listing_id = ANY($1::text[])",
                   [candidate_pair["listing_a"], candidate_pair["listing_b"]])
+
+
+# ── 12. Confirmed advertisement fingerprints are hard exclusions ───────────
+
+def test_confirmed_ad_fingerprints_are_blocked_by_sha_phash_and_url():
+    assert pe.is_blocked_photo_fingerprint({
+        "photo_url": "https://cdn.example/ad.jpg",
+        "sha256": "db30b8758249cf797d8df5afe308ef91b8dae2c5f863d486dc6b6b4c3a280862",
+        "phash": None,
+    })
+    assert pe.is_blocked_photo_fingerprint({
+        "photo_url": "https://cdn.example/reencoded-ad.jpg",
+        "sha256": "different-bytes",
+        "phash": "e0ce2517dbe40ae9",
+    })
+    assert pe.is_blocked_photo_fingerprint(
+        {"photo_url": "https://cdn.example/blocked-url.jpg"},
+        blocked_urls=frozenset({"https://cdn.example/blocked-url.jpg"}),
+    )
+    assert not pe.is_blocked_photo_fingerprint({
+        "photo_url": "https://cdn.example/real.jpg", "sha256": "real", "phash": "real"
+    })
