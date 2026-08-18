@@ -193,7 +193,8 @@ async def _select_targets(limit: int | None, listing_id: str | None,
 
     if listing_id is not None:
         rows = await fetch(
-            "SELECT id, url FROM apartment_listings WHERE id = $1 AND floor IS NULL "
+        "SELECT id, url FROM apartment_listings WHERE id = $1 AND floor IS NULL "
+            "AND COALESCE(floor_backfill_outcome, '') <> 'not_applicable' "
             "AND NOT EXISTS (SELECT 1 FROM property_listings pl WHERE pl.listing_id = apartment_listings.id)",
             listing_id,
         )
@@ -204,6 +205,7 @@ async def _select_targets(limit: int | None, listing_id: str | None,
 
     base = (
         "SELECT id, url FROM apartment_listings al WHERE al.floor IS NULL "
+        "AND COALESCE(al.floor_backfill_outcome, '') <> 'not_applicable' "
         "AND NOT EXISTS (SELECT 1 FROM property_listings pl WHERE pl.listing_id = al.id) "
     )
     params: list = []
@@ -313,10 +315,18 @@ async def run_backfill(limit: int | None, batch_size: int, dry_run: bool,
                 # живым парсером, которые тоже могут писать floor параллельно;
                 # НИЧЕГО кроме floor/floors_total не трогаем (задача, явно).
                 await execute(
-                    "UPDATE apartment_listings SET floor = $2, floors_total = $3 "
+                    "UPDATE apartment_listings SET floor = $2, floors_total = $3, "
+                    "floor_backfill_outcome = 'floor_filled', floor_backfill_checked_at = now() "
                     "WHERE id = $1 AND floor IS NULL",
                     lid, floor, floors_total,
                 )
+
+        if not dry_run and outcome != "floor_filled":
+            await execute(
+                "UPDATE apartment_listings SET floor_backfill_outcome = $2, "
+                "floor_backfill_checked_at = now() WHERE id = $1 AND floor IS NULL",
+                lid, outcome,
+            )
 
         if (i + 1) % max(batch_size, 1) == 0 or (i + 1) == len(targets):
             log.info("прогресс: %d/%d — %s", i + 1, len(targets), stats.as_dict())
