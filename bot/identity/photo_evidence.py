@@ -116,6 +116,9 @@ _ALL_PHOTO_TYPES = _UNIT_SPECIFIC_TYPES | _COMMON_TYPES
 BLOCKED_PHOTO_SHA256 = frozenset({
     "db30b8758249cf797d8df5afe308ef91b8dae2c5f863d486dc6b6b4c3a280862",
     "76d0d8ef35582c03ec57fc74a4fcfd6ca942093d94b9cfb344639ba955fc6bfa",
+    # CDN currently re-encodes both originals to these byte hashes.
+    "36c2109ebf8a2e02ef90f9e70cc93aa391082a22782bc5045f19de7b88c54475",
+    "f31e2d65fae74c5d101f902bcf51c93e44f7b28fa3d5a4fafb66230fa6623b1b",
 })
 BLOCKED_PHOTO_PHASH = frozenset({"f8f4cf81dc17200f", "e0ce2517dbe40ae9"})
 
@@ -249,7 +252,18 @@ async def fingerprint_listing_photos(listing_id: str, *, http_client=None, delay
             phash = compute_image_hash(data)
             if is_blocked_photo_fingerprint(
                 {"photo_url": url, "sha256": sha256, "phash": phash}, blocked_urls=blocked_urls):
-                logger.info("fingerprint_listing_photos: skipped blocked photo %s", url)
+                await execute(
+                    "INSERT INTO blocked_photo_urls (url, reason) VALUES ($1, $2) "
+                    "ON CONFLICT (url) DO UPDATE SET reason = EXCLUDED.reason",
+                    url, "known_ad_fingerprint",
+                )
+                await execute(
+                    "UPDATE apartment_listings SET photos = COALESCE(("
+                    "SELECT jsonb_agg(p) FROM jsonb_array_elements_text(photos) p WHERE p <> $2"
+                    "), '[]'::jsonb) WHERE id = $1",
+                    listing_id, url,
+                )
+                logger.info("fingerprint_listing_photos: removed blocked photo %s", url)
                 continue
             await execute(
                 """
@@ -441,7 +455,8 @@ async def save_candidate_evidence(candidate_id: int, photo_count_a: int, photo_c
 
 
 async def aggregate_candidate_evidence(candidate_id: int, *, http_client=None, delay: float = 0.0,
-                                        dry_run: bool = False) -> dict:
+                                        dry_run: bool = False,
+                                        reuse_existing_fingerprints: bool = False) -> dict:
     """Точка входа для scripts/photo_evidence_scan.py: fingerprint ОБЕИХ
     сторон candidate-пары (если ещё не закэшировано, см. idempotency в
     fingerprint_listing_photos) + сравнение + сохранение evidence. НЕ
@@ -449,7 +464,10 @@ async def aggregate_candidate_evidence(candidate_id: int, *, http_client=None, d
     'partial', см. compare_fingerprints, и это ОЖИДАЕМО до scripts/
     photo_evidence_ai_scan.py).
 
-    dry_run — считает evidence (реальные сетевые закачки ВСЁ РАВНО
+    reuse_existing_fingerprints — не скачивать и не fingerprint'ить фото: пересчитать
+    evidence только по уже сохранённым строкам, например после AI-стадии.
+
+    dry_run — считает evidence (реальные сетевые закачки всё равно
     происходят, иначе не из чего считать — dry-run здесь про запись в БД,
     не про сеть, тот же смысл, что --dry-run у scripts/backfill_listing_
     floors.py: "не пиши решение", не "не делай работу"), но НЕ вызывает
@@ -474,8 +492,9 @@ async def aggregate_candidate_evidence(candidate_id: int, *, http_client=None, d
         return evidence
 
     lid_a, lid_b = pair
-    await fingerprint_listing_photos(lid_a, http_client=http_client, delay=delay)
-    await fingerprint_listing_photos(lid_b, http_client=http_client, delay=delay)
+    if not reuse_existing_fingerprints:
+        await fingerprint_listing_photos(lid_a, http_client=http_client, delay=delay)
+        await fingerprint_listing_photos(lid_b, http_client=http_client, delay=delay)
     fps_a = await _fingerprints_for(lid_a)
     fps_b = await _fingerprints_for(lid_b)
     ok_a = [f for f in fps_a if f["fetch_status"] == "ok"]
