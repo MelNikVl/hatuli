@@ -389,11 +389,16 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         from bot.identity.review_decisions import (
-            normalize_filters, queue_counts, get_candidate_detail, get_next_candidate,
-            QUEUE_FILTER_LABELS,
+            normalize_filters, queue_counts, queue_stats, remaining_count,
+            get_candidate_detail, get_next_candidate, QUEUE_FILTER_LABELS,
         )
         selected = normalize_filters([f for f in filters.split(",") if f])
         counts = await queue_counts(selected)
+        stats = await queue_stats()
+        # "По текущему фильтру осталось" (задача, п.2) — только когда
+        # выбран хоть один фильтр, иначе это была бы просто stats["remaining"]
+        # ещё раз под другим именем.
+        filtered_remaining = await remaining_count(selected) if selected else None
         pair = await get_candidate_detail(candidate_id) if candidate_id is not None \
             else await get_next_candidate(selected)
         # Тогл-URL для каждого чипа считаем ЗДЕСЬ (Python set-арифметика),
@@ -408,7 +413,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         return templates.TemplateResponse("property_match_review.html", {
             "request": request, "pair": pair, "selected_filters": selected,
             "filters_csv": filters, "counts": counts, "filter_labels": QUEUE_FILTER_LABELS,
-            "toggle_filters": toggle_filters,
+            "toggle_filters": toggle_filters, "stats": stats, "filtered_remaining": filtered_remaining,
         })
 
     @app.post("/admin/property-match-review/{candidate_id}/decide")
