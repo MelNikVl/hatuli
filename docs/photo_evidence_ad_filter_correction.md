@@ -26,7 +26,10 @@ Existing cleanup removed the 423 URLs from `apartment_listings.photos`, retained
 raw-cache/fingerprint audit data where present, and offline-reaggregated the 20
 affected candidate evidence rows. No photo-derived candidate edges exist.
 
-The published canary aggregate tallies must be treated as **preliminary** until
-the canary summary is regenerated from the cleaned evidence. The affected rows
-have been excluded without a second SigLIP pass; a future summary regeneration
-is a reporting operation, not an AI rerun.
+## Corrected canary tally
+
+The original 1,000 candidate IDs were reaggregated from existing fingerprints
+after cleanup: 1,000 processed, 0 errors, exact 92, perceptual 239, semantic
+16, no-match 489, and partial/no-AI-yet 164. This excludes the advertisement
+artifacts without a second SigLIP pass. The previous aggregate in the canary
+report is superseded by these figures.
