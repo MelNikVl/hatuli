@@ -57,6 +57,7 @@ venv). Повторный запуск scripts/photo_evidence_scan.py --only-mis
 recompute идемпотентен, не требует отдельного флага).
 """
 import argparse
+import json
 import hashlib
 import sys
 import time
@@ -68,6 +69,16 @@ PHOTO_CACHE = BASE / "static" / "cache" / "photos"
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
 
 _EMBEDDING_MODEL_VERSION = "siglip_vit_b16_webli_v1"  # ДОЛЖНО совпадать с bot/identity/photo_evidence.py
+
+# Isolated SigLIP venv cannot import bot.identity.photo_evidence (no asyncpg).
+# Keep these audited hard exclusions in this boundary too.
+BLOCKED_PHOTO_SHA256 = frozenset({
+    "db30b8758249cf797d8df5afe308ef91b8dae2c5f863d486dc6b6b4c3a280862",
+    "76d0d8ef35582c03ec57fc74a4fcfd6ca942093d94b9cfb344639ba955fc6bfa",
+    "36c2109ebf8a2e02ef90f9e70cc93aa391082a22782bc5045f19de7b88c54475",
+    "f31e2d65fae74c5d101f902bcf51c93e44f7b28fa3d5a4fafb66230fa6623b1b",
+})
+BLOCKED_PHOTO_PHASH = frozenset({"f8f4cf81dc17200f", "e0ce2517dbe40ae9"})
 
 # 6 категорий — задача B: "interior/unit-specific; view-from-window;
 # floorplan; building/common-area; developer render; logo/banner/other".
@@ -100,6 +111,17 @@ def cache_path(url: str) -> Path:
     """Буквально та же формула, что floorplan_scan.py::cache_path и
     bot/identity/photo_evidence.py::cache_path — см. докстринг модуля."""
     return PHOTO_CACHE / (hashlib.sha256(url.encode()).hexdigest() + ".jpg")
+
+
+def load_listing_ids(path: str | None) -> list[str] | None:
+    """Load a bounded AI batch manifest: JSON list or {"listing_ids": [...]} ."""
+    if path is None:
+        return None
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    values = raw.get("listing_ids") if isinstance(raw, dict) else raw
+    if not isinstance(values, list) or not all(isinstance(v, str) and v for v in values):
+        raise ValueError("listing IDs file must be a JSON list of non-empty strings")
+    return list(dict.fromkeys(values))
 
 
 def ensure_downloaded(url: str, timeout: float = 20.0) -> Path:
@@ -184,10 +206,17 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=200)
     ap.add_argument("--batch-size", type=int, default=20, help="commit каждые N фото")
     ap.add_argument("--dry-run", action="store_true", help="не писать embedding/photo_type в БД")
+    ap.add_argument("--listing-ids-file", help="JSON list (or {listing_ids:[...]}) limiting this AI batch")
     args = ap.parse_args()
 
+    listing_ids = load_listing_ids(args.listing_ids_file)
     conn = db()
     cur = conn.cursor()
+    listing_scope = " AND lpf.listing_id = ANY(%s)" if listing_ids is not None else ""
+    params = [list(BLOCKED_PHOTO_SHA256), list(BLOCKED_PHOTO_PHASH)]
+    if listing_ids is not None:
+        params.append(listing_ids)
+    params.append(args.limit)
     cur.execute("""
         SELECT lpf.id, lpf.listing_id, lpf.photo_url FROM listing_photo_fingerprints lpf
         LEFT JOIN blocked_photo_urls bpu ON bpu.url = lpf.photo_url
@@ -195,8 +224,7 @@ def main() -> None:
           AND bpu.url IS NULL
           AND NOT (lpf.sha256 = ANY(%s))
           AND NOT (lpf.phash = ANY(%s))
-        ORDER BY lpf.id LIMIT %s
-    """, (list(BLOCKED_PHOTO_SHA256), list(BLOCKED_PHOTO_PHASH), args.limit))
+    """ + listing_scope + " ORDER BY lpf.id LIMIT %s", params)
     rows = cur.fetchall()
     print(f"Фото к AI-классификации: {len(rows)}", flush=True)
 
