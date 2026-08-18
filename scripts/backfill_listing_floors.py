@@ -53,6 +53,10 @@ unavailable — страница отвечает, но объявление п�
   неактуальным"). Floor с такой страницы НЕ читаем: архивная страница
   Крыши иногда возвращает урезанную/устаревшую вёрстку, надёжность ниже,
   а листинг всё равно на очереди у archive_check.py на удаление.
+not_applicable — follow-up 2026-08-18, п.3: `is_flat_layout` (планировка
+  ЖК — карточка ТИПА квартиры, не конкретная физическая квартира,
+  структурно без поля "этаж", см. classify_and_extract()) — этаж НЕ
+  пишем (не фиктивное значение, не 0, не пропуск), просто честно считаем.
 blocked — ListingBlockedError (403/429).
 errors — любое другое исключение (timeout, DNS, парсинг упал).
 
@@ -131,6 +135,7 @@ class Stats:
         self.floor_filled = 0
         self.floor_not_found = 0
         self.unavailable = 0
+        self.not_applicable = 0  # follow-up 2026-08-18, п.3 — flat_layout, этаж структурно неприменим
         self.blocked = 0
         self.errors = 0
 
@@ -138,11 +143,13 @@ class Stats:
         return {
             "found": self.found, "floor_filled": self.floor_filled,
             "floor_not_found": self.floor_not_found, "unavailable": self.unavailable,
+            "not_applicable": self.not_applicable,
             "blocked": self.blocked, "errors": self.errors,
         }
 
 
-async def _select_targets(limit: int | None, listing_id: str | None) -> list[dict]:
+async def _select_targets(limit: int | None, listing_id: str | None,
+                           order: str = "oldest", seed: int = 20260818) -> list[dict]:
     """Прямая выборка — та же формула, что задача явно требует для аудита
     orphan properties (NOT EXISTS, не вычитание count'ов) — здесь для
     ЦЕЛЕВОГО набора backfill'а, тот же принцип "не гадать по разности".
@@ -165,7 +172,23 @@ async def _select_targets(limit: int | None, listing_id: str | None) -> list[dic
     голый al.id::bigint падал бы InvalidTextRepresentationError на них
     (найдено при первом прогоне тестов) — CASE WHEN приводит числовые id
     к bigint для сортировки, нечисловые сортируются строкой ПОСЛЕ них
-    (NULLS LAST), не роняя запрос."""
+    (NULLS LAST), не роняя запрос.
+
+    ## --order (follow-up 2026-08-18, п.3)
+
+    Историческая находка выше (id-кластер "1000xxxxxx" — все 20 без
+    этажа) оказалась ЧАСТНЫМ случаем более общей находки: САМЫЕ старые
+    id систематически перекошены к `is_flat_layout` (см.
+    bot/core/apartment_details.py, classify_and_extract() выше) — canary
+    только по возрастанию id может месяцами не увидеть ни одного реально
+    заполнимого listing'а. `order`:
+      'oldest'  (дефолт, назад-совместимо) — al.id::bigint ASC;
+      'newest'  — al.id::bigint DESC;
+      'random'  — детерминированная случайная (`ORDER BY
+                  md5(al.id || seed)`, тот же приём, что
+                  scripts/build_validation_manifest.py) — тот же `seed`
+                  на тех же данных => тот же порядок (воспроизводимо,
+                  задача явно требует "воспроизводимый --seed")."""
     from bot.db.pg import fetch
 
     if listing_id is not None:
@@ -176,14 +199,24 @@ async def _select_targets(limit: int | None, listing_id: str | None) -> list[dic
         )
         return [dict(r) for r in rows]
 
-    sql = (
+    if order not in ("oldest", "newest", "random"):
+        raise ValueError(f"order должен быть oldest|newest|random, получено {order!r}")
+
+    base = (
         "SELECT id, url FROM apartment_listings al WHERE al.floor IS NULL "
         "AND NOT EXISTS (SELECT 1 FROM property_listings pl WHERE pl.listing_id = al.id) "
-        "ORDER BY CASE WHEN al.id ~ '^[0-9]+$' THEN al.id::bigint END NULLS LAST, al.id"
     )
+    params: list = []
+    if order == "oldest":
+        sql = base + "ORDER BY CASE WHEN al.id ~ '^[0-9]+$' THEN al.id::bigint END NULLS LAST, al.id"
+    elif order == "newest":
+        sql = base + "ORDER BY CASE WHEN al.id ~ '^[0-9]+$' THEN al.id::bigint END DESC NULLS LAST, al.id DESC"
+    else:  # random
+        sql = base + "ORDER BY md5(al.id || $1::text)"
+        params.append(str(seed))
     if limit:
         sql += f" LIMIT {int(limit)}"
-    rows = await fetch(sql)
+    rows = await fetch(sql, *params)
     return [dict(r) for r in rows]
 
 
@@ -226,7 +259,17 @@ async def _fetch_with_retry(url: str, stats: Stats) -> dict | None:
 def classify_and_extract(details: dict) -> tuple[str, int | None, int | None]:
     """(outcome, floor, floors_total) — чистая функция от результата
     fetch_apartment_details(), не трогает БД/сеть, отдельно тестируется.
-    outcome: 'floor_filled' | 'floor_not_found' | 'unavailable'."""
+    outcome: 'floor_filled' | 'floor_not_found' | 'unavailable' | 'not_applicable'.
+
+    'not_applicable' — follow-up 2026-08-18, п.3: планировка ЖК
+    (`is_flat_layout`, bot/core/apartment_details.py) — карточка ТИПА
+    квартиры, не конкретная физическая квартира, у нее СТРУКТУРНО нет
+    этажа. Проверяется ПЕРВОЙ (раньше is_archived/floor) — не важно, что
+    ещё есть на странице, если это flat_layout, этаж всё равно писать
+    некуда и незачем (задача, явно: "не записывать им фиктивные
+    значения", "исключить записи, для которых этаж неприменим")."""
+    if details.get("is_flat_layout"):
+        return "not_applicable", None, None
     if details.get("is_archived"):
         return "unavailable", None, None
     floor = details.get("floor")
@@ -236,14 +279,14 @@ def classify_and_extract(details: dict) -> tuple[str, int | None, int | None]:
 
 
 async def run_backfill(limit: int | None, batch_size: int, dry_run: bool,
-                        listing_id: str | None) -> Stats:
+                        listing_id: str | None, order: str = "oldest", seed: int = 20260818) -> Stats:
     from bot.db.pg import execute
 
     stats = Stats()
-    targets = await _select_targets(limit, listing_id)
+    targets = await _select_targets(limit, listing_id, order=order, seed=seed)
     stats.found = len(targets)
-    log.info("найдено %d listing'ов (floor IS NULL, без property_listings)%s",
-             stats.found, " [DRY-RUN]" if dry_run else "")
+    log.info("найдено %d listing'ов (floor IS NULL, без property_listings, order=%s)%s",
+             stats.found, order, " [DRY-RUN]" if dry_run else "")
 
     for i, row in enumerate(targets):
         lid, url = row["id"], row["url"]
@@ -257,7 +300,9 @@ async def run_backfill(limit: int | None, batch_size: int, dry_run: bool,
             continue  # уже засчитано в stats (blocked/errors) внутри _fetch_with_retry
 
         outcome, floor, floors_total = classify_and_extract(details)
-        if outcome == "unavailable":
+        if outcome == "not_applicable":
+            stats.not_applicable += 1
+        elif outcome == "unavailable":
             stats.unavailable += 1
         elif outcome == "floor_not_found":
             stats.floor_not_found += 1
@@ -313,6 +358,12 @@ async def main() -> None:
     ap.add_argument("--limit", type=int, default=None, help="ограничить выборку этого прогона")
     ap.add_argument("--batch-size", type=int, default=100, help="частота прогресс-лога (не отдельная транзакция)")
     ap.add_argument("--listing-id", type=str, default=None, help="обработать один конкретный listing_id")
+    ap.add_argument("--order", choices=["oldest", "newest", "random"], default="oldest",
+                     help="порядок отбора (follow-up 2026-08-18, п.3) — 'oldest' сохраняет старое "
+                          "поведение по умолчанию, самые старые id систематически перекошены к "
+                          "flat_layout (см. classify_and_extract())")
+    ap.add_argument("--seed", type=int, default=20260818,
+                     help="для --order random — тот же seed на тех же данных даёт тот же порядок")
     ap.add_argument("--verify-incremental", action="store_true",
                      help="после backfill'а — dry-run incremental job на свежих listing'ах, отчёт, без записи")
     args = ap.parse_args()
@@ -321,7 +372,8 @@ async def main() -> None:
     await init_pool(DATABASE_URL)
     t0 = time.monotonic()
     try:
-        stats = await run_backfill(args.limit, args.batch_size, args.dry_run, args.listing_id)
+        stats = await run_backfill(args.limit, args.batch_size, args.dry_run, args.listing_id,
+                                    order=args.order, seed=args.seed)
         verify_report = None
         if args.verify_incremental and not args.dry_run:
             verify_report = await verify_incremental_picks_up()

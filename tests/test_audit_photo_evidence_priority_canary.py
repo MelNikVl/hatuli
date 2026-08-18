@@ -162,7 +162,11 @@ async def test_priority_ordering(priority_set):
 # ── 2. --limit ──────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_limit_caps_selection(db):
+async def test_limit_caps_selection(priority_set):
+    """НЕ полагается на наполненность прод-БД (найдено на fresh Postgres
+    15 в CI: 0 pending на чистой базе -> len(rows)==0 при limit=3, ложное
+    падение) — priority_set сам гарантирует >=5 pending-строк, limit=3
+    должен вернуть РОВНО 3 независимо от того, что ещё есть в БД."""
     rows = await canary._select_priority_candidates(limit=3, only_missing=False)
     assert len(rows) == 3
 
