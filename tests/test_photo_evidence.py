@@ -410,6 +410,14 @@ async def test_aggregate_candidate_evidence_dry_run_does_not_persist(candidate_p
                   [candidate_pair["listing_a"], candidate_pair["listing_b"]])
 
 
+@pytest.mark.asyncio
+async def test_reaggregate_reuses_existing_fingerprints_without_download(candidate_pair):
+    with patch("bot.identity.photo_evidence.fingerprint_listing_photos", new=AsyncMock()) as mocked:
+        await pe.aggregate_candidate_evidence(
+            candidate_pair["candidate_id"], reuse_existing_fingerprints=True)
+    mocked.assert_not_awaited()
+
+
 # ── 12. Confirmed advertisement fingerprints are hard exclusions ───────────
 
 def test_confirmed_ad_fingerprints_are_blocked_by_sha_phash_and_url():

@@ -43,6 +43,8 @@ AI-стадия ещё не отработала фото, error — стоит 
     venv/bin/python scripts/photo_evidence_scan.py --dry-run --limit 20           # не пишет evidence
     venv/bin/python scripts/photo_evidence_scan.py --limit 200 --only-missing     # батч, пропуская уже готовые
     venv/bin/python scripts/photo_evidence_scan.py --status pending,rejected --limit 500
+    venv/bin/python scripts/photo_evidence_scan.py --only-missing --reuse-existing-fingerprints
+        # после AI-стадии: только reaggregation, без CDN-загрузок
 """
 from __future__ import annotations
 
@@ -98,7 +100,7 @@ async def _select_candidates(status_list: list[str], limit: int | None, order: s
 
 async def run_scan(status_list: list[str], limit: int | None, order: str, only_missing: bool,
                     min_score: float | None, dry_run: bool, batch_size: int,
-                    delay: float) -> dict:
+                    delay: float, reuse_existing_fingerprints: bool = False) -> dict:
     import httpx
 
     from bot.identity.photo_evidence import aggregate_candidate_evidence
@@ -118,7 +120,8 @@ async def run_scan(status_list: list[str], limit: int | None, order: str, only_m
         for i, c in enumerate(candidates):
             try:
                 evidence = await aggregate_candidate_evidence(
-                    c["candidate_id"], http_client=client, delay=delay, dry_run=dry_run)
+                    c["candidate_id"], http_client=client, delay=delay, dry_run=dry_run,
+                    reuse_existing_fingerprints=reuse_existing_fingerprints)
             except Exception as exc:  # noqa: BLE001 — один упавший кандидат не должен ронять весь батч
                 log.warning("candidate_id=%s упал: %s: %s", c["candidate_id"], type(exc).__name__, exc)
                 stats["error"] += 1
@@ -164,6 +167,8 @@ async def main() -> None:
     ap.add_argument("--min-score", type=float, default=None)
     ap.add_argument("--delay", type=float, default=_DEFAULT_PHOTO_DELAY,
                      help="пауза перед каждой РЕАЛЬНОЙ (не из кэша) закачкой фото")
+    ap.add_argument("--reuse-existing-fingerprints", action="store_true",
+                    help="пересчитать evidence только по сохранённым fingerprint: без CDN-загрузок")
     ap.add_argument("--canary", action="store_true",
                      help="эквивалент --limit 100 --order strongest, печатает распределение exact/perceptual")
     args = ap.parse_args()
@@ -180,7 +185,8 @@ async def main() -> None:
     t0 = time.monotonic()
     try:
         stats = await run_scan(status_list, limit, order, args.only_missing, args.min_score,
-                                args.dry_run, args.batch_size, args.delay)
+                               args.dry_run, args.batch_size, args.delay,
+                               args.reuse_existing_fingerprints)
     finally:
         await close_pool()
 

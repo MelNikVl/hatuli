@@ -441,7 +441,8 @@ async def save_candidate_evidence(candidate_id: int, photo_count_a: int, photo_c
 
 
 async def aggregate_candidate_evidence(candidate_id: int, *, http_client=None, delay: float = 0.0,
-                                        dry_run: bool = False) -> dict:
+                                        dry_run: bool = False,
+                                        reuse_existing_fingerprints: bool = False) -> dict:
     """Точка входа для scripts/photo_evidence_scan.py: fingerprint ОБЕИХ
     сторон candidate-пары (если ещё не закэшировано, см. idempotency в
     fingerprint_listing_photos) + сравнение + сохранение evidence. НЕ
@@ -449,8 +450,12 @@ async def aggregate_candidate_evidence(candidate_id: int, *, http_client=None, d
     'partial', см. compare_fingerprints, и это ОЖИДАЕМО до scripts/
     photo_evidence_ai_scan.py).
 
-    dry_run — считает evidence (реальные сетевые закачки ВСЁ РАВНО
-    происходят, иначе не из чего считать — dry-run здесь про запись в БД,
+    reuse_existing_fingerprints — НЕ скачивает и НЕ fingerprint'ит фото: пересчитывает
+    evidence только из уже сохранённых строк. Нужен после AI-стадии и для
+    безопасного resume, когда повторная CDN-закачка не нужна.
+
+    dry_run — считает evidence (если reuse_existing_fingerprints не задан, реальные
+    сетевые закачки всё равно происходят    происходят, иначе не из чего считать — dry-run здесь про запись в БД,
     не про сеть, тот же смысл, что --dry-run у scripts/backfill_listing_
     floors.py: "не пиши решение", не "не делай работу"), но НЕ вызывает
     save_candidate_evidence — для canary/оценки стоимости без изменения
@@ -474,8 +479,9 @@ async def aggregate_candidate_evidence(candidate_id: int, *, http_client=None, d
         return evidence
 
     lid_a, lid_b = pair
-    await fingerprint_listing_photos(lid_a, http_client=http_client, delay=delay)
-    await fingerprint_listing_photos(lid_b, http_client=http_client, delay=delay)
+    if not reuse_existing_fingerprints:
+        await fingerprint_listing_photos(lid_a, http_client=http_client, delay=delay)
+        await fingerprint_listing_photos(lid_b, http_client=http_client, delay=delay)
     fps_a = await _fingerprints_for(lid_a)
     fps_b = await _fingerprints_for(lid_b)
     ok_a = [f for f in fps_a if f["fetch_status"] == "ok"]
