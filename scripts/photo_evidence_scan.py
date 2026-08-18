@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -71,8 +72,34 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/kris
 _DEFAULT_PHOTO_DELAY = 1.0  # между РЕАЛЬНЫМИ (не кэш) закачками фото — тот же порядок, что floorplan_scan.py
 
 
+def load_candidate_ids(path: str) -> list[int]:
+    """Load a frozen batch manifest without accepting arbitrary SQL input."""
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    raw_ids = data.get("candidate_ids") if isinstance(data, dict) else data
+    if not isinstance(raw_ids, list):
+        raise ValueError("manifest must be a JSON list or contain candidate_ids")
+
+    ids: list[int] = []
+    for raw_id in raw_ids:
+        if isinstance(raw_id, bool):
+            raise ValueError("candidate_ids must contain positive integers")
+        try:
+            candidate_id = int(raw_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("candidate_ids must contain positive integers") from exc
+        if candidate_id <= 0:
+            raise ValueError("candidate_ids must contain positive integers")
+        if candidate_id not in ids:
+            ids.append(candidate_id)
+    if not ids:
+        raise ValueError("manifest contains no candidate_ids")
+    return ids
+
+
 async def _select_candidates(status_list: list[str], limit: int | None, order: str,
-                              only_missing: bool, min_score: float | None) -> list[dict]:
+                              only_missing: bool, min_score: float | None,
+                              candidate_ids: list[int] | None = None) -> list[dict]:
     from bot.db.pg import fetch
 
     where = ["pmc.status = ANY($1::text[])"]
@@ -85,6 +112,9 @@ async def _select_candidates(status_list: list[str], limit: int | None, order: s
             "NOT EXISTS (SELECT 1 FROM property_candidate_photo_evidence pcpe "
             "WHERE pcpe.candidate_id = pmc.candidate_id AND pcpe.processing_status = 'ok')"
         )
+    if candidate_ids is not None:
+        params.append(candidate_ids)
+        where.append(f"pmc.candidate_id = ANY(${len(params)}::bigint[])")
     order_sql = "pmc.match_score DESC, pmc.candidate_id ASC" if order == "strongest" else "pmc.candidate_id ASC"
     sql = (
         f"SELECT pmc.candidate_id, pmc.listing_id, pmc.candidate_property_id, pmc.match_score, pmc.status "
@@ -98,12 +128,14 @@ async def _select_candidates(status_list: list[str], limit: int | None, order: s
 
 async def run_scan(status_list: list[str], limit: int | None, order: str, only_missing: bool,
                     min_score: float | None, dry_run: bool, batch_size: int,
-                    delay: float, reuse_existing_fingerprints: bool = False) -> dict:
+                    delay: float, reuse_existing_fingerprints: bool = False,
+                    candidate_ids: list[int] | None = None) -> dict:
     import httpx
 
     from bot.identity.photo_evidence import aggregate_candidate_evidence
 
-    candidates = await _select_candidates(status_list, limit, order, only_missing, min_score)
+    candidates = await _select_candidates(status_list, limit, order, only_missing, min_score,
+                                          candidate_ids)
     log.info("найдено %d candidate-пар (status=%s, order=%s, only_missing=%s)%s",
               len(candidates), status_list, order, only_missing, " [DRY-RUN]" if dry_run else "")
 
@@ -167,6 +199,8 @@ async def main() -> None:
                      help="пауза перед каждой РЕАЛЬНОЙ (не из кэша) закачкой фото")
     ap.add_argument("--reuse-existing-fingerprints", action="store_true",
                     help="пересчитать evidence по сохранённым fingerprint, без CDN-загрузок")
+    ap.add_argument("--candidate-ids-file", type=str, default=None,
+                    help="JSON manifest: обрабатывать только перечисленные candidate_ids")
     ap.add_argument("--canary", action="store_true",
                      help="эквивалент --limit 100 --order strongest, печатает распределение exact/perceptual")
     args = ap.parse_args()
@@ -177,6 +211,7 @@ async def main() -> None:
     if args.canary:
         limit = limit or 100
         order = "strongest"
+    candidate_ids = load_candidate_ids(args.candidate_ids_file) if args.candidate_ids_file else None
 
     from bot.db.pg import init_pool, close_pool
     await init_pool(DATABASE_URL)
@@ -184,7 +219,7 @@ async def main() -> None:
     try:
         stats = await run_scan(status_list, limit, order, args.only_missing, args.min_score,
                                args.dry_run, args.batch_size, args.delay,
-                               args.reuse_existing_fingerprints)
+                               args.reuse_existing_fingerprints, candidate_ids)
     finally:
         await close_pool()
 
