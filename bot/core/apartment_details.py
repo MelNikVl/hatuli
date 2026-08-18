@@ -544,6 +544,17 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
     result["is_archived"] = ("В архиве" in resp.text
                              or "может быть неактуальным" in resp.text)
 
+    # ── Планировка ЖК, не конкретная квартира (follow-up 2026-08-18,
+    # "Property Identity — calibration validation", п.3) — тот же приём,
+    # что is_archived/is_urgent выше (regex по resp.text, не новый парсер):
+    # krisha.kz category id=52 "sell.flat_layout" — карточка ТИПА квартиры
+    # в новостройке (постит сам ЖК/застройщик, "isComplex":true), НЕ
+    # конкретная физическая квартира с адресом+этажом. У таких карточек
+    # структурно нет поля "этаж" — floor-бэкфилл на них тратит HTTP-бюджет
+    # без единого шанса на успех (найдено этим же follow-up на 100%-flat_
+    # layout срезе бэклога, см. docs/floor_backlog_classification.md).
+    result["is_flat_layout"] = '"isFlatLayout":true' in resp.text
+
     # ── Просмотры (ОТЛОЖЕНО): число в статичном HTML пустое
     # (<span class="nb-views-text">), реальный счётчик отдаёт внутренний
     # микросервис Крыши POST'ом на /ms/views/krisha/live/{id}/ — но обычный

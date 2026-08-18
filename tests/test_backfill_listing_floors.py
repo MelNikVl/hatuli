@@ -78,6 +78,25 @@ def test_classify_unavailable_takes_priority_over_floor():
     assert BLF.classify_and_extract({"is_archived": True, "floor": 5}) == ("unavailable", None, None)
 
 
+# ── 1b. classify_and_extract — not_applicable (follow-up 2026-08-18, п.3) ──
+
+def test_classify_flat_layout_is_not_applicable():
+    assert BLF.classify_and_extract({"is_flat_layout": True}) == ("not_applicable", None, None)
+
+
+def test_classify_flat_layout_takes_priority_over_everything():
+    # is_flat_layout=True — даже если страница ЗАОДНО отдала floor и
+    # НЕ архивна, всё равно not_applicable: карточка типа квартиры
+    # структурно не про конкретную физическую единицу.
+    assert BLF.classify_and_extract(
+        {"is_flat_layout": True, "floor": 5, "is_archived": False}) == ("not_applicable", None, None)
+
+
+def test_classify_not_flat_layout_falls_through_normally():
+    assert BLF.classify_and_extract({"is_flat_layout": False, "floor": 5, "floors_total": 9}) == \
+        ("floor_filled", 5, 9)
+
+
 # ── 2. Выборка: только floor IS NULL И НЕТ property_listings ─────────────
 
 @pytest.mark.asyncio
@@ -237,6 +256,125 @@ async def test_generic_error_counted_as_errors_not_blocked(db):
 
 
 # ── 7. verify_incremental_picks_up — только читает/dry-run, не пишет ─────
+
+# ── 8. not_applicable — ничего не пишет, даже floor=None explicit ────────
+
+@pytest.mark.asyncio
+async def test_flat_layout_writes_nothing(db):
+    a = "__test_blf_flatlayout__"
+    try:
+        await _insert_listing(a, floor=None, description="было")
+        with patch("bot.core.apartment_details.fetch_apartment_details",
+                   new=AsyncMock(return_value={"is_flat_layout": True, "floor": None})):
+            stats = await BLF.run_backfill(limit=None, batch_size=100, dry_run=False, listing_id=a)
+        assert stats.not_applicable == 1
+        assert stats.floor_filled == 0
+        from bot.db.pg import fetchrow
+        row = await fetchrow("SELECT floor, description FROM apartment_listings WHERE id=$1", a)
+        assert row["floor"] is None  # не фиктивное значение, просто не тронуто
+        assert row["description"] == "было"
+    finally:
+        await _cleanup(a)
+
+
+# ── 9. --order корректность (oldest/newest/random) ────────────────────────
+
+@pytest.mark.asyncio
+async def test_order_oldest_ascending_by_numeric_id(db):
+    ids = ["__test_blf_ord_100__", "__test_blf_ord_200__", "__test_blf_ord_300__"]
+    # намеренно нечисловые id (тестовый паттерн проекта) — сортировка по
+    # numeric CASE не применяется к ним (NULLS LAST), но относительный
+    # порядок среди СЕБЯ (все нечисловые) стабилен по al.id ASC/DESC —
+    # тестируем через реальные числовые listing_id, вставленные как id.
+    numeric_ids = ["9000000001", "9000000002", "9000000003"]
+    try:
+        for nid in numeric_ids:
+            await _insert_listing(nid, floor=None)
+        targets = await BLF._select_targets(None, None, order="oldest")
+        mine = [t["id"] for t in targets if t["id"] in numeric_ids]
+        assert mine == sorted(numeric_ids)  # по возрастанию численно
+    finally:
+        await _cleanup(*numeric_ids)
+
+
+@pytest.mark.asyncio
+async def test_order_newest_descending_by_numeric_id(db):
+    numeric_ids = ["9000000011", "9000000012", "9000000013"]
+    try:
+        for nid in numeric_ids:
+            await _insert_listing(nid, floor=None)
+        targets = await BLF._select_targets(None, None, order="newest")
+        mine = [t["id"] for t in targets if t["id"] in numeric_ids]
+        assert mine == sorted(numeric_ids, reverse=True)
+    finally:
+        await _cleanup(*numeric_ids)
+
+
+@pytest.mark.asyncio
+async def test_order_random_is_reproducible_with_same_seed(db):
+    numeric_ids = ["9000000021", "9000000022", "9000000023", "9000000024", "9000000025"]
+    try:
+        for nid in numeric_ids:
+            await _insert_listing(nid, floor=None)
+        t1 = await BLF._select_targets(None, None, order="random", seed=42)
+        t2 = await BLF._select_targets(None, None, order="random", seed=42)
+        mine1 = [t["id"] for t in t1 if t["id"] in numeric_ids]
+        mine2 = [t["id"] for t in t2 if t["id"] in numeric_ids]
+        assert mine1 == mine2  # тот же seed -> тот же порядок
+    finally:
+        await _cleanup(*numeric_ids)
+
+
+@pytest.mark.asyncio
+async def test_order_random_different_seeds_can_differ(db):
+    """Не гарантирует РАЗНЫЙ порядок при разных seed (могло бы случайно
+    совпасть) — проверяет только то, что seed реально участвует в запросе
+    (разные параметры -> запрос не падает, оба возвращают полный набор)."""
+    numeric_ids = [f"90000000{n}" for n in range(30, 40)]
+    try:
+        for nid in numeric_ids:
+            await _insert_listing(nid, floor=None)
+        t1 = await BLF._select_targets(None, None, order="random", seed=1)
+        t2 = await BLF._select_targets(None, None, order="random", seed=2)
+        mine1 = {t["id"] for t in t1 if t["id"] in numeric_ids}
+        mine2 = {t["id"] for t in t2 if t["id"] in numeric_ids}
+        assert mine1 == mine2 == set(numeric_ids)  # оба видят весь набор, просто порядок может отличаться
+    finally:
+        await _cleanup(*numeric_ids)
+
+
+def test_invalid_order_rejected():
+    import asyncio
+    with pytest.raises(ValueError):
+        asyncio.run(BLF._select_targets(None, None, order="bogus"))
+
+
+# ── 10. Resume — второй прогон не трогает уже заполненные/недоступные ────
+
+@pytest.mark.asyncio
+async def test_resume_second_run_skips_already_resolved(db):
+    """Первый прогон заполняет floor одному listing'у — второй прогон
+    (без --listing-id, полная выборка) больше НЕ видит его (floor IS NOT
+    NULL теперь) — тот же idempotent WHERE, никакой отдельный 'resume'
+    флаг не нужен (задача, явно допускает: 'сохранить resume и
+    идемпотентность' — тут это естественное свойство WHERE floor IS NULL)."""
+    a, b = "__test_blf_resume_a__", "__test_blf_resume_b__"
+    try:
+        await _insert_listing(a, floor=None)
+        await _insert_listing(b, floor=None)
+
+        with patch("bot.core.apartment_details.fetch_apartment_details",
+                   new=AsyncMock(return_value={"floor": 3, "floors_total": 9})):
+            await BLF.run_backfill(limit=None, batch_size=100, dry_run=False, listing_id=a)
+
+        # "продолжение" — полная выборка (без --listing-id) больше не видит `a`.
+        targets = await BLF._select_targets(None, None)
+        ids = {t["id"] for t in targets}
+        assert a not in ids
+        assert b in ids
+    finally:
+        await _cleanup(a, b)
+
 
 @pytest.mark.asyncio
 async def test_verify_incremental_is_dry_run_only(db):
