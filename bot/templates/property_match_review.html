@@ -46,6 +46,20 @@ initDashboardGrid() в снап-сетку 3×2 с видимыми пустым
   .pmr-filters summary { cursor:pointer; font-size:13px; font-weight:600; padding:8px 0; }
   .pmr-filters-body { display:flex; flex-wrap:wrap; gap:6px; padding-top:8px; }
 
+  /* ── Верхний счётчик очереди (задача 2026-08-18, "честная очередь") ─── */
+  .pmr-remaining { font-size:22px; font-weight:800; margin:2px 0 4px; }
+  .pmr-remaining b { font-size:26px; }
+  .pmr-filtered-remaining { font-size:13px; color:var(--muted); margin-bottom:8px; }
+  .pmr-breakdown { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12px; color:var(--muted);
+                   margin-bottom:8px; }
+  .pmr-breakdown b { color:var(--text); }
+  .pmr-progress-wrap { margin-bottom:6px; }
+  .pmr-progress-track { background:var(--surface2); border:1px solid var(--border); border-radius:8px;
+                         height:10px; overflow:hidden; }
+  .pmr-progress-fill { background:var(--accent); height:100%; }
+  .pmr-progress-caption { font-size:11.5px; color:var(--muted); margin-top:4px; }
+  .pmr-unit-note { font-size:11px; color:var(--muted); margin-bottom:14px; }
+
   /* ── Полноэкранный просмотрщик фото ─────────────────────────────── */
   .pmr-lightbox { position:fixed; inset:0; background:rgba(0,0,0,.92); z-index:2000;
                   display:flex; align-items:center; justify-content:center; }
@@ -72,11 +86,44 @@ initDashboardGrid() в снап-сетку 3×2 с видимыми пустым
 <div class="pmr-head">
   <h1>🔍 Property Match Review</h1>
   <div class="pmr-nav">
-    очередь: {{ counts.get('total', 0) }} ·
     <a href="#pmr-filters-toggle">фильтры ↓</a> ·
     <a href="/admin-panel">Админка</a>
   </div>
 </div>
+
+<!-- Верхний счётчик — задача 2026-08-18, "честная очередь ручной
+     проверки": НЕ COUNT(*) по всей таблице (это было пар-кандидатов, а
+     не то, что осталось проверить), а pending И не отложено И нет
+     окончательного ручного решения. Пары-кандидаты != квартиры — одно
+     объявление может быть в нескольких парах, подпись ниже это явно
+     говорит (задача, явно). -->
+<div class="pmr-remaining">Осталось проверить: <b>{{ stats.remaining }}</b> пар</div>
+{% if filtered_remaining is not none %}
+<div class="pmr-filtered-remaining">По текущему фильтру осталось: {{ filtered_remaining }}</div>
+{% endif %}
+<div class="pmr-breakdown">
+  <span>всего кандидатов: <b>{{ stats.total }}</b></span>
+  <span>проверено: <b>{{ stats.reviewed }}</b></span>
+  <span>подтверждено как одна квартира: <b>{{ stats.accepted }}</b></span>
+  <span>признано разными квартирами: <b>{{ stats.rejected_manual }}</b></span>
+  <span>отложено: <b>{{ stats.deferred }}</b></span>
+  <span>автоматически отклонено: <b>{{ stats.rejected_auto }}</b></span>
+  <span>фото обработано: <b>{{ stats.photo_processed }}</b></span>
+  <span>фото ожидает обработки: <b>{{ stats.photo_pending }}</b></span>
+</div>
+<div class="pmr-progress-wrap">
+  <div class="pmr-progress-track">
+    <div class="pmr-progress-fill" style="width:{{ stats.progress_pct }}%;"></div>
+  </div>
+  <div class="pmr-progress-caption">
+    {% if stats.eligible_total == 0 %}
+      очередь ручной проверки пуста
+    {% else %}
+      проверено {{ stats.reviewed }} из {{ stats.eligible_total }} — {{ stats.progress_pct }}%
+    {% endif %}
+  </div>
+</div>
+<div class="pmr-unit-note">Считаются пары объявлений, а не уникальные квартиры. Одно объявление может участвовать в нескольких парах.</div>
 
 {% if not pair %}
 <div class="pmr-card" style="text-align:center;padding:40px;">
@@ -86,6 +133,7 @@ initDashboardGrid() в снап-сетку 3×2 с видимыми пустым
 
 <!-- 2. Сравнение — сразу под заголовком (задача, явно) ------------------ -->
 <div class="pmr-summary">
+  {% if pair.is_deferred %}<span class="conflict">⏸ отложено — недостаточно данных при прошлой проверке.</span> · {% endif %}
   <b>Сработавшие методы:</b> {{ pair.corroborating_methods | join(', ') }}
   {% if pair.conflict_reasons %}
     · <span class="conflict">⚠ {{ pair.conflict_reasons | join('; ') }}</span>
@@ -141,12 +189,14 @@ initDashboardGrid() в снап-сетку 3×2 с видимыми пустым
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
       <button type="submit" name="decision" value="accepted" class="btn btn-success">✅ Одна квартира</button>
       <button type="submit" name="decision" value="rejected" class="btn btn-danger">❌ Разные квартиры</button>
-      <button type="submit" name="decision" value="skip" class="btn btn-ghost">➡ Недостаточно данных / пропустить</button>
+      <button type="submit" name="decision" value="skip" class="btn btn-ghost">⏸ Недостаточно данных / отложить</button>
     </div>
   </form>
 </div>
 <div style="font-size:11px;color:var(--muted);margin:-14px 0 20px;">
-  «Одна квартира» записывает решение accepted. Физический merge (перенос property_listings) в этой версии НЕ выполняется.
+  «Одна квартира» записывает решение accepted — это делает пару <b>подтверждённым дублём</b>.
+  Физический merge (перенос property_listings) в этой версии НЕ выполняется.
+  «Недостаточно данных / отложить» убирает пару из основной очереди — её можно найти позже через фильтр «⏸ отложенные».
   Следующая пара откроется с начала страницы.
 </div>
 
@@ -161,6 +211,9 @@ initDashboardGrid() в снап-сетку 3×2 с видимыми пустым
   <b>priority_tier</b>={{ pair.priority_tier }}
   <br><br>
   <b>📷 Photo evidence</b> ({{ pair.photo_processing_status or 'pending' }}):
+  {% if not pair.photo_processed %}
+  <b>Фото ещё не проанализированы.</b>
+  {% endif %}
   exact={{ pair.exact_shared_count or 0 }} ·
   perceptual={{ pair.perceptual_shared_count or 0 }} ·
   ai={{ pair.ai_similar_count or 0 }} ·

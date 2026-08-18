@@ -9,20 +9,41 @@ property_match_review_log (migrations/088) играет ту же роль жу�
 
 "Одна квартира" -> decision='accepted' ЗАПИСЫВАЕТСЯ (property_match_
 candidates.status + property_match_review_log), НО property_listings/
-properties НЕ меняются — НИКАКОГО физического merge в этом PR. skip
-('Недостаточно данных') НЕ меняет status (кандидат снова всплывёт в
-очереди — тот же принцип, что skip_unit_candidate)."""
+properties НЕ меняются — НИКАКОГО физического merge в этом PR.
+
+## Skip -> "отложено" (задача 2026-08-18, "честная очередь ручной проверки")
+
+skip НЕ меняет property_match_candidates.status (CHECK-constraint на
+status остаётся 'pending'|'accepted'|'rejected', migrations/086 —
+трогать его миграцией НЕ нужно, задача явно предлагает выбрать вариант
+"попроще" между новым статусом и логом, лог проще). Кандидат считается
+"отложенным" (deferred), когда его status='pending' И ПОСЛЕДНЯЯ (по id,
+append-only, см. _LAST_DECISION_SQL) запись в property_match_review_log
+для него — decision='skip'. Это ЕДИНСТВЕННЫЙ способ, которым pending-
+кандидат может иметь хоть одну запись в журнале — 'accepted'/'rejected'
+всегда переводят status ВНЕ 'pending' (см. record_review_decision), и
+обратного пути ("вернуть в pending") в этом PR нет — так что для
+status='pending' "есть запись в логе" ⟺ "последняя запись — skip"
+СЕЙЧАС всегда эквивалентны, но код явно вычисляет "последнюю запись",
+не просто "наличие записи" — не полагаемся на это временное совпадение,
+устойчиво к будущему added способу вернуть кандидата в pending.
+Повторный skip идемпотентен по НАБЛЮДАЕМОМУ эффекту (кандидат остаётся
+deferred, снова не показывается в основной очереди) — сам append-only
+лог при этом растёт (новая строка на каждый skip), это осознанно:
+"история решений остаётся append-only", идемпотентность — про итоговое
+состояние очереди, не про количество строк в журнале."""
 from __future__ import annotations
 
 import json
 
 _QUEUE_FILTERS = frozenset({
     "unique_photo", "multi_method", "house_number_conflict", "price_conflict",
-    "concurrent", "relist", "unreviewed", "rejected", "reviewed",
+    "concurrent", "relist", "unreviewed", "rejected", "reviewed", "deferred",
 })
 
 # Порядок словаря — порядок чипов в UI (задача E, фильтры перечислены в
-# этом порядке в тексте задачи).
+# этом порядке в тексте задачи; "deferred" добавлен задачей 2026-08-18,
+# п.3 — "добавить отдельный фильтр «Отложенные»").
 QUEUE_FILTER_LABELS = {
     "unique_photo": "⭐ сильное совпадение уникальных фото",
     "multi_method": "🔗 несколько corroborating methods",
@@ -33,7 +54,52 @@ QUEUE_FILTER_LABELS = {
     "unreviewed": "◻ непроверенные",
     "rejected": "✗ rejected",
     "reviewed": "✓ reviewed",
+    "deferred": "⏸ отложенные",
 }
+
+# "Последнее решение по кандидату" — append-only лог, ORDER BY id DESC
+# (не reviewed_at DESC: id — монотонный PK по порядку вставки, reviewed_at
+# в принципе мог бы совпасть у двух строк одной транзакции; задача 2026-
+# 08-18, "история решений остаётся append-only" — эта подзапрос-константа
+# читает историю, никогда её не трогает).
+_LAST_DECISION_SQL = """(
+    SELECT l.decision FROM property_match_review_log l
+    WHERE l.candidate_id = pmc.candidate_id
+    ORDER BY l.id DESC LIMIT 1
+)"""
+
+# "Отложено" — задача 2026-08-18, п.3: pending-кандидат, чьё последнее
+# решение в журнале — skip. См. докстринг модуля выше про эквивалентность
+# "есть запись в логе" на pending-кандидатах СЕЙЧАС.
+# COALESCE(..., FALSE) ОБЯЗАТЕЛЕН: у кандидата без единой записи в логе
+# _LAST_DECISION_SQL возвращает SQL NULL, а "x = 'skip'" на NULL — тоже
+# NULL (трёхзначная логика), НЕ FALSE. Без COALESCE "NOT _IS_DEFERRED_SQL"
+# (см. _browse_where) на таком кандидате даёт NOT NULL = NULL, а не TRUE —
+# WHERE отбрасывает строку целиком, будто она "и не pending, и не
+# deferred" — именно это превращало remaining_count() в 0 на реальных
+# данных (найдено этим же PR при первом прогоне новых тестов).
+_IS_DEFERRED_SQL = f"(pmc.status = 'pending' AND COALESCE({_LAST_DECISION_SQL} = 'skip', FALSE))"
+
+# auto-reject (bot/identity/property_linker.py::_is_hard_conflict, hard
+# conflict = 'rooms mismatch') НИКОГДА не проходит через record_review_
+# decision — INSERT ставит status='rejected' напрямую, reviewed_by/
+# reviewed_at остаются NULL (см. property_linker.py::_generate_candidates
+# INSERT). Ручной reject ВСЕГДА идёт через record_review_decision, который
+# ВСЕГДА пишет reviewed_by (запрошен как NOT NULL параметр). Поэтому
+# "status='rejected' И reviewed_by IS NULL" однозначно отличает
+# auto-reject от ручного — задача 2026-08-18, "auto-rejected и manual
+# rejected считаются отдельно", "не смешивать понятия".
+_IS_AUTO_REJECTED_SQL = "(pmc.status = 'rejected' AND pmc.reviewed_by IS NULL)"
+_IS_MANUAL_REJECTED_SQL = "(pmc.status = 'rejected' AND pmc.reviewed_by IS NOT NULL)"
+
+# Фото-evidence "обработано" = property_candidate_photo_evidence.
+# processing_status='ok' (задача B/этой задачи п.5: "первыми показывать
+# пары, у которых photo evidence уже обработан"). 'pending'/'partial'/
+# 'error' И отсутствие строки вообще — всё это "ещё не готово" с точки
+# зрения очереди (partial/error тоже не дают надёжного сигнала пока не
+# пересчитаны, пользователю всё равно нужно явно увидеть "фото не
+# проанализированы", не выдавать частичный/ошибочный результат за готовый).
+_IS_PHOTO_PROCESSED_SQL = "(pcpe.processing_status = 'ok')"
 
 
 def _where_for_filters(filters: set[str]) -> tuple[str, list]:
@@ -48,6 +114,8 @@ def _where_for_filters(filters: set[str]) -> tuple[str, list]:
         clauses.append("NOT EXISTS (SELECT 1 FROM property_match_review_log l WHERE l.candidate_id = pmc.candidate_id)")
     if "reviewed" in filters:
         clauses.append("EXISTS (SELECT 1 FROM property_match_review_log l WHERE l.candidate_id = pmc.candidate_id)")
+    if "deferred" in filters:
+        clauses.append(_IS_DEFERRED_SQL)
     if "unique_photo" in filters:
         clauses.append("COALESCE(pcpe.shared_unit_specific_count, 0) > 0")
     if "multi_method" in filters:
@@ -61,6 +129,22 @@ def _where_for_filters(filters: set[str]) -> tuple[str, list]:
     if "relist" in filters:
         clauses.append("pmc.relationship_type = 'relist'")
     return " AND ".join(clauses), params
+
+
+def _browse_where(filters: set[str]) -> tuple[str, list]:
+    """WHERE для "показать следующую пару очереди" — это ЖЕ условие
+    используется для счётчика "по текущему фильтру осталось" (задача
+    2026-08-18, п.2), чтобы цифра всегда совпадала с тем, что реально
+    покажет следующий переход по очереди. По умолчанию (без явного
+    rejected/reviewed/deferred фильтра) очередь = 'pending' И НЕ
+    отложенные — задача п.3: "Недостаточно данных / отложить" убирает
+    пару из ОСНОВНОЙ очереди."""
+    where, params = _where_for_filters(filters)
+    if not ({"rejected", "reviewed"} & filters):
+        where += " AND pmc.status = 'pending'"
+    if "deferred" not in filters:
+        where += f" AND NOT {_IS_DEFERRED_SQL}"
+    return where, params
 
 
 # Сортировка очереди — задача, явно, приоритет по убыванию:
@@ -85,10 +169,18 @@ _BASE_SELECT = f"""
            pcpe.shared_unit_specific_count, pcpe.shared_common_count, pcpe.exact_shared_count,
            pcpe.perceptual_shared_count, pcpe.ai_similar_count, pcpe.max_similarity,
            pcpe.matched_photos, pcpe.processing_status AS photo_processing_status,
-           {_PRIORITY_SQL} AS priority_tier
+           {_PRIORITY_SQL} AS priority_tier,
+           {_IS_PHOTO_PROCESSED_SQL} AS photo_processed,
+           {_IS_DEFERRED_SQL} AS is_deferred
     FROM property_match_candidates pmc
     LEFT JOIN property_candidate_photo_evidence pcpe ON pcpe.candidate_id = pmc.candidate_id
 """
+
+# Внутри каждого priority_tier — задача 2026-08-18, п.5: "первыми
+# показывать пары, у которых photo evidence уже обработан", необработанные
+# НЕ прячем, просто идут следом (photo_processed DESC — TRUE=1 раньше
+# FALSE=0 в Postgres при ORDER BY boolean DESC).
+_ORDER_SQL = "ORDER BY priority_tier ASC, photo_processed DESC, pmc.match_score DESC, pmc.candidate_id ASC"
 
 
 def normalize_filters(raw: list[str] | None) -> set[str]:
@@ -115,6 +207,69 @@ async def queue_counts(filters: set[str]) -> dict:
             *params,
         )
     return counts
+
+
+async def remaining_count(filters: set[str]) -> int:
+    """Сколько пар РЕАЛЬНО осталось проверить под этими фильтрами — то же
+    условие, что реально листает get_next_candidate (задача 2026-08-18,
+    п.2: "По текущему фильтру осталось: N" должно совпадать с тем, что
+    покажет следующий переход, не быть отдельной несогласованной
+    цифрой). Пустой filters -> глобальное "Осталось проверить: N пар"
+    (задача, явно: pending, без окончательного решения, не отложено)."""
+    from bot.db.pg import fetchval
+
+    where, params = _browse_where(filters)
+    return await fetchval(
+        f"SELECT count(*) FROM property_match_candidates pmc "
+        f"LEFT JOIN property_candidate_photo_evidence pcpe ON pcpe.candidate_id = pmc.candidate_id "
+        f"WHERE {where}",
+        *params,
+    )
+
+
+def _progress_pct(reviewed: int, eligible_total: int) -> int:
+    """Чистая функция, вынесена из queue_stats() специально ради теста
+    "progress bar корректен при пустой и заполненной очереди" (задача
+    2026-08-18, п.6) без завязки на прод-таблицу (которая никогда не
+    бывает по-настоящему пустой в этой среде). eligible_total=0 -> 0%,
+    не ZeroDivisionError, не 100%-от-нуля."""
+    return round(100 * reviewed / eligible_total) if eligible_total else 0
+
+
+async def queue_stats() -> dict:
+    """Компактная сводка для верхнего блока страницы (задача 2026-08-18,
+    п.2) — считает ПАРЫ (candidate_id), не уникальные объявления/квартиры
+    (задача, явно: "Считаются пары объявлений, а не уникальные квартиры").
+    Не путает total (COUNT(*) по ВСЕЙ таблице) с remaining (pending,
+    ещё не решено, не отложено) — старый баг заголовка "очередь: N"
+    ровно в этом и был.
+
+    "eligible" — пары, которым вообще нужно ручное решение (всё, КРОМЕ
+    auto-rejected по hard conflict — те никогда не были частью очереди
+    ручной проверки, включать их в знаменатель прогресса значило бы
+    требовать "проверить" то, что никто не должен проверять руками).
+    progress_pct считается от eligible, не от total — иначе 100% было бы
+    структурно недостижимо, пока в базе есть хоть один auto-reject."""
+    from bot.db.pg import fetchrow
+
+    row = await fetchrow(f"""
+        SELECT
+            count(*) AS total,
+            count(*) FILTER (WHERE pmc.status = 'accepted') AS accepted,
+            count(*) FILTER (WHERE {_IS_MANUAL_REJECTED_SQL}) AS rejected_manual,
+            count(*) FILTER (WHERE {_IS_AUTO_REJECTED_SQL}) AS rejected_auto,
+            count(*) FILTER (WHERE {_IS_DEFERRED_SQL}) AS deferred,
+            count(*) FILTER (WHERE {_IS_PHOTO_PROCESSED_SQL}) AS photo_processed
+        FROM property_match_candidates pmc
+        LEFT JOIN property_candidate_photo_evidence pcpe ON pcpe.candidate_id = pmc.candidate_id
+    """)
+    stats = dict(row)
+    stats["photo_pending"] = stats["total"] - stats["photo_processed"]
+    stats["reviewed"] = stats["accepted"] + stats["rejected_manual"]
+    stats["eligible_total"] = stats["total"] - stats["rejected_auto"]
+    stats["remaining"] = await remaining_count(set())
+    stats["progress_pct"] = _progress_pct(stats["reviewed"], stats["eligible_total"])
+    return stats
 
 
 async def _resolve_pair_listings(listing_id: str, candidate_property_id: int) -> tuple[str, str | None]:
@@ -192,16 +347,17 @@ async def get_candidate_detail(candidate_id: int) -> dict | None:
 
 
 async def get_next_candidate(filters: set[str]) -> dict | None:
-    """Первая по приоритету/score пара, ЕЩЁ не решённая ('pending')
-    среди выбранных фильтров — если оператор явно попросил --status
-    'rejected'/'reviewed' фильтр, статус кандидата уже отражён в WHERE
-    через _where_for_filters, не форсируем pending поверх этого."""
+    """Первая по приоритету/score пара, ЕЩЁ не решённая ('pending') И не
+    отложенная (deferred) среди выбранных фильтров — если оператор явно
+    попросил --status 'rejected'/'reviewed'/'deferred' фильтр, статус
+    кандидата уже отражён в WHERE через _browse_where, не форсируем
+    pending/not-deferred поверх этого (задача 2026-08-18, п.3: skip
+    убирает пару из ОСНОВНОЙ очереди — она не должна снова стать первой,
+    пока явно не выбран фильтр «Отложенные»)."""
     from bot.db.pg import fetchrow
 
-    where, params = _where_for_filters(filters)
-    if not ({"rejected", "reviewed"} & filters):
-        where += " AND pmc.status = 'pending'"
-    sql = _BASE_SELECT + f" WHERE {where} ORDER BY priority_tier ASC, pmc.match_score DESC, pmc.candidate_id ASC LIMIT 1"
+    where, params = _browse_where(filters)
+    sql = _BASE_SELECT + f" WHERE {where} {_ORDER_SQL} LIMIT 1"
     row = await fetchrow(sql, *params)
     if row is None:
         return None
