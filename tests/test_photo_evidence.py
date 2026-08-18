@@ -348,6 +348,31 @@ async def test_fingerprint_listing_photos_skips_already_fetched(candidate_pair, 
     await execute("DELETE FROM listing_photo_fingerprints WHERE listing_id=$1", candidate_pair["listing_a"])
 
 
+@pytest.mark.asyncio
+async def test_recompressed_ad_phash_is_removed_before_fingerprinting(candidate_pair):
+    from bot.db.pg import execute, fetchval
+
+    url = "https://example.com/__test_recompressed_ad__.jpg"
+    await execute("UPDATE apartment_listings SET photos = $2::jsonb WHERE id = $1",
+                  candidate_pair["listing_a"], f'["{url}"]')
+    jpeg_variant = _resize_bytes(_make_image_bytes(71), 0.5)
+
+    async def _fake_download(u, http_client=None):
+        return jpeg_variant
+
+    with patch("bot.identity.photo_evidence.download_photo", new=_fake_download), \
+         patch("bot.identity.photo_evidence.compute_image_hash", return_value="f8f4cf81dc17200f"):
+        result = await pe.fingerprint_listing_photos(candidate_pair["listing_a"])
+
+    assert result["fetched"] == 0
+    assert await fetchval("SELECT count(*) FROM listing_photo_fingerprints WHERE listing_id=$1 AND photo_url=$2",
+                          candidate_pair["listing_a"], url) == 0
+    assert await fetchval("SELECT photos::text FROM apartment_listings WHERE id=$1",
+                          candidate_pair["listing_a"]) == "[]"
+    assert await fetchval("SELECT reason FROM blocked_photo_urls WHERE url=$1", url) == "known_ad_fingerprint"
+    await execute("DELETE FROM blocked_photo_urls WHERE url=$1", url)
+
+
 # ── 11. aggregate_candidate_evidence — end-to-end (mocked download) ───────
 
 @pytest.mark.asyncio
@@ -422,6 +447,11 @@ def test_confirmed_ad_fingerprints_are_blocked_by_sha_phash_and_url():
         "photo_url": "https://cdn.example/reencoded-ad.jpg",
         "sha256": "different-bytes",
         "phash": "e0ce2517dbe40ae9",
+    })
+    assert pe.is_blocked_photo_fingerprint({
+        "photo_url": "https://cdn.example/recompressed-ad.jpg",
+        "sha256": "36c2109ebf8a2e02ef90f9e70cc93aa391082a22782bc5045f19de7b88c54475",
+        "phash": "different-phash",
     })
     assert pe.is_blocked_photo_fingerprint(
         {"photo_url": "https://cdn.example/blocked-url.jpg"},
