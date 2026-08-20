@@ -337,6 +337,46 @@ async def test_archived_then_reactivated_listing(db):
         await _cleanup([lid], [pid] if pid else [])
 
 
+@pytest.mark.asyncio
+async def test_reactivated_listing_with_stale_last_seen_uses_reactivated_at_as_floor(db):
+    """Регрессия — post-merge validation на реальных данных (2026-08-20)
+    нашла: apartment_listings.last_seen НЕ обновляется bot/core/archive_
+    check.py::_confirm_reactivation (реактивация — лёгкая one-off
+    проверка, не полный перескрап) — last_seen МОЖЕТ оказаться СТАРШЕ
+    последней confirmed-реактивации (113/160 реактивированных listing'ов
+    на реальной БД). Без fix'а (_last_confirmed_active) metrics.
+    last_seen_at молча отставал бы от СОБСТВЕННОГО listing_reactivated
+    события в ТОМ ЖЕ timeline-ответе — самопротиворечие одного JSON."""
+    from bot.core.property_timeline import build_property_timeline
+    lid = "__test_ptl_stale_last_seen_a__"
+    pid = None
+    try:
+        # last_seen (day 9) СТАРШЕ reactivated_at (day 10) — ровно найденный
+        # на проде паттерн.
+        await _insert_listing(lid, first_seen=_dt(0), last_seen=_dt(9), archived_at=None, is_active=True)
+        await _archive_cycle(lid, archived_at=_dt(5), archive_reason="archived_badge", reactivated_at=_dt(10))
+        pid = await _make_property("__test_ptl_hash_stale_last_seen__")
+        await _link(pid, lid)
+
+        result = await build_property_timeline(pid)
+        m = result["metrics"]
+
+        # last_seen_at НЕ может быть раньше подтверждённой реактивации,
+        # которая видна в events этого же ответа.
+        assert m["last_seen_at"] == _dt(10).isoformat()
+        assert m["observed_span_days"] == 10.0  # 0 -> 10, не 0 -> 9
+
+        reactivated = [e for e in result["events"] if e["type"] == "listing_reactivated"]
+        assert reactivated[0]["timestamp"] == m["last_seen_at"]  # согласовано, не противоречит metrics
+
+        # observed_market_days: [0,5] активный период + [10,10] (нет
+        # доказанной активности ПОСЛЕ реактивации, last_seen устарел) = 5.0,
+        # НЕ отрицательное/не пропущенное значение.
+        assert m["observed_market_days"] == 5.0
+    finally:
+        await _cleanup([lid], [pid] if pid else [])
+
+
 # ── provisional identity ──────────────────────────────────────────────
 
 @pytest.mark.asyncio
