@@ -61,6 +61,18 @@ async def _make_property(address_hash, *, floor=5, area_sqm=45.0, rooms=2, compl
     )
 
 
+async def _make_complex(name):
+    """Synthetic complexes row — тот же паттерн, что tests/test_complex_
+    location_block.py/tests/test_property_linker_fuzzy_audit.py и др.
+    ('INSERT INTO complexes (name) VALUES ($1) RETURNING id'). НЕ
+    полагается на реальный prod complex_id (086/083: properties.complex_id
+    -> complexes(id) ON DELETE SET NULL, FK — clean CI DB его не содержит
+    без этой строки, найдено на PR #29 CI: ForeignKeyViolationError на
+    захардкоженном complex_id=2070)."""
+    from bot.db.pg import fetchval
+    return await fetchval("INSERT INTO complexes (name) VALUES ($1) RETURNING id", name)
+
+
 async def _link(property_id, listing_id, *, link_method="bootstrap", confidence=1.0):
     from bot.db.pg import execute
     await execute(
@@ -527,15 +539,17 @@ async def test_house_number_mismatch_with_shared_complex_id_does_not_block(db):
     из них — ОДИН ЖК с разной нотацией подъезда/корпуса, НЕ разные дома,
     см. модульный докстринг 'Расхождение 3')."""
     from bot.identity.property_merge import plan_property_merge
+    from bot.db.pg import execute
 
     la, lb = "__test_pmerge_samecx_a__", "__test_pmerge_samecx_b__"
-    pa = pb = None
+    pa = pb = cx = None
     try:
+        cx = await _make_complex("__test_pmerge_samecx_complex__")
         await _insert_listing(la, address="Сыганак 25К1", first_seen=_dt(0), last_seen=_dt(5))
         await _insert_listing(lb, address="Сыганак 25/1", first_seen=_dt(10), last_seen=_dt(15))
-        pa = await _make_property("__test_pmerge_samecx_hash_a__", complex_id=2070,
+        pa = await _make_property("__test_pmerge_samecx_hash_a__", complex_id=cx,
                                    first_seen_at=_dt(0), last_seen_at=_dt(5))
-        pb = await _make_property("__test_pmerge_samecx_hash_b__", complex_id=2070,
+        pb = await _make_property("__test_pmerge_samecx_hash_b__", complex_id=cx,
                                    first_seen_at=_dt(10), last_seen_at=_dt(15))
         await _link(pa, la); await _link(pb, lb)
         cid = await _make_candidate(la, pb, relationship_type="relist")
@@ -546,6 +560,8 @@ async def test_house_number_mismatch_with_shared_complex_id_does_not_block(db):
         assert plan["status"] == "planned"  # общий complex_id перевешивает формальный house-number mismatch
     finally:
         await _cleanup([la, lb], [p for p in (pa, pb) if p])
+        if cx is not None:
+            await execute("DELETE FROM complexes WHERE id = $1", cx)
 
 
 # ── 11. transaction rollback при ошибке на середине ─────────────────────
