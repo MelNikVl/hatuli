@@ -110,6 +110,41 @@ mismatch()` — НЕ голый `extract_house_number()`-mismatch (см. ауд�
 area=68.0/rooms=3/complex_id=2070 одинаковы на ВСЕХ 15"), формализованный
 здесь как правило, а не разовое наблюдение аудита.
 
+## Post-canary addendum (2026-08-20) — floor mismatch: soft warning, не hard conflict
+
+После первого реального production canary (6/6 clean merges, см. чат/
+PR) задача явно потребовала закрыть floor consistency как отдельный
+методологический вопрос ПЕРЕД следующим batch. Read-only аудит (121
+accepted-ребро в 77 mergeable компонентах + 54136 listing'ов целиком)
+дал:
+
+  - 119/120 (99.17%) accepted-рёбер с известным floor обеих сторон —
+    СОВПАДАЮТ. Единственное расхождение (candidate_id=703, floor 4 vs 1,
+    уже вручную исключён из canary до этого аудита) МЕХАНИЧЕСКИ доказан
+    как post-accept drift, не оригинальное несогласие: match_method=
+    'fuzzy', а `_find_fuzzy_properties()` фильтрует "WHERE p.floor = $2"
+    — floor ОБЯЗАН совпадать в момент генерации кандидата. properties.
+    floor (заморожен на bootstrap) показывает 4=4 на обеих сторонах и на
+    момент генерации (03:51), и на момент accept (19:11) того же дня —
+    текущее floor=1 появилось СТРОГО ПОСЛЕ решения человека. Сегодня ВСЕ
+    129 accepted candidates — match_method IN ('exact_hash', 'fuzzy'), 0
+    'dedup_listings' (единственный метод, не проверяющий floor вообще) —
+    значит floor mismatch у accepted-пары СЕГОДНЯ всегда drift, никогда
+    не "проскочившее" несогласие. Hard-block здесь наказывал бы УЖЕ
+    правильное решение за постороннюю нестабильность поля.
+  - НО: подтверждённый парсер-баг — 135/54136 (0.25%) listing'ов сейчас
+    несут "год как этаж" (2008..2026, всегда floors_total=NULL) — floor
+    недостаточно надёжен, чтобы ПОЛНОСТЬЮ игнорировать несовпадение
+    (вариант "3. ignored" отклонён) — сигнал редкий, но реальный.
+
+Решение — **вариант "2. soft warning"**: `_floor_mismatch_warning()`
+находит несовпадение ТОЛЬКО когда оба значения "правдоподобны"
+(`_is_plausible_floor`, [1, 60] — исключает подтверждённый год-мусор так
+же, как NULL, задача явно: "не считать NULL конфликтом", то же
+распространено на заведомо испорченные значения). Результат идёт в
+`evidence_snapshot["warnings"]`/`plan()`-результат — ВИДЕН оператору
+перед `--apply`, НИКОГДА не в `blocked_reasons`, НЕ блокирует компонент.
+
 ## Что явно НЕ реализовано в этом PR (задача, п.11)
 
 Никаких production merges не выполняется этим PR/веткой ни разу — только
@@ -425,17 +460,69 @@ def _rooms_mismatch(a: dict, b: dict) -> bool:
     return _is_hard_conflict(_conflict_reasons(a, b))
 
 
+# Floor mismatch — SOFT WARNING, НЕ hard conflict (задача 2026-08-20,
+# "floor consistency audit" — решение основано на read-only аудите 121
+# accepted-ребра + 54136 listing'ов, не на предположении):
+#
+#   - 119/120 (99.17%) accepted-рёбер с известным floor обеих сторон —
+#     СОВПАДАЮТ. Единственное расхождение (candidate_id=703, floor 4 vs 1)
+#     МЕХАНИЧЕСКИ доказано как post-accept drift, не как оригинальное
+#     несогласие: match_method='fuzzy', а fuzzy-генерация (property_linker.
+#     py::_find_fuzzy_properties) фильтрует "WHERE p.floor = $2" — floor
+#     ОБЯЗАН совпадать в момент генерации кандидата. properties.floor
+#     (заморожен на bootstrap) показывает 4=4 на обеих сторонах и на
+#     момент генерации, и на момент accept — текущее 1 появилось СТРОГО
+#     ПОСЛЕ решения человека. Все 129 accepted candidates — match_method
+#     IN ('exact_hash', 'fuzzy') (0 'dedup_listings', единственный метод,
+#     который floor вообще не проверяет) — значит СЕГОДНЯ floor mismatch
+#     у accepted-пары ВСЕГДА drift, никогда не "проскочившее" несогласие.
+#     Hard-block здесь наказывал бы УЖЕ ПРАВИЛЬНОЕ решение за постороннюю
+#     нестабильность поля — не тот compromise, что rooms/address (которые
+#     ни exact_hash, ни fuzzy вообще не гарантируют на генерации).
+#   - НО: подтверждённый парсер-баг — 135/54136 (0.25%) listing'ов сейчас
+#     несут "год как этаж" (2008..2026, всегда floors_total=NULL, не из
+#     title-regex пути) — floor НЕ настолько надёжен, чтобы полностью
+#     игнорировать несовпадение (задача, вариант 3), не выдавая никакого
+#     сигнала оператору вовсе. Такие значения — не "другой этаж", а
+#     ненадёжные данные — исключаются из сравнения ниже (не в пользу
+#     match, не в пользу mismatch), а не считаются несовпадением.
+#
+# Итог: soft warning — попадает в evidence_snapshot манифеста и в plan()-
+# результат, НЕ в blocked_reasons, НЕ блокирует компонент.
+_PLAUSIBLE_FLOOR_RANGE = (1, 60)  # Астана: самые высокие жилые дома ~40-50
+# этажей на 2026 год, 60 — запас без включения года (1900+) в диапазон.
+
+
+def _is_plausible_floor(value: int | None) -> bool:
+    return value is not None and _PLAUSIBLE_FLOOR_RANGE[0] <= value <= _PLAUSIBLE_FLOOR_RANGE[1]
+
+
+def _floor_mismatch_warning(a: dict, b: dict) -> bool:
+    """True -> оба этажа известны, оба правдоподобны (см. _is_plausible_
+    floor — иначе это подтверждённый парсер-мусор, не сигнал вообще) и
+    РАЗЛИЧАЮТСЯ. NULL и неправдоподобные значения — НЕ считаются warning'ом
+    (задача, явно: "не считать NULL конфликтом" — то же распространено на
+    заведомо испорченные значения, которые не информативнее NULL)."""
+    fa, fb = a.get("floor"), b.get("floor")
+    if not (_is_plausible_floor(fa) and _is_plausible_floor(fb)):
+        return False
+    return fa != fb
+
+
 def _revalidate_edges(edges: list[dict], listings_by_property: dict[int, list[dict]],
-                       complex_id_by_property: dict[int, int | None]) -> list[dict]:
-    """Пусто -> компонент безопасен для merge. Каждая найденная проблема
-    блокирует ВЕСЬ компонент целиком (задача, явно: "component не должен
-    попасть в apply manifest" — не частичный merge за вычетом плохого
-    ребра, см. модульный докстринг верхнего уровня про 'no silent partial
-    merges'). concurrent-vs-relist mismatch НЕ входит сюда вообще (задача,
-    явно: "concurrent listings допустимы и не являются конфликтом сами по
-    себе") — см. _current_relationship_summary ниже, она ТОЛЬКО
-    информационная."""
+                       complex_id_by_property: dict[int, int | None]) -> tuple[list[dict], list[dict]]:
+    """Возвращает (problems, warnings). problems пусто -> компонент
+    безопасен для merge. Каждая найденная problem блокирует ВЕСЬ компонент
+    целиком (задача, явно: "component не должен попасть в apply manifest"
+    — не частичный merge за вычетом плохого ребра, см. модульный докстринг
+    верхнего уровня про 'no silent partial merges'). warnings НИКОГДА не
+    блокируют (см. _floor_mismatch_warning выше) — только видны оператору
+    в evidence_snapshot перед --apply. concurrent-vs-relist mismatch НЕ
+    входит сюда вообще (задача, явно: "concurrent listings допустимы и не
+    являются конфликтом сами по себе") — см. _current_relationship_summary
+    ниже, она ТОЛЬКО информационная."""
     problems: list[dict] = []
+    warnings: list[dict] = []
     for e in edges:
         a = _representative_listing(listings_by_property.get(e["prop_a"], []))
         b = _representative_listing(listings_by_property.get(e["prop_b"], []))
@@ -466,7 +553,18 @@ def _revalidate_edges(edges: list[dict], listings_by_property: dict[int, list[di
                 "detail": f"price {a.get('price')} (listing {a['listing_id']}) vs "
                           f"{b.get('price')} (listing {b['listing_id']})",
             })
-    return problems
+
+        if _floor_mismatch_warning(a, b):
+            warnings.append({
+                "reason": "floor_mismatch", "candidate_id": e["candidate_id"],
+                "prop_a": e["prop_a"], "prop_b": e["prop_b"],
+                "detail": f"floor {a.get('floor')} (listing {a['listing_id']}) vs "
+                          f"{b.get('floor')} (listing {b['listing_id']}) — soft warning, "
+                          f"see module docstring ('floor consistency audit') for why this "
+                          f"does not block: mechanically always post-accept drift for "
+                          f"exact_hash/fuzzy candidates, not an original disagreement.",
+            })
+    return problems, warnings
 
 
 def _current_relationship_summary(edges: list[dict], listings_by_property: dict[int, list[dict]]) -> list[dict]:
@@ -605,17 +703,17 @@ async def _plan_one_component(members: set[int], edges: list[dict]) -> dict:
     listings_by_property = {pid: f["listings"] for pid, f in facts.items()}
     complex_id_by_property = {pid: f["complex_id"] for pid, f in facts.items()}
 
-    problems = _revalidate_edges(edges, listings_by_property, complex_id_by_property)
+    problems, warnings = _revalidate_edges(edges, listings_by_property, complex_id_by_property)
     if problems:
         return {"status": "blocked", "members": sorted(members), "canonical_property_id": None,
-                "losing_property_ids": [], "manifest": None, "blocked_reasons": problems}
+                "losing_property_ids": [], "manifest": None, "blocked_reasons": problems, "warnings": warnings}
 
     scored = score_canonical_candidates(members, facts)
     if not scored:
         return {"status": "blocked", "members": sorted(members), "canonical_property_id": None,
                 "losing_property_ids": [],
                 "blocked_reasons": [{"reason": "no_facts", "detail": "properties row missing for all members"}],
-                "manifest": None}
+                "manifest": None, "warnings": warnings}
 
     canonical_id = scored[0]["property_id"]
     losing_ids = [s["property_id"] for s in scored[1:]]
@@ -646,12 +744,13 @@ async def _plan_one_component(members: set[int], edges: list[dict]) -> dict:
             "current_relationship": current_relationship,
             "photo_evidence": photo_evidence,
             "seller_observations": seller_observations,
+            "warnings": warnings,
         },
         "matcher_version": matcher_version,
         "merge_tool_version": _MERGE_TOOL_VERSION,
     }
     return {"status": "planned", "members": sorted(members), "canonical_property_id": canonical_id,
-            "losing_property_ids": losing_ids, "manifest": manifest, "blocked_reasons": []}
+            "losing_property_ids": losing_ids, "manifest": manifest, "blocked_reasons": [], "warnings": warnings}
 
 
 async def plan_property_merge(component_property_ids: set[int] | None = None) -> list[dict]:
@@ -740,7 +839,7 @@ async def apply_property_merge(manifest: dict, *, actor: str, dry_run: bool = Tr
 
     listings_by_property = {pid: f["listings"] for pid, f in facts.items()}
     complex_id_by_property = {pid: f["complex_id"] for pid, f in facts.items()}
-    problems = _revalidate_edges(scoped_edges, listings_by_property, complex_id_by_property)
+    problems, warnings = _revalidate_edges(scoped_edges, listings_by_property, complex_id_by_property)
     if problems:
         return {"status": "blocked_conflict", "dry_run": dry_run,
                 "reason": "current data now shows a hard conflict not present (or not checked) at accept time",
@@ -748,7 +847,7 @@ async def apply_property_merge(manifest: dict, *, actor: str, dry_run: bool = Tr
 
     if dry_run:
         return {"status": "would_apply", "dry_run": True, "canonical_property_id": canonical_id,
-                "losing_property_ids": losing_ids, "manifest": manifest}
+                "losing_property_ids": losing_ids, "manifest": manifest, "warnings": warnings}
 
     return await _execute_merge(manifest, scoped_edges, actor=actor)
 

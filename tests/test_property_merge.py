@@ -564,6 +564,123 @@ async def test_house_number_mismatch_with_shared_complex_id_does_not_block(db):
             await execute("DELETE FROM complexes WHERE id = $1", cx)
 
 
+# ── floor mismatch: soft warning, НЕ hard conflict (post-canary audit, 2026-08-20) ──
+
+@pytest.mark.asyncio
+async def test_floor_mismatch_produces_warning_but_does_not_block(db):
+    """Read-only аудит (см. bot/identity/property_merge.py, 'Post-canary
+    addendum') нашёл: floor mismatch у accepted-пары сегодня всегда
+    post-accept drift (fuzzy/exact_hash гарантируют floor на генерации),
+    не оригинальное несогласие -> soft warning, компонент остаётся
+    'planned', НЕ 'blocked'."""
+    from bot.identity.property_merge import plan_property_merge
+
+    la, lb = "__test_pmerge_floorw_a__", "__test_pmerge_floorw_b__"
+    pa = pb = None
+    try:
+        await _insert_listing(la, address="Флор, 1", floor=4, first_seen=_dt(0), last_seen=_dt(5))
+        await _insert_listing(lb, address="Флор, 1", floor=1, first_seen=_dt(10), last_seen=_dt(15))
+        pa = await _make_property("__test_pmerge_floorw_hash_a__", floor=4, first_seen_at=_dt(0), last_seen_at=_dt(5))
+        pb = await _make_property("__test_pmerge_floorw_hash_b__", floor=1, first_seen_at=_dt(10), last_seen_at=_dt(15))
+        await _link(pa, la); await _link(pb, lb)
+        cid = await _make_candidate(la, pb, relationship_type="relist")
+        await _accept(cid)
+
+        plans = await plan_property_merge({pa, pb})
+        plan = _find_component_plan(plans, pa)
+        assert plan["status"] == "planned"  # НЕ blocked
+        assert plan["manifest"] is not None
+        warnings = plan["warnings"]
+        assert len(warnings) == 1
+        assert warnings[0]["reason"] == "floor_mismatch"
+        assert warnings[0]["candidate_id"] == cid
+        # тот же warning виден в manifest'е для оператора перед --apply.
+        assert plan["manifest"]["evidence_snapshot"]["warnings"] == warnings
+    finally:
+        await _cleanup([la, lb], [p for p in (pa, pb) if p])
+
+
+@pytest.mark.asyncio
+async def test_floor_mismatch_with_implausible_year_value_produces_no_warning(db):
+    """Подтверждённый парсер-баг ('год как этаж', 135/54136 на проде,
+    см. аудит) — значение ВНЕ [1,60] не считается genuine floor'ом,
+    исключается из сравнения (не в пользу match/mismatch), а не
+    порождает ложный warning на заведомо испорченных данных."""
+    from bot.identity.property_merge import plan_property_merge
+
+    la, lb = "__test_pmerge_floorbug_a__", "__test_pmerge_floorbug_b__"
+    pa = pb = None
+    try:
+        await _insert_listing(la, address="Баг, 1", floor=2025, first_seen=_dt(0), last_seen=_dt(5))
+        await _insert_listing(lb, address="Баг, 1", floor=4, first_seen=_dt(10), last_seen=_dt(15))
+        pa = await _make_property("__test_pmerge_floorbug_hash_a__", floor=2025, first_seen_at=_dt(0), last_seen_at=_dt(5))
+        pb = await _make_property("__test_pmerge_floorbug_hash_b__", floor=4, first_seen_at=_dt(10), last_seen_at=_dt(15))
+        await _link(pa, la); await _link(pb, lb)
+        cid = await _make_candidate(la, pb, relationship_type="relist")
+        await _accept(cid)
+
+        plans = await plan_property_merge({pa, pb})
+        plan = _find_component_plan(plans, pa)
+        assert plan["status"] == "planned"
+        assert plan["warnings"] == []  # 2025 — не "другой этаж", это мусор, не сравнивается вовсе
+    finally:
+        await _cleanup([la, lb], [p for p in (pa, pb) if p])
+
+
+@pytest.mark.asyncio
+async def test_floor_match_produces_no_warning(db):
+    from bot.identity.property_merge import plan_property_merge
+
+    la, lb = "__test_pmerge_floorok_a__", "__test_pmerge_floorok_b__"
+    pa = pb = None
+    try:
+        await _insert_listing(la, address="Ок, 1", floor=5, first_seen=_dt(0), last_seen=_dt(5))
+        await _insert_listing(lb, address="Ок, 1", floor=5, first_seen=_dt(10), last_seen=_dt(15))
+        pa = await _make_property("__test_pmerge_floorok_hash_a__", floor=5, first_seen_at=_dt(0), last_seen_at=_dt(5))
+        pb = await _make_property("__test_pmerge_floorok_hash_b__", floor=5, first_seen_at=_dt(10), last_seen_at=_dt(15))
+        await _link(pa, la); await _link(pb, lb)
+        cid = await _make_candidate(la, pb, relationship_type="relist")
+        await _accept(cid)
+
+        plans = await plan_property_merge({pa, pb})
+        plan = _find_component_plan(plans, pa)
+        assert plan["status"] == "planned"
+        assert plan["warnings"] == []
+    finally:
+        await _cleanup([la, lb], [p for p in (pa, pb) if p])
+
+
+@pytest.mark.asyncio
+async def test_floor_null_one_side_produces_no_warning(db):
+    """Задача, явно: 'не считать NULL конфликтом' — тот же принцип
+    распространяется на warning (не только hard-block)."""
+    from bot.identity.property_merge import plan_property_merge
+    from bot.db.pg import execute
+
+    la, lb = "__test_pmerge_floornull_a__", "__test_pmerge_floornull_b__"
+    pa = pb = None
+    try:
+        await _insert_listing(la, address="Налл, 1", floor=5, first_seen=_dt(0), last_seen=_dt(5))
+        await _insert_listing(lb, address="Налл, 1", floor=5, first_seen=_dt(10), last_seen=_dt(15))
+        # floor NULL только на apartment_listings — properties.floor может
+        # остаться заполненным, но _revalidate_edges читает floor с
+        # ЛИСТИНГА (представитель стороны), не с properties, поэтому
+        # именно эта колонка должна быть NULL для теста.
+        await execute("UPDATE apartment_listings SET floor=NULL WHERE id=$1", lb)
+        pa = await _make_property("__test_pmerge_floornull_hash_a__", floor=5, first_seen_at=_dt(0), last_seen_at=_dt(5))
+        pb = await _make_property("__test_pmerge_floornull_hash_b__", floor=5, first_seen_at=_dt(10), last_seen_at=_dt(15))
+        await _link(pa, la); await _link(pb, lb)
+        cid = await _make_candidate(la, pb, relationship_type="relist")
+        await _accept(cid)
+
+        plans = await plan_property_merge({pa, pb})
+        plan = _find_component_plan(plans, pa)
+        assert plan["status"] == "planned"
+        assert plan["warnings"] == []
+    finally:
+        await _cleanup([la, lb], [p for p in (pa, pb) if p])
+
+
 # ── 11. transaction rollback при ошибке на середине ─────────────────────
 
 @pytest.mark.asyncio
