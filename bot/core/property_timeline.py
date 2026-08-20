@@ -133,6 +133,32 @@ def _iso(value: datetime | None) -> str | None:
 
 # ── интервалы наблюдаемой активности одного listing'а ───────────────────
 
+def _last_confirmed_active(listing: dict, archive_history: list[dict]) -> datetime | None:
+    """Честная верхняя граница 'наблюдался активным минимум до этого
+    момента' для listing'а, который СЕЙЧАС не архивирован. НАЙДЕНО на
+    post-merge validation Property Timeline на реальных данных
+    (2026-08-20): apartment_listings.last_seen НЕ обновляется при
+    реактивации (bot/core/archive_check.py::_confirm_reactivation
+    атомарно трогает ТОЛЬКО is_active/archived_at/archive_reason/
+    archive_checked_at — реактивация подтверждается лёгкой one-off
+    проверкой 'жив ли листинг', не полным перескрапом, который обновил
+    бы last_seen) — 113 из 160 когда-либо реактивированных listing'ов на
+    реальной БД имеют last_seen СТАРШЕ последней confirmed-реактивации.
+    Без этой поправки last_seen_at/observed_span_days молча отстают бы от
+    собственного listing_reactivated события В ТОМ ЖЕ timeline-ответе
+    (events показывали бы более позднее подтверждённое наблюдение, чем
+    заявляют metrics — внутреннее противоречие одного и того же JSON).
+    listing_archive_history.reactivated_at — НЕЗАВИСИМО подтверждённый
+    факт 'активен на этот момент' (пишется ТОЛЬКО после реального 'alive'
+    с Крыши, см. _confirm_reactivation), поэтому берём MAX(last_seen,
+    все reactivated_at из истории), не просто last_seen."""
+    if listing.get("archived_at") is not None:
+        return listing["archived_at"]
+    candidates = [d for d in (listing.get("last_seen"), *(h.get("reactivated_at") for h in archive_history))
+                  if d is not None]
+    return max(candidates) if candidates else None
+
+
 def _listing_intervals(listing: dict, archive_history: list[dict]) -> list[tuple[datetime, datetime]]:
     """[start, end) сегменты, когда listing БЫЛ активен/наблюдался —
     первый seen -> первая архивация (если была) -> реактивация -> ... ->
@@ -159,7 +185,7 @@ def _listing_intervals(listing: dict, archive_history: list[dict]) -> list[tuple
         if h["reactivated_at"] > cursor:
             cursor = h["reactivated_at"]
 
-    final_end = listing.get("archived_at") or listing.get("last_seen")
+    final_end = _last_confirmed_active(listing, history)
     if final_end is not None and final_end >= cursor:
         segments.append((cursor, final_end))
     return segments
@@ -224,7 +250,10 @@ def _price_trajectory(listings: list[dict], price_history_by_listing: dict[str, 
 def _compute_metrics(listings: list[dict], price_history_by_listing: dict[str, list[dict]],
                       archive_history_by_listing: dict[str, list[dict]]) -> dict:
     first_seens = [l["first_seen"] for l in listings if l.get("first_seen") is not None]
-    last_observed = [l.get("archived_at") or l.get("last_seen") for l in listings]
+    last_observed = [
+        _last_confirmed_active(l, archive_history_by_listing.get(l["listing_id"], []))
+        for l in listings
+    ]
     last_observed = [d for d in last_observed if d is not None]
 
     first_seen_at = min(first_seens) if first_seens else None
