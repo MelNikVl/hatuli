@@ -62,6 +62,12 @@ async def main() -> None:
             manifest = p["manifest"]
             print(f"  PLANNED  members={p['members']}  canonical={p['canonical_property_id']}  "
                   f"losing={p['losing_property_ids']}  component_hash={manifest['component_hash'][:12]}...")
+            if p.get("warnings"):
+                # Soft warnings (напр. floor_mismatch) — НЕ блокируют, но
+                # заслуживают взгляда оператора перед --apply (см. bot/
+                # identity/property_merge.py, "floor consistency audit").
+                for w in p["warnings"]:
+                    print(f"    WARNING  {w['reason']}: {w['detail']}")
             if not args.print_only:
                 fname = f"property_merge_{manifest['canonical_property_id']}_{manifest['component_hash'][:12]}.json"
                 path = os.path.join(args.out_dir, fname)
