@@ -430,6 +430,20 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         qs = f"?filters={filters}" if filters else ""
         return RedirectResponse(url=f"/admin/property-match-review{qs}", status_code=302)
 
+    @app.get("/admin/api/property/{property_id}/timeline")
+    async def property_timeline_api(request: Request, property_id: int):
+        """Read-only JSON — Property Timeline, Phase 1 (задача 2026-08-20).
+        Единая честная история физической квартиры (bot/core/property_
+        timeline.py) — фундамент под true DOM/relist history/seller
+        observations, без production writes, без merge, без ML."""
+        if not is_authed(request):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        from bot.core.property_timeline import build_property_timeline
+        timeline = await build_property_timeline(property_id)
+        if timeline is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return JSONResponse(timeline)
+
     @app.get("/admin/users/stats", response_class=HTMLResponse)
     async def users_stats_page(request: Request):
         if not is_authed(request):
