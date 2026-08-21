@@ -63,7 +63,10 @@ async def live_server():
         await asyncio.sleep(0.05)
     yield f"http://127.0.0.1:{_PORT}"
     server.should_exit = True
-    await task
+    try:
+        await asyncio.wait_for(task, timeout=10)
+    except asyncio.TimeoutError:
+        task.cancel()  # не даём одному зависшему teardown'у повесить весь job
     await close_pool()
 
 
@@ -71,12 +74,22 @@ async def live_server():
 async def page(live_server):
     from playwright.async_api import async_playwright
     async with async_playwright() as p:
-        browser = await p.chromium.launch()
+        # --no-sandbox/--disable-dev-shm-usage — стандартные флаги для
+        # headless Chromium в контейнеризированном CI (GitHub-hosted
+        # runner) — без user-namespaces песочница chromium иногда не
+        # стартует вовсе. wait_until="load" (не "networkidle") — страница
+        # догружает внешние OSM-тайлы/аналитику постоянными фоновыми
+        # запросами, из-за которых "нет сетевой активности 500мс подряд"
+        # может не наступить вовсе на CI-сети (сама реализация теста ждёт
+        # готовности не через таймер, а через wait_for_function ниже —
+        # тот и есть настоящий сигнал готовности, тот же принцип, что и
+        # у самого фикса в dashboard.html).
+        browser = await p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
         pg = await browser.new_page(viewport={"width": 1400, "height": 900})
-        await pg.goto(live_server + "/", wait_until="networkidle", timeout=25000)
-        # Ждём, пока сам dashboard.html объявит нужные глобальные функции
-        # (скрипт большой, но синхронный — networkidle уже гарантирует это).
-        await pg.wait_for_function("typeof renderSidePanelIds === 'function'", timeout=10000)
+        await pg.goto(live_server + "/", wait_until="load", timeout=25000)
+        # Ждём, пока сам dashboard.html объявит нужные глобальные функции —
+        # настоящий сигнал готовности, не networkidle/таймер.
+        await pg.wait_for_function("typeof renderSidePanelIds === 'function'", timeout=15000)
         await pg.evaluate(_SEED_JS)
         yield pg
         await browser.close()
