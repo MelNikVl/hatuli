@@ -2154,11 +2154,15 @@ function buildRentalCardHtml(pt) {
   </div>` : ''}
 </div>` : '';
   const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+  // Тот же минималистичный круглый бейдж, что и на карточке продажи/пине
+  // карты (задача 2026-08-21) — единый визуальный язык вместо прежнего
+  // текстового "▲ 12 тыс".
   let priceTrend = '';
   if (pt.prev_price && pt.prev_price !== pt.price) {
-    const dp = (pt.price - pt.prev_price) / 1000;
-    const dir = dp > 0;
-    priceTrend = ` <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;font-size:14px;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(0)} тыс${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
+    const down = pt.price < pt.prev_price;
+    const deltaAbs = Math.abs(pt.price - pt.prev_price);
+    const deltaTxt = Math.round(deltaAbs / 1000) + ' тыс ₸';
+    priceTrend = `<span title="Цена ${down ? 'снизилась' : 'выросла'} на ${deltaTxt}" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;border-radius:50%;color:${down ? '#16a34a' : '#ef4444'};background:${down ? '#dcfce7' : '#fee2e2'};font-size:12px;font-weight:900;line-height:1;">${down ? '↓' : '↑'}</span>`;
   }
   const ownerPillHtml = `<span style="${pillStyle}margin:0;background:${pt.is_owner ? '#dcfce7' : '#e5e7eb'};color:${pt.is_owner ? '#166534' : '#374151'};">${pt.is_owner ? 'собственник' : 'риелтор'}</span>`;
   const cxLine = pt.complex
@@ -2752,11 +2756,19 @@ function renderSaleBatch(d, opts) {
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
       const areaTxt = pt.area ? Math.round(pt.area) : '?';
       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
-      let priceTrend = '';
+      // Стрелка тренда цены (задача 2026-08-21: "зелёная стрелочка вниз
+      // если снизилась, красная вверх если поднялась", минималистично) —
+      // та же круглая бейдж-стилистика, что уже на пине карты (см.
+      // buildPricePinHtml/trendHtml выше, тот же цвет/форма, единый язык
+      // между картой и карточкой). Раньше здесь считался priceTrend (текст
+      // "▲ 1.2 млн"), но никогда не вставлялся в CARD_HTML ниже — мёртвый
+      // код, честно заменён, а не задвоен.
+      let priceTrendBadge = '';
       if (pt.prev_price && pt.prev_price !== pt.price) {
-        const dp = (pt.price - pt.prev_price) / 1e6;
-        const dir = dp > 0;
-        priceTrend = ` · <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(1)} млн${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
+        const down = pt.price < pt.prev_price;
+        const deltaAbs = Math.abs(pt.price - pt.prev_price);
+        const deltaTxt = deltaAbs >= 1e6 ? (deltaAbs / 1e6).toFixed(1) + ' млн ₸' : Math.round(deltaAbs / 1000) + ' тыс ₸';
+        priceTrendBadge = `<span title="Цена ${down ? 'снизилась' : 'выросла'} на ${deltaTxt}" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;border-radius:50%;color:${down ? '#16a34a' : '#ef4444'};background:${down ? '#dcfce7' : '#fee2e2'};font-size:12px;font-weight:900;line-height:1;">${down ? '↓' : '↑'}</span>`;
       }
       const sc = scoreColor(pt.score, p10, p90);
       if (pt.photos && pt.photos.length) { ptPhotos[pt.id] = pt.photos; carIdx[pt.id] = 0; }
@@ -2825,6 +2837,7 @@ function renderSaleBatch(d, opts) {
   <div style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
       <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
         <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
+        ${priceTrendBadge}
         ${roomsPillHtml}
         ${areaPillHtml}
         ${floorPillHtml}
