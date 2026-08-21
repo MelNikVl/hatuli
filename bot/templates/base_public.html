@@ -16,16 +16,16 @@
 <!-- /Yandex.Metrika counter -->
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>{% block title %}Hatuli — карта квартир Астаны{% endblock %}</title>
-  <meta name="description" content="{% block meta_description %}Hatuli — карта квартир Астаны: продажа и аренда, тепловые карты цен, шума и транспортной доступности, рейтинг жилых комплексов Астаны.{% endblock %}"/>
+  <title>{% block title %}Clearly — карта квартир Астаны{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}Clearly — карта квартир Астаны: продажа и аренда, тепловые карты цен, шума и транспортной доступности, рейтинг жилых комплексов Астаны.{% endblock %}"/>
   <link rel="canonical" href="{% block canonical %}https://hatuli.ai-groundtruth.com{{ request.url.path }}{% endblock %}"/>
   <!-- OpenGraph — генерические дефолты, страницы переопределяют через
        og_title/og_description/og_image (см. /listing/{id} — карточка
        объявления должна нормально разворачиваться превью при шаринге ссылки). -->
   <meta property="og:type" content="website"/>
-  <meta property="og:site_name" content="Hatuli"/>
-  <meta property="og:title" content="{% block og_title %}Hatuli — карта квартир Астаны{% endblock %}"/>
-  <meta property="og:description" content="{% block og_description %}Hatuli — карта квартир Астаны: продажа и аренда, тепловые карты цен, рейтинг жилых комплексов.{% endblock %}"/>
+  <meta property="og:site_name" content="Clearly"/>
+  <meta property="og:title" content="{% block og_title %}Clearly — карта квартир Астаны{% endblock %}"/>
+  <meta property="og:description" content="{% block og_description %}Clearly — карта квартир Астаны: продажа и аренда, тепловые карты цен, рейтинг жилых комплексов.{% endblock %}"/>
   <meta property="og:url" content="https://hatuli.ai-groundtruth.com{{ request.url.path }}"/>
   {% block og_image %}{% endblock %}
   <link rel="icon" type="image/png" href="/static/branding/favicon.png"/>
@@ -36,7 +36,7 @@
   <link rel="preconnect" href="https://kepler.gl" crossorigin>
   <link rel="dns-prefetch" href="https://kepler.gl">
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"WebSite","name":"Hatuli","url":"https://hatuli.ai-groundtruth.com","description":"Карта квартир Астаны: продажа, аренда, тепловые карты, рейтинг жилых комплексов."}
+  {"@context":"https://schema.org","@type":"WebSite","name":"Clearly","url":"https://hatuli.ai-groundtruth.com","description":"Карта квартир Астаны: продажа, аренда, тепловые карты, рейтинг жилых комплексов."}
   </script>
   <script>
   (function() {
@@ -117,20 +117,12 @@
     :root:not([data-theme="light"]) .pub-nav a,
     :root:not([data-theme="light"]) .pub-nav a:hover,
     :root:not([data-theme="light"]) .pub-nav a.active,
-    :root:not([data-theme="light"]) .pub-dd-menu a,
     :root:not([data-theme="light"]) .atabs a,
     :root:not([data-theme="light"]) .atabs a:hover,
     :root:not([data-theme="light"]) .atabs a.active { color: #e8eaf6; }
     .pub-nav .sep { width: 1px; height: 18px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
     .pub-nav .spacer { flex: 1; }
     .pub-nav a.admin-panel-link { background: rgba(88,101,242,.12); border-radius: 8px; margin: 6px 0; padding: 7px 14px; }
-    /* Дропдаун "Аналитика" (задача 2026-08-13, см. base.html) — Воздух
-       перенесён сюда из главного ряда меню. */
-    .pub-dd { position: relative; }
-    .pub-dd-menu { display: none; position: absolute; top: 100%; left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px; min-width: 160px; box-shadow: 0 8px 24px rgba(0,0,0,.18); z-index: 600; }
-    .pub-dd:hover .pub-dd-menu, .pub-dd:focus-within .pub-dd-menu { display: block; }
-    .pub-dd-menu a { display: block; padding: 8px 10px; border-radius: 6px; border-bottom: none; }
-    .pub-dd-menu a:hover { background: rgba(88,101,242,.12); }
     /* "Новостройки" — отдельный пункт меню (раньше был просто значением
        в селекте типа объектов на карте), салатовый фон, чтобы выделялся
        среди остальных ссылок; !important на цвете текста — иначе тёмная
@@ -173,7 +165,7 @@
     or request.url.path == '/admin-panel') %}
 <header class="pub-header">
   <div class="pub-row1">
-    <a href="/" class="pub-logo" style="color:#000;">AGT</a>
+    <a href="/" class="pub-logo" style="text-transform:none;"><span style="color:#0E93A6;">Clearly</span></a>
     <nav class="pub-nav">
       <a href="/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
       <a href="/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>
@@ -181,13 +173,8 @@
       <a href="/mortgage-calculator" class="{% if 'mortgage-calculator' in request.url.path %}active{% endif %}">Калькулятор ипотеки</a>
       <a href="/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
       {% if admin %}
-      <div class="pub-dd" tabindex="0">
-        <a href="/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path or 'investments' in request.url.path %}active{% endif %}">Аналитика</a>
-        <div class="pub-dd-menu">
-          <a href="/air" class="{% if 'air' in request.url.path %}active{% endif %}">🌬 Воздух</a>
-        </div>
-      </div>
-            <a href="/admin-panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Админка</a>
+      <a href="/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path or 'investments' in request.url.path %}active{% endif %}">Аналитика</a>
+      <a href="/admin-panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Админка</a>
       {% endif %}
     </nav>
     <div class="pub-row1-right">

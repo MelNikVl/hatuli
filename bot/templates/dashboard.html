@@ -234,6 +234,7 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="yield" onclick="toggleHeat('yield')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">💰 Доходность</button>
         <button type="button" class="heat-btn" data-mode="infra" onclick="toggleHeat('infra')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🏥 Инфраструктура</button>
         <button type="button" class="heat-btn" data-mode="novelty" onclick="toggleHeat('novelty')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🌿 Новизна домов</button>
+        <button type="button" class="heat-btn" data-mode="liquidity" onclick="toggleHeat('liquidity')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">⚡ Скорость ухода с рынка</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
         <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
@@ -324,6 +325,13 @@ html, body { overflow: hidden !important; }
 :root[data-theme="light"] #side-panel-body .side-card * { color:#000 !important; }
 :root[data-theme="light"] #side-panel-body .side-card a { text-decoration:underline; }
 .side-card-flash { animation: sideCardFlash 0.6s ease-in-out 5; border-color:#2563eb !important; }
+/* Персистентное selected-состояние карточки (задача 2026-08-21: "клик по
+   маркеру → карточка не всегда подсвечивается") — ОТДЕЛЬНО от .side-card-flash
+   (та гаснет через 3с, чисто визуальный "сюда только что прыгнули" эффект).
+   .side-card-selected держится, пока не выбрана другая карточка/маркер —
+   см. selectCard()/clearSideCardSelection(). outline (не border) — не
+   меняет box-модель/layout соседних карточек в CSS Grid. */
+.side-card-selected { outline: 2.5px solid #2563eb; outline-offset: -1px; }
 .nb-cx-popup .leaflet-popup-content-wrapper { padding:0; border-radius:12px; overflow:hidden; }
 .nb-cx-popup .leaflet-popup-content { margin:0; width:280px !important; }
 @keyframes sideCardFlash {
@@ -757,40 +765,23 @@ function openSidePanel(ids) {
     sidePanelShownIds = ids.slice();
     renderSidePanelIds(sidePanelShownIds, undefined, 'объявлений');
   }
-  // Карточка может появиться с задержкой (ленивый батч-рендер панели,
-  // гонка с перерисовкой по moveend) — ретраим центрирование.
-  let attempts = 0;
-  const tryCenter = () => {
-    const el = document.getElementById('card-' + ids[0]);
-    if (!el) {
-      if (attempts++ < 10) { setTimeout(tryCenter, 250); return; }
-      // Живой фидбек 2026-08-13 ("иногда скроллится куда-то, где его нет,
-      // даже после полной подгрузки"): персистентный список (moveend-
-      // driven, см. refreshSidePanelList) мог просто не успеть/не выбрать
-      // именно эту карточку 10 ретраев подряд — раньше на этом молча
-      // сдавались. Кликнутый маркер гарантированно есть в MINI_PIN_MARKERS/
-      // CARD_HTML (иначе не по чему было бы кликать) — досильно вставляем
-      // именно его в список вместо очередного ожидания чужого рефреша.
-      if (!sidePanelShownIds.includes(ids[0]) && CARD_HTML[ids[0]] != null) {
-        sidePanelShownIds = [ids[0]].concat(sidePanelShownIds);
+  // См. focusSideCard() выше — единая точка синхронизации "карточка
+  // гарантированно в DOM -> центрирована -> получила selected-состояние",
+  // без гоняющихся друг за другом независимых таймеров.
+  const targetId = ids[0];
+  focusSideCard(`.side-card[data-id="${CSS.escape(String(targetId))}"]`, {
+    cardId: targetId,
+    ensure: () => {
+      // Кликнутый маркер гарантированно есть в MINI_PIN_MARKERS/CARD_HTML
+      // (иначе не по чему было бы кликать) — вставляем его в список СРАЗУ,
+      // не дожидаясь ленивого moveend-driven рефреша (тот мог не успеть,
+      // или выбрать другой набор карточек под текущий вьюпорт).
+      if (!sidePanelShownIds.includes(targetId) && CARD_HTML[targetId] != null) {
+        sidePanelShownIds = [targetId].concat(sidePanelShownIds);
         renderSidePanelIds(sidePanelShownIds, undefined, 'объявлений');
-        requestAnimationFrame(() => {
-          const el2 = document.getElementById('card-' + ids[0]);
-          if (!el2) return;
-          centerCardInPanel(el2);
-          el2.classList.add('side-card-flash');
-          setTimeout(() => el2.classList.remove('side-card-flash'), 3000);
-        });
       }
-      return;
-    }
-    // Мгновенный скролл ТОЛЬКО панели (см. centerCardInPanel) — карточка
-    // ровно по центру правого блока, страница не прокручивается.
-    centerCardInPanel(el);
-    el.classList.add('side-card-flash');
-    setTimeout(() => el.classList.remove('side-card-flash'), 3000);
-  };
-  tryCenter();
+    },
+  });
 }
 function closeSidePanel() {
   // Панель больше не скрывается (персистентная) — клик по карте раньше её
@@ -879,6 +870,15 @@ function highlightMapPin(cardId, on) {
 // добавляем новые id в конец и убираем те, которых больше нет в ids.
 function renderSidePanelIds(ids, emptyMsg, countWord) {
   const body = document.getElementById('side-panel-body');
+  // Нормализуем ВСЕ id к строке в одном месте, на входе — задача 2026-08-21
+  // аудит нашёл первопричину периодической несинхронности: id в разных
+  // источниках (Object.keys() — всегда строки; JSON с сервера — может
+  // прийти числом; dataset.* в DOM — браузер ВСЕГДА хранит строкой) не
+  // всегда совпадали по ТИПУ при формально одинаковом значении (123 !==
+  // "123" в Set/строгом сравнении) — карточка считалась "новой", хотя уже
+  // была на экране, удалялась и пересоздавалась заново лишний раз, теряя
+  // именно выставленное только что selected-состояние/DOM-ссылку.
+  ids = ids.map(String);
   if (!ids.length) {
     body.innerHTML = `<div style="grid-column:1/-1;padding:40px 12px;text-align:center;color:#888;">${emptyMsg || 'В этой области карты ничего не найдено.'}</div>`;
     document.getElementById('side-panel-count').textContent = '';
@@ -910,6 +910,11 @@ function renderSidePanelIds(ids, emptyMsg, countWord) {
     div.innerHTML = CARD_HTML[id] || '';
     div.addEventListener('mouseenter', () => highlightMapPin(id, true));
     div.addEventListener('mouseleave', () => highlightMapPin(id, false));
+    // Выбранная карточка переживает пересборку списка (задача 2026-08-21,
+    // п.7: "после изменения фильтров/перемещения карты и т.д.") — если
+    // именно эта карточка была выбрана ДО того, как её пересоздали, класс
+    // возвращается сразу, а не только при следующем клике.
+    if (selectedCardId != null && String(selectedCardId) === id) div.classList.add('side-card-selected');
     frag.appendChild(div);
   });
   body.appendChild(frag);
@@ -1039,20 +1044,9 @@ function scrollToNewbuildComplex(complexId) {
   const mw = document.getElementById('map-wrap');
   if (mw && window.innerWidth <= 767) mw.classList.add('mobile-list');
   // Карточки юнитов рендерятся ПОСЛЕ сетевого ответа /admin/api/newbuild-complex
-  // .../units, а панель в это же время может перерисовываться по moveend —
-  // гонка: в момент вызова карточки ещё нет (el=null → старый код молча
-  // выходил), либо «липкий» scrollTop после полной замены списка давал
-  // неверную позицию (жалоба 2026-08-13: «скроллится куда-то, где его нет»).
-  // Ретраим центрирование, пока карточка не появится и не встанет по центру.
-  let attempts = 0;
-  const tryCenter = () => {
-    const el = document.querySelector(`#side-panel-body .side-card[data-complex-id="${complexId}"]`);
-    if (!el) { if (attempts++ < 10) setTimeout(tryCenter, 250); return; }
-    centerCardInPanel(el);
-    el.classList.add('side-card-flash');
-    setTimeout(() => el.classList.remove('side-card-flash'), 3000);
-  };
-  tryCenter();
+  // .../units — по-настоящему асинхронный случай, focusSideCard() без
+  // ensure ждёт появления узла через MutationObserver (не поллинг вслепую).
+  focusSideCard(`.side-card[data-complex-id="${CSS.escape(String(complexId))}"]`);
 }
 // (регистрация map.on('moveend', …) для refreshSidePanelList — см. ниже,
 // ПОСЛЕ строки `const map = L.map(...)`: `map` — const, обращение к ней
@@ -1084,6 +1078,115 @@ function centerCardInPanel(el) {
   const elTop = elRect.top - bodyRect.top + body.scrollTop;
   const target = elTop - (body.clientHeight - el.offsetHeight) / 2;
   body.scrollTop = Math.max(0, target);
+}
+
+// ── Персистентное selected-состояние карточки в панели (задача 2026-08-21) ──
+// Раздельно от highlightMapPin/selectPin (те красят ПИН на карте) — эта
+// пара красит именно КАРТОЧКУ СПИСКА и переживает пересборку списка (см.
+// применение внутри renderSidePanelIds ниже), в отличие от .side-card-flash,
+// который гаснет через 3с и создавался заново при каждом клике.
+let selectedCardId = null;
+function setCardSelectedClass(id, on) {
+  const el = document.getElementById('card-' + id);
+  if (el) el.classList.toggle('side-card-selected', on);
+}
+function selectCard(id) {
+  if (selectedCardId != null && selectedCardId !== id) setCardSelectedClass(selectedCardId, false);
+  selectedCardId = id;
+  if (id != null) setCardSelectedClass(id, true);
+}
+function clearCardSelection() {
+  if (selectedCardId != null) setCardSelectedClass(selectedCardId, false);
+  selectedCardId = null;
+}
+
+// ── Гарантированная синхронизация "карточка появилась в DOM" ────────────
+// Первопричина периодически ломавшегося скролла (задача 2026-08-21, аудит):
+// НЕ сам центрирующий скролл (тот всегда крутил именно #side-panel-body,
+// не всю страницу — см. комментарий у centerCardInPanel), а то, ЧЕМ он был
+// синхронизирован с рендером карточки — фиксированный ретрай-луп
+// setTimeout(fn, 250) до 10 раз (2.5с), гонявшийся ВНАПЕРЕГОНКИ с
+// НЕЗАВИСИМЫМ moveend-debounce (250мс, см. map.on('moveend', ...) ниже),
+// который в это же время мог пересобрать список (renderSidePanelIds).
+// Т.к. Leaflet-попапы (marker.openPopup()) по умолчанию делают autoPan —
+// это САМО по себе триггерит лишний moveend прямо в момент клика — два
+// асинхронных таймера гонялись за одним и тем же DOM-узлом, и то, что
+// открывалось/центрировалось, зависело от того, какой из них "победит" —
+// отсюда "то работает, то нет" без видимой закономерности.
+// Новая модель: (1) карточка гарантированно вставляется СИНХРОННО, если
+// её HTML уже готов (CARD_HTML[id] — а он обязан быть готов, раз по
+// маркеру вообще было чем кликнуть); (2) rAF, не setTimeout, ждёт ровно
+// один кадр реального layout перед measure/scroll; (3) на время фокуса
+// выставляется флаг sidePanelFocusBusy — конкурентный moveend-refresh
+// именно в этом узком окне пропускается (см. ниже), а не гонится
+// параллельно; (4) MutationObserver — единственный ОСТАВШИЙСЯ "таймер"
+// для по-настоящему асинхронных случаев (newbuild: карточки юнитов ждут
+// сетевой ответ) — ждёт РЕАЛЬНОГО появления узла, не гадает интервалом,
+// с одним bounded safety-timeout, а не бесконечным поллингом.
+let sidePanelFocusBusy = false;
+function focusSideCard(selector, opts) {
+  opts = opts || {};
+  const body = document.getElementById('side-panel-body');
+  if (!body) return;
+  sidePanelFocusBusy = true;
+  const finish = (el) => {
+    if (!el) { sidePanelFocusBusy = false; return; }
+    requestAnimationFrame(() => {
+      // Перечитываем узел — на случай, если он успел пересобраться, пока
+      // мы ждали кадр (renderSidePanelIds сохраняет id тех же карточек,
+      // но лишняя перестраховка от устаревшей ссылки ничего не стоит).
+      const fresh = body.querySelector(selector);
+      if (!fresh) { sidePanelFocusBusy = false; return; }
+      centerCardInPanel(fresh);
+      // cardId явно не задан (например, клик по ЖК-пину знает только
+      // complexId, а не какая юнит-карточка окажется первой) — берём id
+      // прямо с найденного узла, dataset.id проставлен renderSidePanelIds
+      // для КАЖДОЙ карточки без исключений.
+      const idToSelect = opts.cardId != null ? opts.cardId : fresh.dataset.id;
+      if (idToSelect != null) selectCard(idToSelect);
+      fresh.classList.add('side-card-flash');
+      setTimeout(() => fresh.classList.remove('side-card-flash'), 3000);
+      // sidePanelFocusBusy снимается ТОЛЬКО здесь, ПОСЛЕ реального
+      // scrollTop-присвоения — задача 2026-08-21, найдено на реальных
+      // данных (клик по ЖК с 47 вариантами): снятие флага ДО этого момента
+      // (в начале finish(), синхронно) оставляло окно между "клик
+      // обработан" и "кадр отрисован", в которое conкурентный moveend-
+      // рефреш (см. marker.openPopup() autoPan выше) успевал пройти mimo
+      // guard'а и своим renderSidePanelIds сбросить body.scrollTop=0
+      // (replaced-ветка) уже ПОСЛЕ того, как centerCardInPanel отработал —
+      // итоговый scrollTop оставался 0, хотя selected-класс уже стоял.
+      sidePanelFocusBusy = false;
+    });
+  };
+  const existing = body.querySelector(selector);
+  if (existing) { finish(existing); return; }
+  if (typeof opts.ensure === 'function') {
+    // Синхронная гарантия: если данные карточки уже есть в памяти
+    // (CARD_HTML), вставляем её НЕМЕДЛЕННО вместо ожидания ленивого
+    // moveend-driven рефреша — тот может случиться позже или вообще не
+    // выбрать именно эту карточку (см. док-комментарий выше).
+    opts.ensure();
+    const now = body.querySelector(selector);
+    if (now) { finish(now); return; }
+  }
+  // Настоящий асинхронный случай (данные ещё не пришли с сервера) —
+  // ждём появления узла через MutationObserver, а не поллингом.
+  let settled = false;
+  const obs = new MutationObserver(() => {
+    const el = body.querySelector(selector);
+    if (!el) return;
+    settled = true;
+    obs.disconnect();
+    finish(el);
+  });
+  obs.observe(body, {childList: true, subtree: false});
+  setTimeout(() => {
+    if (settled) return;
+    obs.disconnect();
+    sidePanelFocusBusy = false;
+    // По-настоящему нет данных (не пришли за 4с) — тихо сдаёмся, ничего
+    // не подсвечиваем, не оставляем панель в промежуточном состоянии.
+  }, 4000);
 }
 function proxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
 // Ошибка загрузки фото в карточке: если в галерее есть ещё кадры — показать
@@ -1217,7 +1320,16 @@ map.on('moveend', () => {
 // границы карты.
 map.on('moveend', () => {
   clearTimeout(sidePanelRefreshTimer);
-  sidePanelRefreshTimer = setTimeout(() => {
+  sidePanelRefreshTimer = setTimeout(function moveendSidePanelRefresh() {
+    // Задача 2026-08-21, аудит: пока идёт явная (кликом по маркеру)
+    // синхронизация "карточка в DOM -> центрирование -> selected" (см.
+    // focusSideCard/sidePanelFocusBusy), ЭТОТ moveend-рефреш (например,
+    // от autoPan попапа, который открылся вместе с тем же кликом) не
+    // запускается параллельно — это и была основная гонка, из-за которой
+    // скролл иногда "сбивался". НЕ теряем рефреш вовсе — короткий
+    // отложенный повтор, sidePanelFocusBusy гарантированно снимается за
+    // ограниченное время (rAF-кадр или максимум 4с safety-timeout).
+    if (sidePanelFocusBusy) { setTimeout(moveendSidePanelRefresh, 100); return; }
     // На отдалённом виде (zoom < ZOOM_GATE) обычная viewport-подгрузка
     // пинов не срабатывает вообще (см. viewportNeedsReload) — панель тогда
     // никогда не увидит объекты в НОВОЙ области после панорамирования.
@@ -2042,11 +2154,15 @@ function buildRentalCardHtml(pt) {
   </div>` : ''}
 </div>` : '';
   const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
+  // Тот же минималистичный круглый бейдж, что и на карточке продажи/пине
+  // карты (задача 2026-08-21) — единый визуальный язык вместо прежнего
+  // текстового "▲ 12 тыс".
   let priceTrend = '';
   if (pt.prev_price && pt.prev_price !== pt.price) {
-    const dp = (pt.price - pt.prev_price) / 1000;
-    const dir = dp > 0;
-    priceTrend = ` <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;font-size:14px;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(0)} тыс${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
+    const down = pt.price < pt.prev_price;
+    const deltaAbs = Math.abs(pt.price - pt.prev_price);
+    const deltaTxt = Math.round(deltaAbs / 1000) + ' тыс ₸';
+    priceTrend = `<span title="Цена ${down ? 'снизилась' : 'выросла'} на ${deltaTxt}" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;border-radius:50%;color:${down ? '#16a34a' : '#ef4444'};background:${down ? '#dcfce7' : '#fee2e2'};font-size:12px;font-weight:900;line-height:1;">${down ? '↓' : '↑'}</span>`;
   }
   const ownerPillHtml = `<span style="${pillStyle}margin:0;background:${pt.is_owner ? '#dcfce7' : '#e5e7eb'};color:${pt.is_owner ? '#166534' : '#374151'};">${pt.is_owner ? 'собственник' : 'риелтор'}</span>`;
   const cxLine = pt.complex
@@ -2081,6 +2197,9 @@ function setPinSelected(id, on) {
 function clearMapSelection() {
   if (selectedPinId) { setPinSelected(selectedPinId, false); selectedPinId = null; }
   if (selectedClusterEl) { selectedClusterEl.style.filter = 'none'; selectedClusterEl = null; }
+  // Клик по пустому месту карты снимает выделение и с карточки в панели —
+  // пин и карточка одного объявления всегда выделены/сняты синхронно.
+  clearCardSelection();
 }
 function selectPin(id) {
   clearMapSelection();
@@ -2637,11 +2756,19 @@ function renderSaleBatch(d, opts) {
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
       const areaTxt = pt.area ? Math.round(pt.area) : '?';
       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
-      let priceTrend = '';
+      // Стрелка тренда цены (задача 2026-08-21: "зелёная стрелочка вниз
+      // если снизилась, красная вверх если поднялась", минималистично) —
+      // та же круглая бейдж-стилистика, что уже на пине карты (см.
+      // buildPricePinHtml/trendHtml выше, тот же цвет/форма, единый язык
+      // между картой и карточкой). Раньше здесь считался priceTrend (текст
+      // "▲ 1.2 млн"), но никогда не вставлялся в CARD_HTML ниже — мёртвый
+      // код, честно заменён, а не задвоен.
+      let priceTrendBadge = '';
       if (pt.prev_price && pt.prev_price !== pt.price) {
-        const dp = (pt.price - pt.prev_price) / 1e6;
-        const dir = dp > 0;
-        priceTrend = ` · <span style="color:${dir ? '#ef4444' : '#16a34a'};font-weight:700;">${dir ? '▲' : '▼'} ${Math.abs(dp).toFixed(1)} млн${pt.price_changed ? ' ' + pt.price_changed : ''}</span>`;
+        const down = pt.price < pt.prev_price;
+        const deltaAbs = Math.abs(pt.price - pt.prev_price);
+        const deltaTxt = deltaAbs >= 1e6 ? (deltaAbs / 1e6).toFixed(1) + ' млн ₸' : Math.round(deltaAbs / 1000) + ' тыс ₸';
+        priceTrendBadge = `<span title="Цена ${down ? 'снизилась' : 'выросла'} на ${deltaTxt}" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;border-radius:50%;color:${down ? '#16a34a' : '#ef4444'};background:${down ? '#dcfce7' : '#fee2e2'};font-size:12px;font-weight:900;line-height:1;">${down ? '↓' : '↑'}</span>`;
       }
       const sc = scoreColor(pt.score, p10, p90);
       if (pt.photos && pt.photos.length) { ptPhotos[pt.id] = pt.photos; carIdx[pt.id] = 0; }
@@ -2710,6 +2837,7 @@ function renderSaleBatch(d, opts) {
   <div style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
       <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
         <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
+        ${priceTrendBadge}
         ${roomsPillHtml}
         ${areaPillHtml}
         ${floorPillHtml}
@@ -3086,7 +3214,7 @@ function setAirDays(d, btn) {
     toggleHeat('air');
   }
 }
-let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, interest: null, air: null, count: null};
+let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, interest: null, air: null, count: null, liquidity: null};
 let noiseDefaultsApplied = false;  // гекс 40м / прозрачность 50% при первом включении шума за сессию
 // Детальный слой шума (30м, по фактическим точкам дорог) при ~39к точек по
 // городу даёт под 100к+ отдельных гексов, если рисовать их все разом — это
@@ -3581,6 +3709,64 @@ function drawPriceM2Heat(points, archivedPoints) {
   });
 }
 
+// Скорость ухода объявлений с рынка (задача 2026-08-21, "тепловая карта —
+// где быстрее уходят квартиры зелёным, где стоят долго красным") — медиана
+// outcome_labels.time_on_market (дни first_seen→archived_at, ТОТ ЖЕ расчёт,
+// что /admin/analytics/market-absorption, не переизобретён) по гексу.
+// НЕ факт продажи — только наблюдаемое подтверждённое выбывание объявления,
+// см. /admin/api/liquidity-points и пояснение на странице "Поглощение и
+// ликвидность". 10 опорных цветов зелёный->красный, отдельная палитра от
+// HEAT_STOPS/PRICE_STOPS (те завязаны на цену/шум) — по задаче явно "10 цветов".
+const LIQUIDITY_STOPS = [
+  [21, 128, 61],   // тёмно-зелёный — уходят быстрее всего
+  [22, 163, 74],
+  [101, 163, 13],
+  [163, 230, 53],
+  [202, 184, 15],
+  [234, 179, 8],
+  [249, 145, 15],
+  [249, 115, 22],
+  [239, 68, 68],
+  [127, 29, 29],   // бордовый — стоят дольше всего
+];
+function liquidityColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = LIQUIDITY_STOPS.length - 1;
+  const pos = t * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const frac = pos - i;
+  const from = LIQUIDITY_STOPS[i], to = LIQUIDITY_STOPS[i + 1];
+  const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+// Медиана days по гексу, нормализация по 10/90 перцентилю (как доходность/
+// цена — устойчиво к единичным выбросам). Точек по городу немного (~3.7к —
+// это подтверждённо выбывшие объявления с известными координатами, самой
+// природы показателя меньше, чем активных объявлений) — гексы с 1 точкой
+// подписаны в тултипе честно, не скрыты (Unknown ≠ average, но и не
+// притворяемся, что выборка больше, чем есть).
+function drawLiquidityHeat(points) {
+  const buckets = hexBucket(points || [], p => [p.lat, p.lon], HEAT_EDGE_M);
+  if (!buckets.size) return;
+  const medians = [];
+  buckets.forEach(b => { b.value = median(b.items.map(i => i.days)); medians.push(b.value); });
+  if (!medians.length) return;
+  const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
+  buckets.forEach(b => {
+    const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
+    const hexId = `${b.q},${b.r}`;
+    const n = b.items.length;
+    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
+      color: '#fff', weight: 0.5, fillColor: liquidityColor(t), fillOpacity: 0.55,
+    }).bindTooltip(
+      `гекс ${hexId}<br>медианный срок до выбывания: ~${Math.round(b.value)} дн.<br>` +
+      `подтверждённо выбывших: ${n}${n < 5 ? ' (малая выборка)' : ''}<br>` +
+      `<span style="color:#888;font-size:11px;">не факт продажи — наблюдаемое исчезновение объявления</span>`,
+      {sticky: true}
+    ).addTo(heatTargetLayer);
+  });
+}
+
 // Доходность аренды (задача "тепловая карта доходности — увидеть, что на
 // правом берегу выгоднее") — медиана yield_pct по гексу. Семантика цвета
 // ОБРАТНАЯ цене: высокая доходность = хорошо для инвестора = зелёный (как
@@ -3997,6 +4183,9 @@ async function loadHeatData(mode) {
     const d = await fetch('/admin/api/city-poi').then(r => r.json());
     const kinds = new Set(['school', 'kindergarten', 'university', 'clinic', 'gov']);
     heatCache.infra = (d.poi || []).filter(p => kinds.has(p.kind) && p.lat != null && p.lon != null);
+  } else if (mode === 'liquidity') {
+    const d = await fetch('/admin/api/liquidity-points').then(r => r.json());
+    heatCache.liquidity = d.points || [];
   }
   return heatCache[mode];
 }
@@ -4139,6 +4328,8 @@ function renderHeatMode(mode, data) {
     drawCountHeat(data, p => [p.lat, p.lon], 'объектов инфраструктуры');
   } else if (mode === 'novelty') {
     drawNoveltyHeat(data);
+  } else if (mode === 'liquidity') {
+    drawLiquidityHeat(data);
   }
 }
 
@@ -4154,7 +4345,7 @@ const HEAT_MODE_LABELS = {
   population: 'Плотность нас.', interest: 'Интерес (просмотры)', air: 'Воздух (ПНЗ)', count: 'Кол-во объявлений',
   demolition: '🏚 Снос домов', crime: '🚨 Преступность',
   price_m2: '📐 Цена за м²', yield: '💰 Доходность', infra: '🏥 Инфраструктура',
-  novelty: '🌿 Новизна домов',
+  novelty: '🌿 Новизна домов', liquidity: '⚡ Скорость ухода с рынка',
 };
 function openSplitView() {
   if (!heatMode || splitMap) return;
@@ -4784,7 +4975,7 @@ function toggleShareMenu(ev, id) {
   if (!menu) return;
   if (menu.style.display === 'block') { menu.style.display = 'none'; return; }
   const url = shareListingUrl(id);
-  const text = 'Смотри квартиру на Hatuli';
+  const text = 'Смотри квартиру на Clearly';
   const itemStyle = 'display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:none;background:none;color:var(--text);font-size:14px;text-align:left;cursor:pointer;border-radius:6px;white-space:nowrap;';
   const items = [];
   items.push(`<button type="button" style="${itemStyle}" onclick="shareCopyLink('${id}', this)">🔗 Скопировать ссылку</button>`);
@@ -4795,7 +4986,7 @@ function toggleShareMenu(ev, id) {
   // (системный шэринг умеет "отправить в Instagram"), на десктопе даём
   // скопировать ссылку и открыть Instagram, чтобы вставить в сообщение/бно.
   if (navigator.share) {
-    items.push(`<button type="button" style="${itemStyle}" onclick="navigator.share({title:'Hatuli',text:'${text}',url:'${url}'}).catch(()=>{}); document.getElementById('share-menu').style.display='none';">📱 Ещё (Instagram и др.)</button>`);
+    items.push(`<button type="button" style="${itemStyle}" onclick="navigator.share({title:'Clearly',text:'${text}',url:'${url}'}).catch(()=>{}); document.getElementById('share-menu').style.display='none';">📱 Ещё (Instagram и др.)</button>`);
   } else {
     items.push(`<a href="https://www.instagram.com/" target="_blank" style="${itemStyle}text-decoration:none;" onclick="shareCopyLink('${id}', null)">📷 Instagram (сначала скопируется ссылка)</a>`);
   }

@@ -54,15 +54,24 @@ property_id (последняя строка сортировки, детерм�
 Полная таблица — на ВСЕ компоненты (сейчас: см. вывод). Развёрнутый
 per-listing dry-run — только на САМУЮ длинную цепочку (задача, явно:
 "для реальной цепочки из 15 properties").
+
+## Обновление 2026-08-20 ("Safe Physical Property Merge")
+
+Формула (build_components/_load_property_facts/score_canonical_
+candidates) ПЕРЕЕХАЛА в bot/identity/property_merge.py — production-код
+merge engine'а. Этот скрипт больше НЕ держит свою копию (задача явно:
+"не изобретай вторую систему") — импортирует ровно ту же реализацию,
+только печатает. Единственное отличие вывода: score_canonical_
+candidates() теперь дополнительно сортирует по identity_status-тиру
+ПЕРЕД 7-факторным score (bot/identity/property_merge.py докстринг,
+"Расхождение 1") — на сегодняшних данных (100% properties 'provisional')
+это НЕ меняет ни одного результата этого скрипта.
 """
 from __future__ import annotations
 
 import asyncio
 import os
-import statistics
 import sys
-from collections import defaultdict
-from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -72,137 +81,12 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
 
-_WEIGHTS = {
-    "completeness": 0.25, "address_consistency": 0.15, "coords_presence": 0.10,
-    "history_duration": 0.15, "listing_count": 0.15, "conflict_absence": 0.10, "freshness": 0.10,
-}
-assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9
-
-
-def _build_components(edges: list[dict]) -> dict[int, set[int]]:
-    parent: dict[int, int] = {}
-
-    def find(x: int) -> int:
-        parent.setdefault(x, x)
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: int, b: int) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    for r in edges:
-        a, b = r["prop_a"], r["prop_b"]
-        if a is None or b is None:
-            continue
-        find(a); find(b)
-        union(a, b)
-
-    groups: dict[int, set[int]] = defaultdict(set)
-    all_props = {p for r in edges for p in (r["prop_a"], r["prop_b"]) if p is not None}
-    for p in all_props:
-        groups[find(p)].add(p)
-    # re-key by an arbitrary stable representative (min id) — canonical
-    # SELECTION happens later via scoring, this key is just a dict key.
-    return {min(members): members for members in groups.values()}
-
-
-async def _load_property_facts(prop_ids: list[int]) -> dict[int, dict]:
-    from bot.db.pg import fetch
-
-    props = await fetch(
-        "SELECT property_id, complex_id, floor, area_sqm, rooms, first_seen_at, last_seen_at "
-        "FROM properties WHERE property_id = ANY($1::int[])", prop_ids)
-    listings = await fetch("""
-        SELECT pl.property_id, al.id AS listing_id, al.address, al.lat, al.lon, al.is_active
-        FROM property_listings pl JOIN apartment_listings al ON al.id = pl.listing_id
-        WHERE pl.property_id = ANY($1::int[])
-    """, prop_ids)
-    conflicts = await fetch("""
-        SELECT pl.property_id, count(*) AS n
-        FROM property_match_candidates pmc
-        JOIN property_listings pl ON pl.listing_id = pmc.listing_id
-        WHERE pmc.conflict_reasons IS NOT NULL AND pl.property_id = ANY($1::int[])
-        GROUP BY pl.property_id
-        UNION ALL
-        SELECT pmc.candidate_property_id AS property_id, count(*) AS n
-        FROM property_match_candidates pmc
-        WHERE pmc.conflict_reasons IS NOT NULL AND pmc.candidate_property_id = ANY($1::int[])
-        GROUP BY pmc.candidate_property_id
-    """, prop_ids)
-
-    listings_by_prop: dict[int, list[dict]] = defaultdict(list)
-    for l in listings:
-        listings_by_prop[l["property_id"]].append(dict(l))
-    conflict_n: dict[int, int] = defaultdict(int)
-    for c in conflicts:
-        conflict_n[c["property_id"]] += c["n"]
-
-    facts = {}
-    for p in props:
-        p = dict(p)
-        pid = p["property_id"]
-        facts[pid] = {
-            **p,
-            "listings": listings_by_prop.get(pid, []),
-            "n_conflicts": conflict_n.get(pid, 0),
-        }
-    return facts
-
-
-def _score_component(members: set[int], facts: dict[int, dict]) -> list[dict]:
-    member_facts = [facts[p] for p in members if p in facts]
-    if not member_facts:
-        return []
-
-    durations = [(f["last_seen_at"] - f["first_seen_at"]).total_seconds() for f in member_facts]
-    max_duration = max(durations) or 1.0
-    counts = [len(f["listings"]) for f in member_facts]
-    max_count = max(counts) or 1
-    last_seens = [f["last_seen_at"] for f in member_facts]
-    newest = max(last_seens)
-    oldest = min(last_seens)
-    freshness_span = (newest - oldest).total_seconds() or 1.0
-
-    scored = []
-    for f in member_facts:
-        completeness = sum([
-            f["complex_id"] is not None, f["floor"] is not None,
-            f["area_sqm"] is not None, f["rooms"] is not None,
-        ]) / 4.0
-
-        addrs = {(l["address"] or "").strip().lower() for l in f["listings"] if l["address"]}
-        address_consistency = 1.0 if len(addrs) <= 1 else 1.0 / len(addrs)
-
-        coords_presence = 1.0 if any(l["lat"] is not None and l["lon"] is not None for l in f["listings"]) else 0.0
-
-        duration = (f["last_seen_at"] - f["first_seen_at"]).total_seconds()
-        history_duration = duration / max_duration if max_duration else 0.0
-
-        listing_count = len(f["listings"]) / max_count if max_count else 0.0
-
-        conflict_absence = 1.0 / (1 + f["n_conflicts"])
-
-        freshness = (f["last_seen_at"] - oldest).total_seconds() / freshness_span if freshness_span else 1.0
-
-        subscores = {
-            "completeness": completeness, "address_consistency": address_consistency,
-            "coords_presence": coords_presence, "history_duration": history_duration,
-            "listing_count": listing_count, "conflict_absence": conflict_absence, "freshness": freshness,
-        }
-        total = sum(_WEIGHTS[k] * v for k, v in subscores.items())
-        scored.append({"property_id": f["property_id"], "score": round(total, 4),
-                        "subscores": {k: round(v, 3) for k, v in subscores.items()},
-                        "n_listings": len(f["listings"]), "n_conflicts": f["n_conflicts"],
-                        "complex_id": f["complex_id"], "floor": f["floor"], "area_sqm": f["area_sqm"],
-                        "rooms": f["rooms"], "first_seen_at": f["first_seen_at"], "last_seen_at": f["last_seen_at"]})
-
-    # Стабильный tie-break — меньший property_id ПОСЛЕДНИМ ключом сортировки.
-    scored.sort(key=lambda s: (-s["score"], s["property_id"]))
-    return scored
+from bot.identity.property_merge import (  # noqa: E402  (после sys.path.insert)
+    _CANONICAL_WEIGHTS as _WEIGHTS,
+    build_components as _build_components,
+    score_canonical_candidates as _score_component,
+    _load_component_facts as _load_property_facts,
+)
 
 
 async def main() -> None:
@@ -236,8 +120,8 @@ async def main() -> None:
         print(f"  property_id={s['property_id']:>6}  score={s['score']:.4f}  "
               f"listings={s['n_listings']}  conflicts={s['n_conflicts']}  "
               f"floor={s['floor']}  area={s['area_sqm']}  rooms={s['rooms']}  "
-              f"complex_id={s['complex_id']}  first_seen={s['first_seen_at']:%Y-%m-%d}  "
-              f"last_seen={s['last_seen_at']:%Y-%m-%d}")
+              f"complex_id={s['complex_id']}  first_seen={s['first_seen_at'][:10]}  "
+              f"last_seen={s['last_seen_at'][:10]}")
         print(f"      subscores: {s['subscores']}")
 
     canonical = scored[0]

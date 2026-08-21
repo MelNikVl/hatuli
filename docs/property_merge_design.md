@@ -1,5 +1,40 @@
 # Property Identity — physical merge: architecture & rollout plan
 
+## Implementation status (2026-08-20, "Safe Physical Property Merge")
+
+Реализовано: `bot/identity/property_merge.py` (engine), `migrations/092_
+property_merge_log.sql` (§2 схема — без изменений), `scripts/property_
+merge_plan.py`/`property_merge_apply.py`/`property_merge_rollback.py`
+(CLI), `scripts/audit_property_merge_dry_run.py` (real-data dry-run,
+§10 отчёт), `tests/test_property_merge.py`. **Ни один physical merge не
+выполнен в production этим PR** — engine принят/протестирован, реальный
+canary — отдельное решение (см. финальный отчёт PR).
+
+Два расхождения с этим документом, разрешённые кодом (полные обоснования
+— докстринг `bot/identity/property_merge.py`, не дублируются здесь):
+
+1. **§1 canonical scoring** дополнен identity_status-тиром (confirmed →
+   provisional → merged) ПЕРЕД 7-факторным score — задача 2026-08-20
+   явно попросила этот приоритет, документ его не предполагал. На
+   сегодняшних данных (100% properties `provisional`) результат
+   идентичен старой формуле.
+2. **Новый шаг, отсутствовавший здесь** — `_resolve_live_canonical()`:
+   после ПЕРВОГО реального merge `property_match_candidates.candidate_
+   property_id` может указывать на уже `'merged'` property (§3 этого
+   документа сознательно не трогает такие строки) — граф связности
+   резолвит такие id к их живому canonical ПЕРЕД построением компонент,
+   иначе следующий `plan()` включил бы пустую (без листингов) `'merged'`
+   property как полноценного "участника".
+
+Также добавлена (документ её не описывал, задача 2026-08-20 потребовала
+явно) **строгая pre-merge ревалидация** поверх §9: rooms mismatch/severe
+address mismatch (house number БЕЗ общего `complex_id`)/severe price
+conflict, пересчитанные на ЖИВЫХ данных перед КАЖДЫМ `--apply`, плюс
+frozen-manifest workflow (`component_hash`) — гарантирует, что `--apply`
+никогда не строит собственный "живой" список accepted-кандидатов заново
+(тот же класс бага, что нашёлся и был исправлен в photo-evidence batch
+pipeline).
+
 Задача 2026-08-18, "Property Identity — review calibration", Stage 2:
 **проектный документ, физический merge НЕ выполняется этим PR ни в
 production, ни где-либо ещё.** Код (если/когда будет написан) — отдельная
