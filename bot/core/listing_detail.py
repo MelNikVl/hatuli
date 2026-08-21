@@ -104,12 +104,14 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
     # для kzk_badge ниже — тот же lookup, не дублируем запрос.
     complex_photos = []
     kzk_badge = None
+    complex_housing_class = None
     if l.get("complex_name"):
         cx_row = await pg_fetchrow(
-            "SELECT id, developer_id, photos, photo_url FROM complexes "
+            "SELECT id, developer_id, photos, photo_url, housing_class FROM complexes "
             "WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
             l["complex_name"])
         if cx_row:
+            complex_housing_class = cx_row.get("housing_class")
             cxp = cx_row["photos"]
             if isinstance(cxp, str):
                 try:
@@ -193,6 +195,19 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
                 "photo": (nb_photos or [None])[0],
             })
 
+    # «Паспорт рисков» (задача 2026-08-21, "Риски объекта") — единый
+    # normalized risk_analysis, см. bot/core/listing_risks.py докстринг.
+    # Переиспользует уже загруженные l/kzk_badge/seller_profile/layers/
+    # ai_analysis/complex_housing_class — не пересчитывает их заново.
+    # compute_listing_risks_safe гасит любую ошибку внутри (не роняет
+    # открытие карточки), поэтому отдельного try/except здесь не нужно.
+    from bot.core.listing_risks import compute_listing_risks_safe
+    risk_analysis = await compute_listing_risks_safe(
+        listing_id, l, kzk_badge=kzk_badge, seller_profile=seller_profile,
+        layers=layers, ai_analysis=ai_analysis,
+        complex_housing_class=complex_housing_class,
+    )
+
     return {
         "id": l["id"], "url": l.get("url") or "",
         "price": l.get("price"), "rooms": l.get("rooms"),
@@ -243,6 +258,7 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
         } if hd else None)(
             (lambda v: (json.loads(v) if isinstance(v, str) else v) if v else None)(l.get("hex_details"))
         ),
+        "risk_analysis": risk_analysis,
         # То же, что показывает страница /admin/analytics/{id} — доходность
         # и разбивка скора по компонентам, теперь дублируется и в модалке
         # на карте, чтобы не заставлять переходить на отдельную страницу.

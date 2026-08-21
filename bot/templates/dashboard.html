@@ -3065,6 +3065,102 @@ function loadDomScenario(id) {
   });
 }
 
+// ── «Риски объекта» (задача 2026-08-21, "паспорт рисков") — рендер уже
+// нормализованного d.risk_analysis (bot/core/listing_risks.py, приходит
+// СРАЗУ вместе с основным /admin/api/listing/{id}, отдельного запроса не
+// нужно — в отличие от прогноза срока экспозиции, риски не настолько
+// тяжёлые, чтобы откладывать их отдельным lazy-запросом). Вся бизнес-
+// логика (что считать риском, пороги, severity) — на бэкенде; здесь
+// только вёрстка уже готовых карточек, никаких условий по сути риска.
+const RISK_SEVERITY_META = {
+  critical: {bg: 'rgba(239,68,68,.14)', border: 'rgba(239,68,68,.35)', text: '#dc2626', label: 'Критично'},
+  high:     {bg: 'rgba(239,68,68,.10)', border: 'rgba(239,68,68,.28)', text: '#dc2626', label: 'Высокий'},
+  medium:   {bg: 'rgba(234,179,8,.14)', border: 'rgba(234,179,8,.35)', text: '#a16207', label: 'Стоит проверить'},
+  low:      {bg: 'rgba(100,116,139,.12)', border: 'rgba(100,116,139,.28)', text: '#475569', label: 'Незначительно'},
+  info:     {bg: 'rgba(100,116,139,.12)', border: 'rgba(100,116,139,.28)', text: '#475569', label: 'Информация'},
+};
+const RISK_PROTECTIVE_META = {bg: 'rgba(22,163,74,.1)', border: 'rgba(22,163,74,.3)', text: '#15803d'};
+
+function riskItemCardHtml(item) {
+  const m = RISK_SEVERITY_META[item.severity] || RISK_SEVERITY_META.info;
+  return `
+<div style="padding:10px 12px;border-radius:10px;background:${m.bg};border:1px solid ${m.border};margin-bottom:8px;">
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+    <span style="font-weight:700;font-size:13.5px;color:${m.text};">${escapeHtml(item.title)}</span>
+    <span style="font-size:10px;font-weight:700;color:${m.text};background:rgba(255,255,255,.5);padding:1px 7px;border-radius:8px;">${m.label}</span>
+  </div>
+  <div style="font-size:12.5px;color:var(--text);margin-top:5px;line-height:1.5;">${escapeHtml(item.description)}</div>
+  <div style="font-size:11px;color:#888;margin-top:6px;">Источник: ${escapeHtml(item.source || '—')}</div>
+  ${item.recommendation ? `<div style="font-size:11.5px;color:${m.text};margin-top:4px;">👉 ${escapeHtml(item.recommendation)}</div>` : ''}
+</div>`;
+}
+
+function riskProtectiveRowHtml(p) {
+  const m = RISK_PROTECTIVE_META;
+  return `
+<div style="padding:9px 12px;border-radius:10px;background:${m.bg};border:1px solid ${m.border};margin-bottom:6px;">
+  <span style="font-weight:700;font-size:13px;color:${m.text};">✅ ${escapeHtml(p.title)}</span>
+  <div style="font-size:12px;color:var(--text);margin-top:3px;line-height:1.5;">${escapeHtml(p.description)}</div>
+</div>`;
+}
+
+function riskUnknownGroupHtml(u, idx, uid) {
+  return `
+<details style="margin-bottom:6px;">
+  <summary style="cursor:pointer;font-size:12.5px;font-weight:600;color:var(--text);padding:4px 0;">🔍 ${escapeHtml(u.title)}</summary>
+  <div style="font-size:12px;color:#888;padding:4px 4px 6px 20px;line-height:1.5;">${escapeHtml(u.description)}</div>
+</details>`;
+}
+
+const RISK_STATE_META = {
+  // overall_level -> состояние заголовка блока (задание §5, 3 состояния)
+  critical: {icon: '🔴', label: 'Обнаружены значимые риски'},
+  high:     {icon: '🔴', label: 'Обнаружены значимые риски'},
+  medium:   {icon: '🟡', label: 'Есть моменты, которые стоит проверить'},
+  low:      {icon: '🟢', label: 'Явных рисков по имеющимся данным не обнаружено'},
+  info:     {icon: '🟢', label: 'Явных рисков по имеющимся данным не обнаружено'},
+};
+
+function renderRiskAnalysisBody(ra, uid) {
+  if (!ra || ra.overall_level === 'unknown') {
+    return '<div style="color:#999;font-size:13px;">Риски временно не рассчитаны.</div>';
+  }
+  const state = RISK_STATE_META[ra.overall_level] || RISK_STATE_META.info;
+  const items = ra.items || [];
+  const topItems = items.slice(0, 3);
+  const restItems = items.slice(3);
+  const protective = ra.protective || [];
+  const unknowns = ra.unknowns || [];
+
+  const topHtml = topItems.map(riskItemCardHtml).join('');
+  const restHtml = restItems.map(riskItemCardHtml).join('');
+  const showAllBtn = restItems.length ? `
+<button type="button" onclick="document.getElementById('risk-more-${uid}').style.display='block';this.style.display='none';"
+        style="background:none;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 14px;font-size:12.5px;font-weight:700;cursor:pointer;margin-top:2px;">
+  Показать все (${items.length})
+</button>` : '';
+
+  const protectiveHtml = protective.length ? `
+<div style="margin-top:12px;">${protective.map(riskProtectiveRowHtml).join('')}</div>` : '';
+
+  const unknownsHtml = unknowns.length ? `
+<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+  <div style="font-size:12.5px;font-weight:700;color:var(--text);margin-bottom:6px;">Что не удалось проверить</div>
+  ${unknowns.map((u, i) => riskUnknownGroupHtml(u, i, uid)).join('')}
+</div>` : '';
+
+  return `
+<div style="font-size:16px;font-weight:800;">${state.icon} ${state.label}</div>
+<div style="font-size:12px;color:#999;margin-top:4px;line-height:1.5;">
+  Это не означает, что объект полностью проверен. Ниже указано, каких данных у Clearly нет.
+</div>
+<div style="font-size:11.5px;color:#888;margin-top:6px;">${escapeHtml(ra.summary || '')}</div>
+${items.length ? `<div style="margin-top:12px;">${topHtml}<div id="risk-more-${uid}" style="display:none;">${restHtml}</div>${showAllBtn}</div>` : ''}
+${protectiveHtml}
+${unknownsHtml}
+`;
+}
+
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : String(s);
@@ -4864,8 +4960,15 @@ function openDetailModal(id, ev, scrollToScore) {
 ${dealScoreGaugeSvg(d.deal_score.deal)}
 <div style="font-size:13px;color:var(--text);margin-top:2px;text-align:center;">Полнота данных: <b>${d.deal_score.confidence}%</b></div>
 <div style="font-size:11.5px;color:var(--text);margin-top:10px;line-height:1.4;">
-  Взвешенная сумма 5 факторов: цена vs локальный рынок (40%), локация (20%), качество ЖК (20%), доходность (15%), риск (5%).
+  Deal Score оценивает ПРИВЛЕКАТЕЛЬНОСТЬ предложения — взвешенная сумма
+  цены vs локального рынка, локации, качества ЖК и доходности
+  (bot/core/deal_score.py — актуальные веса см. /admin/info).
   Полнота данных — доля факторов, посчитанных на реальных данных, а не риск сделки и не статистическая уверенность модели.
+  <br><br>
+  <b>Риски в этот балл не подмешиваются</b> (вес риска в сумме — 0%) — они
+  показываются отдельным блоком «🛡 Риски объекта» выше и могут быть
+  важнее высокого Deal Score: высокая привлекательность предложения не
+  отменяет юридические, объектные или информационные риски.
 </div>` : '';
 
     // Task 5: мини-панель Kepler.gl — тепловая карта цен по району вокруг
@@ -4988,6 +5091,22 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
   <div id="modal-dom-scenario-body" style="font-size:13px;color:#999;">Считаем прогноз…</div>
 </div>` : '';
 
+    // «Риски объекта» (задача 2026-08-21, "паспорт рисков") — приходит
+    // СРАЗУ в d.risk_analysis (bot/core/listing_risks.py, см. bot/core/
+    // listing_detail.py), отдельного запроса не нужно (в отличие от
+    // прогноза срока экспозиции) — риск-анализ переиспользует уже
+    // загруженные внутри build_listing_detail() данные, не требует
+    // второго тяжёлого похода в БД со стороны фронта. Блок показывается
+    // ВСЕГДА (даже если risk_analysis недоступен — renderRiskAnalysisBody
+    // сама показывает аккуратный fallback, см. функцию выше).
+    // Расположение — после цены/торга/прогноза срока экспозиции, до
+    // Deal Score (задание §5).
+    const riskAnalysisHtml = !isPublicTier ? `
+<div id="modal-risk-analysis-wrap" style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
+  <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">🛡 Риски объекта</div>
+  <div id="modal-risk-analysis-body">${renderRiskAnalysisBody(d.risk_analysis, id)}</div>
+</div>` : '';
+
     // Профиль продавца (§2.7 liquidity_model_design.md, задача
     // 2026-08-15, миграция 077, seller_profiles) — d.seller_profile
     // приходит из bot/core/listing_detail.py, null если у продавца
@@ -5022,6 +5141,7 @@ ${kzkBadgeHtml}
 ${bargainHtml}
 ${priceHistoryHtml}
 ${domScenarioHtml}
+${riskAnalysisHtml}
 ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:13px;color:var(--text);font-weight:700;margin-bottom:6px;">📝 Описание</div>
   <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(d.description).slice(0, 600)}${d.description.length > 600 ? '…' : ''}</div>
