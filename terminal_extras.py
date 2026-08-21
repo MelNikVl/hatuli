@@ -6460,6 +6460,39 @@ def make_extras_router(templates) -> APIRouter:
         from bot.core.listing_detail import build_price_history
         return JSONResponse(await build_price_history(listing_id))
 
+    # ── Сценарный прогноз срока экспозиции (задача 2026-08-21, "MVP
+    # прогноза срока экспозиции") ───────────────────────────────────────────
+
+    @router.get("/admin/api/listing/{listing_id}/dom-scenario")
+    async def api_listing_dom_scenario(request: Request, listing_id: str):
+        """Отдельный endpoint, а не поле в /admin/api/listing/{id} —
+        загружается ТОЛЬКО когда попап уже открыт (см. loadDomScenario в
+        dashboard.html), не блокирует и не замедляет открытие самой
+        карточки (п.4 задания). Расчёт — непараметрический, см. bot/
+        analytics/dom_scenario.py докстринг (Kaplan-Meier по сегменту +
+        PAVA-сглаживание ценовых корзин, НЕ ML-модель — "Пауза по ML" не
+        нарушается, докстринг там же).
+
+        Ошибка расчёта НЕ должна ломать открытие карточки (п.4) — весь
+        запрос обёрнут в try/except, при любой проблеме отдаём
+        {"available": false}, popup показывает аккуратный fallback
+        (см. renderDomScenarioBlock в dashboard.html)."""
+        from bot.core.site_auth import get_user_tier
+
+        tier = await get_user_tier(request)
+        if tier == "public":
+            # Публичному тиру и так не отдаётся полная карточка вторички
+            # (см. /admin/api/listing/{id} -> ListingRestricted) — тот же
+            # уровень доступа здесь, без похода в БД.
+            return JSONResponse({"available": False, "reason": "restricted"})
+        try:
+            from bot.analytics.dom_scenario import compute_dom_scenario_cached
+            payload = await compute_dom_scenario_cached(listing_id)
+        except Exception:
+            logger.exception("dom_scenario: расчёт не удался для listing_id=%s", listing_id)
+            return JSONResponse({"available": False, "reason": "error"})
+        return JSONResponse(payload)
+
     @router.get("/admin/api/no-photo-history")
     async def no_photo_history(request: Request, days: int = 30):
         """Снимки no_photo_stats_history — сколько активных объявлений без
