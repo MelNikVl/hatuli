@@ -31,6 +31,36 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
+    def _fmt_num(value, digits: int = 0) -> str:
+        """1234567 -> '1 234 567' / 12.3 -> '12,3' — форматирование больших
+        чисел для рыночной аналитики (задача 2026-08-21, "форматирование
+        тенге и больших чисел"), None -> '—'."""
+        if value is None:
+            return "—"
+        try:
+            num = round(float(value), digits)
+        except (TypeError, ValueError):
+            return "—"
+        if digits == 0:
+            s = f"{int(num):,}".replace(",", " ")
+        else:
+            s = f"{num:,.{digits}f}".replace(",", " ").replace(".", ",")
+        return s
+
+    def _fmt_tenge(value) -> str:
+        if value is None:
+            return "—"
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            return "—"
+        if num >= 1_000_000:
+            return f"{_fmt_num(num / 1_000_000, 1)} млн ₸"
+        return f"{_fmt_num(num)} ₸"
+
+    templates.env.filters["fmt_num"] = _fmt_num
+    templates.env.filters["fmt_tenge"] = _fmt_tenge
+
     def is_authed(request: Request) -> bool:
         return request.cookies.get("admin_auth") == "1"
 
@@ -443,6 +473,121 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         if timeline is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
         return JSONResponse(timeline)
+
+    # ── Рыночная аналитика (задача 2026-08-21, "Обзор рынка" +
+    # "Поглощение и ликвидность") — read-only презентационные страницы,
+    # НЕ трогают Deal Score/Property Identity/архивацию, только читают.
+    # Сервисный слой — bot/analytics/market_dashboards.py (там же —
+    # формулы и ограничения каждого показателя).
+
+    def _mkt_filters_context(request: Request, filters: dict, complex_options: list[dict]) -> dict:
+        from bot.analytics import market_dashboards as md
+        qp = dict(request.query_params)
+        presentation = qp.get("presentation") == "1"
+        qp_reset = {"presentation": "1"} if presentation else {}
+        from urllib.parse import urlencode
+        return {
+            "filters": filters,
+            "district_options": md.DISTRICT_OPTIONS,
+            "class_options": md.CLASS_OPTIONS,
+            "rooms_options": md.ROOMS_OPTIONS,
+            "market_type_options": md.MARKET_TYPE_OPTIONS,
+            "status_options": md.STATUS_OPTIONS,
+            "complex_options": complex_options,
+            "raw_presentation": presentation,
+            "reset_url": f"{request.url.path}?{urlencode(qp_reset)}" if qp_reset else request.url.path,
+        }
+
+    @app.get("/admin/analytics/market-overview", response_class=HTMLResponse)
+    async def market_overview_page(
+        request: Request, period: str = "30", district: str = "", complex_id: str = "",
+        klass: str = "", rooms: str = "", market_type: str = "", status: str = "active",
+        structure_dim: str = "rooms", corridor_dim: str = "rooms",
+    ):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        import asyncio
+        from bot.analytics import market_dashboards as md
+
+        filters = md.normalize_filters({
+            "period": period, "district": district, "complex_id": complex_id, "klass": klass,
+            "rooms": rooms, "market_type": market_type, "status": status,
+        })
+
+        (kpis, dynamics, new_vs_exit, complex_options, freshness,
+         struct_rooms, struct_class, struct_district, struct_price_range, struct_area,
+         corridor_rooms, corridor_class, segments) = await asyncio.gather(
+            md.overview_kpis(filters),
+            md.market_dynamics_series(filters),
+            md.new_vs_exit_series(filters),
+            md.list_complexes_for_filter(),
+            md.get_data_freshness(),
+            md.supply_structure(filters, "rooms"),
+            md.supply_structure(filters, "class"),
+            md.supply_structure(filters, "district"),
+            md.supply_structure(filters, "price_range"),
+            md.supply_structure(filters, "area"),
+            md.price_corridors(filters, "rooms"),
+            md.price_corridors(filters, "class"),
+            md.segment_table(filters),
+        )
+
+        ctx = {
+            "request": request, "atab": "market_overview",
+            "kpis": kpis, "dynamics": dynamics, "new_vs_exit": new_vs_exit,
+            "freshness": freshness, "segments": segments,
+            "structure_by_dim": {
+                "rooms": struct_rooms, "class": struct_class, "district": struct_district,
+                "price_range": struct_price_range, "area": struct_area,
+            },
+            "corridor_by_dim": {"rooms": corridor_rooms, "class": corridor_class},
+        }
+        ctx.update(_mkt_filters_context(request, filters, complex_options))
+        return templates.TemplateResponse("market_overview.html", ctx)
+
+    @app.get("/admin/analytics/market-absorption", response_class=HTMLResponse)
+    async def market_absorption_page(
+        request: Request, period: str = "30", district: str = "", complex_id: str = "",
+        klass: str = "", rooms: str = "", market_type: str = "", status: str = "active",
+        exit_speed_dim: str = "district", exit_speed_metric: str = "exit_rate",
+    ):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        import asyncio
+        from bot.analytics import market_dashboards as md
+
+        filters = md.normalize_filters({
+            "period": period, "district": district, "complex_id": complex_id, "klass": klass,
+            "rooms": rooms, "market_type": market_type, "status": status,
+        })
+
+        (kpis, new_vs_exit, funnel, complex_options, freshness,
+         speed_rooms, speed_class, speed_district, speed_complex,
+         scatter, drop_buckets) = await asyncio.gather(
+            md.absorption_kpis(filters),
+            md.new_vs_exit_series(filters),
+            md.supply_funnel(filters),
+            md.list_complexes_for_filter(),
+            md.get_data_freshness(),
+            md.segment_exit_speed(filters, "rooms"),
+            md.segment_exit_speed(filters, "class"),
+            md.segment_exit_speed(filters, "district"),
+            md.segment_exit_speed(filters, "complex"),
+            md.price_vs_liquidity_scatter(filters),
+            md.price_drop_buckets(filters),
+        )
+
+        ctx = {
+            "request": request, "atab": "market_absorption",
+            "kpis": kpis, "new_vs_exit": new_vs_exit, "funnel": funnel, "freshness": freshness,
+            "speed_by_dim": {
+                "rooms": speed_rooms, "class": speed_class, "district": speed_district, "complex": speed_complex,
+            },
+            "scatter": scatter, "drop_buckets": drop_buckets,
+        }
+        ctx.update(_mkt_filters_context(request, filters, complex_options))
+        return templates.TemplateResponse("market_absorption.html", ctx)
+
 
     @app.get("/admin/users/stats", response_class=HTMLResponse)
     async def users_stats_page(request: Request):

@@ -1,0 +1,70 @@
+<!-- Единый блок фильтров — общий для «Обзор рынка» и «Поглощение и
+     ликвидность» (задача 2026-08-21: "фильтры должны обновлять KPI,
+     графики и таблицы согласованно"). Обычная GET-форма — submit
+     перезагружает страницу с новыми query-параметрами, сервер
+     пересчитывает всё согласованно одним набором filters. -->
+<form class="mkt-filters" method="get" id="mkt-filters-form">
+  {% if raw_presentation %}<input type="hidden" name="presentation" value="1">{% endif %}
+  <div class="fld">
+    <label>Период</label>
+    <select name="period" onchange="document.getElementById('mkt-filters-form').submit()">
+      {% for val, label in [('7','7 дней'), ('30','30 дней'), ('90','90 дней'), ('all','Весь период')] %}
+      <option value="{{ val }}" {{ 'selected' if filters.period == val }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fld">
+    <label>Район</label>
+    <select name="district" onchange="document.getElementById('mkt-filters-form').submit()">
+      <option value="">Все районы</option>
+      {% for val, label in district_options %}
+      <option value="{{ val }}" {{ 'selected' if filters.district == val }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fld">
+    <label>ЖК</label>
+    <select name="complex_id" onchange="document.getElementById('mkt-filters-form').submit()">
+      <option value="">Все ЖК</option>
+      {% for c in complex_options %}
+      <option value="{{ c.id }}" {{ 'selected' if filters.complex_id == c.id }}>{{ c.name }} ({{ c.active_count }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fld">
+    <label>Класс жилья</label>
+    <select name="klass" onchange="document.getElementById('mkt-filters-form').submit()">
+      <option value="">Все классы</option>
+      {% for c in class_options %}
+      <option value="{{ c }}" {{ 'selected' if filters.klass == c }}>{{ c|capitalize }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fld">
+    <label>Комнатность</label>
+    <select name="rooms" onchange="document.getElementById('mkt-filters-form').submit()">
+      <option value="">Все</option>
+      {% for val, label in rooms_options %}
+      <option value="{{ val }}" {{ 'selected' if filters.rooms == val }}>{{ label }}-комн.</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fld">
+    <label>Рынок</label>
+    <select name="market_type" onchange="document.getElementById('mkt-filters-form').submit()">
+      <option value="">Все</option>
+      {% for val, label in market_type_options %}
+      <option value="{{ val }}" {{ 'selected' if filters.market_type == val }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="fld">
+    <label>Статус</label>
+    <select name="status" onchange="document.getElementById('mkt-filters-form').submit()">
+      {% for val, label in status_options %}
+      <option value="{{ val }}" {{ 'selected' if filters.status == val }}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <a class="mkt-reset" href="{{ reset_url }}">Сбросить фильтры</a>
+</form>
