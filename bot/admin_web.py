@@ -66,7 +66,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     @app.get("/llms.txt", response_class=PlainTextResponse)
     async def llms_txt():
         return PlainTextResponse(
-            "# Hatuli\n\n"
+            "# Clearly\n\n"
             "> Карта квартир Астаны: продажа и аренда, тепловые карты цен/шума/"
             "транспортной доступности, рейтинг жилых комплексов, оценка справедливой "
             "цены и торга по объявлению.\n\n"
@@ -229,8 +229,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 price_txt = f"{r['price']/1e6:.1f} млн ₸" if r.get("price") else ""
                 title_bits = [f"{r.get('rooms') or '?'}-комн", f"{r.get('area') or '?'} м²", r["complex_name"]]
                 listing_meta = {
-                    "title": f"{price_txt} · {' · '.join(title_bits)} · Новостройка — Hatuli".strip(" ·"),
-                    "description": f"{' · '.join(title_bits)} — цена {price_txt or 'по запросу'} на Hatuli.",
+                    "title": f"{price_txt} · {' · '.join(title_bits)} · Новостройка — Clearly".strip(" ·"),
+                    "description": f"{' · '.join(title_bits)} — цена {price_txt or 'по запросу'} на Clearly.",
                     "image": r.get("layout_photo_url"),
                 }
             return await _render_dashboard(request, listing_id=listing_id, listing_meta=listing_meta)
@@ -267,8 +267,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             if r.get("complex_name"):
                 title_bits.append(r["complex_name"])
             listing_meta = {
-                "title": f"{price_txt} · {' · '.join(title_bits)} — Hatuli".strip(" ·"),
-                "description": f"{' · '.join(title_bits)}{', ' + r['district'] if r.get('district') else ''} — цена {price_txt or 'по запросу'} на Hatuli.",
+                "title": f"{price_txt} · {' · '.join(title_bits)} — Clearly".strip(" ·"),
+                "description": f"{' · '.join(title_bits)}{', ' + r['district'] if r.get('district') else ''} — цена {price_txt or 'по запросу'} на Clearly.",
                 "image": photos[0] if photos else None,
             }
         return await _render_dashboard(request, listing_id=listing_id, listing_meta=listing_meta)
