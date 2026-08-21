@@ -72,7 +72,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     token = parts[1].strip() if len(parts) > 1 else ""
     if not token:
         await message.answer(
-            "Привет! Это бот входа в личный кабинет Hatuli.\n"
+            "Привет! Это бот входа в личный кабинет Clearly.\n"
             "Открой сайт и нажми «Войти через Telegram» — оттуда придёт ссылка сюда."
         )
         return

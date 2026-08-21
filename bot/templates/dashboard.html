@@ -4784,7 +4784,7 @@ function toggleShareMenu(ev, id) {
   if (!menu) return;
   if (menu.style.display === 'block') { menu.style.display = 'none'; return; }
   const url = shareListingUrl(id);
-  const text = 'Смотри квартиру на Hatuli';
+  const text = 'Смотри квартиру на Clearly';
   const itemStyle = 'display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:none;background:none;color:var(--text);font-size:14px;text-align:left;cursor:pointer;border-radius:6px;white-space:nowrap;';
   const items = [];
   items.push(`<button type="button" style="${itemStyle}" onclick="shareCopyLink('${id}', this)">🔗 Скопировать ссылку</button>`);
@@ -4795,7 +4795,7 @@ function toggleShareMenu(ev, id) {
   // (системный шэринг умеет "отправить в Instagram"), на десктопе даём
   // скопировать ссылку и открыть Instagram, чтобы вставить в сообщение/бно.
   if (navigator.share) {
-    items.push(`<button type="button" style="${itemStyle}" onclick="navigator.share({title:'Hatuli',text:'${text}',url:'${url}'}).catch(()=>{}); document.getElementById('share-menu').style.display='none';">📱 Ещё (Instagram и др.)</button>`);
+    items.push(`<button type="button" style="${itemStyle}" onclick="navigator.share({title:'Clearly',text:'${text}',url:'${url}'}).catch(()=>{}); document.getElementById('share-menu').style.display='none';">📱 Ещё (Instagram и др.)</button>`);
   } else {
     items.push(`<a href="https://www.instagram.com/" target="_blank" style="${itemStyle}text-decoration:none;" onclick="shareCopyLink('${id}', null)">📷 Instagram (сначала скопируется ссылка)</a>`);
   }
