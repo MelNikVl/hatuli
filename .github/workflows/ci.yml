@@ -76,6 +76,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Задача 2026-08-21 ("маркер карты -> карточка", tests/test_map_card_sync.py)
+      # — первый тест в проекте, реально запускающий браузер (Playwright
+      # chromium.launch()), не подменяющий sys.modules['playwright.sync_api']
+      # заглушкой (см. tests/test_news_collect_deadline.py — тот паттерн
+      # сознательно избегал этого шага раньше). `pip install` кладёт только
+      # python-пакет playwright, САМИ бинарники браузера — отдельная загрузка;
+      # --with-deps тянет и системные библиотеки (иначе headless chromium не
+      # стартует на голом ubuntu-latest runner'е — не хватает libnss3 и т.п.).
+      - name: Install Playwright browser (chromium)
+        run: playwright install --with-deps chromium
+
       - name: Compose DATABASE_URL
         run: echo "DATABASE_URL=postgresql://$TEST_DB_USER:$TEST_DB_PASSWORD@$TEST_DB_HOST:5432/$TEST_DB_NAME" >> "$GITHUB_ENV"
 
