@@ -26,6 +26,7 @@ import re
 
 import httpx
 from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from bot.db import settings as app_settings
@@ -6436,7 +6437,22 @@ def make_extras_router(templates) -> APIRouter:
         """Полные данные объявления для модалки (фото, адрес, торг).
         Сборка вынесена в bot/core/listing_detail.build_listing_detail()
         (Фаза B, п.5, "роут не знает SQL") — здесь только тир + перевод
-        исключений в HTTP-статусы, поведение не менялось."""
+        исключений в HTTP-статусы, поведение не менялось.
+
+        Регрессия (найдена CI на PR #39, tests/test_dom_scenario.py::
+        test_main_listing_card_still_opens_when_dom_scenario_errors):
+        payload — сырой dict из asyncpg-строки, где NUMERIC-колонки
+        (apartment_listings.yield_pct/payback_years — см. migrations/
+        000_core_tables.sql, на dev-БД они исторически ALTER'нуты в REAL
+        мимо миграций, поэтому локально не воспроизводилось — но
+        migrations/*.sql "с нуля", как в CI/проде, создают их NUMERIC)
+        приходят как decimal.Decimal — стандартный json.dumps внутри
+        JSONResponse.render() их не сериализует (TypeError). jsonable_
+        encoder() — рекурсивный (проходит вложенные dict/list, см.
+        bargain/seller_profile/score_breakdown ниже по payload), тот же
+        конвертер, что FastAPI использует под капотом для response_model —
+        никакой новой зависимости, просто перестали её обходить прямым
+        JSONResponse(payload)."""
         from bot.core.site_auth import get_user_tier
         from bot.core.listing_detail import build_listing_detail, ListingNotFound, ListingRestricted
 
@@ -6447,7 +6463,7 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse({"error": "not_found"}, status_code=404)
         except ListingRestricted as exc:
             return JSONResponse({"error": "restricted", "message": exc.message}, status_code=403)
-        return JSONResponse(payload)
+        return JSONResponse(jsonable_encoder(payload))
 
     # ── История цены объявления ───────────────────────────────────────────
 
@@ -6459,6 +6475,39 @@ def make_extras_router(templates) -> APIRouter:
         (Фаза B, п.5, "роут не знает SQL")."""
         from bot.core.listing_detail import build_price_history
         return JSONResponse(await build_price_history(listing_id))
+
+    # ── Сценарный прогноз срока экспозиции (задача 2026-08-21, "MVP
+    # прогноза срока экспозиции") ───────────────────────────────────────────
+
+    @router.get("/admin/api/listing/{listing_id}/dom-scenario")
+    async def api_listing_dom_scenario(request: Request, listing_id: str):
+        """Отдельный endpoint, а не поле в /admin/api/listing/{id} —
+        загружается ТОЛЬКО когда попап уже открыт (см. loadDomScenario в
+        dashboard.html), не блокирует и не замедляет открытие самой
+        карточки (п.4 задания). Расчёт — непараметрический, см. bot/
+        analytics/dom_scenario.py докстринг (Kaplan-Meier по сегменту +
+        PAVA-сглаживание ценовых корзин, НЕ ML-модель — "Пауза по ML" не
+        нарушается, докстринг там же).
+
+        Ошибка расчёта НЕ должна ломать открытие карточки (п.4) — весь
+        запрос обёрнут в try/except, при любой проблеме отдаём
+        {"available": false}, popup показывает аккуратный fallback
+        (см. renderDomScenarioBlock в dashboard.html)."""
+        from bot.core.site_auth import get_user_tier
+
+        tier = await get_user_tier(request)
+        if tier == "public":
+            # Публичному тиру и так не отдаётся полная карточка вторички
+            # (см. /admin/api/listing/{id} -> ListingRestricted) — тот же
+            # уровень доступа здесь, без похода в БД.
+            return JSONResponse({"available": False, "reason": "restricted"})
+        try:
+            from bot.analytics.dom_scenario import compute_dom_scenario_cached
+            payload = await compute_dom_scenario_cached(listing_id)
+        except Exception:
+            logger.exception("dom_scenario: расчёт не удался для listing_id=%s", listing_id)
+            return JSONResponse({"available": False, "reason": "error"})
+        return JSONResponse(payload)
 
     @router.get("/admin/api/no-photo-history")
     async def no_photo_history(request: Request, days: int = 30):
