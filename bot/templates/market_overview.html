@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% include "_market_dashboard_style.html" %}
+{% if raw_presentation %}<script>document.body.classList.add('mkt-presentation-mode');</script>{% endif %}
+<div class="mkt-admin-only">{% include "_analytics_tabs.html" with context %}</div>
+
+<div class="mkt-dashboard" id="mkt-root">
+  <div class="mkt-header">
+    <div>
+      <h1>Рынок недвижимости Астаны</h1>
+      <p class="mkt-subtitle">Предложение, цены и динамика рынка на основе наблюдаемых объявлений</p>
+    </div>
+    <div style="display:flex;gap:14px;align-items:flex-start;">
+      <div class="mkt-freshness">
+        Данные обновлены: <b>{{ freshness.max_last_seen.strftime('%d.%m.%Y %H:%M') if freshness.max_last_seen else '—' }}</b><br>
+        История с <b>{{ freshness.min_first_seen.strftime('%d.%m.%Y') if freshness.min_first_seen else '—' }}</b>
+      </div>
+      <a class="mkt-presentation-btn" id="mkt-presentation-toggle" href="#">🖥 Режим презентации</a>
+    </div>
+  </div>
+
+  {% include "_market_filters.html" %}
+
+  <!-- ── KPI ──────────────────────────────────────────────────────── -->
+  <div class="mkt-kpi-grid">
+    {% for key, icon, label in [
+      ('active_listings','📋','Активные объявления'),
+      ('unique_properties','🏠','Уникальные физ. квартиры'),
+      ('new_supply','🆕','Новое предложение'),
+      ('confirmed_exits','📤','Подтверждённо выбывшие'),
+      ('median_price','💰','Медианная цена квартиры'),
+      ('median_ppm2','📐','Медианная цена за м²'),
+      ('median_ppm2_change','📈','Δ цены/м² к пред. периоду'),
+      ('median_dom','⏱','Медианная экспозиция'),
+      ('price_drop_share','🔻','Доля со снижением цены'),
+      ('active_complexes','🏗','Активные ЖК'),
+    ] %}
+    {% set k = kpis[key] %}
+    <div class="mkt-kpi">
+      <div class="lbl">{{ icon }} {{ label }}
+        <span class="tip-ico" title="{{ k.formula }}{{ ' — ' + k.limitation if k.limitation }}">i</span>
+      </div>
+      {% if k.status == 'insufficient' or k.value is none %}
+        <div class="val" style="font-size:16px;color:var(--mkt-muted);font-weight:600;">Недостаточно накопленных данных</div>
+      {% else %}
+        <div class="val">
+          {%- if key in ('median_price','median_ppm2') -%}
+            {{ k.value | fmt_tenge }}
+          {%- else -%}
+            {{ k.value | fmt_num(1 if key in ('median_dom', 'median_ppm2_change', 'price_drop_share') else 0) }}<span class="unit">{{ k.unit }}</span>
+          {%- endif -%}
+        </div>
+      {% endif %}
+      {% if key == 'median_ppm2_change' and k.status == 'ok' and k.value is not none %}
+        <span class="chg {{ 'up' if k.value > 0 else ('down' if k.value < 0 else 'flat') }}">
+          {{ '▲' if k.value > 0 else ('▼' if k.value < 0 else '→') }} {{ k.value }}%
+        </span>
+      {% endif %}
+      {% if k.limitation %}<div class="lim">{{ k.limitation }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- ── 1. Динамика рынка ───────────────────────────────────────── -->
+  <div class="mkt-chart-panel">
+    <h3>📊 Динамика рынка</h3>
+    <p class="mkt-note">{{ dynamics.note }}</p>
+    {% if dynamics.labels|length < 2 %}
+      <div class="mkt-insufficient">Недостаточно накопленных данных для графика за выбранный период</div>
+    {% else %}
+    <div class="mkt-row-2">
+      <div class="mkt-canvas-wrap" style="height:230px;">
+        <canvas id="mkt-chart-active"></canvas>
+      </div>
+      <div class="mkt-canvas-wrap" style="height:230px;">
+        <canvas id="mkt-chart-price"></canvas>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── 2. Новое и выбывшее предложение ─────────────────────────── -->
+  <div class="mkt-chart-panel">
+    <h3>🔄 Новое и выбывшее предложение</h3>
+    <p class="mkt-note">Архивированные объявления — подтверждённое исчезновение с рынка, НЕ факт продажи.</p>
+    {% if new_vs_exit.labels|length < 1 %}
+      <div class="mkt-insufficient">Недостаточно накопленных данных</div>
+    {% else %}
+    <div class="mkt-canvas-wrap" style="height:280px;">
+      <canvas id="mkt-chart-newexit"></canvas>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="mkt-row-2">
+    <!-- ── 3. Структура предложения ──────────────────────────────── -->
+    <div class="mkt-chart-panel">
+      <h3>🧩 Структура предложения</h3>
+      <div class="mkt-seg-toggle" id="mkt-structure-toggle">
+        {% for dim, label in [('rooms','Комнатность'),('class','Класс ЖК'),('district','Район'),('price_range','Цена'),('area','Площадь')] %}
+        <button type="button" data-dim="{{ dim }}" class="{{ 'active' if dim == 'rooms' }}">{{ label }}</button>
+        {% endfor %}
+      </div>
+      <div class="mkt-canvas-wrap" style="height:320px;">
+        <canvas id="mkt-chart-structure"></canvas>
+      </div>
+    </div>
+
+    <!-- ── 4. Ценовые коридоры ───────────────────────────────────── -->
+    <div class="mkt-chart-panel">
+      <h3>📏 Ценовые коридоры (₸/м²)</h3>
+      <div class="mkt-seg-toggle" id="mkt-corridor-toggle">
+        <button type="button" data-dim="rooms" class="active">Комнатность</button>
+        <button type="button" data-dim="class">Класс ЖК</button>
+      </div>
+      <p class="mkt-note">P25–P75 (тёмный сегмент) вокруг медианы, тонкая линия — диапазон после отсечения выбросов (P1/P99).</p>
+      <div class="mkt-canvas-wrap" style="height:320px;">
+        <canvas id="mkt-chart-corridors"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 5. Таблица районов (замена карте гексагонов) ────────────── -->
+  <div class="mkt-chart-panel">
+    <h3>🗺 Районы — предложение и цены</h3>
+    <p class="mkt-note">Ограничено реальными административными районами Астаны, встречающимися в данных.</p>
+    {% if segments|length == 0 %}
+      <div class="mkt-insufficient">Недостаточно накопленных данных</div>
+    {% else %}
+    <div style="overflow-x:auto;">
+      <table class="mkt-table">
+        <thead><tr>
+          <th>Район</th><th class="num">Активно</th><th class="num">Медиана ₸/м²</th>
+          <th class="num">Δ цены к пред. периоду</th><th class="num">Медианная экспозиция</th><th class="num">Доля со снижением</th>
+        </tr></thead>
+        <tbody>
+          {% for s in segments %}
+          <tr class="{{ 'insufficient-row' if s.insufficient }}">
+            <td>{{ s.district }}{% if s.insufficient %}<span class="mkt-badge-insufficient">N&lt;{{ 20 }}</span>{% endif %}</td>
+            <td class="num">{{ s.active_count | fmt_num }}</td>
+            <td class="num">{{ (s.median_ppm2 | fmt_num) if s.median_ppm2 else '—' }}</td>
+            <td class="num">{% if s.price_change_pct is not none %}{{ '▲' if s.price_change_pct > 0 else ('▼' if s.price_change_pct < 0 else '→') }} {{ s.price_change_pct }}%{% else %}Недостаточно данных{% endif %}</td>
+            <td class="num">{{ (s.median_dom_days | fmt_num) ~ ' дн.' if s.median_dom_days else 'Недостаточно данных' }}</td>
+            <td class="num">{{ (s.price_drop_share_pct ~ '%') if s.price_drop_share_pct is not none else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+(function () {
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+  const accent = '#94ccd1';
+  const green = getComputedStyle(document.documentElement).getPropertyValue('--green').trim() || '#2ecc71';
+  const red = getComputedStyle(document.documentElement).getPropertyValue('--red').trim() || '#e74c3c';
+  const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || (isDark ? '#e8eaf6' : '#1a1a2e');
+  const gridColor = isDark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.06)';
+  Chart.defaults.color = textColor;
+  Chart.defaults.borderColor = gridColor;
+  Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+
+  const dynamics = {{ dynamics | tojson }};
+  const newVsExit = {{ new_vs_exit | tojson }};
+  const structureByDim = {{ structure_by_dim | tojson }};
+  const corridorByDim = {{ corridor_by_dim | tojson }};
+
+  if (dynamics.labels && dynamics.labels.length >= 2) {
+    new Chart(document.getElementById('mkt-chart-active'), {
+      type: 'line',
+      data: { labels: dynamics.labels, datasets: [{
+        label: 'Активные объявления', data: dynamics.active_counts,
+        borderColor: accent, backgroundColor: accent + '33', fill: true, tension: .25, pointRadius: 0, borderWidth: 2.5,
+      }]},
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: 'top' }, title: { display: true, text: 'Активные объявления' } },
+        scales: { y: { beginAtZero: false } } },
+    });
+    new Chart(document.getElementById('mkt-chart-price'), {
+      type: 'line',
+      data: { labels: dynamics.labels, datasets: [{
+        label: 'Медиана цены/м² среди новых объявлений', data: dynamics.median_ppm2,
+        borderColor: '#f4a742', backgroundColor: '#f4a74233', fill: true, tension: .25, pointRadius: 0, borderWidth: 2.5, spanGaps: true,
+      }]},
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: 'top' }, title: { display: true, text: 'Цена/м², ₸ (новые объявления)' } },
+        scales: { y: { beginAtZero: false, ticks: { callback: v => (v/1000).toFixed(0) + 'к' } } } },
+    });
+  }
+
+  if (newVsExit.labels && newVsExit.labels.length >= 1) {
+    new Chart(document.getElementById('mkt-chart-newexit'), {
+      type: 'bar',
+      data: { labels: newVsExit.labels, datasets: [
+        { label: 'Новые объявления', data: newVsExit.new_supply, backgroundColor: accent, borderRadius: 4 },
+        { label: 'Подтверждённо архивированные', data: newVsExit.exits.map(v => -v), backgroundColor: red, borderRadius: 4 },
+        { label: 'Чистое изменение', data: newVsExit.net_change, type: 'line', borderColor: textColor, borderWidth: 2, pointRadius: 2, tension: .2, yAxisID: 'y' },
+      ]},
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: (ctx) => {
+          const v = ctx.dataset.label === 'Подтверждённо архивированные' ? -ctx.raw : ctx.raw;
+          return ctx.dataset.label + ': ' + v;
+        } } } },
+        scales: { x: { stacked: false }, y: { stacked: false } } },
+    });
+  }
+
+  // ── Структура предложения (переключаемая) ─────────────────────
+  let structureChart = null;
+  function renderStructure(dim) {
+    const d = structureByDim[dim] || { segments: [], counts: [] };
+    if (structureChart) structureChart.destroy();
+    const palette = ['#94ccd1','#f4a742','#8892b0','#e74c3c','#2ecc71','#7289da','#f39c12','#5fa8ae'];
+    structureChart = new Chart(document.getElementById('mkt-chart-structure'), {
+      type: 'bar',
+      data: { labels: d.segments, datasets: [{ data: d.counts,
+        backgroundColor: d.segments.map((_, i) => palette[i % palette.length]), borderRadius: 4 }] },
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { beginAtZero: true } } },
+    });
+  }
+  renderStructure('rooms');
+  document.getElementById('mkt-structure-toggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-dim]'); if (!btn) return;
+    document.querySelectorAll('#mkt-structure-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderStructure(btn.dataset.dim);
+  });
+
+  // ── Ценовые коридоры (переключаемые, floating bar как box-plot) ──
+  let corridorChart = null;
+  function renderCorridors(dim) {
+    const d = corridorByDim[dim] || { rows: [] };
+    if (corridorChart) corridorChart.destroy();
+    if (!d.rows || !d.rows.length) return;
+    corridorChart = new Chart(document.getElementById('mkt-chart-corridors'), {
+      type: 'bar',
+      data: { labels: d.rows.map(r => r.segment), datasets: [
+        { label: 'Диапазон (после отсечения выбросов)', data: d.rows.map(r => [r.min, r.max]),
+          backgroundColor: accent + '22', borderColor: accent + '55', borderWidth: 1, borderSkipped: false, barThickness: 26 },
+        { label: 'P25–P75', data: d.rows.map(r => [r.p25, r.p75]),
+          backgroundColor: '#5fa8ae', borderRadius: 4, barThickness: 16 },
+      ]},
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: 'top' },
+          tooltip: { callbacks: { label: (ctx) => {
+            const r = d.rows[ctx.dataIndex];
+            return `медиана: ${Math.round(r.median).toLocaleString('ru-RU')} ₸/м² (N=${r.n})`;
+          } } } },
+        scales: { x: { beginAtZero: false } } },
+    });
+  }
+  renderCorridors('rooms');
+  document.getElementById('mkt-corridor-toggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-dim]'); if (!btn) return;
+    document.querySelectorAll('#mkt-corridor-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderCorridors(btn.dataset.dim);
+  });
+
+  // ── Режим презентации: ?presentation=1, сохраняет остальные фильтры ──
+  const toggleBtn = document.getElementById('mkt-presentation-toggle');
+  if (toggleBtn) {
+    const url = new URL(window.location.href);
+    const isPresentation = url.searchParams.get('presentation') === '1';
+    toggleBtn.textContent = isPresentation ? '🖥 Выйти из режима презентации' : '🖥 Режим презентации';
+    toggleBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const u = new URL(window.location.href);
+      if (isPresentation) u.searchParams.delete('presentation');
+      else u.searchParams.set('presentation', '1');
+      window.location.href = u.toString();
+    });
+  }
+})();
+</script>
+{% endblock %}

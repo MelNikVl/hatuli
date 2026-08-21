@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% include "_market_dashboard_style.html" %}
+{% if raw_presentation %}<script>document.body.classList.add('mkt-presentation-mode');</script>{% endif %}
+<div class="mkt-admin-only">{% include "_analytics_tabs.html" with context %}</div>
+
+<div class="mkt-dashboard" id="mkt-root">
+  <div class="mkt-header">
+    <div>
+      <h1>Поглощение и ликвидность предложения</h1>
+      <p class="mkt-subtitle">Наблюдаемая скорость выхода объявлений с рынка — без предположения о факте сделки</p>
+    </div>
+    <div style="display:flex;gap:14px;align-items:flex-start;">
+      <div class="mkt-freshness">
+        Данные обновлены: <b>{{ freshness.max_last_seen.strftime('%d.%m.%Y %H:%M') if freshness.max_last_seen else '—' }}</b><br>
+        История с <b>{{ freshness.min_first_seen.strftime('%d.%m.%Y') if freshness.min_first_seen else '—' }}</b>
+      </div>
+      <a class="mkt-presentation-btn" id="mkt-presentation-toggle" href="#">🖥 Режим презентации</a>
+    </div>
+  </div>
+
+  <div class="mkt-disclaimer">
+    <span class="ico">ℹ️</span>
+    <span>Clearly пока не располагает подтверждёнными данными о зарегистрированных сделках. Выбывание означает,
+      что объявление подтверждённо исчезло с рынка (проверено повторным обращением к странице объявления).
+      Причиной может быть продажа, снятие с публикации или повторное размещение.</span>
+  </div>
+
+  {% include "_market_filters.html" %}
+
+  <!-- ── KPI ──────────────────────────────────────────────────────── -->
+  <div class="mkt-kpi-grid">
+    {% for key, icon, label in [
+      ('new_supply','🆕','Новое предложение'),
+      ('confirmed_exits','📤','Наблюдаемое выбывание'),
+      ('exit_rate','📉','Коэфф. наблюдаемого выбывания'),
+      ('net_change','⚖️','Чистое изменение предложения'),
+      ('months_of_stock','🗓','Месяцы наблюдаемого запаса'),
+      ('median_time_to_exit','⏱','Медианный срок до выбывания'),
+      ('relist_share','🔁','Доля повторных публикаций'),
+      ('price_drop_share','🔻','Доля со снижением цены'),
+      ('median_price_drop_pct','💸','Медианное снижение цены'),
+      ('exit_after_drop_share','📎','Выбывшие после снижения цены'),
+    ] %}
+    {% set k = kpis[key] %}
+    <div class="mkt-kpi">
+      <div class="lbl">{{ icon }} {{ label }}
+        <span class="tip-ico" title="{{ k.formula }}{{ ' — ' + k.limitation if k.limitation }}">i</span>
+      </div>
+      {% if k.status == 'insufficient' or k.value is none %}
+        <div class="val" style="font-size:16px;color:var(--mkt-muted);font-weight:600;">Недостаточно накопленных данных</div>
+      {% else %}
+        <div class="val">{{ k.value | fmt_num(1 if k.unit in ('%', 'мес', 'дней') else 0) }}<span class="unit">{{ k.unit }}</span></div>
+      {% endif %}
+      {% if key == 'net_change' and k.value is not none %}
+        <span class="chg {{ 'up' if k.value > 0 else ('down' if k.value < 0 else 'flat') }}">
+          {{ '▲' if k.value > 0 else ('▼' if k.value < 0 else '→') }}
+        </span>
+      {% endif %}
+      {% if k.limitation %}<div class="lim">{{ k.limitation }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- ── 1. Динамика нового и выбывшего предложения ─────────────── -->
+  <div class="mkt-chart-panel">
+    <h3>🔄 Динамика нового и выбывшего предложения</h3>
+    {% if new_vs_exit.labels|length < 1 %}
+      <div class="mkt-insufficient">Недостаточно накопленных данных</div>
+    {% else %}
+    <div class="mkt-canvas-wrap" style="height:280px;">
+      <canvas id="mkt-chart-newexit"></canvas>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="mkt-row-2">
+    <!-- ── 2. Waterfall предложения ──────────────────────────────── -->
+    <div class="mkt-chart-panel">
+      <h3>🧮 Баланс предложения за период</h3>
+      <p class="mkt-note">{{ funnel.note }}</p>
+      <div class="mkt-canvas-wrap" style="height:320px;">
+        <canvas id="mkt-chart-funnel"></canvas>
+      </div>
+    </div>
+
+    <!-- ── 4. Цена и ликвидность (scatter) ───────────────────────── -->
+    <div class="mkt-chart-panel">
+      <h3>💧 Цена и ликвидность</h3>
+      <p class="mkt-note">Точка = район × класс жилья (N≥20). Размер — активное предложение, цвет — класс.
+        Показывает наблюдаемую связь, НЕ причинность.</p>
+      {% if scatter|length == 0 %}
+        <div class="mkt-insufficient">Недостаточно накопленных данных</div>
+      {% else %}
+      <div class="mkt-canvas-wrap" style="height:320px;">
+        <canvas id="mkt-chart-scatter"></canvas>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ── 3. Скорость вымывания по сегментам ──────────────────────── -->
+  <div class="mkt-chart-panel">
+    <h3>⚡ Скорость вымывания по сегментам</h3>
+    <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+      <div class="mkt-seg-toggle" id="mkt-speed-dim-toggle">
+        {% for dim, label in [('rooms','Комнатность'),('class','Класс'),('district','Район'),('complex','ЖК')] %}
+        <button type="button" data-dim="{{ dim }}" class="{{ 'active' if dim == 'district' }}">{{ label }}</button>
+        {% endfor %}
+      </div>
+      <div class="mkt-seg-toggle" id="mkt-speed-metric-toggle">
+        {% for m, label in [('exit_rate_pct','Коэфф. выбывания'),('median_dom_days','Медианная экспозиция'),('months_of_stock','Месяцы запаса')] %}
+        <button type="button" data-metric="{{ m }}" class="{{ 'active' if m == 'exit_rate_pct' }}">{{ label }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    <p class="mkt-note">Размер выборки N подписан у каждого столбца. Сегменты с N&lt;20 помечены как недостаточные.</p>
+    <div class="mkt-canvas-wrap" style="height:360px;">
+      <canvas id="mkt-chart-speed"></canvas>
+    </div>
+  </div>
+
+  <!-- ── 5. Цена перед выбыванием ─────────────────────────────────── -->
+  <div class="mkt-chart-panel">
+    <h3>💰 Цена перед выбыванием</h3>
+    <p class="mkt-note">Группировка подтверждённо выбывших объявлений периода по совокупному снижению цены с момента публикации.</p>
+    <div style="overflow-x:auto;">
+      <table class="mkt-table">
+        <thead><tr><th>Группа</th><th class="num">Объявлений</th><th class="num">Доля среди выбывших</th><th class="num">Медианная экспозиция</th></tr></thead>
+        <tbody>
+          {% for b in drop_buckets %}
+          <tr>
+            <td>{{ b.label }}</td>
+            <td class="num">{{ b.n | fmt_num }}</td>
+            <td class="num">{{ (b.share_pct ~ '%') if b.share_pct is not none else '—' }}</td>
+            <td class="num">{{ (b.median_dom_days | fmt_num(1)) ~ ' дн.' if b.median_dom_days else 'Недостаточно данных' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+  const accent = '#94ccd1';
+  const green = getComputedStyle(document.documentElement).getPropertyValue('--green').trim() || '#2ecc71';
+  const red = getComputedStyle(document.documentElement).getPropertyValue('--red').trim() || '#e74c3c';
+  const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text').trim() || (isDark ? '#e8eaf6' : '#1a1a2e');
+  const gridColor = isDark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.06)';
+  Chart.defaults.color = textColor;
+  Chart.defaults.borderColor = gridColor;
+  Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+
+  const newVsExit = {{ new_vs_exit | tojson }};
+  const funnel = {{ funnel | tojson }};
+  const speedByDim = {{ speed_by_dim | tojson }};
+  const scatter = {{ scatter | tojson }};
+
+  if (newVsExit.labels && newVsExit.labels.length >= 1) {
+    new Chart(document.getElementById('mkt-chart-newexit'), {
+      type: 'bar',
+      data: { labels: newVsExit.labels, datasets: [
+        { label: 'Новое предложение', data: newVsExit.new_supply, backgroundColor: accent, borderRadius: 4 },
+        { label: 'Наблюдаемое выбывание', data: newVsExit.exits.map(v => -v), backgroundColor: red, borderRadius: 4 },
+        { label: 'Чистое изменение', data: newVsExit.net_change, type: 'line', borderColor: textColor, borderWidth: 2, pointRadius: 2, tension: .2 },
+      ]},
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: (ctx) => {
+          const v = ctx.dataset.label === 'Наблюдаемое выбывание' ? -ctx.raw : ctx.raw;
+          return ctx.dataset.label + ': ' + v;
+        } } } } },
+    });
+  }
+
+  // ── Waterfall: active_start -> +new -> -exits -> +reactivated -> active_end ──
+  (function () {
+    const steps = [
+      { label: 'Активно на начало', value: funnel.active_start, base: 0 },
+      { label: '+ Новое предложение', value: funnel.new_supply, base: funnel.active_start },
+      { label: '− Выбывание', value: -funnel.confirmed_exits, base: funnel.active_start + funnel.new_supply - funnel.confirmed_exits },
+      { label: '+ Реактивировано', value: funnel.reactivated, base: funnel.active_start + funnel.new_supply - funnel.confirmed_exits },
+      { label: 'Активно на конец', value: funnel.active_end, base: 0 },
+    ];
+    const isTotal = [true, false, false, false, true];
+    new Chart(document.getElementById('mkt-chart-funnel'), {
+      type: 'bar',
+      data: {
+        labels: steps.map(s => s.label),
+        datasets: [
+          { label: 'база', data: steps.map((s, i) => isTotal[i] ? 0 : s.base), backgroundColor: 'rgba(0,0,0,0)' },
+          { label: 'значение', data: steps.map((s, i) => isTotal[i] ? s.value : Math.abs(s.value)),
+            backgroundColor: steps.map((s, i) => isTotal[i] ? accent : (s.value >= 0 ? green : red)),
+            borderRadius: 4 },
+        ],
+      },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: {
+          label: (ctx) => ctx.datasetIndex === 1 ? (steps[ctx.dataIndex].value >= 0 ? '+' : '') + steps[ctx.dataIndex].value : null,
+        } } },
+        scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } },
+    });
+  })();
+
+  // ── Скорость вымывания по сегментам ────────────────────────────
+  let speedChart = null;
+  const metricLabels = { exit_rate_pct: 'Коэфф. выбывания, %', median_dom_days: 'Медианная экспозиция, дней', months_of_stock: 'Месяцы запаса' };
+  function renderSpeed(dim, metric) {
+    const rows = (speedByDim[dim] || []).filter(r => r[metric] !== null && r[metric] !== undefined);
+    if (speedChart) speedChart.destroy();
+    if (!rows.length) return;
+    speedChart = new Chart(document.getElementById('mkt-chart-speed'), {
+      type: 'bar',
+      data: { labels: rows.map(r => `${r.segment} (N=${r.n})`), datasets: [{
+        data: rows.map(r => r[metric]),
+        backgroundColor: rows.map(r => r.insufficient ? '#8892b055' : accent),
+        borderRadius: 4,
+      }]},
+      options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false }, title: { display: true, text: metricLabels[metric] || metric },
+          tooltip: { callbacks: { label: (ctx) => rows[ctx.dataIndex].insufficient ? 'Недостаточная выборка' : ctx.raw } } },
+        scales: { x: { beginAtZero: true } } },
+    });
+  }
+  let currentDim = 'district', currentMetric = 'exit_rate_pct';
+  renderSpeed(currentDim, currentMetric);
+  document.getElementById('mkt-speed-dim-toggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-dim]'); if (!btn) return;
+    document.querySelectorAll('#mkt-speed-dim-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active'); currentDim = btn.dataset.dim; renderSpeed(currentDim, currentMetric);
+  });
+  document.getElementById('mkt-speed-metric-toggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-metric]'); if (!btn) return;
+    document.querySelectorAll('#mkt-speed-metric-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active'); currentMetric = btn.dataset.metric; renderSpeed(currentDim, currentMetric);
+  });
+
+  // ── Цена и ликвидность (scatter) ───────────────────────────────
+  if (scatter.length) {
+    const classColors = {
+      'эконом': '#8892b0', 'комфорт': accent, 'комфорт+': '#5fa8ae', 'бизнес': '#f4a742',
+      'бизнес+': '#e08a1e', 'премиум': '#c084fc', 'элит': '#f472b6', 'не определён': '#4a4e69',
+    };
+    const byClass = {};
+    scatter.forEach(p => { (byClass[p.klass] = byClass[p.klass] || []).push(p); });
+    const datasets = Object.keys(byClass).map(k => ({
+      label: k,
+      data: byClass[k].map(p => ({ x: p.median_ppm2, y: p.exit_rate_pct, r: Math.min(28, Math.max(6, Math.sqrt(p.n) * 0.55)), district: p.district, n: p.n })),
+      backgroundColor: (classColors[k] || accent) + '99',
+      borderColor: classColors[k] || accent,
+    }));
+    new Chart(document.getElementById('mkt-chart-scatter'), {
+      type: 'bubble',
+      data: { datasets },
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { position: 'top', labels: { boxWidth: 10 } },
+          tooltip: { callbacks: { label: (ctx) => {
+            const p = ctx.raw;
+            return `${p.district}, ${ctx.dataset.label}: ${Math.round(p.x).toLocaleString('ru-RU')} ₸/м², выбывание ${p.y}%, N=${p.n}`;
+          } } } },
+        scales: {
+          x: { title: { display: true, text: 'Медиана цены/м², ₸' } },
+          y: { title: { display: true, text: 'Коэфф. наблюдаемого выбывания, %' } },
+        } },
+    });
+  }
+
+  const toggleBtn = document.getElementById('mkt-presentation-toggle');
+  if (toggleBtn) {
+    const url = new URL(window.location.href);
+    const isPresentation = url.searchParams.get('presentation') === '1';
+    toggleBtn.textContent = isPresentation ? '🖥 Выйти из режима презентации' : '🖥 Режим презентации';
+    toggleBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const u = new URL(window.location.href);
+      if (isPresentation) u.searchParams.delete('presentation');
+      else u.searchParams.set('presentation', '1');
+      window.location.href = u.toString();
+    });
+  }
+})();
+</script>
+{% endblock %}
