@@ -2943,6 +2943,107 @@ function loadPriceHistory(id) {
   }).catch(() => { el.innerHTML = ''; });
 }
 
+// ── Сценарный прогноз срока экспозиции (задача 2026-08-21, "MVP прогноза
+// срока экспозиции при разных ценах") — блок в попапе + компактный график
+// "цена -> ожидаемый срок". Расчёт целиком на бэкенде (bot/analytics/
+// dom_scenario.py, непараметрический Kaplan-Meier + PAVA, НЕ ML-модель) —
+// здесь только рендер уже готового JSON, загружается отдельным запросом
+// ПОСЛЕ основного контента попапа (см. вызов loadDomScenario ниже), чтобы
+// не задерживать открытие самой карточки.
+const DOM_CONF_LABELS = {low: 'низкий', medium: 'средний', sufficient: 'достаточный'};
+
+// Тот же приём, что sparklineSVG выше — самодостаточный инлайн SVG, без
+// графической библиотеки (в проекте уже есть Chart.js на других
+// страницах через CDN, но именно в dashboard.html/попапе принят паттерн
+// голого SVG без доп. сетевого запроса — см. sparklineSVG/dealScoreGaugeSvg
+// в этом же файле). scenarios приходят с бэкенда уже отсортированными и
+// ГАРАНТИРОВАННО монотонными (_enforce_monotone_scenarios) — рисуем по
+// возрастанию цены слева направо, поэтому линия физически не может пойти
+// вверх при движении вправо.
+function domScenarioChartSVG(scenarios, w, h) {
+  if (!scenarios || scenarios.length < 2) return '';
+  const pts = scenarios.slice().sort((a, b) => a.price - b.price);
+  const minP = pts[0].price, maxP = pts[pts.length - 1].price;
+  const allDays = pts.reduce((acc, p) => acc.concat([p.days_low, p.days_high]), []);
+  let minD = Math.min(...allDays), maxD = Math.max(...allDays);
+  if (minD === maxD) { minD -= 1; maxD += 1; }
+  // PAD_L/PAD_R достаточно широкие, чтобы подпись у крайней точки
+  // ("−10%"/"тек.", text-anchor=middle) не вылезала за x=0/x=w — раньше
+  // при PAD=8 знак "−" у самой левой точки обрезался внешним
+  // overflow:hidden обёртки (см. domScenarioHtml в openDetailModal).
+  const PAD_L = 22, PAD_R = 22, PAD_T = 10, PAD_B = 24;
+  const plotW = Math.max(1, w - PAD_L - PAD_R);
+  const plotH = Math.max(1, h - PAD_T - PAD_B);
+  const xFor = (p) => PAD_L + (maxP === minP ? plotW / 2 : (p - minP) / (maxP - minP) * plotW);
+  const yFor = (d) => PAD_T + (1 - (d - minD) / (maxD - minD)) * plotH;
+  const bandTop = pts.map(p => `${xFor(p.price).toFixed(1)},${yFor(p.days_high).toFixed(1)}`).join(' L');
+  const bandBottom = pts.slice().reverse().map(p => `${xFor(p.price).toFixed(1)},${yFor(p.days_low).toFixed(1)}`).join(' L');
+  const bandPath = `M${bandTop} L${bandBottom} Z`;
+  const midLine = pts.map((p, i) => (i ? 'L' : 'M') + xFor(p.price).toFixed(1) + ',' +
+    yFor((p.days_low + p.days_high) / 2).toFixed(1)).join(' ');
+  const dots = pts.map(p => {
+    const x = xFor(p.price), y = yFor((p.days_low + p.days_high) / 2);
+    const isCurrent = p.discount_pct === 0;
+    const label = isCurrent ? 'текущая цена' : `цена −${p.discount_pct}%`;
+    const r = isCurrent ? 6 : 4;
+    const color = isCurrent ? '#d97706' : '#2563eb';
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="11" fill="transparent" stroke="none">` +
+           `<title>${label}: ${fmtMln(p.price)} ₸ — ${p.days_low}–${p.days_high} дней</title></circle>` +
+           `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r}" fill="${color}" stroke="#fff" stroke-width="1.5" style="pointer-events:none;"/>`;
+  }).join('');
+  const labels = pts.map(p => {
+    const x = xFor(p.price);
+    const label = p.discount_pct === 0 ? 'тек.' : `−${p.discount_pct}%`;
+    return `<text x="${x.toFixed(1)}" y="${h - 4}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${p.discount_pct === 0 ? '#d97706' : 'var(--text)'}">${label}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" style="display:block;width:100%;height:${h}px;overflow:visible;">` +
+         `<path d="${bandPath}" fill="#2563eb" fill-opacity="0.14" stroke="none"/>` +
+         `<path d="${midLine}" fill="none" stroke="#2563eb" stroke-width="2"/>` +
+         `${dots}${labels}</svg>`;
+}
+
+function renderDomScenarioBody(d, w) {
+  if (!d || !d.available) {
+    return '<div style="color:#999;font-size:13px;">Прогноз срока экспозиции сейчас недоступен.</div>';
+  }
+  if (d.insufficient_data) {
+    return `<div style="color:#999;font-size:13px;">Пока недостаточно похожих объектов для расчёта.</div>` +
+      (d.disclaimer ? `<div style="font-size:11px;color:#aaa;margin-top:6px;line-height:1.5;">${escapeHtml(d.disclaimer)}</div>` : '');
+  }
+  const cur = d.current;
+  const confLabel = DOM_CONF_LABELS[d.confidence] || d.confidence || '—';
+  const scenarioLines = (d.scenarios || []).map(s => {
+    const label = s.discount_pct === 0 ? 'Текущая цена' : `Снижение на ${s.discount_pct}%`;
+    return `<li>${label} — ${s.days_low}–${s.days_high} дней</li>`;
+  }).join('');
+  const chartW = Math.max(260, w || 260);
+  const calcDate = d.calculated_at ? new Date(d.calculated_at).toLocaleDateString('ru') : '—';
+  return `
+<div style="font-size:17px;font-weight:800;">При текущей цене ожидаемый срок экспозиции: ${cur.days_low}–${cur.days_high} дня</div>
+<div style="font-size:11.5px;color:#999;margin-top:4px;line-height:1.5;">${escapeHtml(d.disclaimer || '')}</div>
+<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;">
+  <div><div style="font-size:11px;color:#999;">Цена</div><div style="font-weight:700;font-size:13px;">${fmtMln(cur.price)} ₸</div></div>
+  <div><div style="font-size:11px;color:#999;">Цена/м²</div><div style="font-weight:700;font-size:13px;">${Math.round(cur.price_per_m2).toLocaleString('ru')} ₸</div></div>
+  <div><div style="font-size:11px;color:#999;">Аналогов</div><div style="font-weight:700;font-size:13px;">${d.sample_size}</div></div>
+  <div><div style="font-size:11px;color:#999;">Сегмент</div><div style="font-weight:700;font-size:13px;">${escapeHtml(d.segment || '—')}</div></div>
+  <div><div style="font-size:11px;color:#999;">Надёжность</div><div style="font-weight:700;font-size:13px;">${confLabel}</div></div>
+</div>
+<div style="margin-top:14px;max-width:100%;overflow:hidden;">${domScenarioChartSVG(d.scenarios, chartW, 150)}</div>
+<ul style="margin:10px 0 0;padding-left:18px;font-size:12.5px;line-height:1.7;color:var(--text);">${scenarioLines}</ul>
+<div style="font-size:10.5px;color:#aaa;margin-top:8px;">Рассчитано: ${calcDate}</div>`;
+}
+
+function loadDomScenario(id) {
+  const bodyEl = document.getElementById('modal-dom-scenario-body');
+  if (!bodyEl) return;
+  fetch('/admin/api/listing/' + encodeURIComponent(id) + '/dom-scenario').then(r => r.json()).then(d => {
+    const w = Math.max(260, (bodyEl.clientWidth || 260));
+    bodyEl.innerHTML = renderDomScenarioBody(d, w);
+  }).catch(() => {
+    bodyEl.innerHTML = '<div style="color:#999;font-size:13px;">Прогноз срока экспозиции сейчас недоступен.</div>';
+  });
+}
+
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : String(s);
@@ -4852,6 +4953,20 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
   <div id="modal-price-history"></div>
 </div>`;
 
+    // Прогноз срока экспозиции (задача 2026-08-21) — блок открывается
+    // ВСЕГДА (не только при успешном расчёте, см. renderDomScenarioBody
+    // выше про insufficient_data/available:false), сам расчёт грузится
+    // отдельным запросом после вставки этого плейсхолдера (loadDomScenario
+    // ниже) — не задерживает открытие карточки. Публичному тиру полная
+    // карточка вторички не отдаётся вовсе (см. ListingRestricted выше),
+    // isPublicTier здесь для единообразия с остальными "непубличными"
+    // блоками попапа (similarMapHtml и т.п.).
+    const domScenarioHtml = !isPublicTier ? `
+<div id="modal-dom-scenario-wrap" style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
+  <div style="font-size:14px;color:var(--text);font-weight:700;margin-bottom:8px;">📈 Ожидаемый срок экспозиции</div>
+  <div id="modal-dom-scenario-body" style="font-size:13px;color:#999;">Считаем прогноз…</div>
+</div>` : '';
+
     // Профиль продавца (§2.7 liquidity_model_design.md, задача
     // 2026-08-15, миграция 077, seller_profiles) — d.seller_profile
     // приходит из bot/core/listing_detail.py, null если у продавца
@@ -4885,6 +5000,7 @@ ${dealBadgesHtml}
 ${kzkBadgeHtml}
 ${bargainHtml}
 ${priceHistoryHtml}
+${domScenarioHtml}
 ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
   <div style="font-size:13px;color:var(--text);font-weight:700;margin-bottom:6px;">📝 Описание</div>
   <div style="font-size:13.5px;line-height:1.6;white-space:pre-wrap;">${escapeHtml(d.description).slice(0, 600)}${d.description.length > 600 ? '…' : ''}</div>
@@ -4934,6 +5050,7 @@ ${krishaSourceFooterHtml}
     if (!isPublicTier && d.lat != null && d.lon != null) initModalSimilarMap(d, id);
     initModalPriceHeat(d);
     initMortgageBlockToggle(id);
+    if (!isPublicTier) loadDomScenario(id);
 
     if (scrollToScore) {
       // "почему?" в превью-карточке открывает эту же модалку и сразу
