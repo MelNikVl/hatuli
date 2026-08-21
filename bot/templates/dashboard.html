@@ -234,6 +234,7 @@ html, body { overflow: hidden !important; }
         <button type="button" class="heat-btn" data-mode="yield" onclick="toggleHeat('yield')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">💰 Доходность</button>
         <button type="button" class="heat-btn" data-mode="infra" onclick="toggleHeat('infra')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🏥 Инфраструктура</button>
         <button type="button" class="heat-btn" data-mode="novelty" onclick="toggleHeat('novelty')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">🌿 Новизна домов</button>
+        <button type="button" class="heat-btn" data-mode="liquidity" onclick="toggleHeat('liquidity')" style="padding:6.7px 11.5px;border:none;border-radius:7px;background:#2563eb;color:#fff;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap;">⚡ Скорость ухода с рынка</button>
       </div>
       <div id="heat-load-bar-wrap" style="display:none;height:3px;border-radius:2px;background:var(--bg);overflow:hidden;margin-top:6px;">
         <div id="heat-load-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#60a5fa);border-radius:2px;transition:width .2s ease;"></div>
@@ -3086,7 +3087,7 @@ function setAirDays(d, btn) {
     toggleHeat('air');
   }
 }
-let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, interest: null, air: null, count: null};
+let heatCache = {sale: null, rental: null, noise: null, transport: null, hype: null, population: null, interest: null, air: null, count: null, liquidity: null};
 let noiseDefaultsApplied = false;  // гекс 40м / прозрачность 50% при первом включении шума за сессию
 // Детальный слой шума (30м, по фактическим точкам дорог) при ~39к точек по
 // городу даёт под 100к+ отдельных гексов, если рисовать их все разом — это
@@ -3581,6 +3582,64 @@ function drawPriceM2Heat(points, archivedPoints) {
   });
 }
 
+// Скорость ухода объявлений с рынка (задача 2026-08-21, "тепловая карта —
+// где быстрее уходят квартиры зелёным, где стоят долго красным") — медиана
+// outcome_labels.time_on_market (дни first_seen→archived_at, ТОТ ЖЕ расчёт,
+// что /admin/analytics/market-absorption, не переизобретён) по гексу.
+// НЕ факт продажи — только наблюдаемое подтверждённое выбывание объявления,
+// см. /admin/api/liquidity-points и пояснение на странице "Поглощение и
+// ликвидность". 10 опорных цветов зелёный->красный, отдельная палитра от
+// HEAT_STOPS/PRICE_STOPS (те завязаны на цену/шум) — по задаче явно "10 цветов".
+const LIQUIDITY_STOPS = [
+  [21, 128, 61],   // тёмно-зелёный — уходят быстрее всего
+  [22, 163, 74],
+  [101, 163, 13],
+  [163, 230, 53],
+  [202, 184, 15],
+  [234, 179, 8],
+  [249, 145, 15],
+  [249, 115, 22],
+  [239, 68, 68],
+  [127, 29, 29],   // бордовый — стоят дольше всего
+];
+function liquidityColor(t) {
+  t = Math.max(0, Math.min(1, t));
+  const n = LIQUIDITY_STOPS.length - 1;
+  const pos = t * n;
+  const i = Math.min(Math.floor(pos), n - 1);
+  const frac = pos - i;
+  const from = LIQUIDITY_STOPS[i], to = LIQUIDITY_STOPS[i + 1];
+  const c = from.map((f, k) => Math.round(f + (to[k] - f) * frac));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+// Медиана days по гексу, нормализация по 10/90 перцентилю (как доходность/
+// цена — устойчиво к единичным выбросам). Точек по городу немного (~3.7к —
+// это подтверждённо выбывшие объявления с известными координатами, самой
+// природы показателя меньше, чем активных объявлений) — гексы с 1 точкой
+// подписаны в тултипе честно, не скрыты (Unknown ≠ average, но и не
+// притворяемся, что выборка больше, чем есть).
+function drawLiquidityHeat(points) {
+  const buckets = hexBucket(points || [], p => [p.lat, p.lon], HEAT_EDGE_M);
+  if (!buckets.size) return;
+  const medians = [];
+  buckets.forEach(b => { b.value = median(b.items.map(i => i.days)); medians.push(b.value); });
+  if (!medians.length) return;
+  const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
+  buckets.forEach(b => {
+    const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
+    const hexId = `${b.q},${b.r}`;
+    const n = b.items.length;
+    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
+      color: '#fff', weight: 0.5, fillColor: liquidityColor(t), fillOpacity: 0.55,
+    }).bindTooltip(
+      `гекс ${hexId}<br>медианный срок до выбывания: ~${Math.round(b.value)} дн.<br>` +
+      `подтверждённо выбывших: ${n}${n < 5 ? ' (малая выборка)' : ''}<br>` +
+      `<span style="color:#888;font-size:11px;">не факт продажи — наблюдаемое исчезновение объявления</span>`,
+      {sticky: true}
+    ).addTo(heatTargetLayer);
+  });
+}
+
 // Доходность аренды (задача "тепловая карта доходности — увидеть, что на
 // правом берегу выгоднее") — медиана yield_pct по гексу. Семантика цвета
 // ОБРАТНАЯ цене: высокая доходность = хорошо для инвестора = зелёный (как
@@ -3997,6 +4056,9 @@ async function loadHeatData(mode) {
     const d = await fetch('/admin/api/city-poi').then(r => r.json());
     const kinds = new Set(['school', 'kindergarten', 'university', 'clinic', 'gov']);
     heatCache.infra = (d.poi || []).filter(p => kinds.has(p.kind) && p.lat != null && p.lon != null);
+  } else if (mode === 'liquidity') {
+    const d = await fetch('/admin/api/liquidity-points').then(r => r.json());
+    heatCache.liquidity = d.points || [];
   }
   return heatCache[mode];
 }
@@ -4139,6 +4201,8 @@ function renderHeatMode(mode, data) {
     drawCountHeat(data, p => [p.lat, p.lon], 'объектов инфраструктуры');
   } else if (mode === 'novelty') {
     drawNoveltyHeat(data);
+  } else if (mode === 'liquidity') {
+    drawLiquidityHeat(data);
   }
 }
 
@@ -4154,7 +4218,7 @@ const HEAT_MODE_LABELS = {
   population: 'Плотность нас.', interest: 'Интерес (просмотры)', air: 'Воздух (ПНЗ)', count: 'Кол-во объявлений',
   demolition: '🏚 Снос домов', crime: '🚨 Преступность',
   price_m2: '📐 Цена за м²', yield: '💰 Доходность', infra: '🏥 Инфраструктура',
-  novelty: '🌿 Новизна домов',
+  novelty: '🌿 Новизна домов', liquidity: '⚡ Скорость ухода с рынка',
 };
 function openSplitView() {
   if (!heatMode || splitMap) return;

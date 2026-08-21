@@ -3527,6 +3527,35 @@ def make_extras_router(templates) -> APIRouter:
         } for r in rows if r["lat"] is not None]
         return JSONResponse({"points": pts, "count": len(pts)})
 
+    @router.get("/admin/api/liquidity-points")
+    async def liquidity_points_api(request: Request):
+        """Точки для тепловой карты «Скорость ухода с рынка» (задача
+        2026-08-21, главная карта, режим 'liquidity') — переиспользует
+        outcome_labels.time_on_market (тот же готовый расчёт, что и
+        /admin/analytics/market-absorption, см. bot/analytics/
+        market_dashboards.py — days first_seen→archived_at). НЕ факт
+        продажи — только наблюдаемое исчезновение объявления с рынка,
+        подтверждённое HTTP-проверкой (см. bot/core/archive_check.py).
+
+        Окно 180 дней — компромисс между "свежий срез" и достаточным
+        покрытием точек по городу (на момент задачи всего ~3.7к
+        объявлений в базе имеют одновременно lat/lon и посчитанный DOM —
+        подтверждённых выбываний физически меньше, чем активных
+        объявлений, сама природа показателя). Клиент бакетирует точки в
+        гексы и красит по медиане days на гекс (см. drawLiquidityHeat)."""
+        from bot.db.pg import fetch as pg_fetch
+        rows = await pg_fetch("""
+            SELECT a.lat, a.lon, ol.time_on_market AS days
+            FROM apartment_listings a
+            JOIN outcome_labels ol ON ol.listing_id = a.id
+            WHERE a.lat IS NOT NULL AND a.lon IS NOT NULL
+              AND ol.time_on_market IS NOT NULL
+              AND COALESCE(a.is_duplicate, FALSE) = FALSE
+              AND a.archived_at >= now() - interval '180 days'
+        """)
+        pts = [{"lat": float(r["lat"]), "lon": float(r["lon"]), "days": r["days"]} for r in rows]
+        return JSONResponse({"points": pts, "count": len(pts)})
+
     @router.get("/admin/api/admin-info-heat")
     async def admin_info_heat_api(request: Request):
         """Точки домов (lat/lon + year) для тепловой карты новизны:
