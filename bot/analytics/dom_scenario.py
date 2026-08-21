@@ -57,7 +57,30 @@ dashboard.py.
 случае используется тот же метод, что уже проверен в scripts/dom_forecast_
 baseline_backtest.py::_baseline_segment_median — медиана T среди РАЗРЕШИВШИХСЯ
 (event=1) наблюдений сегмента, с явно принудительной низкой надёжностью
-(п.10 задания)."""
+(п.10 задания).
+
+## Presentation-only fallback (задача 2026-08-21, "линейный демо-сценарий")
+
+Линейная зависимость добавлена для демонстрации продуктовой логики в
+презентации. Она НЕ является обученной оценкой влияния скидки. Основной
+диапазон при текущей цене (0%) — всегда результат существующей модели
+(KM/segment_median_baseline), НЕ подменяется. Только когда эмпирическая
+ценовая кривая (`_price_sensitivity_curve`) недоступна ИЛИ доступна, но по
+факту не даёт различимых сценариев (все 5 точек совпадают — реальный,
+частый случай при сильном цензурировании, см. docs/dom_scenario_
+calculator.md), сценарии по цене заменяются временным линейным
+демо-рядом: `multiplier = max(0.70, 1 - discount_pct * 0.03)`, применённым
+к 0%-диапазону текущей модели (см. `_presentation_linear_scenarios`).
+Помечается в ответе `scenario_mode="presentation_linear"` +
+`price_effect_empirical=False` + `scenario_disclaimer` — UI обязан
+показать её как временную демонстрацию, не как результат Kaplan-Meier
+или доказанный прогноз продажи (п.6 задания). Когда эмпирическая кривая
+реально различает сценарии — `scenario_mode="empirical"` +
+`price_effect_empirical=True`, `scenario_disclaimer=None`, демо-ряд не
+используется вовсе. Исторические данные об уходе объявлений в архив
+продолжают накапливаться — после достаточного покрытия этот fallback
+должен быть заменён эмпирической моделью (тот же критерий пересмотра,
+что уже описан в §5 docs/dom_forecast_audit.md)."""
 from __future__ import annotations
 
 import time
@@ -93,6 +116,18 @@ MIN_SAMPLE_ANY = 3          # меньше — "недостаточно дан�
 DAYS_MIN = 3     # разумный нижний предел диапазона
 DAYS_MAX = 180   # разумный верхний предел — не даём AFT-подобной экстраполяции
                   # в сотни/тысячи дней (см. аудит §4: AFT давал до 2336)
+
+# ── presentation-only линейный демо-сценарий (см. модульный докстринг,
+# "Presentation-only fallback") — НЕ обученная оценка, временная
+# визуализация, пока не накопится эмпирика. Коэффициенты — прямое
+# задание продукта, не подобраны по данным.
+PRESENTATION_SLOPE_PER_PCT = 0.03   # multiplier = 1 - discount_pct * 0.03
+PRESENTATION_MIN_MULTIPLIER = 0.70  # достигается ровно на 10% (10*0.03=0.30)
+SCENARIO_DISCLAIMER_PRESENTATION = (
+    "Демонстрационный сценарий. Зависимость показана линейно для "
+    "наглядности. Фактические коэффициенты будут уточняться по мере "
+    "накопления данных об уходе объявлений в архив."
+)
 
 _CACHE_TTL = 900.0  # 15 минут — попап открывают часто, цена объявления не
                      # меняется поминутно; тот же паттерн TTL-кэша, что уже
@@ -240,6 +275,58 @@ def _enforce_monotone_scenarios(scenarios: list[dict]) -> list[dict]:
         prev_low, prev_high = low, high
         out.append({**sc, "days_low": int(round(low)), "days_high": int(round(high))})
     return out
+
+
+def _round_half_up(x: float) -> int:
+    """Классическое "округление по arithmetic rounding" (0.5 всегда вверх),
+    НЕ python round() (banker's rounding — 10.5 -> 10, а не 11). Нужно
+    только для presentation-linear ряда — там числа сверены с конкретным
+    примером в задании (15-27 -> ... -> 11-19 на -10%: 15*0.7=10.5 должно
+    дать 11, а не банковские 10) — единообразие округления по задаче."""
+    import math
+    return math.floor(x + 0.5)
+
+
+def _scenarios_are_flat(scenarios: list[dict]) -> bool:
+    """True, если ВСЕ сценарии (по всем discount_pct) совпадают с
+    0%-сценарием — то самое "модель не смогла определить влияние цены и
+    собирается показать одинаковые значения" (п.2 задания). Не триггерится
+    на частичное совпадение (напр. только 2 соседних сценария слились из-за
+    PAVA-корзины) — это честная (пусть и грубая) эмпирика, не "все плоско"."""
+    if not scenarios:
+        return True
+    base = scenarios[0]
+    return all(sc["days_low"] == base["days_low"] and sc["days_high"] == base["days_high"]
+               for sc in scenarios[1:])
+
+
+def _presentation_linear_scenarios(price: float, days_low_base: float, days_high_base: float) -> list[dict]:
+    """Временный демо-ряд (см. модульный докстринг, "Presentation-only
+    fallback") — НЕ эмпирическая оценка. 0%-сценарий = переданный базовый
+    диапазон БЕЗ ИЗМЕНЕНИЙ (п.1 задания: "основной диапазон... не
+    подменять"). Остальные — тот же multiplier к low И high по отдельности
+    (не к ширине диапазона), округление half-up (см. _round_half_up),
+    минимальная ширина диапазона — 1 день (после округления оба конца
+    иногда схлопываются в одно число на короткой базе — п. "диапазон не
+    должен становиться меньше одного дня"). Монотонность — тот же
+    _enforce_monotone_scenarios, что и у эмпирического ряда (безопасно на
+    уже целых числах, round() на int — no-op). price сценария — та же
+    формула округления до тенге, что и в эмпирическом ряду
+    (compute_dom_scenario: round(price * (1 - pct/100)))."""
+    scenarios = []
+    for pct in DISCOUNT_SCENARIOS:
+        multiplier = max(PRESENTATION_MIN_MULTIPLIER, 1 - pct * PRESENTATION_SLOPE_PER_PCT)
+        low = _round_half_up(days_low_base * multiplier)
+        high = _round_half_up(days_high_base * multiplier)
+        low = max(DAYS_MIN, low)
+        if high <= low:
+            high = low + 1  # диапазон не схлопывается в одно число
+        scenarios.append({
+            "discount_pct": pct,
+            "price": round(price * (1 - pct / 100)),
+            "days_low": low, "days_high": high,
+        })
+    return _enforce_monotone_scenarios(scenarios)
 
 
 # ── ценовая чувствительность: корзины price_dev внутри сегмента + PAVA ──
@@ -448,6 +535,10 @@ async def compute_dom_scenario(listing_id: str) -> dict:
             "disclaimer": CONFIRMED_SALE_DISCLAIMER, "confidence": "low",
             "sample_size": 0, "event_count": 0, "segment": None,
             "calculated_at": calculated_at,
+            # Нет базового диапазона вообще (нечего масштабировать) —
+            # presentation-linear здесь неприменим, поля — для единообразия
+            # формы ответа (фронту не нужно отдельно проверять их наличие).
+            "scenario_mode": None, "price_effect_empirical": None, "scenario_disclaimer": None,
         }
 
     exclude_key = f"l:{listing_id}" if listing["property_id"] is None else str(listing["property_id"])
@@ -462,6 +553,7 @@ async def compute_dom_scenario(listing_id: str) -> dict:
             "event_count": segment["event_count"] if segment else 0,
             "segment": _segment_label(segment["tier"], district, rooms) if segment else None,
             "calculated_at": calculated_at,
+            "scenario_mode": None, "price_effect_empirical": None, "scenario_disclaimer": None,
         }
 
     obs_TE = [(t, e) for t, e, _ppm2 in segment["obs"]]
@@ -522,6 +614,27 @@ async def compute_dom_scenario(listing_id: str) -> dict:
             "days_high": _clamp_days(days_high_base * multiplier),
         })
     scenarios = _enforce_monotone_scenarios(scenarios)
+    # 0%-сценарий уже прошёл _enforce_monotone_scenarios (целые дни) —
+    # presentation-linear ниже строится ИМЕННО от этих готовых int, а не
+    # от сырых days_low_base/days_high_base: иначе разные функции
+    # округления (обычный round() тут vs half-up у демо-ряда) могли бы
+    # дать разное число на 0% в зависимости от того, сработал fallback
+    # или нет — а п.1 задания требует БУКВАЛЬНО одно и то же число.
+    current_days_low, current_days_high = scenarios[0]["days_low"], scenarios[0]["days_high"]
+
+    # ── presentation-only линейный демо-ряд (см. модульный докстринг,
+    # "Presentation-only fallback") — ТОЛЬКО когда эмпирический ряд выше
+    # реально не различает сценарии (п.2 задания: "модель не смогла
+    # определить влияние цены и сейчас собирается показать одинаковые
+    # значения").
+    price_effect_empirical = not _scenarios_are_flat(scenarios)
+    if price_effect_empirical:
+        scenario_mode = "empirical"
+        scenario_disclaimer = None
+    else:
+        scenario_mode = "presentation_linear"
+        scenario_disclaimer = SCENARIO_DISCLAIMER_PRESENTATION
+        scenarios = _presentation_linear_scenarios(price, current_days_low, current_days_high)
 
     confidence = _confidence_level(segment["tier"], segment["event_count"], km_ok)
     if method == "segment_median_baseline":
@@ -533,6 +646,9 @@ async def compute_dom_scenario(listing_id: str) -> dict:
     return {
         "available": True,
         "insufficient_data": False,
+        "scenario_mode": scenario_mode,
+        "price_effect_empirical": price_effect_empirical,
+        "scenario_disclaimer": scenario_disclaimer,
         "current": {
             "price": price,
             "price_per_m2": ppm2_current,

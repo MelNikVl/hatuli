@@ -19,6 +19,7 @@ apartment_listings не задеваются (фильтруются по distri
   - блок в попапе dashboard.html рендерится"""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -48,6 +49,8 @@ def _days_ago(n: float) -> datetime:
 from bot.analytics.dom_scenario import (  # noqa: E402
     _rooms_bucket, _rooms_label, price_at, kaplan_meier, km_quantile, pava,
     _enforce_monotone_scenarios, CONFIRMED_SALE_DISCLAIMER, DAYS_MIN, DAYS_MAX,
+    _round_half_up, _scenarios_are_flat, _presentation_linear_scenarios,
+    SCENARIO_DISCLAIMER_PRESENTATION, PRESENTATION_MIN_MULTIPLIER, DISCOUNT_SCENARIOS,
 )
 
 
@@ -145,11 +148,110 @@ def test_enforce_monotone_scenarios_clamps_upward_noise():
     assert fixed[2]["days_high"] <= fixed[1]["days_high"]  # шумный скачок вверх подавлен
 
 
+# ── presentation-only линейный демо-сценарий (задача 2026-08-21,
+# "линейный демо-сценарий") — чистые функции, без БД ─────────────────────
+
+def test_round_half_up_matches_arithmetic_rounding_not_bankers():
+    # 10.5 -> 11 (не python round(), который дал бы 10 — banker's rounding
+    # округлил бы к чётному). Единообразие округления — прямое требование
+    # задания, сверено с конкретным примером в нём (15-27 -> ... -> 11-19).
+    assert _round_half_up(10.5) == 11
+    assert _round_half_up(13.65) == 14
+    assert _round_half_up(22.95) == 23
+    assert _round_half_up(15.0) == 15
+
+
+def test_scenarios_are_flat_detects_identical_values():
+    identical = [
+        {"days_low": 15, "days_high": 27}, {"days_low": 15, "days_high": 27},
+        {"days_low": 15, "days_high": 27},
+    ]
+    assert _scenarios_are_flat(identical) is True
+
+    differentiated = [
+        {"days_low": 15, "days_high": 27}, {"days_low": 14, "days_high": 25},
+        {"days_low": 13, "days_high": 23},
+    ]
+    assert _scenarios_are_flat(differentiated) is False
+
+    # Частичное совпадение (не ВСЕ точки одинаковы) — это честная грубая
+    # эмпирика, не триггерит presentation-fallback.
+    partial = [{"days_low": 15, "days_high": 27}, {"days_low": 15, "days_high": 27},
+               {"days_low": 13, "days_high": 23}]
+    assert _scenarios_are_flat(partial) is False
+
+
+def test_presentation_linear_scenarios_matches_task_example():
+    """Прямая сверка с примером из задания: базовый диапазон 15-27 дней ->
+    14-25 (-3%) -> 13-23 (-5%) -> 12-21 (-7%) -> 11-19 (-10%)."""
+    scenarios = _presentation_linear_scenarios(price=50_000_000, days_low_base=15, days_high_base=27)
+    by_pct = {s["discount_pct"]: (s["days_low"], s["days_high"]) for s in scenarios}
+    assert by_pct[0] == (15, 27)
+    assert by_pct[3] == (14, 25)
+    assert by_pct[5] == (13, 23)
+    assert by_pct[7] == (12, 21)
+    assert by_pct[10] == (11, 19)
+
+
+def test_presentation_linear_scenarios_base_range_unchanged():
+    """п.1 задания — "основной диапазон при текущей цене... не
+    подменять": 0%-сценарий строится ИЗ переданной базы БЕЗ масштабирования
+    (multiplier=1.0), должен буквально совпасть со входом."""
+    scenarios = _presentation_linear_scenarios(price=42_000_000, days_low_base=18, days_high_base=32)
+    current = next(s for s in scenarios if s["discount_pct"] == 0)
+    assert (current["days_low"], current["days_high"]) == (18, 32)
+
+
+def test_presentation_linear_scenarios_monotone_non_increasing():
+    scenarios = sorted(
+        _presentation_linear_scenarios(price=60_000_000, days_low_base=40, days_high_base=90),
+        key=lambda s: s["discount_pct"],
+    )
+    assert [s["discount_pct"] for s in scenarios] == DISCOUNT_SCENARIOS
+    for i in range(1, len(scenarios)):
+        assert scenarios[i]["days_low"] <= scenarios[i - 1]["days_low"]
+        assert scenarios[i]["days_high"] <= scenarios[i - 1]["days_high"]
+        assert scenarios[i]["price"] < scenarios[i - 1]["price"]
+
+
+def test_presentation_linear_scenarios_min_multiplier_clamped_at_10pct():
+    # 10 * 0.03 = 0.30 -> multiplier ровно 0.70 (PRESENTATION_MIN_MULTIPLIER),
+    # клэмп не должен срабатывать раньше 10% на заданной сетке скидок.
+    scenarios = {s["discount_pct"]: s for s in
+                 _presentation_linear_scenarios(price=10_000_000, days_low_base=100, days_high_base=200)}
+    assert scenarios[10]["days_low"] == _round_half_up(100 * PRESENTATION_MIN_MULTIPLIER)
+    assert scenarios[10]["days_high"] == _round_half_up(200 * PRESENTATION_MIN_MULTIPLIER)
+
+
+def test_presentation_linear_scenarios_range_never_collapses_below_one_day():
+    """"диапазон не должен становиться меньше одного дня" — на очень
+    короткой базе (low==high) масштабирование обоих концов одним
+    multiplier+округление могло бы дать low==high на выходе тоже;
+    функция обязана раздвинуть их минимум на 1 день."""
+    scenarios = _presentation_linear_scenarios(price=20_000_000, days_low_base=4, days_high_base=4)
+    for s in scenarios:
+        assert s["days_high"] - s["days_low"] >= 1
+        assert s["days_low"] >= DAYS_MIN
+
+
 def test_disclaimer_never_claims_confirmed_sale():
     forbidden = ["точно продастся", "квартира продана", "гарантированно продастся", "подтверждена продажа"]
     for phrase in forbidden:
         assert phrase not in CONFIRMED_SALE_DISCLAIMER
     assert "не подтверждает факт продажи" in CONFIRMED_SALE_DISCLAIMER
+
+
+def test_scenario_disclaimer_presentation_text_and_wording():
+    """Точный текст из задания + п.6 ("не выдавать за результат
+    Kaplan-Meier или за доказанный прогноз продажи") — не должно быть
+    формулировок, звучащих как подтверждённый результат."""
+    assert SCENARIO_DISCLAIMER_PRESENTATION == (
+        "Демонстрационный сценарий. Зависимость показана линейно для "
+        "наглядности. Фактические коэффициенты будут уточняться по мере "
+        "накопления данных об уходе объявлений в архив."
+    )
+    for phrase in ["Kaplan", "Каплан", "доказан", "гарантир", "точно продастся"]:
+        assert phrase not in SCENARIO_DISCLAIMER_PRESENTATION
 
 
 def test_days_bounds_are_sane():
@@ -361,6 +463,60 @@ async def test_scenarios_are_monotone_and_within_bounds(scenario, db):
         assert scenarios[i]["price"] < scenarios[i - 1]["price"]
     for s in scenarios:
         assert DAYS_MIN <= s["days_low"] <= s["days_high"] <= DAYS_MAX
+    # Явно различающийся ценовой сегмент (дёшево/дорого, 12 событий,
+    # достаточно для _price_sensitivity_curve) — эмпирическая кривая
+    # должна была РЕАЛЬНО сработать, а не тихо подмениться линейным
+    # demo-рядом (задача 2026-08-21, "линейный демо-сценарий", п.4
+    # тестов: "эмпирическая кривая не заменяется демонстрационной").
+    if not _scenarios_are_flat(scenarios):
+        assert result["scenario_mode"] == "empirical"
+        assert result["price_effect_empirical"] is True
+        assert result["scenario_disclaimer"] is None
+
+
+@pytest.mark.asyncio
+async def test_identical_scenarios_replaced_with_presentation_linear(scenario, db):
+    """"линейный демо-сценарий" (задача 2026-08-21) — сегмент, где событий
+    достаточно для сегментного baseline (>=MIN_EVENTS_MEDIUM=5), но МЕНЬШЕ
+    порога ценовой кривой (MIN_EVENTS_FOR_PRICE_CURVE=6) — _price_
+    sensitivity_curve гарантированно возвращает None, эмпирический ряд
+    гарантированно плоский -> presentation-linear должен сработать
+    детерминированно (не полагаемся на случайную "плоскость" PAVA-корзин)."""
+    from bot.analytics.dom_scenario import compute_dom_scenario, DAYS_MIN, DAYS_MAX
+
+    target = await _insert(scenario, "target", rooms=2, price=30_000_000, area=50.0)
+    for coro in _fill_segment(scenario, 5, rooms=2):  # ровно 5 — ниже порога кривой
+        await coro
+
+    result = await compute_dom_scenario(target)
+    assert result["available"] is True
+    if result["insufficient_data"]:
+        pytest.skip("сегмент оказался тоньше ожидаемого на этой БД")
+
+    # п.: "одинаковые сценарии заменяются линейными"
+    assert result["scenario_mode"] == "presentation_linear"
+    assert result["price_effect_empirical"] is False
+    assert result["scenario_disclaimer"] == SCENARIO_DISCLAIMER_PRESENTATION
+
+    scenarios = sorted(result["scenarios"], key=lambda s: s["discount_pct"])
+    assert [s["discount_pct"] for s in scenarios] == DISCOUNT_SCENARIOS
+    # это НЕ снова плоский ряд — линейный демо-fallback обязан различать
+    # сценарии (если только базовый диапазон не выродился в 0 дней ширины)
+    assert not _scenarios_are_flat(scenarios) or scenarios[0]["days_high"] == scenarios[0]["days_low"] + 1
+
+    # п.: "исходный диапазон не меняется" — 0%-сценарий = result["current"]
+    current_scenario = scenarios[0]
+    assert current_scenario["days_low"] == result["current"]["days_low"]
+    assert current_scenario["days_high"] == result["current"]["days_high"]
+
+    # п.: "значения монотонно уменьшаются"
+    for i in range(1, len(scenarios)):
+        assert scenarios[i]["days_low"] <= scenarios[i - 1]["days_low"]
+        assert scenarios[i]["days_high"] <= scenarios[i - 1]["days_high"]
+        assert scenarios[i]["price"] < scenarios[i - 1]["price"]
+    for s in scenarios:
+        assert DAYS_MIN <= s["days_low"] <= s["days_high"] <= DAYS_MAX
+        assert s["days_high"] - s["days_low"] >= 1  # диапазон не схлопывается
 
 
 @pytest.mark.asyncio
@@ -404,6 +560,25 @@ async def test_api_dom_scenario_existing_listing(client, scenario, db):
     assert r.status_code == 200
     body = r.json()
     assert "available" in body
+
+
+@pytest.mark.asyncio
+async def test_api_reports_scenario_mode_explicitly(client, scenario, db):
+    """"линейный демо-сценарий" (задача 2026-08-21), п. "API явно
+    сообщает режим расчёта" — оба режима видны напрямую в JSON, фронту не
+    нужно ничего выводить косвенно из формы диапазонов."""
+    # 5 событий -> curve=None -> гарантированный presentation_linear (см.
+    # test_identical_scenarios_replaced_with_presentation_linear выше).
+    target_flat = await _insert(scenario, "target_flat", rooms=2, price=30_000_000, area=50.0)
+    for coro in _fill_segment(scenario, 5, rooms=2):
+        await coro
+    r = await client.get(f"/admin/api/listing/{target_flat}/dom-scenario")
+    assert r.status_code == 200
+    body = r.json()
+    if not body.get("insufficient_data"):
+        assert body["scenario_mode"] == "presentation_linear"
+        assert body["price_effect_empirical"] is False
+        assert body["scenario_disclaimer"]
 
 
 @pytest.mark.asyncio
@@ -456,3 +631,106 @@ async def test_dashboard_popup_shell_contains_dom_scenario_block(client, db):
     assert "loadDomScenario" in html
     assert "domScenarioChartSVG" in html
     assert "квартира точно продастся" not in html
+
+
+# ── Часть 4 — реальный браузер (Playwright), задача 2026-08-21, "линейный
+# демо-сценарий", п. "блок корректно помещается на мобильной ширине" ─────
+# Тот же паттерн, что tests/test_map_card_sync.py — реальный uvicorn +
+# реальный chromium (playwright уже зависимость проекта, CI ставит браузер
+# отдельным шагом, см. .github/workflows/ci.yml). renderDomScenarioBody
+# вызывается напрямую с синтетическими данными (в обход сети/БД) — тестируем
+# именно вёрстку/раскладку блока на узком экране, не пайплайн загрузки.
+
+_MOBILE_PORT = 8098
+
+_FAKE_PRESENTATION_RESPONSE = """{
+  "available": true, "insufficient_data": false,
+  "scenario_mode": "presentation_linear", "price_effect_empirical": false,
+  "scenario_disclaimer": "Демонстрационный сценарий. Зависимость показана линейно для наглядности. Фактические коэффициенты будут уточняться по мере накопления данных об уходе объявлений в архив.",
+  "current": {"price": 42000000, "price_per_m2": 840000, "days_low": 15, "days_high": 27},
+  "scenarios": [
+    {"discount_pct": 0, "price": 42000000, "days_low": 15, "days_high": 27},
+    {"discount_pct": 3, "price": 40740000, "days_low": 14, "days_high": 25},
+    {"discount_pct": 5, "price": 39900000, "days_low": 13, "days_high": 23},
+    {"discount_pct": 7, "price": 39060000, "days_low": 12, "days_high": 21},
+    {"discount_pct": 10, "price": 37800000, "days_low": 11, "days_high": 19}
+  ],
+  "sample_size": 84, "event_count": 5, "segment": "Есильский р-н · 2 комнаты",
+  "fallback_level": "district_rooms", "confidence": "low", "method": "segment_median_baseline",
+  "disclaimer": "Оценка основана на сроках активности похожих объявлений. Снятие объявления с публикации не подтверждает факт продажи.",
+  "calculated_at": "2026-08-21T12:00:00Z"
+}"""
+
+
+@pytest_asyncio.fixture
+async def mobile_live_server():
+    import uvicorn
+    from bot.db.pg import init_pool, close_pool
+    await init_pool(DATABASE_URL)
+    from bot.admin_web import create_admin_app
+    from bot.db.compat import BotDB
+    db = BotDB("/tmp/__test_dom_scenario_mobile_admin.db")
+    await db.init()
+    app = create_admin_app(db, admin_password="x", bot_version="test")
+    config = uvicorn.Config(app=app, host="127.0.0.1", port=_MOBILE_PORT, log_level="warning")
+    server = uvicorn.Server(config)
+    task = asyncio.create_task(server.serve())
+    for _ in range(100):
+        if getattr(server, "started", False):
+            break
+        await asyncio.sleep(0.05)
+    yield f"http://127.0.0.1:{_MOBILE_PORT}"
+    server.should_exit = True
+    await task
+    await close_pool()
+
+
+@pytest.mark.asyncio
+async def test_dom_scenario_block_fits_on_mobile_width(mobile_live_server):
+    """"блок корректно помещается на мобильной ширине" — узкий вьюпорт
+    (360px, типичный телефон), блок отрендерен ЧЕРЕЗ ту же функцию
+    renderDomScenarioBody, что и в проде, включая presentation-linear
+    плашку (самый длинный текст блока — если что-то переполнится, то
+    именно она). Проверяем, что контейнер блока не создаёт СВОЙ
+    горизонтальный скролл сверх той ширины, что ему выделена (пере-
+    определять существующий #detail-modal-box min-width:640px — вне
+    объёма этой задачи, см. предыдущий отчёт по фиче)."""
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page(viewport={"width": 360, "height": 720})
+        await page.goto(mobile_live_server + "/", wait_until="networkidle", timeout=25000)
+        await page.wait_for_function("typeof renderDomScenarioBody === 'function'", timeout=10000)
+
+        metrics = await page.evaluate(
+            """(fakeJson) => {
+                const d = JSON.parse(fakeJson);
+                const container = document.createElement('div');
+                // Ширина типичной "внутренней колонки" блока на узком
+                // экране — тот же паттерн отступов, что modal-dom-scenario-wrap
+                // (padding 14-16px с обеих сторон) внутри 360px вьюпорта.
+                container.style.cssText = 'width:328px;box-sizing:border-box;';
+                container.id = '__mobile_test_container__';
+                document.body.appendChild(container);
+                container.innerHTML = renderDomScenarioBody(d, 300);
+                const rect = container.getBoundingClientRect();
+                return {
+                    scrollWidth: container.scrollWidth,
+                    clientWidth: container.clientWidth,
+                    hasPresentationBadge: container.innerHTML.includes('Демонстрационный сценарий'),
+                    hasDashedLine: container.innerHTML.includes('stroke-dasharray'),
+                    hasConfirmedSaleDisclaimer: container.innerHTML.includes('не подтверждает факт продажи'),
+                };
+            }""",
+            _FAKE_PRESENTATION_RESPONSE,
+        )
+        await browser.close()
+
+    assert metrics["scrollWidth"] <= metrics["clientWidth"] + 1, (
+        f"блок создаёт собственный горизонтальный оверфлоу на мобильной ширине: "
+        f"scrollWidth={metrics['scrollWidth']} > clientWidth={metrics['clientWidth']}"
+    )
+    assert metrics["hasPresentationBadge"] is True
+    assert metrics["hasDashedLine"] is True  # график в демо-режиме — пунктир, не сплошная линия
+    assert metrics["hasConfirmedSaleDisclaimer"] is True  # основной дисклеймер сохранён рядом
