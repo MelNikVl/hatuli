@@ -2951,6 +2951,11 @@ function loadPriceHistory(id) {
 // ПОСЛЕ основного контента попапа (см. вызов loadDomScenario ниже), чтобы
 // не задерживать открытие самой карточки.
 const DOM_CONF_LABELS = {low: 'низкий', medium: 'средний', sufficient: 'достаточный'};
+// Запасной текст плашки presentation-linear — на случай, если API почему-то
+// не прислал scenario_disclaimer (не должно случаться, см. bot/analytics/
+// dom_scenario.py::SCENARIO_DISCLAIMER_PRESENTATION — тот же текст 1:1).
+const SCENARIO_DISCLAIMER_PRESENTATION_FALLBACK_TEXT = 'Демонстрационный сценарий. Зависимость показана линейно для наглядности. ' +
+  'Фактические коэффициенты будут уточняться по мере накопления данных об уходе объявлений в архив.';
 
 // Тот же приём, что sparklineSVG выше — самодостаточный инлайн SVG, без
 // графической библиотеки (в проекте уже есть Chart.js на других
@@ -2960,7 +2965,7 @@ const DOM_CONF_LABELS = {low: 'низкий', medium: 'средний', sufficie
 // ГАРАНТИРОВАННО монотонными (_enforce_monotone_scenarios) — рисуем по
 // возрастанию цены слева направо, поэтому линия физически не может пойти
 // вверх при движении вправо.
-function domScenarioChartSVG(scenarios, w, h) {
+function domScenarioChartSVG(scenarios, w, h, isPresentation) {
   if (!scenarios || scenarios.length < 2) return '';
   const pts = scenarios.slice().sort((a, b) => a.price - b.price);
   const minP = pts[0].price, maxP = pts[pts.length - 1].price;
@@ -2988,7 +2993,7 @@ function domScenarioChartSVG(scenarios, w, h) {
     const r = isCurrent ? 6 : 4;
     const color = isCurrent ? '#d97706' : '#2563eb';
     return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="11" fill="transparent" stroke="none">` +
-           `<title>${label}: ${fmtMln(p.price)} ₸ — ${p.days_low}–${p.days_high} дней</title></circle>` +
+           `<title>${label}: ${fmtMln(p.price)} ₸ — ${p.days_low}–${p.days_high} дней${isPresentation ? ' (демонстрационный сценарий)' : ''}</title></circle>` +
            `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r}" fill="${color}" stroke="#fff" stroke-width="1.5" style="pointer-events:none;"/>`;
   }).join('');
   const labels = pts.map(p => {
@@ -2996,9 +3001,15 @@ function domScenarioChartSVG(scenarios, w, h) {
     const label = p.discount_pct === 0 ? 'тек.' : `−${p.discount_pct}%`;
     return `<text x="${x.toFixed(1)}" y="${h - 4}" text-anchor="middle" font-size="10.5" font-weight="700" fill="${p.discount_pct === 0 ? '#d97706' : 'var(--text)'}">${label}</text>`;
   }).join('');
+  // Демо-режим (isPresentation) — линия пунктиром, не сплошная: визуально
+  // отличается от "настоящей" эмпирической кривой (п.6 задания, "не
+  // выдавать линейный сценарий за результат Kaplan-Meier"), не только
+  // текстовой подписью рядом (см. renderDomScenarioBody).
+  const lineDash = isPresentation ? ' stroke-dasharray="6,4"' : '';
+  const lineColor = isPresentation ? '#9ca3af' : '#2563eb';
   return `<svg viewBox="0 0 ${w} ${h}" style="display:block;width:100%;height:${h}px;overflow:visible;">` +
-         `<path d="${bandPath}" fill="#2563eb" fill-opacity="0.14" stroke="none"/>` +
-         `<path d="${midLine}" fill="none" stroke="#2563eb" stroke-width="2"/>` +
+         `<path d="${bandPath}" fill="${lineColor}" fill-opacity="0.14" stroke="none"/>` +
+         `<path d="${midLine}" fill="none" stroke="${lineColor}" stroke-width="2"${lineDash}/>` +
          `${dots}${labels}</svg>`;
 }
 
@@ -3018,6 +3029,15 @@ function renderDomScenarioBody(d, w) {
   }).join('');
   const chartW = Math.max(260, w || 260);
   const calcDate = d.calculated_at ? new Date(d.calculated_at).toLocaleDateString('ru') : '—';
+  // Presentation-only линейный демо-ряд (задача 2026-08-21, "линейный
+  // демо-сценарий") — заметная, но компактная плашка РЯДОМ С ГРАФИКОМ,
+  // не подменяет и не убирает основной дисклеймер про неподтверждённую
+  // продажу (d.disclaimer) ниже — это ДВА разных предупреждения о разном.
+  const isPresentation = d.scenario_mode === 'presentation_linear';
+  const presentationBadgeHtml = isPresentation ? `
+<div style="margin-top:10px;padding:7px 10px;border-radius:8px;background:rgba(217,119,6,.1);border:1px solid rgba(217,119,6,.25);color:#b45309;font-size:11.5px;font-weight:600;line-height:1.5;">
+  📐 ${escapeHtml(d.scenario_disclaimer || SCENARIO_DISCLAIMER_PRESENTATION_FALLBACK_TEXT)}
+</div>` : '';
   return `
 <div style="font-size:17px;font-weight:800;">При текущей цене ожидаемый срок экспозиции: ${cur.days_low}–${cur.days_high} дня</div>
 <div style="font-size:11.5px;color:#999;margin-top:4px;line-height:1.5;">${escapeHtml(d.disclaimer || '')}</div>
@@ -3028,7 +3048,8 @@ function renderDomScenarioBody(d, w) {
   <div><div style="font-size:11px;color:#999;">Сегмент</div><div style="font-weight:700;font-size:13px;">${escapeHtml(d.segment || '—')}</div></div>
   <div><div style="font-size:11px;color:#999;">Надёжность</div><div style="font-weight:700;font-size:13px;">${confLabel}</div></div>
 </div>
-<div style="margin-top:14px;max-width:100%;overflow:hidden;">${domScenarioChartSVG(d.scenarios, chartW, 150)}</div>
+<div style="margin-top:14px;max-width:100%;overflow:hidden;">${domScenarioChartSVG(d.scenarios, chartW, 150, isPresentation)}</div>
+${presentationBadgeHtml}
 <ul style="margin:10px 0 0;padding-left:18px;font-size:12.5px;line-height:1.7;color:var(--text);">${scenarioLines}</ul>
 <div style="font-size:10.5px;color:#aaa;margin-top:8px;">Рассчитано: ${calcDate}</div>`;
 }
