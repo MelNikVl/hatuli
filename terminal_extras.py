@@ -26,6 +26,7 @@ import re
 
 import httpx
 from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from bot.db import settings as app_settings
@@ -6436,7 +6437,22 @@ def make_extras_router(templates) -> APIRouter:
         """Полные данные объявления для модалки (фото, адрес, торг).
         Сборка вынесена в bot/core/listing_detail.build_listing_detail()
         (Фаза B, п.5, "роут не знает SQL") — здесь только тир + перевод
-        исключений в HTTP-статусы, поведение не менялось."""
+        исключений в HTTP-статусы, поведение не менялось.
+
+        Регрессия (найдена CI на PR #39, tests/test_dom_scenario.py::
+        test_main_listing_card_still_opens_when_dom_scenario_errors):
+        payload — сырой dict из asyncpg-строки, где NUMERIC-колонки
+        (apartment_listings.yield_pct/payback_years — см. migrations/
+        000_core_tables.sql, на dev-БД они исторически ALTER'нуты в REAL
+        мимо миграций, поэтому локально не воспроизводилось — но
+        migrations/*.sql "с нуля", как в CI/проде, создают их NUMERIC)
+        приходят как decimal.Decimal — стандартный json.dumps внутри
+        JSONResponse.render() их не сериализует (TypeError). jsonable_
+        encoder() — рекурсивный (проходит вложенные dict/list, см.
+        bargain/seller_profile/score_breakdown ниже по payload), тот же
+        конвертер, что FastAPI использует под капотом для response_model —
+        никакой новой зависимости, просто перестали её обходить прямым
+        JSONResponse(payload)."""
         from bot.core.site_auth import get_user_tier
         from bot.core.listing_detail import build_listing_detail, ListingNotFound, ListingRestricted
 
@@ -6447,7 +6463,7 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse({"error": "not_found"}, status_code=404)
         except ListingRestricted as exc:
             return JSONResponse({"error": "restricted", "message": exc.message}, status_code=403)
-        return JSONResponse(payload)
+        return JSONResponse(jsonable_encoder(payload))
 
     # ── История цены объявления ───────────────────────────────────────────
 
