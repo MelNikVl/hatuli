@@ -325,6 +325,13 @@ html, body { overflow: hidden !important; }
 :root[data-theme="light"] #side-panel-body .side-card * { color:#000 !important; }
 :root[data-theme="light"] #side-panel-body .side-card a { text-decoration:underline; }
 .side-card-flash { animation: sideCardFlash 0.6s ease-in-out 5; border-color:#2563eb !important; }
+/* Персистентное selected-состояние карточки (задача 2026-08-21: "клик по
+   маркеру → карточка не всегда подсвечивается") — ОТДЕЛЬНО от .side-card-flash
+   (та гаснет через 3с, чисто визуальный "сюда только что прыгнули" эффект).
+   .side-card-selected держится, пока не выбрана другая карточка/маркер —
+   см. selectCard()/clearSideCardSelection(). outline (не border) — не
+   меняет box-модель/layout соседних карточек в CSS Grid. */
+.side-card-selected { outline: 2.5px solid #2563eb; outline-offset: -1px; }
 .nb-cx-popup .leaflet-popup-content-wrapper { padding:0; border-radius:12px; overflow:hidden; }
 .nb-cx-popup .leaflet-popup-content { margin:0; width:280px !important; }
 @keyframes sideCardFlash {
@@ -758,40 +765,23 @@ function openSidePanel(ids) {
     sidePanelShownIds = ids.slice();
     renderSidePanelIds(sidePanelShownIds, undefined, 'объявлений');
   }
-  // Карточка может появиться с задержкой (ленивый батч-рендер панели,
-  // гонка с перерисовкой по moveend) — ретраим центрирование.
-  let attempts = 0;
-  const tryCenter = () => {
-    const el = document.getElementById('card-' + ids[0]);
-    if (!el) {
-      if (attempts++ < 10) { setTimeout(tryCenter, 250); return; }
-      // Живой фидбек 2026-08-13 ("иногда скроллится куда-то, где его нет,
-      // даже после полной подгрузки"): персистентный список (moveend-
-      // driven, см. refreshSidePanelList) мог просто не успеть/не выбрать
-      // именно эту карточку 10 ретраев подряд — раньше на этом молча
-      // сдавались. Кликнутый маркер гарантированно есть в MINI_PIN_MARKERS/
-      // CARD_HTML (иначе не по чему было бы кликать) — досильно вставляем
-      // именно его в список вместо очередного ожидания чужого рефреша.
-      if (!sidePanelShownIds.includes(ids[0]) && CARD_HTML[ids[0]] != null) {
-        sidePanelShownIds = [ids[0]].concat(sidePanelShownIds);
+  // См. focusSideCard() выше — единая точка синхронизации "карточка
+  // гарантированно в DOM -> центрирована -> получила selected-состояние",
+  // без гоняющихся друг за другом независимых таймеров.
+  const targetId = ids[0];
+  focusSideCard(`.side-card[data-id="${CSS.escape(String(targetId))}"]`, {
+    cardId: targetId,
+    ensure: () => {
+      // Кликнутый маркер гарантированно есть в MINI_PIN_MARKERS/CARD_HTML
+      // (иначе не по чему было бы кликать) — вставляем его в список СРАЗУ,
+      // не дожидаясь ленивого moveend-driven рефреша (тот мог не успеть,
+      // или выбрать другой набор карточек под текущий вьюпорт).
+      if (!sidePanelShownIds.includes(targetId) && CARD_HTML[targetId] != null) {
+        sidePanelShownIds = [targetId].concat(sidePanelShownIds);
         renderSidePanelIds(sidePanelShownIds, undefined, 'объявлений');
-        requestAnimationFrame(() => {
-          const el2 = document.getElementById('card-' + ids[0]);
-          if (!el2) return;
-          centerCardInPanel(el2);
-          el2.classList.add('side-card-flash');
-          setTimeout(() => el2.classList.remove('side-card-flash'), 3000);
-        });
       }
-      return;
-    }
-    // Мгновенный скролл ТОЛЬКО панели (см. centerCardInPanel) — карточка
-    // ровно по центру правого блока, страница не прокручивается.
-    centerCardInPanel(el);
-    el.classList.add('side-card-flash');
-    setTimeout(() => el.classList.remove('side-card-flash'), 3000);
-  };
-  tryCenter();
+    },
+  });
 }
 function closeSidePanel() {
   // Панель больше не скрывается (персистентная) — клик по карте раньше её
@@ -880,6 +870,15 @@ function highlightMapPin(cardId, on) {
 // добавляем новые id в конец и убираем те, которых больше нет в ids.
 function renderSidePanelIds(ids, emptyMsg, countWord) {
   const body = document.getElementById('side-panel-body');
+  // Нормализуем ВСЕ id к строке в одном месте, на входе — задача 2026-08-21
+  // аудит нашёл первопричину периодической несинхронности: id в разных
+  // источниках (Object.keys() — всегда строки; JSON с сервера — может
+  // прийти числом; dataset.* в DOM — браузер ВСЕГДА хранит строкой) не
+  // всегда совпадали по ТИПУ при формально одинаковом значении (123 !==
+  // "123" в Set/строгом сравнении) — карточка считалась "новой", хотя уже
+  // была на экране, удалялась и пересоздавалась заново лишний раз, теряя
+  // именно выставленное только что selected-состояние/DOM-ссылку.
+  ids = ids.map(String);
   if (!ids.length) {
     body.innerHTML = `<div style="grid-column:1/-1;padding:40px 12px;text-align:center;color:#888;">${emptyMsg || 'В этой области карты ничего не найдено.'}</div>`;
     document.getElementById('side-panel-count').textContent = '';
@@ -911,6 +910,11 @@ function renderSidePanelIds(ids, emptyMsg, countWord) {
     div.innerHTML = CARD_HTML[id] || '';
     div.addEventListener('mouseenter', () => highlightMapPin(id, true));
     div.addEventListener('mouseleave', () => highlightMapPin(id, false));
+    // Выбранная карточка переживает пересборку списка (задача 2026-08-21,
+    // п.7: "после изменения фильтров/перемещения карты и т.д.") — если
+    // именно эта карточка была выбрана ДО того, как её пересоздали, класс
+    // возвращается сразу, а не только при следующем клике.
+    if (selectedCardId != null && String(selectedCardId) === id) div.classList.add('side-card-selected');
     frag.appendChild(div);
   });
   body.appendChild(frag);
@@ -1040,20 +1044,9 @@ function scrollToNewbuildComplex(complexId) {
   const mw = document.getElementById('map-wrap');
   if (mw && window.innerWidth <= 767) mw.classList.add('mobile-list');
   // Карточки юнитов рендерятся ПОСЛЕ сетевого ответа /admin/api/newbuild-complex
-  // .../units, а панель в это же время может перерисовываться по moveend —
-  // гонка: в момент вызова карточки ещё нет (el=null → старый код молча
-  // выходил), либо «липкий» scrollTop после полной замены списка давал
-  // неверную позицию (жалоба 2026-08-13: «скроллится куда-то, где его нет»).
-  // Ретраим центрирование, пока карточка не появится и не встанет по центру.
-  let attempts = 0;
-  const tryCenter = () => {
-    const el = document.querySelector(`#side-panel-body .side-card[data-complex-id="${complexId}"]`);
-    if (!el) { if (attempts++ < 10) setTimeout(tryCenter, 250); return; }
-    centerCardInPanel(el);
-    el.classList.add('side-card-flash');
-    setTimeout(() => el.classList.remove('side-card-flash'), 3000);
-  };
-  tryCenter();
+  // .../units — по-настоящему асинхронный случай, focusSideCard() без
+  // ensure ждёт появления узла через MutationObserver (не поллинг вслепую).
+  focusSideCard(`.side-card[data-complex-id="${CSS.escape(String(complexId))}"]`);
 }
 // (регистрация map.on('moveend', …) для refreshSidePanelList — см. ниже,
 // ПОСЛЕ строки `const map = L.map(...)`: `map` — const, обращение к ней
@@ -1085,6 +1078,115 @@ function centerCardInPanel(el) {
   const elTop = elRect.top - bodyRect.top + body.scrollTop;
   const target = elTop - (body.clientHeight - el.offsetHeight) / 2;
   body.scrollTop = Math.max(0, target);
+}
+
+// ── Персистентное selected-состояние карточки в панели (задача 2026-08-21) ──
+// Раздельно от highlightMapPin/selectPin (те красят ПИН на карте) — эта
+// пара красит именно КАРТОЧКУ СПИСКА и переживает пересборку списка (см.
+// применение внутри renderSidePanelIds ниже), в отличие от .side-card-flash,
+// который гаснет через 3с и создавался заново при каждом клике.
+let selectedCardId = null;
+function setCardSelectedClass(id, on) {
+  const el = document.getElementById('card-' + id);
+  if (el) el.classList.toggle('side-card-selected', on);
+}
+function selectCard(id) {
+  if (selectedCardId != null && selectedCardId !== id) setCardSelectedClass(selectedCardId, false);
+  selectedCardId = id;
+  if (id != null) setCardSelectedClass(id, true);
+}
+function clearCardSelection() {
+  if (selectedCardId != null) setCardSelectedClass(selectedCardId, false);
+  selectedCardId = null;
+}
+
+// ── Гарантированная синхронизация "карточка появилась в DOM" ────────────
+// Первопричина периодически ломавшегося скролла (задача 2026-08-21, аудит):
+// НЕ сам центрирующий скролл (тот всегда крутил именно #side-panel-body,
+// не всю страницу — см. комментарий у centerCardInPanel), а то, ЧЕМ он был
+// синхронизирован с рендером карточки — фиксированный ретрай-луп
+// setTimeout(fn, 250) до 10 раз (2.5с), гонявшийся ВНАПЕРЕГОНКИ с
+// НЕЗАВИСИМЫМ moveend-debounce (250мс, см. map.on('moveend', ...) ниже),
+// который в это же время мог пересобрать список (renderSidePanelIds).
+// Т.к. Leaflet-попапы (marker.openPopup()) по умолчанию делают autoPan —
+// это САМО по себе триггерит лишний moveend прямо в момент клика — два
+// асинхронных таймера гонялись за одним и тем же DOM-узлом, и то, что
+// открывалось/центрировалось, зависело от того, какой из них "победит" —
+// отсюда "то работает, то нет" без видимой закономерности.
+// Новая модель: (1) карточка гарантированно вставляется СИНХРОННО, если
+// её HTML уже готов (CARD_HTML[id] — а он обязан быть готов, раз по
+// маркеру вообще было чем кликнуть); (2) rAF, не setTimeout, ждёт ровно
+// один кадр реального layout перед measure/scroll; (3) на время фокуса
+// выставляется флаг sidePanelFocusBusy — конкурентный moveend-refresh
+// именно в этом узком окне пропускается (см. ниже), а не гонится
+// параллельно; (4) MutationObserver — единственный ОСТАВШИЙСЯ "таймер"
+// для по-настоящему асинхронных случаев (newbuild: карточки юнитов ждут
+// сетевой ответ) — ждёт РЕАЛЬНОГО появления узла, не гадает интервалом,
+// с одним bounded safety-timeout, а не бесконечным поллингом.
+let sidePanelFocusBusy = false;
+function focusSideCard(selector, opts) {
+  opts = opts || {};
+  const body = document.getElementById('side-panel-body');
+  if (!body) return;
+  sidePanelFocusBusy = true;
+  const finish = (el) => {
+    if (!el) { sidePanelFocusBusy = false; return; }
+    requestAnimationFrame(() => {
+      // Перечитываем узел — на случай, если он успел пересобраться, пока
+      // мы ждали кадр (renderSidePanelIds сохраняет id тех же карточек,
+      // но лишняя перестраховка от устаревшей ссылки ничего не стоит).
+      const fresh = body.querySelector(selector);
+      if (!fresh) { sidePanelFocusBusy = false; return; }
+      centerCardInPanel(fresh);
+      // cardId явно не задан (например, клик по ЖК-пину знает только
+      // complexId, а не какая юнит-карточка окажется первой) — берём id
+      // прямо с найденного узла, dataset.id проставлен renderSidePanelIds
+      // для КАЖДОЙ карточки без исключений.
+      const idToSelect = opts.cardId != null ? opts.cardId : fresh.dataset.id;
+      if (idToSelect != null) selectCard(idToSelect);
+      fresh.classList.add('side-card-flash');
+      setTimeout(() => fresh.classList.remove('side-card-flash'), 3000);
+      // sidePanelFocusBusy снимается ТОЛЬКО здесь, ПОСЛЕ реального
+      // scrollTop-присвоения — задача 2026-08-21, найдено на реальных
+      // данных (клик по ЖК с 47 вариантами): снятие флага ДО этого момента
+      // (в начале finish(), синхронно) оставляло окно между "клик
+      // обработан" и "кадр отрисован", в которое conкурентный moveend-
+      // рефреш (см. marker.openPopup() autoPan выше) успевал пройти mimo
+      // guard'а и своим renderSidePanelIds сбросить body.scrollTop=0
+      // (replaced-ветка) уже ПОСЛЕ того, как centerCardInPanel отработал —
+      // итоговый scrollTop оставался 0, хотя selected-класс уже стоял.
+      sidePanelFocusBusy = false;
+    });
+  };
+  const existing = body.querySelector(selector);
+  if (existing) { finish(existing); return; }
+  if (typeof opts.ensure === 'function') {
+    // Синхронная гарантия: если данные карточки уже есть в памяти
+    // (CARD_HTML), вставляем её НЕМЕДЛЕННО вместо ожидания ленивого
+    // moveend-driven рефреша — тот может случиться позже или вообще не
+    // выбрать именно эту карточку (см. док-комментарий выше).
+    opts.ensure();
+    const now = body.querySelector(selector);
+    if (now) { finish(now); return; }
+  }
+  // Настоящий асинхронный случай (данные ещё не пришли с сервера) —
+  // ждём появления узла через MutationObserver, а не поллингом.
+  let settled = false;
+  const obs = new MutationObserver(() => {
+    const el = body.querySelector(selector);
+    if (!el) return;
+    settled = true;
+    obs.disconnect();
+    finish(el);
+  });
+  obs.observe(body, {childList: true, subtree: false});
+  setTimeout(() => {
+    if (settled) return;
+    obs.disconnect();
+    sidePanelFocusBusy = false;
+    // По-настоящему нет данных (не пришли за 4с) — тихо сдаёмся, ничего
+    // не подсвечиваем, не оставляем панель в промежуточном состоянии.
+  }, 4000);
 }
 function proxyImg(url) { return url ? '/img-proxy?u=' + encodeURIComponent(url) : url; }
 // Ошибка загрузки фото в карточке: если в галерее есть ещё кадры — показать
@@ -1218,7 +1320,16 @@ map.on('moveend', () => {
 // границы карты.
 map.on('moveend', () => {
   clearTimeout(sidePanelRefreshTimer);
-  sidePanelRefreshTimer = setTimeout(() => {
+  sidePanelRefreshTimer = setTimeout(function moveendSidePanelRefresh() {
+    // Задача 2026-08-21, аудит: пока идёт явная (кликом по маркеру)
+    // синхронизация "карточка в DOM -> центрирование -> selected" (см.
+    // focusSideCard/sidePanelFocusBusy), ЭТОТ moveend-рефреш (например,
+    // от autoPan попапа, который открылся вместе с тем же кликом) не
+    // запускается параллельно — это и была основная гонка, из-за которой
+    // скролл иногда "сбивался". НЕ теряем рефреш вовсе — короткий
+    // отложенный повтор, sidePanelFocusBusy гарантированно снимается за
+    // ограниченное время (rAF-кадр или максимум 4с safety-timeout).
+    if (sidePanelFocusBusy) { setTimeout(moveendSidePanelRefresh, 100); return; }
     // На отдалённом виде (zoom < ZOOM_GATE) обычная viewport-подгрузка
     // пинов не срабатывает вообще (см. viewportNeedsReload) — панель тогда
     // никогда не увидит объекты в НОВОЙ области после панорамирования.
@@ -2082,6 +2193,9 @@ function setPinSelected(id, on) {
 function clearMapSelection() {
   if (selectedPinId) { setPinSelected(selectedPinId, false); selectedPinId = null; }
   if (selectedClusterEl) { selectedClusterEl.style.filter = 'none'; selectedClusterEl = null; }
+  // Клик по пустому месту карты снимает выделение и с карточки в панели —
+  // пин и карточка одного объявления всегда выделены/сняты синхронно.
+  clearCardSelection();
 }
 function selectPin(id) {
   clearMapSelection();
