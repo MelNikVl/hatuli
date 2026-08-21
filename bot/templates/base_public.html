@@ -16,16 +16,16 @@
 <!-- /Yandex.Metrika counter -->
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>{% block title %}Hatuli — карта квартир Астаны{% endblock %}</title>
-  <meta name="description" content="{% block meta_description %}Hatuli — карта квартир Астаны: продажа и аренда, тепловые карты цен, шума и транспортной доступности, рейтинг жилых комплексов Астаны.{% endblock %}"/>
+  <title>{% block title %}Clearly — карта квартир Астаны{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}Clearly — карта квартир Астаны: продажа и аренда, тепловые карты цен, шума и транспортной доступности, рейтинг жилых комплексов Астаны.{% endblock %}"/>
   <link rel="canonical" href="{% block canonical %}https://hatuli.ai-groundtruth.com{{ request.url.path }}{% endblock %}"/>
   <!-- OpenGraph — генерические дефолты, страницы переопределяют через
        og_title/og_description/og_image (см. /listing/{id} — карточка
        объявления должна нормально разворачиваться превью при шаринге ссылки). -->
   <meta property="og:type" content="website"/>
-  <meta property="og:site_name" content="Hatuli"/>
-  <meta property="og:title" content="{% block og_title %}Hatuli — карта квартир Астаны{% endblock %}"/>
-  <meta property="og:description" content="{% block og_description %}Hatuli — карта квартир Астаны: продажа и аренда, тепловые карты цен, рейтинг жилых комплексов.{% endblock %}"/>
+  <meta property="og:site_name" content="Clearly"/>
+  <meta property="og:title" content="{% block og_title %}Clearly — карта квартир Астаны{% endblock %}"/>
+  <meta property="og:description" content="{% block og_description %}Clearly — карта квартир Астаны: продажа и аренда, тепловые карты цен, рейтинг жилых комплексов.{% endblock %}"/>
   <meta property="og:url" content="https://hatuli.ai-groundtruth.com{{ request.url.path }}"/>
   {% block og_image %}{% endblock %}
   <link rel="icon" type="image/png" href="/static/branding/favicon.png"/>
@@ -36,7 +36,7 @@
   <link rel="preconnect" href="https://kepler.gl" crossorigin>
   <link rel="dns-prefetch" href="https://kepler.gl">
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"WebSite","name":"Hatuli","url":"https://hatuli.ai-groundtruth.com","description":"Карта квартир Астаны: продажа, аренда, тепловые карты, рейтинг жилых комплексов."}
+  {"@context":"https://schema.org","@type":"WebSite","name":"Clearly","url":"https://hatuli.ai-groundtruth.com","description":"Карта квартир Астаны: продажа, аренда, тепловые карты, рейтинг жилых комплексов."}
   </script>
   <script>
   (function() {
@@ -165,7 +165,7 @@
     or request.url.path == '/admin-panel') %}
 <header class="pub-header">
   <div class="pub-row1">
-    <a href="/" class="pub-logo" style="color:#000;">AGT</a>
+    <a href="/" class="pub-logo" style="text-transform:none;"><span style="color:#94CCD1;">Clearly</span></a>
     <nav class="pub-nav">
       <a href="/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
       <a href="/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>
