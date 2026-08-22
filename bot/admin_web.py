@@ -185,7 +185,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # только UX (не единственная линия защиты, но без неё выбор "Продажа"
         # молча отдавал 0 точек — выглядело как баг, а не как ограничение).
         tier = await get_user_tier(request)
-        return templates.TemplateResponse(
+        resp = templates.TemplateResponse(
             "dashboard.html", {
                 "request": request,
                 "stats": stats,
@@ -200,6 +200,18 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "listing_meta": listing_meta,
             }
         )
+        # Живой баг (2026-08-22, "скролл до объявления в панели снова
+        # сломался"): страница отдавалась БЕЗ Cache-Control вовсе —
+        # Cloudflare/браузер мог закэшировать HTML этой страницы целиком,
+        # включая инлайновый <script> с логикой карты/панели, и продолжать
+        # отдавать СТАРУЮ (или пойманную на середине правки на сервере)
+        # версию скрипта уже ПОСЛЕ того, как на сервере всё исправлено —
+        # воспроизвести на прямом запросе к origin (мимо CDN/кэша браузера)
+        # не получалось именно поэтому. dashboard.html рендерится каждый
+        # раз заново из живых данных (stats/tier/listing_id) — кэшировать
+        # его в принципе не должно быть смысла.
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        return resp
 
     @app.get("/", response_class=HTMLResponse)
     async def root_dashboard(request: Request):
