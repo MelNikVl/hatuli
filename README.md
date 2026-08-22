@@ -2,7 +2,7 @@
 
 Система автоматически собирает данные об объявлениях продажи и аренды квартир,
 считает для каждого объекта многофакторный Deal Score, строит тепловые карты
-города (цены, аренда, шум, транспорт, хайп), анализирует новости недвижимости,
+города (цены, аренда, шум, транспорт, хайп, ликвидность), анализирует новости недвижимости,
 обогащает данные о ЖК/застройщиках из официальных реестров и помогает принять
 решение о покупке — с локальным (гексагональным) сравнением цены, анализом
 торга по реальным аналогам, рейтингом ЖК/застройщиков и скором
@@ -34,12 +34,24 @@
 - **Реальные просмотры** — `krisha-viewcount.service` (Playwright/headless
   Chromium): считывает число просмотров объявления (статичный HTML Крыши
   число не отдаёт, нужен JS/фингерпринт) и копит историю, цикл ~1 ч.
+- **Стрелка тренда цены** — минималистичная ▲/▼ в карточках боковой панели и на
+  маркерах карты: направление и цвет — по динамике цены объявления.
 - **Дедупликация, геопривязка, проверка актуальности** (архив).
 - **Исторические снимки для вердикт-стратегии** — ежедневные
   `listing_snapshots` (цена/просмотры/активность), `outcome_labels`
   (исходы: исчезло за 30 дн / снижение цены / пережило 90 дн / TOM /
   скорость просмотров) и `deal_score_snapshots` (история Deal Score) —
   сырые данные для будущих outcome-моделей (Фаза C).
+- **«📈 Ожидаемый срок экспозиции»** — в попапе карточки объявления
+  (`/admin/api/listing/{id}/dom-scenario`): консервативный эмпирический прогноз —
+  непараметрический Kaplan–Meier по сегменту + PAVA-сглаживание ценовых корзин
+  (не ML: действует «пауза по ML», обоснование — docs/dom_forecast_audit.md).
+  Единица наблюдения — `property_id` (повторные публикации одной квартиры не
+  считаются независимыми), активные объявления — право-цензурированные,
+  fallback-сегменты — от «район × комнатность» до городского baseline.
+  Сценарный калькулятор: ожидаемый срок экспозиции при разных ценах
+  (снижение/повышение). Честная пометка: исчезновение с рынка ≠ подтверждённая
+  продажа. Подробности — docs/dom_scenario_calculator.md.
 
 ### ЖК и застройщики
 - **Обогащение данными о ЖК/застройщиках** — класс жилья, теххарактеристики,
@@ -64,6 +76,10 @@
 - **Отслеживание изменений источников** — `source_changes`/`source_runs`:
   дифф новых/изменённых ЖК по каждому прогону Korter/Homsters (вкладки
   парсеров: изменения за 1/3/7/30 дней, длительность обходов).
+- **Сбор отзывов** — `reviews_pipeline.py`: ежедневный сбор отзывов из всех
+  источников в `reviews_raw` (`krisha-reviews-collect.timer` 03:00) + rescore
+  review-очереди entity resolution (`krisha-review-rescore.timer` 05:30) —
+  фундамент под рейтинг ЖК по отзывам.
 - **Банки и ипотека** — 14 банков, 27 ипотечных программ
   (`/admin/banks`, `/admin/banks/{slug}`): ставки, ГЭСВ, взносы, условия,
   ссылки на источники.
@@ -85,10 +101,16 @@
   SQL (сделано для ~15 тыс. объявлений). Интегрировано в `floorplan_scan.py`.
 
 ### Карты города
-- **Тепловые карты** на дашборде (13 режимов): цены продажи/аренды, цена за м²,
+- **Тепловые карты** на дашборде (16 режимов): цены продажи/аренды, цена за м²,
   доходность, внешний шум (OSM-дороги), транспортная доступность, хайп по
   новостям, плотность населения, количество объявлений, снос домов,
-  инфраструктура, новизна домов и **преступность**.
+  инфраструктура, новизна домов, преступность, интерес (просмотры),
+  воздух (ПНЗ) и **скорость ухода с рынка**.
+- **«⚡ Скорость ухода с рынка»** — режим тепловой карты ликвидности на главной
+  карте: насколько быстро объявления исчезают с рынка, по
+  `outcome_labels.time_on_market` (окно 180 дней). Не факт продажи — только
+  наблюдаемое исчезновение, подтверждённое HTTP-проверкой (`archive_check`);
+  тот же расчёт, что в «Поглощение и ликвидность».
 - **Преступность** — официальный портал КПСиСУ ГП РК (`gis.kgp.kz`, слой
   KPSSU/crime): 250k+ записей по Астане с 2015 г., ежедневное обновление
   (`krisha-crime.timer` 06:30). Гексы 150 м: оттенок = тяжесть (0–4),
@@ -120,6 +142,40 @@
   `hex_market_stats` (плотность предложения по гексагону), ежемесячный
   пересчёт `complex_location_scores`, ежедневный healthcheck зеркал Overpass
   (`krisha-osm-healthcheck`) с общим `admin_alert`.
+
+### Property Identity (физические квартиры)
+- **Связывание объявлений в физические квартиры** — `property_linker.py`:
+  детерминированный двухфазный граф кандидатов, таблицы `properties`
+  (identity_status: `provisional`/`confirmed`/`merged`) и `property_listings`
+  (link_method, confidence). Инкрементальная поддержка для новых объявлений —
+  `bot/jobs/property_identity_incremental.py`
+  (`krisha-property-identity-incremental.timer`, ~15 мин).
+- **Фото-доказательства и ручное ревью** — очередь `/admin/property-match-review`:
+  кандидаты на совпадение с фото-доказательствами, ручные решения
+  (подтвердить/отклонить), честные счётчики очереди.
+- **Безопасный physical merge** — `bot/identity/property_merge.py` (engine) и CLI
+  `scripts/property_merge_plan.py` / `property_merge_apply.py` /
+  `property_merge_rollback.py`, лог в `property_merge_log`: слияние дублей
+  физических квартир, каноническая запись — identity_status-тир перед
+  7-факторным скорингом; несовпадение этажа — soft warning в pre-merge
+  revalidation. В production ни один merge не выполнен (canary — отдельное
+  решение).
+- **Property Timeline (Phase 1)** — read-only API
+  `/admin/api/property/{property_id}/timeline`: единая честная история физической
+  квартиры (union всех её listing через `property_listings`, `price_history`,
+  история архиваций, фото-доказательства) — фундамент под true DOM / relist
+  history. Без writes, без merge, без ML.
+
+### Рыночная аналитика
+- **«Обзор рынка»** (`/admin/analytics/market-overview`) — read-only страница:
+  срезы предложения по фильтрам (период, район, ЖК, класс, комнатность, тип
+  рынка, статус), структура и динамика.
+- **«Поглощение и ликвидность»** (`/admin/analytics/market-absorption`) —
+  скорость ухода объявлений с рынка (days `first_seen → archived_at`) и
+  ликвидность по сегментам.
+- Сервисный слой — `bot/analytics/market_dashboards.py` (там же формулы и
+  ограничения каждого показателя); страницы только читают данные и не трогают
+  Deal Score / Property Identity / архивацию.
 
 ### Хайп-аналитика по новостям (LLM)
 - **Принцип**: хайп локаций строится **только из новостей** — LLM (DeepSeek)
@@ -183,7 +239,18 @@ krisha_bot/
 │   │   ├── dedup_listings.py       # Дедупликация
 │   │   ├── housing_class_score.py  # Оценка класса ЖК по характеристикам
 │   │   ├── sheets_sync.py          # Google Sheets
-│   │   └── archive_check.py        # Проверка ухода в архив
+│   │   ├── archive_check.py        # Проверка ухода в архив
+│   │   └── property_timeline.py    # Property Timeline — история физической квартиры
+│   ├── analytics/
+│   │   ├── dom_scenario.py         # Сценарный калькулятор срока экспозиции (Kaplan–Meier + PAVA)
+│   │   └── market_dashboards.py    # Рыночная аналитика: «Обзор рынка», «Поглощение и ликвидность»
+│   ├── identity/
+│   │   ├── property_linker.py      # Property Identity: связывание listing → property
+│   │   ├── property_merge.py       # Safe Physical Property Merge (plan/apply/rollback)
+│   │   └── review_decisions.py     # Ручное ревью кандидатов property match
+│   ├── jobs/
+│   │   ├── property_identity_incremental.py  # Инкрементальная поддержка Property Identity
+│   │   └── scheduler.py            # Планировщик задач
 │   ├── db/
 │   │   ├── pg.py                   # PostgreSQL connection pool (asyncpg)
 │   │   └── models.py / schema.sql  # DDL / инициализация схемы
@@ -220,18 +287,20 @@ krisha_bot/
 ├── osm_mirrors_healthcheck.py      # Healthcheck зеркал Overpass (L1)
 ├── housing_class_pre2000_backfill.py   # Класс старого фонда (одноразовый backfill)
 ├── terminal_extras.py              # API/страницы: хайп, банки, новости, ЖК, бэкапы
-└── migrations/                     # SQL-миграции 001–073
+└── migrations/                     # SQL-миграции 001–092
 ```
 
 ---
 
 ## Базы данных
 
-### krisha_bot (основная, 94 таблицы)
+### krisha_bot (основная, 107 таблиц)
 
 | Таблица | Описание |
 |---------|----------|
 | `apartment_listings` | Квартиры на продажу — данные, скоры, история цены |
+| `properties` / `property_listings` | Property Identity: физические квартиры, связь listing → property (link_method, confidence) |
+| `property_merge_log` | Лог безопасных physical merge (plan/apply/rollback) |
 | `rental_listings` / `rental_index` | Объявления аренды / агрегированные ставки |
 | `complexes` | ЖК — класс, год, застройщик, цена/м², координаты, `build_status`, `deadline` |
 | `complex_tech_specs` | Теххарактеристики ЖК: этажность, потолки, лифты, отопление, фасад |
@@ -245,12 +314,14 @@ krisha_bot/
 | `blocked_photo_urls` | Мусорные фото-URL (SigLIP-эталоны), вычищены из объявлений |
 | `price_history` | История цены по объявлению |
 | `news` | Новости недвижимости (СМИ): title, source, url, image_url, summary |
+| `reviews_raw` | Сырые отзывы из всех источников (reviews_pipeline.py) |
 | `banks` / `mortgage_programs` | Банки и ипотечные программы (14/27) |
 | `transport_stops` / `transport_hexes` | Остановки ОСМ (838) / гексы транспорта 100 м (5 409) |
 | `city_roads` / `city_poi` | Дороги для карты шума / POI (школы, сады, landmark, ЛРТ) |
 | `complex_stats_history` | Ежедневная история статистики ЖК: `avg_dom_days`, `price_drop_share_30d/60d` (с 2026-08-14) |
 | `hex_market_stats` | Ежедневный снимок плотности предложения по гексагону |
 | `complex_location_scores` | Скор локации ЖК по группам + история (ежемесячный пересчёт) |
+| `complex_walkability` | Пешеходная доступность ЖК (OSRM-маршруты, ежемесячный пересчёт) |
 | `listing_snapshots` | Ежедневные снимки объявлений: цена, просмотры, активность |
 | `outcome_labels` | Ежедневные outcome-метки: исчез за 30 дн, снижение цены, пережило 90 дн, TOM |
 | `deal_score_snapshots` | Ежедневная история Deal Score |
@@ -296,12 +367,15 @@ krisha_bot/
 
 ---
 
-## Веб-панель (http://192.168.1.68:8082, публично: https://hatuli.ai-groundtruth.com)
+## Веб-панель (http://192.168.1.68:8082, публично: https://hatuli.ai-groundtruth.com; пользовательский бренд — Clearly)
 
 ```
 /admin                        — карта, фильтры, тепловые карты (вкл. «Хайп (новости)»)
 /admin/analytics              — квартиры со скорами, аналитика
 /admin/analytics/prices       — цены
+/admin/analytics/market-overview — «Обзор рынка» (рыночная аналитика)
+/admin/analytics/market-absorption — «Поглощение и ликвидность»
+/admin/property-match-review  — очередь ревью совпадений Property Identity (фото-доказательства)
 /admin/parsers                — hub парсеров: общие данные, Korter, Homsters, homeportal, комплекс-скан
 /admin/analytics/complexes    — hub ЖК: «Класс жилья» (этажность/потолки/лифты/квартиры + пометки Крыша/Homeportal/Объявл.) и «ЖК под правку»
 /complex/{id}                 — карточка ЖК: официальные данные + блок «🗺 Локация» (скор-карта по группам, риск-бейджи, слои POI/снос/плотность, таймлайн)
@@ -330,8 +404,10 @@ krisha_bot/
 | `krisha-homsters` | Обогащение первичного рынка (Homsters.kz, 5 дней) |
 | `krisha-korter` | Обогащение (Korter.kz: класс ЖК, застройщик, 5 дней) |
 | `krisha-homeportal` (timer) | Реестр КЖК: официальные данные (1 ЖК / 90 с) |
+| `krisha-complex-scan` (timer) | Скан карточек ЖК Крыши: кол-во квартир, описание, фото, статус/срок строительства (каждые 20 мин) |
 | `krisha-hype-news` (timer) | LLM-анализ новостей → хайп-локации (21:00) |
 | `krisha-crime` (timer) | Преступность КПСиСУ: полная история Астаны + ежедневный инкремент (06:30) |
+| `krisha-air-stations` (timer) | Качество воздуха: станции ПНЗ (ecodata.kz Shiny), ежечасно — режим «Воздух» тепловой карты |
 | `krisha-floorplan` (timer) | SigLIP-сканер планировок + мусорные фото |
 | `krisha-market` | Рыночные справочные данные |
 | `krisha-alerts` | Telegram-алерты (платные, Stars) |
@@ -341,12 +417,18 @@ krisha_bot/
 | `krisha-listing-snapshot` (timer) | Ежедневный снимок объявлений → listing_snapshots (08:30) |
 | `krisha-deal-score-snapshot` (timer) | Ежедневный снимок Deal Score → deal_score_snapshots (08:35) |
 | `krisha-outcome-labels` (timer) | Ежедневный пересчёт outcome_labels (08:45) |
-| `krisha-housing-class-estimate` (timer) | Ежемесячный пересчёт housing_class_estimate (1-е число, 08:45) |
+| `krisha-housing-class-estimate` (timer, отключён) | Ежемесячный пересчёт housing_class_estimate (1-е число, 08:45) |
 | `krisha-complex-location-score` (timer) | Ежемесячный пересчёт complex_location_scores (1-е число, 09:15) |
+| `krisha-complex-walkability` (timer) | Ежемесячный пересчёт пешеходной доступности ЖК (OSRM) — Фаза L3 «Локация» |
 | `krisha-osm-healthcheck` (timer) | Ежедневный healthcheck зеркал Overpass + admin_alert (09:05) |
+| `krisha-kzk-registry` (timer) | Еженедельный сбор реестра КЖК (developers.kz) |
+| `krisha-newbuild` (timer) | Weekly newbuild developers scan (все импортёры) |
+| `krisha-reviews-collect` (timer) | Ежедневный сбор отзывов из всех источников → reviews_raw (03:00) |
+| `krisha-review-rescore` (timer) | Rescore review-очереди entity resolution (05:30) |
+| `krisha-photos-backfill` (timer) | Backfill фото/адресов ЖК из homeportal (приоритет источников, ~07:50) |
+| `krisha-property-identity-incremental` (timer) | Инкрементальное поддержание Property Identity (~15 мин) |
 
-Cron сервера: `krisha_complex_scan.py` каждые 20 мин (карточки ЖК, щадящий
-delay 120 с / batch 10), `street_audit_daily.py` в 04:30 (отвязка улиц),
+Cron сервера: `street_audit_daily.py` в 04:30 (отвязка улиц),
 `siroty_daily.py` в 05:05 (разбор «сирот»: привязка к ЖК по адресу +
 геокодирование Nominatim).
 
@@ -355,17 +437,18 @@ delay 120 с / batch 10), `street_audit_daily.py` в 04:30 (отвязка ул�
 | Крон | Расписание | Назначение |
 |------|------------|------------|
 | `github-trending-digest` | 10:00 | Дайджест GitHub Trending + Radar (Threads) одним постом |
-| `threads-githubradar-daily` | 09:00 | Сбор канала @githubradar (материал для 10:00, без доставки) |
-| `hh-kz-vacancy-scan` | 9:00, 14:00 | Тихий скан вакансий hh.kz (IT-профиль) |
-| `linkedin-threads-vacancy-scan` | 12:00, 18:00 | Скан IT-вакансий LinkedIn + Threads (лиды в vacancy_leads.json) |
-| `hh-vacancy-digest` | 20:00 | Топ-3 вакансии hh.kz + лиды LinkedIn/Threads (с проверкой закрытых) |
+| `hh-kz-vacancy-scan` | 9:00, 14:00 | Тихий скан вакансий hh.kz (IT-профиль) (отключён) |
+| `linkedin-threads-vacancy-scan` | 12:00, 18:00 | Скан IT-вакансий LinkedIn + Threads (лиды в vacancy_leads.json) (отключён) |
+| `hh-vacancy-digest` | 20:00 | Топ-3 вакансии hh.kz + лиды LinkedIn/Threads (с проверкой закрытых) (отключён) |
 | `hype-tracker-collect` | 8:00, 20:00 | Снимки хайпа (25 ресурсов) |
 | `media-scan-5x` | 8/11/14/17/20 | Медиа-скан СМИ |
-| `threads-hourly-scan` | каждый час | Упоминания недвижимости в Threads |
 | `news-daily-collect` | 08:30 | Сбор новостей недвижимости |
 | `hype-news-daily-report` | 21:00 | LLM-анализ новостей → рейтинги локаций + отчёт в чат |
 | `hatuli-daily-backup` | 03:00 | Бэкап на Windows (C:\BU_HATULI, ротация 5) |
 | `ИИ-ревью словаря новостей (суббота 11:00)` | сб 11:00 | Еженедельное ИИ-ревью словаря новостных запросов хайпа (`hype_tracker/query_dict_review.py`) |
+| `The Colony дайджест` | 19:00 | Ежедневный дайджест The Colony |
+| `2GIS рейтинги школ/садиков` | 1-е число, 06:00 | Рейтинги школ/садиков 2GIS |
+| `OLX мониторинг чатов` | 8:00–23:00 | Мониторинг чатов OLX (отключён) |
 | `Еженедельный отчёт по кронам` | пн 09:00 | Отчёт о кронах и таймерах Hermes для владельца (что чистить) |
 | `Notion-дайджест изменений проекта` | 23:00 | Ежедневный отчёт об изменениях проекта krisha_bot в Notion |
 | `hatuli README weekly` | сб 10:00 | Еженедельное обновление README.md проекта (сверка фич/сервисов/кронов, коммит + push) |
