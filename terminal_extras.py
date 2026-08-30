@@ -315,11 +315,16 @@ def make_extras_router(templates) -> APIRouter:
     # нужна и в admin_web.py, для /listing/{id} — раньше была задублирована
     # тут как локальная), см. её докстринг.
     from bot.core.site_auth import get_user_tier
-    @router.get("/admin/analytics/hype", response_class=HTMLResponse)
-    async def hype_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("hype_analytics.html", {"request": request})
+    # Admin IA cleanup (2026-08-30): удалён недостижимый дубль этого роута —
+    # bot/admin_web.py::hype_analytics_page_old регистрирует тот же путь НА
+    # app напрямую (redirect на /admin/analytics/heatmaps?tab=hype, "Слито
+    # во вкладку 'Хайп' hub-страницы", уже сделанная консолидация), ДО того
+    # как этот router здесь include_router'ится — этот handler и шаблон
+    # hype_analytics.html ни разу не выполнялись. API ниже (/admin/api/
+    # hype-hexes) сознательно НЕ удалён в этом PR, хотя проверка показала,
+    # что heatmaps_hub.html его тоже не вызывает (см. отчёт admin IA
+    # cleanup, "needs decision" — API-эндпоинты вне скоупа этой page/nav
+    # чистки, нужна отдельная проверка внешних потребителей).
 
     @router.get("/admin/api/hype-hexes")
     async def hype_hexes(request: Request):
@@ -576,11 +581,13 @@ def make_extras_router(templates) -> APIRouter:
             return HTMLResponse("Новость не найдена", status_code=404)
         return templates.TemplateResponse("news_detail.html", {"request": request, "n": dict(n)})
 
-    @router.get("/admin/analytics/news-analysis", response_class=HTMLResponse)
-    async def news_analysis_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("news_analysis.html", {"request": request})
+    # Admin IA cleanup (2026-08-30): удалён недостижимый дубль этого роута —
+    # bot/admin_web.py::news_analysis_page регистрирует тот же путь НА app
+    # напрямую (redirect на /admin/analytics/heatmaps?tab=hype, уже
+    # сделанная консолидация), ДО того как этот router здесь include_
+    # router'ится — этот handler и шаблон news_analysis.html ни разу не
+    # выполнялись. API ниже (/admin/api/news-analysis) не тронут — та же
+    # оговорка, что у hype-hexes выше (needs decision, вне скоупа).
 
     @router.get("/admin/api/news-analysis")
     async def news_analysis_api(request: Request, days: int = 90):
@@ -599,11 +606,12 @@ def make_extras_router(templates) -> APIRouter:
         cur.close(); db.close()
         return JSONResponse({"runs": runs})
 
-    @router.get("/admin/analytics/transport", response_class=HTMLResponse)
-    async def transport_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("transport_analytics.html", {"request": request})
+    # Admin IA cleanup (2026-08-30): удалён недостижимый дубль этого роута —
+    # bot/admin_web.py регистрирует "/admin/analytics/transport" НА app
+    # напрямую, ДО того как этот router здесь include_router'ится, поэтому
+    # этот handler ни разу не выполнялся (Starlette матчит по порядку
+    # регистрации, первый совпавший побеждает). Канонический handler —
+    # bot/admin_web.py::transport_page.
 
     @router.get("/admin/analytics/walkability", response_class=HTMLResponse)
     async def walkability_page(request: Request):
