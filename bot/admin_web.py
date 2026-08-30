@@ -972,21 +972,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # ссылки не 404-или.
         return RedirectResponse(url="/admin/analytics/heatmaps?tab=hype", status_code=301)
 
+    # Admin IA cleanup (2026-08-30): раньше здесь было ДВА идентичных
+    # регистрации "/admin/analytics/transport" подряд (transport_page +
+    # transport_analytics_page, byte-for-byte одинаковый handler-код) плюс
+    # ТРЕТЬЯ в terminal_extras.py — Starlette матчит роуты в порядке
+    # регистрации, так что реально отвечал только первый, второй и третий
+    # были 100% недостижимым мёртвым кодом. Оставлен один.
     @app.get("/admin/analytics/transport", response_class=HTMLResponse)
     async def transport_page(request: Request):
         # ВАЖНО: выше catch-all /admin/analytics/{listing_id} ниже.
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        return templates.TemplateResponse("transport_analytics.html", {
-            "request": request, "atab": "transport",
-        })
-
-    @app.get("/admin/analytics/transport", response_class=HTMLResponse)
-    async def transport_analytics_page(request: Request):
-        # ВАЖНО: ДОЛЖЕН стоять выше catch-all /admin/analytics/{listing_id} —
-        # без этого "transport" матчился туда как несуществующий listing_id
-        # (терялся, т.к. одноимённый роут в terminal_extras.py регистрируется
-        # через include_router ПОСЛЕ этого catch-all).
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         return templates.TemplateResponse("transport_analytics.html", {
