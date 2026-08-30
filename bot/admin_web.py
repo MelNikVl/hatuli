@@ -854,25 +854,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         return RedirectResponse(url="/admin/analytics/floors", status_code=301)
 
     @app.get("/admin/analytics/year", response_class=HTMLResponse)
-    async def year_analytics_page(request: Request):
-        if not is_authed(request):
-            return RedirectResponse(url="/admin/login", status_code=302)
-        from bot.db.pg import fetchval as pg_fv
-        total_active = await pg_fv(
-            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
-            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
-        # Год берём с объявления, а если пусто — с его ЖК (см. комментарий
-        # в service_apartments.py про снимок year_stats_history).
-        missing_year = await pg_fv("""
-            SELECT COUNT(*) FROM apartment_listings a
-            LEFT JOIN complexes c ON lower(trim(c.name)) = lower(trim(a.complex_name))
-            WHERE a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
-              AND COALESCE(a.year_built, c.year_built) IS NULL
-        """) or 0
-        return templates.TemplateResponse("year_analytics.html", {
-            "request": request, "atab": "year",
-            "total_active": total_active, "missing_year": missing_year,
-        })
+    async def year_analytics_page_redirect(request: Request):
+        # Admin IA cleanup (2026-08-30), этап 2: страница показывала ровно
+        # два блока (покрытие данными о годе постройки + график во
+        # времени) — перенесены на /admin/admin-info ("Возраст домов",
+        # та же тема), отдельным разделом не оправдана. Старый route
+        # оставлен 301-редиректом — тот же паттерн, что floor_performance_
+        # page_redirect чуть выше.
+        return RedirectResponse(url="/admin/admin-info", status_code=301)
 
     @app.get("/admin/analytics/demand", response_class=HTMLResponse)
     async def demand_analytics_page(request: Request):

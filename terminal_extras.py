@@ -315,16 +315,20 @@ def make_extras_router(templates) -> APIRouter:
     # нужна и в admin_web.py, для /listing/{id} — раньше была задублирована
     # тут как локальная), см. её докстринг.
     from bot.core.site_auth import get_user_tier
-    # Admin IA cleanup (2026-08-30): удалён недостижимый дубль этого роута —
-    # bot/admin_web.py::hype_analytics_page_old регистрирует тот же путь НА
-    # app напрямую (redirect на /admin/analytics/heatmaps?tab=hype, "Слито
-    # во вкладку 'Хайп' hub-страницы", уже сделанная консолидация), ДО того
-    # как этот router здесь include_router'ится — этот handler и шаблон
-    # hype_analytics.html ни разу не выполнялись. API ниже (/admin/api/
-    # hype-hexes) сознательно НЕ удалён в этом PR, хотя проверка показала,
-    # что heatmaps_hub.html его тоже не вызывает (см. отчёт admin IA
-    # cleanup, "needs decision" — API-эндпоинты вне скоупа этой page/nav
-    # чистки, нужна отдельная проверка внешних потребителей).
+    # Admin IA cleanup (2026-08-30, этап 1): удалён недостижимый дубль этого
+    # роута — bot/admin_web.py::hype_analytics_page_old регистрирует тот же
+    # путь НА app напрямую (redirect на /admin/analytics/heatmaps?tab=hype,
+    # "Слито во вкладку 'Хайп' hub-страницы", уже сделанная консолидация),
+    # ДО того как этот router здесь include_router'ится — этот handler и
+    # шаблон hype_analytics.html (удалён этапом 2, см. ниже) ни разу не
+    # выполнялись.
+    #
+    # ИСПРАВЛЕНО (этап 2): предыдущий комментарий здесь ошибочно утверждал
+    # "heatmaps_hub.html его тоже не вызывает" — неполная проверка (grep по
+    # самому heatmaps_hub.html, БЕЗ учёта {% include %}). API ниже АКТИВНО
+    # используется: heatmaps_hub.html -> {% include "_hype_body.html" %} ->
+    # fetch('/admin/api/hype-hexes') (bot/templates/_hype_body.html) — живой
+    # эндпоинт текущего hub, НЕ orphaned, НЕ трогать.
 
     @router.get("/admin/api/hype-hexes")
     async def hype_hexes(request: Request):
@@ -581,13 +585,17 @@ def make_extras_router(templates) -> APIRouter:
             return HTMLResponse("Новость не найдена", status_code=404)
         return templates.TemplateResponse("news_detail.html", {"request": request, "n": dict(n)})
 
-    # Admin IA cleanup (2026-08-30): удалён недостижимый дубль этого роута —
-    # bot/admin_web.py::news_analysis_page регистрирует тот же путь НА app
-    # напрямую (redirect на /admin/analytics/heatmaps?tab=hype, уже
+    # Admin IA cleanup (2026-08-30, этап 1): удалён недостижимый дубль этого
+    # роута — bot/admin_web.py::news_analysis_page регистрирует тот же путь
+    # НА app напрямую (redirect на /admin/analytics/heatmaps?tab=hype, уже
     # сделанная консолидация), ДО того как этот router здесь include_
-    # router'ится — этот handler и шаблон news_analysis.html ни разу не
-    # выполнялись. API ниже (/admin/api/news-analysis) не тронут — та же
-    # оговорка, что у hype-hexes выше (needs decision, вне скоупа).
+    # router'ится — этот handler и шаблон news_analysis.html (удалён этапом
+    # 2) ни разу не выполнялись.
+    #
+    # ИСПРАВЛЕНО (этап 2) — та же ошибка, что у hype-hexes выше: API ниже
+    # АКТИВНО используется — heatmaps_hub.html -> {% include "_hype_body.
+    # html" %} -> fetch('/admin/api/news-analysis?days=...'). НЕ orphaned,
+    # НЕ трогать.
 
     @router.get("/admin/api/news-analysis")
     async def news_analysis_api(request: Request, days: int = 90):
@@ -3489,8 +3497,16 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/admin-info", response_class=HTMLResponse)
     async def admin_info_page(request: Request):
-        """ИНФО для админа: пометка старого фонда (пятиэтажки до 700 тыс/м²,
-        год 1970) + тепловая карта новизны домов Астаны."""
+        """"Возраст домов" (Admin IA cleanup, задача 2026-08-30, этап 2 —
+        переименовано с misleading "ИНФО для админа": страница никогда не
+        была общей system-info-страницей, только про год постройки/старый
+        фонд — название вводило в заблуждение). Объединяет: пометку
+        старого фонда (пятиэтажки до 700 тыс/м², год 1970) + распределение
+        по десятилетиям + тепловую карту новизны домов Астаны (исходный
+        контент) + покрытие данными о годе постройки во времени (перенесено
+        сюда с /admin/analytics/year, см. year_analytics_page redirect
+        ниже — та страница показывала ровно одну узкую метрику той же
+        темы "год постройки", отдельным разделом не оправдана)."""
         if not is_authed(request):
             return RedirectResponse("/admin/login")
         from bot.db.pg import fetchval as pg_fval, fetch as pg_fetch
@@ -3505,6 +3521,20 @@ def make_extras_router(templates) -> APIRouter:
             GROUP BY 1 ORDER BY 1
         """)
         decades = [{"dec": r["dec"], "cnt": r["count"]} for r in decade_rows]
+
+        # ── перенесено с /admin/analytics/year (бывшая year_analytics_page,
+        # bot/admin_web.py, теперь redirect сюда) — те же два запроса,
+        # byte-for-byte, не переизобретены заново.
+        total_active = await pg_fval(
+            "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
+            "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
+        missing_year = await pg_fval("""
+            SELECT COUNT(*) FROM apartment_listings a
+            LEFT JOIN complexes c ON lower(trim(c.name)) = lower(trim(a.complex_name))
+            WHERE a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
+              AND COALESCE(a.year_built, c.year_built) IS NULL
+        """) or 0
+
         return templates.TemplateResponse("admin_info.html", {
             "request": request,
             "old_fund_total": old_fund_total,
@@ -3512,6 +3542,8 @@ def make_extras_router(templates) -> APIRouter:
             "hy_total": hy_total,
             "hy_with_year": hy_with_year,
             "decades": decades,
+            "total_active": total_active,
+            "missing_year": missing_year,
         })
 
     @router.get("/admin/api/novelty-points")
@@ -4785,7 +4817,6 @@ def make_extras_router(templates) -> APIRouter:
             backups.append(d)
         return templates.TemplateResponse("backup.html", {
             "request": request,
-            "atab": "backup",
             "backups": backups,
             "total": total,
             "ok_count": ok_n,
