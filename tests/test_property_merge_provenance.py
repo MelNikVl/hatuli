@@ -513,3 +513,94 @@ async def test_repeated_apply_and_validation_are_idempotent(db):
         assert n_validation_rows == 2
     finally:
         await _cleanup([la, lb], [pa, pb])
+
+
+# ── 11+12. fix 2026-08-30 — one resolved git provenance snapshot per call ──
+# Regression-тест на конкретный баг, найденный на real canary #1: РАНЬШЕ
+# apply_property_merge_durable() вызывал persist_manifest() с СЫРЫМ
+# git_provenance (None в обычном production CLI-вызове) ДО того, как сам
+# резолвил его через get_git_provenance() парой строк ниже — manifest_log
+# получал NULL git_sha/git_branch/git_dirty, а execution_log — реальные
+# значения из ОТДЕЛЬНОГО, более позднего вызова get_git_provenance() (два
+# независимых снимка одной apply-операции, теоретически способных
+# разойтись, если working tree стал dirty МЕЖДУ ними). Существующие тесты
+# №1-10 выше этот баг НЕ ловили — все они передают ЯВНЫЙ (не None)
+# git_provenance, а баг проявлялся только на None-пути (реальный CLI-
+# дефолт) — отсюда специально тест именно на git_provenance=None.
+
+def test_get_git_provenance_returns_well_formed_dict():
+    """Чистая проверка реального (не мок) get_git_provenance() — этот файл
+    сам живёт в git-репозитории, sha/branch должны резолвиться."""
+    from bot.identity.property_merge_provenance import get_git_provenance
+
+    gp = get_git_provenance()
+    assert set(gp.keys()) == {"git_sha", "git_branch", "git_dirty"}
+    assert gp["git_sha"] is not None
+    assert gp["git_branch"] is not None
+    assert gp["git_dirty"] in (True, False)
+
+
+@pytest.mark.asyncio
+async def test_manifest_and_execution_share_one_resolved_git_provenance_when_none_passed(db):
+    """git_provenance=None -> резолвится РОВНО ОДИН РАЗ реальным
+    get_git_provenance() -> manifest_log И execution_log обязаны получить
+    ИДЕНТИЧНЫЕ (не просто 'оба не NULL', а побайтово равные) значения —
+    единый snapshot на весь durable-вызов. dry_run=True (не требует
+    master/clean guard'а — фокус теста на persist-consistency, не на
+    guard'е, тот покрыт test_check_git_provenance_* выше)."""
+    from bot.identity.property_merge_provenance import apply_property_merge_durable
+    from bot.db.pg import fetchrow
+
+    manifest, la, lb, pa, pb = await _make_pair_and_plan("gitnone")
+    try:
+        result = await apply_property_merge_durable(manifest, actor="pytest", dry_run=True)
+        assert result["status"] == "would_apply"
+
+        m_row = await fetchrow(
+            "SELECT git_sha, git_branch, git_dirty FROM property_merge_manifest_log WHERE manifest_id=$1",
+            result["manifest_id"])
+        e_row = await fetchrow(
+            "SELECT git_sha, git_branch, git_dirty FROM property_merge_execution_log WHERE execution_id=$1",
+            result["execution_id"])
+
+        # Регрессия исходного бага выглядела бы как m_row поля = NULL,
+        # пока e_row поля заполнены реальными значениями.
+        assert m_row["git_sha"] is not None, "manifest_log.git_sha must be resolved, not NULL (bug regression)"
+        assert m_row["git_branch"] is not None, "manifest_log.git_branch must be resolved, not NULL (bug regression)"
+        assert m_row["git_dirty"] is not None, "manifest_log.git_dirty must be resolved, not NULL (bug regression)"
+
+        assert m_row["git_sha"] == e_row["git_sha"]
+        assert m_row["git_branch"] == e_row["git_branch"]
+        assert m_row["git_dirty"] == e_row["git_dirty"]
+    finally:
+        await _cleanup([la, lb], [pa, pb])
+
+
+@pytest.mark.asyncio
+async def test_explicit_git_provenance_used_consistently_everywhere(db):
+    """Явно переданный git_provenance dict (тесты/инжектированный provider)
+    -> используется КАК ЕСТЬ, идентично, и в manifest_log, и в
+    execution_log — ни один реальный git-subprocess не запускается."""
+    from bot.identity.property_merge_provenance import apply_property_merge_durable
+    from bot.db.pg import fetchrow
+
+    manifest, la, lb, pa, pb = await _make_pair_and_plan("gitexplicit")
+    explicit = {"git_sha": "cafef00d" * 5, "git_branch": "master", "git_dirty": False}
+    try:
+        result = await apply_property_merge_durable(manifest, actor="pytest", dry_run=False,
+                                                      git_provenance=explicit)
+        assert result["status"] == "merged"
+
+        m_row = await fetchrow(
+            "SELECT git_sha, git_branch, git_dirty FROM property_merge_manifest_log WHERE manifest_id=$1",
+            result["manifest_id"])
+        e_row = await fetchrow(
+            "SELECT git_sha, git_branch, git_dirty FROM property_merge_execution_log WHERE execution_id=$1",
+            result["execution_id"])
+
+        for row, label in ((m_row, "manifest_log"), (e_row, "execution_log")):
+            assert row["git_sha"] == explicit["git_sha"], label
+            assert row["git_branch"] == explicit["git_branch"], label
+            assert row["git_dirty"] == explicit["git_dirty"], label
+    finally:
+        await _cleanup([la, lb], [pa, pb])

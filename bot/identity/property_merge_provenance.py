@@ -177,14 +177,25 @@ async def apply_property_merge_durable(
 
     git_provenance=None -> реальный get_git_provenance() репозитория; explicit
     dict (в частности из тестов) -> используется как есть, ни один git-
-    subprocess не запускается — это и есть unit-тестируемость guard'а."""
+    subprocess не запускается — это и есть unit-тестируемость guard'а.
+
+    Provenance резолвится РОВНО ОДИН РАЗ, здесь, ДО первого использования
+    (задача 2026-08-30, fix: canary #1 нашёл, что persist_manifest()
+    раньше вызывался с сырым git_provenance ДО его резолва —
+    manifest_log получал NULL git_sha/git_branch/git_dirty, пока
+    execution_log получал реальные значения из ОТДЕЛЬНОГО, более
+    позднего get_git_provenance()-вызова — два независимых снимка одного
+    apply могли теоретически разойтись, напр. если working tree стал
+    dirty МЕЖДУ ними). Один resolved `gp` теперь передаётся во ВСЕ
+    audit-записи этого вызова (manifest persist, guard-проверка,
+    execution persist) — единый snapshot на всю durable-операцию."""
     from bot.identity.property_merge import apply_property_merge, validate_manifest_shape
 
     validate_manifest_shape(manifest)
-    manifest_id = await persist_manifest(manifest, actor=actor, git_provenance=git_provenance)
+    gp = git_provenance if git_provenance is not None else get_git_provenance()
+    manifest_id = await persist_manifest(manifest, actor=actor, git_provenance=gp)
 
     property_ids = [int(x) for x in manifest["property_ids"]]
-    gp = git_provenance if git_provenance is not None else get_git_provenance()
     started_at = datetime.now(timezone.utc)
     branch_needs_override = gp.get("git_branch") not in (None, "master")
     override_used = (not dry_run) and allow_non_master and branch_needs_override
