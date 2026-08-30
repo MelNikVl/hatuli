@@ -380,3 +380,82 @@ merge-код когда-либо модифицирует.
   этой же задачи) — НЕ предлагается здесь; even после появления
   precision-оценок по сигналам, merge остаётся ручным per-decision
   действием, пока это явно не изменено отдельным решением.
+
+## 13. Addendum (2026-08-30) — durable audit/provenance trail
+
+**Контекст.** После первого production batch (6 canary + 20 batch20,
+2026-08-20) и одного size=3 canary+rollback+reapply (2026-08-21) — все 22
+merge чисты по данным (property_listings/identity_status/timelines
+корректны), но read-only provenance audit (2026-08-30) не смог
+подтвердить САМ ПРОЦЕСС исполнения: ни одного frozen manifest-файла на
+диске (`scripts/property_merge_plan.py --out-dir` либо не запускался
+отдельно, либо файлы не сохранились), ни одной строки execution-журнала,
+ни одного зафиксированного вызова Property Timeline-валидации между
+операциями. batch20 (20 apply за 191мс, интервалы 8-19мс) — механически
+несовместим с 20 отдельными CLI-запусками `property_merge_apply.py`
+(старт интерпретатора + `init_pool`/`close_pool` каждый раз — сотни мс —
+секунды на вызов), т.е. это был in-process loop, а не задокументированный
+per-pair CLI workflow. Git SHA восстановлен через `git reflog` (не через
+`git log`) для batch20 (`master`@`75c9e50`, доказано bracketing'ом
+checkout-истории) — для size3-canary НЕ буквально master (branch `feat/
+rebrand-clearly`@`bc288af`, но этот коммит трогает только user-facing
+брендинг, ноль пересечения с merge-движком, функционально эквивалентно).
+Итог того аудита: **B — state clean, provenance incomplete**, ничего не
+откачено (задача явно запретила).
+
+**Что добавлено этой задачей** (`migrations/093_property_merge_audit_
+trail.sql`, `bot/identity/property_merge_provenance.py`, `scripts/
+property_merge_batch_runner.py`) — НЕ вторая merge-система, обёртка/
+audit-слой ПОВЕРХ §1-§9 (`apply_property_merge()` не изменён ни на
+строку):
+
+1. **`property_merge_manifest_log`** — frozen manifest persist'ится
+   ЦЕЛИКОМ (JSONB) ДО любой попытки apply, независимо от исхода (даже
+   `blocked_stale`/`blocked_conflict`/`blocked_provenance` — manifest всё
+   равно виден в audit trail). Append-only, ни одного UPDATE/DELETE в
+   коде этого PR.
+2. **`property_merge_execution_log`** — ОДНА строка на apply-attempt,
+   пишется ОДНИМ INSERT в конце (не INSERT+UPDATE — `started_at`/
+   `finished_at` оба известны на момент единственной записи, exception
+   тоже перехватывается и логируется как `status='error'`, не роняет
+   вызывающий код неаудированным).
+3. **`property_merge_validation_log`** — `validate_property_merge(execution_
+   id)` — read-only post-apply проверки (canonical listing_count,
+   losing без listings, expected listing IDs присутствуют, timeline
+   events детерминированы, `observed_market_days` sanity, candidate
+   statuses не тронуты) поверх `build_property_timeline()`
+   (`bot/core/property_timeline.py`, PR #27/#28, не изменён). НИКОГДА не
+   делает auto-rollback сама.
+4. **Git-provenance guard** (`check_git_provenance()`, чистая функция —
+   принимает dict, не обязательно результат реального `git`) — dirty
+   working tree блокирует apply БЕЗ исключений (нет override-параметра
+   вообще); не-`master` требует явного `allow_non_master=True` +
+   `override_reason` (попадает в `execution_log.provenance_override*`).
+   Неизвестное состояние (`git_dirty=None`, git недоступен) — fail-closed,
+   тоже блокирует.
+5. **`scripts/property_merge_batch_runner.py`** — принимает ТОЛЬКО
+   заранее подготовленный список `{"manifest_path", "expected_component_
+   hash"?}` (никогда не строит список сам живым запросом). Порядок на
+   каждый компонент: `load → apply → assert merged/already_merged →
+   validate → assert passed → следующий`; любой blocked/stale/conflict/
+   exception/validation failure — немедленный `STOP`, без `continue`,
+   без auto-rollback (задача, явно).
+
+**Legacy provenance** (batch20/size3, 2026-08-20/21) — `property_merge_
+provenance_note` (миграция 093, `is_reconstructed BOOLEAN DEFAULT TRUE`)
+зарезервирована для явно помеченных reconstructed-фактов о ЭТИХ
+операциях — это НЕ backfill настоящего audit trail (задача, явно:
+"не пытаться дорисовать как будто их audit существовал тогда"). Этот PR
+такую строку не создаёт ни разу; `scripts/audit_property_merge_provenance_
+dry_run.py` демонстрирует новый check-формат на этих properties БЕЗ
+персиста (нет реального `execution_id`, которому строка в `validation_log`
+могла бы честно принадлежать).
+
+Тесты — `tests/test_property_merge_provenance.py` (10 сценариев: manifest/
+execution/validation persisted, batch stop на apply-failure и на
+validation-failure с недостигнутым третьим компонентом, stale manifest
+не апплаится, dirty/non-master guard через injected provenance,
+rollback не трогает manifest/execution_log (append-only), repeated apply
+идемпотентен на обоих уровнях). Production merges этим PR не
+выполняются — ни разу, только engine + tests + read-only real-data
+demo (см. `scripts/audit_property_merge_provenance_dry_run.py`).
