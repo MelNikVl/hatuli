@@ -58,8 +58,20 @@ async def overpass_request(query: str, timeout: float = 30.0) -> dict | None:
     return None
 
 
-async def overpass_cached(lat: float, lon: float, kind: str, query: str) -> dict | None:
-    """Запрос к Overpass с кешем. query — готовый Overpass QL."""
+async def overpass_cached(lat: float, lon: float, kind: str, query: str, *,
+                           allow_live_fetch: bool = True) -> dict | None:
+    """Запрос к Overpass с кешем. query — готовый Overpass QL.
+
+    allow_live_fetch=False (задача "fix/ai-tools-strict-read-only", review
+    PR #51 п.1 — bot/ai_tools/core.py::get_location_analysis не должен
+    делать живые внешние запросы и не должен писать в БД) — читает ТОЛЬКО
+    уже существующую непротухшую строку osm_cache; если её нет, честно
+    возвращает None, НЕ дёргает overpass_request() и НЕ пишет ничего.
+    Дефолт True — поведение для ВСЕХ остальных потребителей (per-listing
+    scoring при парсинге, человеческий /complex/{id}) не меняется ни
+    строкой; единственный вызывающий с allow_live_fetch=False — AI-tools
+    adaptor (см. bot/core/complex_location_detail.py::
+    _build_poi_strict_read_only)."""
     glat, glon = grid(lat), grid(lon)
     try:
         row = await fetchrow(
@@ -72,6 +84,9 @@ async def overpass_cached(lat: float, lon: float, kind: str, query: str) -> dict
             return json.loads(payload) if isinstance(payload, str) else payload
     except Exception as exc:
         logger.warning("osm_cache read failed: %s", exc)
+
+    if not allow_live_fetch:
+        return None
 
     data = await overpass_request(query)
     if data is None:

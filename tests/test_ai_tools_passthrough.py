@@ -213,6 +213,10 @@ async def test_complex_market_profile_passthrough_and_insufficient_data_preserve
     # свежий ЖК без properties — price/liquidity honestly insufficient_data.
     assert result.data["price"]["insufficient_data"] is True
     assert result.data["liquidity"]["insufficient_data"] is True
+    # review PR #51 п.5 — demand.insufficient_history (свежий ЖК без единой
+    # строки views_history) заслуживает тот же warning, что price/liquidity.
+    assert result.data["demand"]["insufficient_history"] is True
+    assert any("demand" in w and "insufficient_history" in w for w in result.warnings)
 
 
 async def test_complex_market_profile_unknown_complex(db):

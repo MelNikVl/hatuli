@@ -22,9 +22,34 @@ API v1 для AI tools" (фундамент под будущий agentic-layer 
 (fetch/fetchrow чужих core-модулей и bot.db.pg.fetchrow напрямую в
 resolve_listing). tests/test_ai_tools_read_only.py проверяет это явно.
 
+get_location_analysis — единственное исключение, требовавшее отдельного
+внимания (найдено в review PR #51): build_complex_location_detail() при
+дефолтных настройках может на cache-miss сходить в живой Overpass И
+записать результат в osm_cache (bot/score_layers/osm.py::overpass_cached).
+Задача "fix/ai-tools-strict-read-only" добавила параметр
+allow_live_fetch=False именно для AI-tools пути (см. докстринг
+get_location_analysis и build_complex_location_detail) — обычный UI и
+любой другой потребитель по умолчанию (allow_live_fetch=True) продолжают
+работать как раньше, ни строкой иначе.
+
 Каждая функция возвращает `ToolResult` (bot/ai_tools/envelope.py) — router.py
 и/или тесты дальше заворачивают его в общий envelope через build_envelope().
-"""
+
+## methodology_version — версия ЭТОГО адаптера, не гарантия апстрима
+
+RESOLVE_LISTING_VERSION/PROPERTY_HISTORY_VERSION/LISTING_ANALYSIS_VERSION/
+COMPLEX_MARKET_PROFILE_VERSION/LOCATION_ANALYSIS_VERSION ниже — версии
+API/adaptor-контракта bot/ai_tools/ (эта обёртка: какие поля она отдаёт и
+как их извлекает), НЕ версии внутренних формул апстрим-модулей, которые
+она вызывает. У большинства из них (bot.core.bargain, bot.analytics.
+dom_scenario, bot.core.complex_market_profile, bot.core.
+complex_location_detail) СВОЕГО version-маркера нет вообще — если их
+формула/методология изменится, эти константы НЕ изменятся автоматически
+(задача явно требует это не путать, review PR #51 п.6). Единственное
+исключение — get_listing_risks: там methodology_version берётся из
+РЕАЛЬНОГО bot.core.listing_risks.VERSION апстрим-модуля (см. её докстринг
+ниже), LISTING_RISKS_VERSION_FALLBACK используется только если апстрим
+почему-то не вернул risk_analysis вовсе."""
 from __future__ import annotations
 
 import re
@@ -386,6 +411,14 @@ async def get_complex_market_profile(complex_id: int) -> ToolResult:
         warnings.append("price section: insufficient_data (sample below internal minimum)")
     if (profile.get("liquidity") or {}).get("insufficient_data"):
         warnings.append("liquidity section: insufficient_data (sample below internal minimum)")
+    # Тот же принцип, что и price/liquidity выше (review PR #51 п.5) —
+    # demand использует ДРУГОЕ имя флага (insufficient_history, не
+    # insufficient_data — см. bot/core/complex_market_profile.py::
+    # _build_demand докстринг: "нет истории вообще" это отдельный случай
+    # от "истории мало"), но сигнал того же рода и заслуживает того же
+    # warning, а не молчаливого пропуска.
+    if (profile.get("demand") or {}).get("insufficient_history"):
+        warnings.append("demand section: insufficient_history (no/too little views_history for this complex)")
 
     data = {"found": True, **profile}
     return ToolResult(
@@ -409,12 +442,23 @@ async def get_complex_market_profile(complex_id: int) -> ToolResult:
 async def get_location_analysis(complex_id: int) -> ToolResult:
     """Переиспользует bot.core.complex_location_detail.
     build_complex_location_detail() 1:1 (блок «Локация» на странице ЖК,
-    Фаза L2) — без нового геопространственного расчёта."""
+    Фаза L2) — без нового геопространственного расчёта.
+
+    Вызывает с allow_live_fetch=False (задача "fix/ai-tools-strict-read-
+    only", review PR #51 п.1: этот AI-tool не должен делать живые внешние
+    HTTP-запросы к Overpass и не должен писать в osm_cache — обычный
+    /admin/api/complex/{id}/location-detail для человеческого UI и любой
+    другой потребитель продолжают работать как раньше, allow_live_fetch
+    по умолчанию True именно для них, см. докстринг
+    build_complex_location_detail). POI/школы при этом читаются ТОЛЬКО из
+    city_poi/уже существующего кэша — если ни того, ни другого для этой
+    точки нет, честный insufficient_data-warning ниже, НЕ молчаливый
+    fallback и НЕ ноль/среднее вместо ответа."""
     from bot.core.complex_location_detail import build_complex_location_detail, ComplexNotFound
 
     as_of = _now_iso()
     try:
-        detail = await build_complex_location_detail(complex_id)
+        detail = await build_complex_location_detail(complex_id, allow_live_fetch=False)
     except ComplexNotFound:
         return ToolResult(
             data={"complex_id": complex_id, "found": False},
@@ -429,6 +473,12 @@ async def get_location_analysis(complex_id: int) -> ToolResult:
     elif not detail.get("has_score"):
         warnings.append("no complex_location_scores snapshot yet for this complex_id (score is None)")
 
+    poi_source = detail.get("poi_source") or {}
+    if detail.get("has_coords") and poi_source.get("available") is False:
+        warnings.append(
+            "POI data unavailable in local/cache sources; live external fetch disabled "
+            "for AI read-only API")
+
     data = {"complex_id": complex_id, "found": True, **detail}
     score = detail.get("score") or {}
     return ToolResult(
@@ -437,7 +487,9 @@ async def get_location_analysis(complex_id: int) -> ToolResult:
         confidence=score.get("confidence"),
         evidence=[
             {"source": "complex_location_scores"}, {"source": "hex_market_stats"},
-            {"source": "demolition_houses"}, {"source": "poi/schools layers (bot/score_layers/)"},
+            {"source": "demolition_houses"},
+            {"source": "poi/schools layers (bot/score_layers/) — local city_poi sync + "
+                       "existing osm_cache rows only, live Overpass fetch disabled for this API"},
             {"source": "complex_walkability"}, {"source": "complex_stats_history"},
         ],
         warnings=warnings,

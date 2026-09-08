@@ -50,12 +50,16 @@ _LOCAL_KIND_MAP: dict[str, str] = {
 }
 
 
-async def fetch_poi(lat: float, lon: float) -> list[dict] | None:
+async def fetch_poi(lat: float, lon: float, *, allow_live_fetch: bool = True) -> list[dict] | None:
     """Список [{kind, dist_m, lat, lon, id, type, area_ha}] — city_poi
     (без сети), фолбэк на overpass_cached() только если ни одна из
     _LOCAL_KIND_MAP категорий ещё не синхронизирована (см.
     bot/score_layers/osm.py::local_poi_near). None если ОБА источника
     недоступны.
+
+    allow_live_fetch=False (см. overpass_cached() докстринг) — прокидывается
+    как есть; дефолт True не меняет поведение ни для одного существующего
+    вызывающего.
 
     id/type/area_ha из локального источника (задача 2026-08-17, "Parks —
     площадь"): раньше ВСЕГДА None для local-записей (city_poi их не
@@ -80,7 +84,8 @@ async def fetch_poi(lat: float, lon: float) -> list[dict] | None:
             })
         return out
 
-    data = await overpass_cached(lat, lon, "poi700", _QUERY.format(lat=lat, lon=lon))
+    data = await overpass_cached(lat, lon, "poi700", _QUERY.format(lat=lat, lon=lon),
+                                  allow_live_fetch=allow_live_fetch)
     if data is None:
         return None
     out = []

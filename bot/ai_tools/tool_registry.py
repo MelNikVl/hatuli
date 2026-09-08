@@ -28,6 +28,20 @@ ENVELOPE_OUTPUT_SCHEMA: dict = {
                  "evidence", "warnings", "methodology_version"],
 }
 
+# Общий для всех 6 entity-based тулов контракт found=true/false (найдено
+# при review PR #51 п.3 — data-shape в описании каждого tool'а ниже
+# описывает ТОЛЬКО happy path). Добавляется в конец `description` каждого
+# такого tool'а вместо повторения текста руками — сам формат ответа НЕ
+# меняется, это только точнее документирует уже существующее поведение
+# (см. bot/ai_tools/core.py — не найдено -> data = {<id-поле>, "found":
+# false}, ВСЕ остальные поля из "data:" ниже в этом случае ОТСУТСТВУЮТ,
+# не null).
+_FOUND_CONTRACT_NOTE = (
+    " Contract: data.found == true -> full payload described above is present; "
+    "data.found == false -> data contains ONLY the id field(s) + \"found\": false, "
+    "every other field listed above is ABSENT (not null) — always check data.found first."
+)
+
 DATA_QUALITY_OUTPUT_SCHEMA: dict = {
     "type": "object",
     "properties": {
@@ -66,8 +80,9 @@ TOOLS: list[dict] = [
             "required": ["url_or_id"],
         },
         "output_schema": {**ENVELOPE_OUTPUT_SCHEMA,
-                           "description": "data: {listing_id, found, property_id, complex_id, "
-                                          "complex_id_resolution, address, district, complex_name, market_type, ...}"},
+                           "description": ("data: {listing_id, found, property_id, complex_id, "
+                                            "complex_id_resolution, address, district, complex_name, market_type, ...}"
+                                            + _FOUND_CONTRACT_NOTE)},
         "read_only": True,
         "handler": "bot.ai_tools.core.resolve_listing",
     },
@@ -83,8 +98,8 @@ TOOLS: list[dict] = [
             "required": ["property_id"],
         },
         "output_schema": {**ENVELOPE_OUTPUT_SCHEMA,
-                           "description": "data: {property_id, found, identity_status, identity, "
-                                          "metrics, listings[], events[]}"},
+                           "description": ("data: {property_id, found, identity_status, identity, "
+                                            "metrics, listings[], events[]}" + _FOUND_CONTRACT_NOTE)},
         "read_only": True,
         "handler": "bot.ai_tools.core.get_property_history",
     },
@@ -100,9 +115,10 @@ TOOLS: list[dict] = [
             "required": ["listing_id"],
         },
         "output_schema": {**ENVELOPE_OUTPUT_SCHEMA,
-                           "description": "data: {listing_id, found, price, market, fair_price{}, "
-                                          "deal_score, yield_pct, net_yield_pct, dom_scenario{}, "
-                                          "similar_listings[], score_breakdown{}, sample_size, insufficient_data}"},
+                           "description": ("data: {listing_id, found, price, market, fair_price{}, "
+                                            "deal_score, yield_pct, net_yield_pct, dom_scenario{}, "
+                                            "similar_listings[], score_breakdown{}, sample_size, insufficient_data}"
+                                            + _FOUND_CONTRACT_NOTE)},
         "read_only": True,
         "handler": "bot.ai_tools.core.get_listing_analysis",
     },
@@ -119,9 +135,9 @@ TOOLS: list[dict] = [
             "required": ["listing_id"],
         },
         "output_schema": {**ENVELOPE_OUTPUT_SCHEMA,
-                           "description": "data: {listing_id, found, risk_analysis: "
-                                          "{overall_level, summary, items[], protective[], unknowns[], "
-                                          "calculated_at, version}}"},
+                           "description": ("data: {listing_id, found, risk_analysis: "
+                                            "{overall_level, summary, items[], protective[], unknowns[], "
+                                            "calculated_at, version}}" + _FOUND_CONTRACT_NOTE)},
         "read_only": True,
         "handler": "bot.ai_tools.core.get_listing_risks",
     },
@@ -138,8 +154,9 @@ TOOLS: list[dict] = [
             "required": ["complex_id"],
         },
         "output_schema": {**ENVELOPE_OUTPUT_SCHEMA,
-                           "description": "data: {complex_id, found, as_of, identity{}, physical{}, "
-                                          "supply{}, price{}, liquidity{}, demand{}, data_quality{}}"},
+                           "description": ("data: {complex_id, found, as_of, identity{}, physical{}, "
+                                            "supply{}, price{}, liquidity{}, demand{}, data_quality{}}"
+                                            + _FOUND_CONTRACT_NOTE)},
         "read_only": True,
         "handler": "bot.ai_tools.core.get_complex_market_profile",
     },
@@ -148,16 +165,23 @@ TOOLS: list[dict] = [
         "description": "Location detail for one ЖК (complex): location score "
                         "breakdown (transport/infra/noise/green/risk), hex density, "
                         "nearby demolition houses, POI/schools, walkability, price-drop "
-                        "trend. Pure passthrough of "
-                        "bot.core.complex_location_detail.build_complex_location_detail.",
+                        "trend. Wraps bot.core.complex_location_detail."
+                        "build_complex_location_detail(complex_id, allow_live_fetch=False) — "
+                        "unlike the human-facing UI, this tool NEVER makes a live Overpass "
+                        "request and NEVER writes to osm_cache (review PR #51 п.1); POI/schools "
+                        "come only from already-synced local data or an existing cache row.",
         "input_schema": {
             "type": "object",
             "properties": {"complex_id": {"type": "integer"}},
             "required": ["complex_id"],
         },
         "output_schema": {**ENVELOPE_OUTPUT_SCHEMA,
-                           "description": "data: {complex_id, found, has_coords, has_score, score, "
-                                          "density[], demolition[], poi{}, price_drop_trend[], walkability{}}"},
+                           "description": ("data: {complex_id, found, has_coords, has_score, score, "
+                                            "density[], demolition[], poi{}, poi_source{mode, available}, "
+                                            "price_drop_trend[], walkability{}}. poi_source.available == false "
+                                            "means POI/schools are unknown (no local/cache coverage), NOT that "
+                                            "there is nothing nearby — check it before trusting empty poi{} lists."
+                                            + _FOUND_CONTRACT_NOTE)},
         "read_only": True,
         "handler": "bot.ai_tools.core.get_location_analysis",
     },

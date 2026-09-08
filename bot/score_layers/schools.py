@@ -77,14 +77,18 @@ async def _from_local_table(lat: float, lon: float, university_only: bool = Fals
     return 0, "школ/садиков в 700м не найдено"
 
 
-async def fetch_schools_poi(lat: float, lon: float) -> list[dict] | None:
+async def fetch_schools_poi(lat: float, lon: float, *, allow_live_fetch: bool = True) -> list[dict] | None:
     """Сырые точки школ/садиков/вузов с координатами (Фаза L2, docs/
     location_product_design.md, задача 2026-08-14) — для карты со слоями
     на /complex/{id} (bot/core/complex_location_detail.py). compute()
     выше отдаёт только агрегированный adj/reason, не список точек —
     эта функция параллельна ей, тем же путём (city_poi -> Overpass-кэш),
     но возвращает список, а не решение. None, если оба источника
-    недоступны (не путать с пустым списком — "искали, не нашли")."""
+    недоступны (не путать с пустым списком — "искали, не нашли").
+
+    allow_live_fetch=False (bot/score_layers/osm.py::overpass_cached
+    докстринг) — прокидывается как есть; дефолт True не меняет поведение
+    ни для одного существующего вызывающего."""
     from bot.score_layers.osm import overpass_cached, element_coords, local_poi_near
 
     # local_poi_near — [] (синхронизировано, реально пусто) отличается от
@@ -96,7 +100,8 @@ async def fetch_schools_poi(lat: float, lon: float) -> list[dict] | None:
     if rows is not None:
         return rows
 
-    data = await overpass_cached(lat, lon, "schools", _QUERY.format(lat=lat, lon=lon))
+    data = await overpass_cached(lat, lon, "schools", _QUERY.format(lat=lat, lon=lon),
+                                  allow_live_fetch=allow_live_fetch)
     if data is None:
         return None
     out = []
