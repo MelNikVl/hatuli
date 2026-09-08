@@ -2172,4 +2172,11 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     from terminal_extras import make_extras_router
     app.include_router(make_extras_router(templates))
 
+    # Read-only AI-tools API v1 (задача "Hatuli API v1 для AI tools",
+    # фундамент под будущий agentic-layer/HackAlem) — тонкая обёртка над
+    # уже существующей аналитикой, см. bot/ai_tools/ докстринги. Тот же
+    # admin_auth-гейт, что и у остальных /admin/api/* JSON-роутов.
+    from bot.ai_tools.router import make_ai_tools_router
+    app.include_router(make_ai_tools_router())
+
     return app
