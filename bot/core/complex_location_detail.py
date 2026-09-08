@@ -38,7 +38,19 @@ class ComplexNotFound(Exception):
 DEMOLITION_RADIUS_KM = 1.0
 
 
-async def build_complex_location_detail(complex_id: int) -> dict:
+async def build_complex_location_detail(complex_id: int, *, allow_live_fetch: bool = True) -> dict:
+    """allow_live_fetch=False (задача "fix/ai-tools-strict-read-only",
+    review PR #51 п.1) — ЕДИНСТВЕННЫЙ вызывающий с этим флагом:
+    bot/ai_tools/core.py::get_location_analysis (AI-tools adaptor). Дефолт
+    True сохраняет ТЕКУЩЕЕ поведение 1:1 для человеческого UI
+    (/admin/api/complex/{id}/location-detail) и для любых других
+    потребителей — при allow_live_fetch=True этот код идёт ровно по тому
+    же пути (_build_poi), что и до появления этого параметра, ни строкой
+    иначе. При False POI/школы читаются ТОЛЬКО из city_poi/уже
+    существующего osm_cache (_build_poi_strict_read_only) — без живого
+    Overpass-запроса и без записи в osm_cache; ответ дополняется полем
+    `poi_source` с честным `available` (см. докстринг
+    _build_poi_strict_read_only)."""
     from bot.db.pg import fetchrow, fetch
     from bot.core.house_resolution import resolve_complex_geo_centroid
     from bot.core.hexgrid import hex_id as compute_hex_id, neighbors as hex_neighbors, hex_corners
@@ -61,20 +73,27 @@ async def build_complex_location_detail(complex_id: int) -> dict:
     score = await _build_score(complex_id)
     density = await _build_density(lat, lon, fetch, app_settings, compute_hex_id, hex_neighbors, hex_corners)
     demolition = await _build_demolition(lat, lon, fetch, haversine_km)
-    poi = await _build_poi(lat, lon)
     price_drop_trend = await _build_price_drop_trend(complex_id, fetch)
     walkability = await _build_walkability(complex_id, fetch)
 
-    return {
+    result = {
         "has_coords": True,
         "has_score": score is not None,
         "score": score,
         "density": density,
         "demolition": demolition,
-        "poi": poi,
         "price_drop_trend": price_drop_trend,
         "walkability": walkability,
     }
+
+    if allow_live_fetch:
+        result["poi"] = await _build_poi(lat, lon)
+    else:
+        poi, poi_available = await _build_poi_strict_read_only(lat, lon)
+        result["poi"] = poi
+        result["poi_source"] = {"mode": "local_cache_only", "available": poi_available}
+
+    return result
 
 
 async def _build_score(complex_id: int) -> dict | None:
@@ -160,6 +179,47 @@ async def _build_poi(lat, lon) -> dict:
     for s in school_points:
         out["school"].append({"lat": s["lat"], "lon": s["lon"], "kind": s["kind"]})
     return out
+
+
+async def _build_poi_strict_read_only(lat, lon) -> tuple[dict, bool]:
+    """Read-only вариант _build_poi ИСКЛЮЧИТЕЛЬНО для AI-tools adaptor
+    (задача "fix/ai-tools-strict-read-only", review PR #51 п.1) — вызывает
+    fetch_poi()/fetch_schools_poi() с allow_live_fetch=False: читает
+    ТОЛЬКО city_poi (локальный синк) и уже существующие непротухшие
+    строки osm_cache, НИКОГДА не делает живой запрос к Overpass и
+    НИКОГДА не пишет в osm_cache (bot/score_layers/osm.py::overpass_cached
+    докстринг).
+
+    Намеренно НЕ переиспользует _build_poi() (та не принимает
+    allow_live_fetch) — вместо этого дублирует её ~10 строк бакетирования
+    по kind, чтобы _build_poi() и build_complex_location_detail() при
+    allow_live_fetch=True (человеческий UI, ЛЮБОЙ другой потребитель)
+    остались ВООБЩЕ БЕЗ ИЗМЕНЕНИЙ — задача явно требует не трогать
+    существующий UI-путь и не менять business-логику location score.
+
+    Возвращает (out, available). available=False, только если ОБА
+    источника (fetch_poi И fetch_schools_poi) вернули None — то есть ни
+    локальный синк, ни существующий кэш не покрывают эту точку вообще;
+    тогда out — честно пустой (Unknown ≠ average, не подменяем нулём).
+    available=True и при полностью пустых бакетах — это ЗАСЧИТАННЫЙ
+    ответ "рядом ничего нет", а не "не знаем"."""
+    from bot.score_layers.poi import fetch_poi
+    from bot.score_layers.schools import fetch_schools_poi
+
+    poi_raw = await fetch_poi(lat, lon, allow_live_fetch=False)
+    school_raw = await fetch_schools_poi(lat, lon, allow_live_fetch=False)
+    available = poi_raw is not None or school_raw is not None
+
+    poi_points = poi_raw or []
+    school_points = school_raw or []
+
+    out: dict[str, list] = {"bus_stop": [], "shop": [], "health": [], "food": [],
+                             "service": [], "park": [], "school": []}
+    for p in poi_points:
+        out.setdefault(p["kind"], []).append({"lat": p["lat"], "lon": p["lon"]})
+    for s in school_points:
+        out["school"].append({"lat": s["lat"], "lon": s["lon"], "kind": s["kind"]})
+    return out, available
 
 
 async def _build_walkability(complex_id: int, fetch) -> dict:

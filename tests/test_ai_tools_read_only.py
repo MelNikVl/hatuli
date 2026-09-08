@@ -83,20 +83,26 @@ async def scenario(db):
 async def _seed(sc: _Scenario):
     from bot.db.pg import execute, fetchval
 
+    complex_name = f"__TEST_AI_READONLY_CX_{sc.suffix}__"
     lid = sc.lid(1)
     sc.listing_ids.append(lid)
     await execute(
         """
         INSERT INTO apartment_listings (id, url, price, area, rooms, floor, floors_total,
-                                         district, market_type, is_active, first_seen)
-        VALUES ($1,$2,25000000,45.0,2,5,9,$3,'secondary', TRUE, now())
+                                         district, complex_name, market_type, is_active,
+                                         first_seen, lat, lon)
+        VALUES ($1,$2,25000000,45.0,2,5,9,$3,$4,'secondary', TRUE, now(), 1.234, 2.345)
         ON CONFLICT (id) DO NOTHING
         """,
-        lid, f"https://krisha.kz/a/show/{lid}", sc.district,
+        lid, f"https://krisha.kz/a/show/{lid}", sc.district, complex_name,
     )
+    # lat/lon (океан, вне зоны реального покрытия city_poi/osm_cache) — задача
+    # "fix/ai-tools-strict-read-only": этот сценарий раньше НИКОГДА не доходил
+    # до has_coords=True/_build_poi_strict_read_only (review PR #51 дыра была
+    # найдена именно потому, что этот тест её не покрывал).
     cid = await fetchval(
         "INSERT INTO complexes (name) VALUES ($1) RETURNING id",
-        f"__TEST_AI_READONLY_CX_{sc.suffix}__",
+        complex_name,
     )
     sc.complex_ids.append(cid)
     address_hash = f"__test_ai_readonly_prop_{sc.suffix}__"
