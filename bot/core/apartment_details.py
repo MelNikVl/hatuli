@@ -3,6 +3,7 @@ Enhanced apartment detail fetcher.
 Extracts ALL signals from krisha.kz listing page.
 """
 import asyncio, logging, random, re
+import time
 import httpx
 from bs4 import BeautifulSoup
 
@@ -12,9 +13,35 @@ logger = logging.getLogger(__name__)
 # и /admin/api/parser-cycle-history) — сбрасывается в service_apartments.run_cycle().
 REQUEST_COUNTS = {"detail": 0}
 
+# Krisha intermittently responds with its non-standard HTTP 468. Treat it like
+# a temporary site-side block: stop detail requests for a while instead of
+# burning the rest of the cycle on requests that are likely to fail too.
+_BLOCKED_UNTIL = 0.0
+_BLOCKED_STREAK = 0
+_BLOCKED_BASE_SECONDS = 15 * 60
+_BLOCKED_MAX_SECONDS = 6 * 60 * 60
+
+
+def detail_fetch_cooldown_remaining() -> float:
+    """Seconds until detail requests may resume, or zero when not blocked."""
+    return max(0.0, _BLOCKED_UNTIL - time.monotonic())
+
+
+def _record_detail_block(status_code: int, url: str) -> float:
+    global _BLOCKED_UNTIL, _BLOCKED_STREAK
+    _BLOCKED_STREAK += 1
+    delay = min(_BLOCKED_BASE_SECONDS * (2 ** (_BLOCKED_STREAK - 1)),
+                _BLOCKED_MAX_SECONDS)
+    _BLOCKED_UNTIL = time.monotonic() + delay
+    logger.warning(
+        "Krisha detail requests paused for %d min after HTTP %d: %s (streak=%d)",
+        delay // 60, status_code, url, _BLOCKED_STREAK,
+    )
+    return delay
+
 
 class ListingBlockedError(Exception):
-    """403/429 от krisha.kz на детальной странице — сработала защита от
+    """403/429/468 от krisha.kz на детальной странице — временная блокировка
     бота (задача 2026-08-17, "Missing floor + orphan audit"). Отдельно от
     прочих сетевых ошибок — caller'у (scripts/backfill_listing_floors.py)
     нужно различать "заблокировали, притормози" от "страницы нет"/"сеть
@@ -35,7 +62,7 @@ async def fetch_apartment_details(url: str, *, raise_on_error: bool = False) -> 
     просит различать причины (используется scripts/backfill_listing_
     floors.py для честной статистики blocked/errors, не новый парсер —
     та же функция, тот же HTTP-запрос, только не глотает исключение):
-    ListingBlockedError на 403/429, исходное исключение (timeout/DNS/...)
+    ListingBlockedError на 403/429/468, исходное исключение (timeout/DNS/...)
     пробрасывается как есть на прочих сетевых ошибках.
     """
     return await _fetch_apartment_details_impl(url, raise_on_error=raise_on_error)
@@ -92,18 +119,26 @@ UTILITY_PATTERNS = [
 
 
 async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = False) -> dict:
+    cooldown = detail_fetch_cooldown_remaining()
+    if cooldown:
+        if raise_on_error:
+            raise ListingBlockedError(f"detail requests paused for {int(cooldown)}s")
+        return {}
+
     await asyncio.sleep(random.uniform(3.0, 6.0))
 
     async with httpx.AsyncClient(headers=HEADERS, timeout=30.0, follow_redirects=True) as c:
         try:
             resp = await c.get(url)
             REQUEST_COUNTS["detail"] += 1
-            if resp.status_code in (403, 429):
-                logger.warning("blocked: %s", url)
+            if resp.status_code in (403, 429, 468):
+                _record_detail_block(resp.status_code, url)
                 if raise_on_error:
                     raise ListingBlockedError(f"{resp.status_code} {url}")
                 return {}
             resp.raise_for_status()
+            global _BLOCKED_STREAK
+            _BLOCKED_STREAK = 0
         except ListingBlockedError:
             raise
         except Exception as exc:
