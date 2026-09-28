@@ -301,3 +301,56 @@ async def test_deterministic_output_same_inputs(db):
         assert p1 == p2
     finally:
         await _cleanup([la], [p for p in (pid,) if p], [c for c in (cid,) if c])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_of_day,expected_price", [(10, 20_000_000), (20, 25_000_000),
+                                                     (25, 25_000_000), (40, 30_000_000)])
+async def test_historical_price_is_reconstructed_in_database_query(db, as_of_day, expected_price):
+    from bot.core.complex_market_profile import get_complex_market_profile
+    lids, pids, cids = [], [], []
+    try:
+        cid = await _make_complex("__test_cmp_price_asof__")
+        cids.append(cid)
+        for i in range(5):
+            lid = f"__test_cmp_price_asof_{i}__"
+            lids.append(lid)
+            await _insert_listing(lid, price=30_000_000, area=50, first_seen=_dt(0))
+            pid = await _make_property(cid, f"__test_cmp_price_asof_hash_{i}__")
+            pids.append(pid)
+            await _link(pid, lid)
+            await _price_history_row(lid, 20_000_000, 25_000_000, _dt(20))
+            await _price_history_row(lid, 25_000_000, 30_000_000, _dt(30))
+        result = await get_complex_market_profile(cid, _dt(as_of_day))
+        assert result["price"]["median_asking_price"] == expected_price
+        assert result["price"]["median_price_m2"] == expected_price / 50
+        assert result["price"]["sample_size"] == 5
+    finally:
+        await _cleanup(lids, pids, cids)
+
+
+@pytest.mark.asyncio
+async def test_historical_exit_and_reactivation_reconstructed_from_database(db):
+    from bot.core.complex_market_profile import get_complex_market_profile
+    lids, pids, cids = [], [], []
+    try:
+        cid = await _make_complex("__test_cmp_archive_asof__")
+        cids.append(cid)
+        for i in range(5):
+            lid = f"__test_cmp_archive_asof_{i}__"
+            lids.append(lid)
+            await _insert_listing(lid, first_seen=_dt(0), is_active=False, archived_at=_dt(80))
+            pid = await _make_property(cid, f"__test_cmp_archive_asof_hash_{i}__")
+            pids.append(pid)
+            await _link(pid, lid)
+            await _archive_history(lid, _dt(10), _dt(40))
+        historical = await get_complex_market_profile(cid, _dt(30))
+        assert historical["supply"]["active_properties_now"] == 0
+        assert historical["liquidity"]["median_observed_dom_days"] == 10
+        assert historical["liquidity"]["fraction_disappearing"]["within_30d"]["fraction"] == 1
+        later = await get_complex_market_profile(cid, _dt(50))
+        assert later["supply"]["active_properties_now"] == 5
+        assert later["liquidity"]["median_observed_dom_days"] == 20
+        assert later["liquidity"]["true_relist_count"] == 0
+    finally:
+        await _cleanup(lids, pids, cids)

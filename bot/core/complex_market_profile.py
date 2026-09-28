@@ -40,21 +40,23 @@ listings.archived_at (open-ended, если is_active=FALSE и объявлени
 даёт полный набор "архивных интервалов" на объявление; "активен на as_of"
 = first_seen <= as_of И as_of не попадает ни в один такой интервал.
 
-## DOM (observed market days) — ограничение
+## Historical reconstruction
 
-Для КАЖДОГО property мержатся интервалы [first_seen, effective_end) ВСЕХ
-его listing'ов (см. `_merge_intervals` — не double-count, если два listing'а
-одной property существовали в одно и то же время). effective_end для
-неактивного на as_of листинга берётся из ТЕКУЩЕГО apartment_listings.
-archived_at (не из точного исторического интервала, закрывшего его) —
-приближение: если у листинга было несколько циклов архивации И as_of
-приходится на прошлый ЗАКРЫТЫЙ цикл, конец интервала может быть не
-абсолютно точным (задача Phase 4, "честно, не идеально" — ограничение
-явно задокументировано, не скрыто)."""
+Prices use the last change at/before as_of, otherwise the first later
+change's old_price. Current price is a fallback only when no price events
+exist. Activity subtracts dated archive gaps; simultaneous ads are merged.
+This is retrospective reconstruction with current Property Identity links,
+not a point-in-time training dataset. Area/rooms/complex attributes have no
+complete history and are explicitly reported as current attributes.
+"""
 from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+
+from bot.core.listing_activity import (
+    active_at, active_intervals, archive_intervals, confirmed_relists, merge_intervals,
+)
 
 _MIN_SAMPLE = 5          # ниже этого агрегат (медиана цены и т.п.) -> insufficient_data
 _MIN_SAMPLE_ROOMS = 3    # ниже этого per-room breakdown для этой комнатности -> insufficient_data
@@ -89,18 +91,7 @@ def _merge_intervals(intervals: list[tuple[datetime, datetime]]) -> float:
     """Суммарные дни в ОБЪЕДИНЕНИИ (не сумме) интервалов — два listing'а
     одной property, активных ОДНОВРЕМЕННО (concurrent duplicates), не
     должны задвоить DOM. Возвращает дни (float)."""
-    if not intervals:
-        return 0.0
-    s = sorted(intervals, key=lambda t: t[0])
-    merged: list[list[datetime]] = [list(s[0])]
-    for start, end in s[1:]:
-        if start <= merged[-1][1]:
-            if end > merged[-1][1]:
-                merged[-1][1] = end
-        else:
-            merged.append([start, end])
-    total = sum((end - start).total_seconds() for start, end in merged)
-    return total / 86400.0
+    return sum((end - start).total_seconds() for start, end in merge_intervals(intervals)) / 86400.0
 
 
 async def get_complex_market_profile(complex_id: int, as_of: datetime | None = None) -> dict | None:
@@ -127,33 +118,48 @@ async def get_complex_market_profile(complex_id: int, as_of: datetime | None = N
 
     base_rows = await fetch(
         """
-        WITH archive_intervals AS (
-            SELECT listing_id, archived_at AS start_ts, reactivated_at AS end_ts
-            FROM listing_archive_history
-            UNION ALL
-            SELECT id, archived_at, NULL
-            FROM apartment_listings
-            WHERE is_active IS FALSE AND archived_at IS NOT NULL
-        )
         SELECT
-            p.property_id, al.id AS listing_id, al.price, al.area, al.rooms,
-            al.first_seen, al.archived_at AS current_archived_at,
-            NOT EXISTS (
-                SELECT 1 FROM archive_intervals ai
-                WHERE ai.listing_id = al.id AND ai.start_ts <= $2
-                  AND (ai.end_ts IS NULL OR $2 < ai.end_ts)
-            ) AS active_at_as_of
+            p.property_id, al.id AS listing_id,
+            CASE WHEN past.id IS NOT NULL THEN past.new_price
+                 WHEN future.id IS NOT NULL THEN future.old_price
+                 ELSE al.price END AS price,
+            CASE WHEN past.id IS NOT NULL THEN 'price_history'
+                 WHEN future.id IS NOT NULL THEN 'first_later_old_price'
+                 ELSE 'current_without_price_events' END AS price_source,
+            al.area, al.rooms, al.is_active, al.first_seen, al.archived_at
         FROM properties p
         JOIN property_listings pl ON pl.property_id = p.property_id
         JOIN apartment_listings al ON al.id = pl.listing_id
-        WHERE p.complex_id = $1
-          AND al.first_seen <= $2
-          AND COALESCE(al.is_duplicate, FALSE) = FALSE
+        LEFT JOIN LATERAL (
+            SELECT ph.id, ph.new_price FROM price_history ph
+            WHERE ph.listing_id = al.id AND ph.changed_at <= $2
+            ORDER BY ph.changed_at DESC, ph.id DESC LIMIT 1
+        ) past ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT ph.id, ph.old_price FROM price_history ph
+            WHERE ph.listing_id = al.id AND ph.changed_at > $2
+            ORDER BY ph.changed_at ASC, ph.id ASC LIMIT 1
+        ) future ON TRUE
+        WHERE p.complex_id = $1 AND al.first_seen <= $2
         """,
         complex_id, as_of,
     )
     base = [dict(r) for r in base_rows]
     listing_ids = [r["listing_id"] for r in base]
+
+    history_by_listing: dict[str, list[dict]] = defaultdict(list)
+    if listing_ids:
+        archive_rows = await fetch(
+            "SELECT listing_id, archived_at, reactivated_at FROM listing_archive_history "
+            "WHERE listing_id = ANY($1::text[]) AND archived_at <= $2 "
+            "ORDER BY listing_id, archived_at, reactivated_at",
+            listing_ids, as_of,
+        )
+        for row in archive_rows:
+            history_by_listing[row["listing_id"]].append(dict(row))
+    for row in base:
+        row["archive_history"] = history_by_listing[row["listing_id"]]
+        row["active_at_as_of"] = active_at(row, row["archive_history"], as_of)
 
     price_history_rows: list[dict] = []
     if listing_ids:
@@ -243,7 +249,7 @@ def _build_supply(base: list[dict], as_of: datetime) -> dict:
         new_counts[f"new_listings_{days}d"] = sum(1 for r in base if r["first_seen"] >= cutoff)
 
     by_room: dict[str, int] = defaultdict(int)
-    for r in active_rows:
+    for r in _representative_active_rows(base):
         key = str(r["rooms"]) if r["rooms"] is not None else "unknown"
         by_room[key] += 1
 
@@ -259,13 +265,25 @@ def _build_supply(base: list[dict], as_of: datetime) -> dict:
 
 # ── price ─────────────────────────────────────────────────────────────
 
+def _representative_active_rows(base: list[dict]) -> list[dict]:
+    # One vote per property. Prefer its most recently first-seen active ad;
+    # tie-breaking by ID makes disagreements reproducible and inspectable.
+    representatives = {}
+    for row in sorted(base, key=lambda r: (r["first_seen"], r["listing_id"])):
+        if row["active_at_as_of"]:
+            representatives[row["property_id"]] = row
+    return list(representatives.values())
+
+
 def _build_price(base: list[dict]) -> dict:
-    active = [r for r in base if r["active_at_as_of"] and r["price"] and r["price"] > 0]
+    active = [r for r in _representative_active_rows(base) if r["price"] and r["price"] > 0]
     prices = [float(r["price"]) for r in active]
     price_m2 = [float(r["price"]) / r["area"] for r in active if r.get("area") and r["area"] > 0]
 
     result: dict = {
         "sample_size": len(active),
+        "sample_unit": "property",
+        "representative_policy": "latest_first_seen_active_listing_then_id",
         "median_asking_price": _median(prices) if len(active) >= _MIN_SAMPLE else None,
         "median_price_m2": _median(price_m2) if len(price_m2) >= _MIN_SAMPLE else None,
         "p25_price_m2": _percentile(price_m2, 0.25) if len(price_m2) >= _MIN_SAMPLE else None,
@@ -303,37 +321,37 @@ def _build_liquidity(base: list[dict], as_of: datetime) -> dict:
     disappeared_counts = {w: 0 for w in _DISAPPEAR_WINDOWS}
     disappeared_denominator = {w: 0 for w in _DISAPPEAR_WINDOWS}
 
-    for property_id, rows in by_property.items():
-        if len(rows) >= 2:
+    for rows in by_property.values():
+        histories = {r["listing_id"]: r.get("archive_history", []) for r in rows}
+        if confirmed_relists(rows, histories):
             n_relisted += 1
 
-        intervals: list[tuple[datetime, datetime]] = []
-        any_active = False
-        earliest_first_seen = min(r["first_seen"] for r in rows)
-        for r in rows:
-            start = r["first_seen"]
-            if r["active_at_as_of"]:
-                end = as_of
-                any_active = True
-            else:
-                end = r["current_archived_at"] if r["current_archived_at"] is not None else as_of
-                if end < start:
-                    end = start
-            intervals.append((start, end))
-        merged_days = _merge_intervals(intervals)
+        intervals = [interval for r in rows
+                     for interval in active_intervals(r, histories[r["listing_id"]], as_of)]
+        merged = merge_intervals(intervals)
+        merged_days = _merge_intervals(merged)
         dom_days.append(merged_days)
+        any_active = any(r["active_at_as_of"] for r in rows)
+        earliest_first_seen = min(r["first_seen"] for r in rows)
 
         if any_active:
             for t in _STALE_THRESHOLDS:
                 if merged_days >= t:
                     stale_counts[t] += 1
 
+        # A property exits only when every one of its observed IDs is gone.
+        # Keep a past exit even if the property subsequently returned.
+        archive_dates = {start for r in rows
+                         for start, _ in archive_intervals(r, histories[r["listing_id"]])
+                         if earliest_first_seen <= start <= as_of}
+        exits = {end for _, end in merged if end in archive_dates
+                 and not any(active_at(r, histories[r["listing_id"]], end) for r in rows)}
         for w in _DISAPPEAR_WINDOWS:
             window_end = earliest_first_seen + timedelta(days=w)
             if window_end > as_of:
-                continue  # ещё не прошло w дней от первого наблюдения -> не в знаменателе
+                continue
             disappeared_denominator[w] += 1
-            if not any_active:
+            if any(exit_at <= window_end for exit_at in exits):
                 disappeared_counts[w] += 1
 
     active_property_count = sum(1 for rows in by_property.values() if any(r["active_at_as_of"] for r in rows))
@@ -341,6 +359,8 @@ def _build_liquidity(base: list[dict], as_of: datetime) -> dict:
     result = {
         "sample_size_properties": n_properties,
         "true_relist_count": n_relisted,
+        "relist_definition": "new_listing_id_after_all_previous_ids_archived",
+        "disappearance_definition": "any_confirmed_property_exit_within_window_from_first_seen",
         "true_relist_rate": round(n_relisted / n_properties, 4) if n_properties >= _MIN_SAMPLE else None,
         "median_observed_dom_days": round(_median(dom_days), 1) if len(dom_days) >= _MIN_SAMPLE and dom_days else None,
         "insufficient_data": n_properties < _MIN_SAMPLE,
@@ -415,4 +435,10 @@ def _build_data_quality(c: dict, base: list[dict], price_history_rows: list[dict
         "has_views_history": len(views_rows) > 0,
         "freshness_days_since_latest_first_seen": freshness,
         "as_of_is_now": as_of == now,
+        "historical_reconstruction": "retrospective_with_current_property_links",
+        "unversioned_attributes": ["area", "rooms", "complex_assignment", "complex_attributes"],
+        "price_without_event_history_count": sum(
+            r.get("price_source") == "current_without_price_events" for r in base),
+        "inactive_without_archive_timestamp_count": sum(
+            r.get("is_active") is False and r.get("archived_at") is None for r in base),
     }
