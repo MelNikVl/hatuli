@@ -58,10 +58,10 @@ from datetime import datetime, timezone
 from bot.ai_tools.envelope import ToolResult
 
 RESOLVE_LISTING_VERSION = "ai_api.resolve_listing.v1"
-PROPERTY_HISTORY_VERSION = "ai_api.property_history.v1"
+PROPERTY_HISTORY_VERSION = "ai_api.property_history.v2"
 LISTING_ANALYSIS_VERSION = "ai_api.listing_analysis.v1"
 LISTING_RISKS_VERSION_FALLBACK = "ai_api.listing_risks.v1"
-COMPLEX_MARKET_PROFILE_VERSION = "ai_api.complex_market_profile.v1"
+COMPLEX_MARKET_PROFILE_VERSION = "ai_api.complex_market_profile.v2"
 LOCATION_ANALYSIS_VERSION = "ai_api.location_analysis.v1"
 
 # Тот же паттерн, что bot/core/parser.py::_extract_listing_id использует

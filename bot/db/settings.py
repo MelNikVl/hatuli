@@ -32,7 +32,6 @@ DEFAULTS: dict[str, str] = {
     "ALERT_THRESHOLD": "65",
     "POPUP_WIDTH_PX": "380",
     "PARSER_MAX_PAGES": "5",
-    "PARSER_MAX_PRICE": "80000000",
     "MONETIZATION_ENABLED": "0",
     # Пауза между циклами service_apartments.py (задача 2026-08-17,
     # "интервал apartment parser") — random.uniform(MIN, MAX) минут между

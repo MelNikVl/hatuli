@@ -74,47 +74,41 @@ async def _rental_loop() -> None:
     """Rental index: one page every 5-15 min, rebuild index after each full pass."""
     import asyncio, random, logging
     from bot.core.rental_parser import (
-        parse_rental_path, save_rental_listings,
+        collect_rental_page, RENTAL_INDEX_REFRESH_PAGES,
         rebuild_rental_index, RENTAL_PATHS
     )
     log = logging.getLogger("rental_loop")
     paths = list(RENTAL_PATHS.items())  # [(path, prop_type), ...]
     path_idx = 0
-    page_num = 1
-    MAX_PAGES = 5  # страниц на один тип за цикл
+    completed_types = set()
+    pages_since_index = 0
 
     while True:
         try:
             path, prop_type = paths[path_idx]
-            log.info("Rental: %s page %d", prop_type, page_num)
-            listings = await parse_rental_path(path, prop_type, max_pages=1)
-            # parse_rental_path с max_pages=1 даёт одну страницу,
-            # но нам нужна конкретная страница — используем напрямую
-            from bot.core.rental_parser import _fetch_page
             import httpx
-            from bot.core.rental_parser import BASE_URL, DEFAULT_HEADERS
-            url = BASE_URL + path + (f"?page={page_num}" if page_num > 1 else "")
             async with httpx.AsyncClient(follow_redirects=True) as client:
-                listings = await _fetch_page(client, url, prop_type)
-            if listings:
-                saved = await save_rental_listings(listings)
-                log.info("Rental: saved %d from %s page %d", saved, prop_type, page_num)
-            # Следующая страница или следующий тип
-            page_num += 1
-            if page_num > MAX_PAGES or not listings:
-                path_idx = (path_idx + 1) % len(paths)
-                page_num = 1
-                if path_idx == 0:
-                    # Прошли все типы — пересчитываем индекс
-                    log.info("Rental: rebuilding index...")
-                    await rebuild_rental_index()
-                    try:
-                        from bot.core.sheets_sync_rental import sync_rental_to_sheets
-                        await sync_rental_to_sheets()
-                    except Exception as _e:
-                        log.warning("rental sheets sync failed: %s", _e)
+                step = await collect_rental_page(client, path, prop_type)
+            log.info("Rental: %s page %d saved %d", prop_type, step["page"], step["saved"])
+            pages_since_index += 1
+            if step["completed"]:
+                completed_types.add(prop_type)
+            full_pass = len(completed_types) == len(paths)
+            if full_pass or pages_since_index >= RENTAL_INDEX_REFRESH_PAGES:
+                await rebuild_rental_index()
+                pages_since_index = 0
+                if full_pass:
+                    completed_types.clear()
+                try:
+                    from bot.core.sheets_sync_rental import sync_rental_to_sheets
+                    await sync_rental_to_sheets()
+                except Exception as _e:
+                    log.warning("rental sheets sync failed: %s", _e)
+
         except Exception as e:
             logging.getLogger("rental_loop").error("Rental error: %s", e, exc_info=True)
+        finally:
+            path_idx = (path_idx + 1) % len(paths)
 
         await asyncio.sleep(random.uniform(5 * 60, 15 * 60))
 

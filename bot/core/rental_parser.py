@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import hashlib
+import json
 import re
 import statistics
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 import httpx
@@ -40,7 +42,8 @@ RENTAL_PATHS: dict[str, str] = {
     "/arenda/kommercheskaya/astana/": "commercial",
 }
 
-MAX_PAGES_PER_PATH = 10
+MAX_PAGES_PER_PATH = 0  # 0/None means scan to the end, not a page cap
+RENTAL_INDEX_REFRESH_PAGES = 15
 MIN_SLEEP = 8.0
 MAX_SLEEP = 16.0
 
@@ -171,36 +174,122 @@ def _parse_card(card, prop_type: str) -> RentalListing | None:
         return None
 
 
-async def _fetch_page(client: httpx.AsyncClient, url: str, prop_type: str) -> list[RentalListing]:
-    try:
-        resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=20)
-        resp.raise_for_status()
-    except Exception as e:
-        logger.warning("Fetch error %s: %s", url, e)
-        return []
+@dataclass
+class RentalPage:
+    listings: list[RentalListing]
+    card_ids: tuple[str, ...]
 
+
+@dataclass
+class RentalPagination:
+    """Track raw page IDs, not filtered listings; resume across restarts."""
+    page: int = 1
+    signatures: set[str] = field(default_factory=set)
+
+    def advance(self, result: RentalPage) -> bool:
+        signature = hashlib.sha256("\n".join(sorted(set(result.card_ids))).encode()).hexdigest()
+        if not result.card_ids or signature in self.signatures:
+            self.page = 1
+            self.signatures.clear()
+            return True
+        self.signatures.add(signature)
+        self.page += 1
+        return False
+
+    def dumps(self) -> str:
+        return json.dumps({"page": self.page, "signatures": sorted(self.signatures)})
+
+    @classmethod
+    def loads(cls, value: str | None) -> "RentalPagination":
+        if not value:
+            return cls()
+        state = json.loads(value)
+        if not isinstance(state, dict):
+            raise ValueError("Invalid rental cursor")
+        page, signatures = state.get("page"), state.get("signatures")
+        if type(page) is not int or page < 1 or not isinstance(signatures, list):
+            raise ValueError("Invalid rental cursor")
+        if any(not isinstance(v, str) or not re.fullmatch(r"[a-f0-9]{64}", v) for v in signatures):
+            raise ValueError("Invalid rental page signatures")
+        return cls(page, set(signatures))
+
+
+async def _fetch_page_result(client: httpx.AsyncClient, url: str, prop_type: str) -> RentalPage:
+    # A failed/challenged response must not look like a successful empty page.
+    resp = await client.get(url, headers=DEFAULT_HEADERS, timeout=20)
+    resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-    results = []
-    for card in soup.select("div.a-card"):
+    cards = soup.select("div.a-card, section.a-card")
+    if not cards:
+        text = soup.get_text(" ", strip=True).lower()
+        challenge = re.search(r"captcha|капч|провер.{0,20}(робот|человек)|access denied|just a moment", text)
+        empty_search = soup.select_one(".a-list, .a-list-empty") is not None or re.search(
+            r"ничего не найдено|объявлени[йя] не найдено|найдено\s+0\s+объявлен", text)
+        if challenge or not empty_search:
+            raise ValueError(f"Unrecognised rental search response: {url}")
+        return RentalPage([], ())
+
+    results, card_ids = [], []
+    for card in cards:
+        listing_id = str(card.get("data-id", "")).strip()
+        if not listing_id:
+            link = card.select_one('a[href*="/a/show/"]')
+            match = re.search(r"/a/show/(\d+)", link.get("href", "")) if link else None
+            listing_id = match.group(1) if match else ""
+        if not listing_id:
+            raise ValueError(f"Rental card without an ID: {url}")
+        card_ids.append(listing_id)
         listing = _parse_card(card, prop_type)
         if listing:
             results.append(listing)
-    return results
+    return RentalPage(results, tuple(card_ids))
 
 
-async def parse_rental_path(path: str, prop_type: str, max_pages: int = MAX_PAGES_PER_PATH) -> list[RentalListing]:
-    all_listings: list[RentalListing] = []
+async def _fetch_page(client: httpx.AsyncClient, url: str, prop_type: str) -> list[RentalListing]:
+    """Compatibility wrapper. Fetch failures propagate; they are not EOF."""
+    return (await _fetch_page_result(client, url, prop_type)).listings
+
+
+async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: str) -> dict:
+    """One durable page step shared by the service and the bot's background loop.
+
+    Advance only after saving succeeds. A retry can repeat idempotent saves,
+    but cannot skip the failed page. Callers rotate types after each success.
+    """
+    from bot.db import settings as app_settings
+    await app_settings.load()
+    key = f"RENTAL_CRAWL_V1_{prop_type.upper()}"
+    cursor = RentalPagination.loads(app_settings.get(key, ""))
+    page = cursor.page
+    url = BASE_URL + path + (f"?page={page}" if page > 1 else "")
+    result = await _fetch_page_result(client, url, prop_type)
+    saved = await save_rental_listings(result.listings) if result.listings else 0
+    # save_rental_listings logs individual row errors and returns a count;
+    # a partial write is retryable too, even when it did not raise itself.
+    if saved != len(result.listings):
+        raise RuntimeError(f"Incomplete rental page save: {saved}/{len(result.listings)} ({url})")
+    completed = cursor.advance(result)
+    await app_settings.set(key, cursor.dumps())
+    return {"page": page, "saved": saved, "completed": completed,
+            "raw_card_count": len(result.card_ids)}
+
+
+async def parse_rental_path(path: str, prop_type: str, max_pages: int | None = MAX_PAGES_PER_PATH) -> list[RentalListing]:
+    """Unbounded by default; an explicit positive limit is for partial scans."""
+    all_listings: dict[str, RentalListing] = {}
+    cursor = RentalPagination()
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        for page in range(1, max_pages + 1):
+        while not max_pages or cursor.page <= max_pages:
+            page = cursor.page
             url = BASE_URL + path + (f"?page={page}" if page > 1 else "")
-            listings = await _fetch_page(client, url, prop_type)
-            if not listings:
-                logger.info("  %s page %d: empty — stop", path, page)
+            result = await _fetch_page_result(client, url, prop_type)
+            if cursor.advance(result):
+                logger.info("  %s page %d: end or repeated page", path, page)
                 break
-            all_listings.extend(listings)
-            logger.info("  %s page %d: %d listings", path, page, len(listings))
-            await asyncio.sleep(MIN_SLEEP + (MAX_SLEEP - MIN_SLEEP) * page / max_pages)
-    return all_listings
+            all_listings.update((listing.id, listing) for listing in result.listings)
+            logger.info("  %s page %d: %d listings", path, page, len(result.listings))
+            await asyncio.sleep(MIN_SLEEP + (MAX_SLEEP - MIN_SLEEP) * min(page / (max_pages or page), 1))
+    return list(all_listings.values())
 
 
 async def save_rental_listings(listings: list[RentalListing]) -> int:
@@ -461,17 +550,11 @@ async def lookup_rental_estimate(
 
 async def run_rental_cycle() -> None:
     """Полный цикл: парсинг → сохранение → пересчёт индекса."""
-    from bot.db import settings as app_settings
-    await app_settings.load()
-    # На Крыше сейчас ~4250 объявлений аренды квартир (~213 страниц по 20) —
-    # 10 страниц/цикл покрывали только ~4.7% рынка. Дефолт поднят, настраивается
-    # в /admin/settings отдельно от лимита продаж (аренда медленнее — 8-16с/стр).
-    max_pages = app_settings.get_int("RENTAL_MAX_PAGES", MAX_PAGES_PER_PATH)
-    logger.info("=== Rental cycle start (max_pages=%d) ===", max_pages)
+    logger.info("=== Rental cycle start (all pages) ===")
     total = 0
     for path, prop_type in RENTAL_PATHS.items():
         logger.info("Parsing %s (%s)...", path, prop_type)
-        listings = await parse_rental_path(path, prop_type, max_pages=max_pages)
+        listings = await parse_rental_path(path, prop_type)
         saved = await save_rental_listings(listings)
         total += saved
         logger.info("  saved %d for %s", saved, prop_type)

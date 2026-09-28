@@ -79,7 +79,7 @@ def _extract_rooms(title):
     return int(m.group(1)) if m else None
 
 
-async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000_000,
+async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=None,
                                      start_page=1, stats: dict | None = None):
     """Parse apartment sale listings from krisha.kz.
     start_page: с какой страницы начинать (для глубокого обхода всей выдачи).
@@ -102,7 +102,9 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
         # (analyze_apartments его не пробрасывал вообще) — поэтому ВЕСЬ обход
         # (и обычный сервис, и full_sweep) молча ограничивался потолком 80М,
         # и объявления 100-200М+ никогда не попадали даже в скачанную выдачу.
-        params = {"das[_sys.hasphoto]": 1}
+        # Collect the entire price range, including listings without photos.
+        # An explicit max_price is still supported for deliberate narrow scans.
+        params = {}
         if max_price:
             params["das[price][to]"] = max_price
         if page > 1:
@@ -194,7 +196,7 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
                 published = time_tag.get_text(strip=True) if time_tag else ""
 
                 # Превью-фото карточки — уже лежит в уже скачанной странице
-                # выдачи (das[_sys.hasphoto]=1 гарантирует, что оно есть),
+                # выдачи, если у объявления есть фото,
                 # берём бесплатно вместо ожидания дорогого запроса детальной
                 # страницы (см. coord_backfill.py) отдельно по расписанию.
                 # img.a-image__img отдаёт готовый src (не лениво подгружаемый
@@ -221,13 +223,12 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=80_000
 
 
 async def analyze_apartments(city="astana", max_pages=5, start_page=1,
-                              max_price=80_000_000, stats: dict | None = None):
-    """Full pipeline: parse sales + rentals, score, return sorted results.
-    max_price/stats пробрасываются в parse_apartments_for_sale — раньше
-    ЭТА функция их не принимала вовсе, поэтому даже явный вызов с
-    max_price=0 (см. full_sweep.py) падал с TypeError, а обычный сервисный
-    цикл всегда получал скрытый потолок 80М (дефолт parse_apartments_for_sale),
-    так что дорогие объявления 100-200М+ не долетали даже до скрапинга."""
+                              max_price=None, stats: dict | None = None):
+    """Full pipeline over the unrestricted sale search by default.
+
+    max_price is an explicit optional filter; ordinary/deep/full sweeps pass
+    no cap. stats reports page failures/end-of-search to full_sweep.py.
+    """
     from collections import defaultdict
 
     # 1. Build rental index

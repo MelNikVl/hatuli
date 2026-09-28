@@ -68,8 +68,9 @@ backfill записал связь), не факт РЫНКА (apartment_listing
 их в одно событие означало бы потерять эту разницу.
 
 new_listing_linked/listing_relist — РЫНОЧНЫЙ факт: первый (по first_seen)
-listing под property -> new_listing_linked, каждый следующий ->
-listing_relist (задача явно просит "relist history" как фундамент).
+listing под property -> new_listing_linked. Новый ID после подтверждённой
+архивации всех прежних ID -> listing_relist. Параллельные ID не релисты;
+возврат того же ID остаётся listing_reactivated.
 listing_first_seen эмитится ДЛЯ КАЖДОГО listing'а отдельно (raw-факт
 "мы начали наблюдать это объявление") — намеренно рядом с new_listing_
 linked/listing_relist в один и тот же timestamp для не-первого listing'а:
@@ -113,6 +114,8 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+
+from bot.core.listing_activity import confirmed_relists
 
 
 # ── нормализация seller_name (та же формула, что property_linker.py's
@@ -278,7 +281,7 @@ def _compute_metrics(listings: list[dict], price_history_by_listing: dict[str, l
         "last_seen_at": _iso(last_seen_at),
         "observed_span_days": observed_span_days,
         "listing_count": len(listings),
-        "relist_count": max(len(listings) - 1, 0),
+        "relist_count": len(confirmed_relists(listings, archive_history_by_listing)),
         "unique_observed_seller_names": len(seller_names),
         "initial_price": initial_price,
         "latest_price": latest_price,
@@ -343,7 +346,7 @@ def _build_events(listings: list[dict], price_history_by_listing: dict[str, list
     # факты, на apartment_listings.first_seen. Порядок "кто первый" —
     # по first_seen (listings уже отсортированы вызывающим кодом).
     by_first_seen = [l for l in listings if l.get("first_seen") is not None]
-    prev_listing_id = None
+    relists = confirmed_relists(listings, archive_history_by_listing)
     for i, listing in enumerate(by_first_seen):
         events.append({
             "timestamp": _iso(listing["first_seen"]),
@@ -362,7 +365,8 @@ def _build_events(listings: list[dict], price_history_by_listing: dict[str, list
                 "after": listing["listing_id"],
                 "evidence": {"note": "первый по времени listing, наблюдаемый под этой property"},
             })
-        else:
+        elif listing["listing_id"] in relists:
+            prev_listing_id = relists[listing["listing_id"]]
             events.append({
                 "timestamp": _iso(listing["first_seen"]),
                 "type": "listing_relist",
@@ -371,7 +375,6 @@ def _build_events(listings: list[dict], price_history_by_listing: dict[str, list
                 "after": listing["listing_id"],
                 "evidence": {"previous_listing_id": prev_listing_id},
             })
-        prev_listing_id = listing["listing_id"]
 
     # listing_archived — на archived_at (текущий период архивации).
     for listing in listings:
