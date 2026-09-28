@@ -40,6 +40,16 @@ DEFAULTS: dict[str, str] = {
     # докстринг про валидацию и абсолютные границы).
     "PARSE_INTERVAL_MIN": "30",
     "PARSE_INTERVAL_MAX": "70",
+    # Дедлайн полного круга глубокого обхода каталога Крыши (задача
+    # 2026-09-28, "круг не более 2 суток"). service_apartments.py::
+    # _plan_deep_batch() подбирает DEEP_SWEEP_BATCH под этот бюджет:
+    # по графику — базовый батч, отстали после простоя — вплоть до
+    # DEEP_SWEEP_BATCH_MAX. DEEP_SWEEP_CYCLE_PERIOD_MIN — замеряемая
+    # самим сервисом EMA периода цикла (работа + пауза), сюда попадает
+    # только сид: реальное значение сервис перезапишет в app_settings.
+    "DEEP_SWEEP_CIRCLE_TARGET_HOURS": "48",
+    "DEEP_SWEEP_BATCH_MAX": "160",
+    "DEEP_SWEEP_CYCLE_PERIOD_MIN": "120",
     # Веса компонентов Deal Score (bot/core/deal_score.py) — сумма нормализуется
     # к 1.0 при чтении, так что абсолютные значения не обязаны давать ровно 100.
     "SCORE_W_PRICE": "40",

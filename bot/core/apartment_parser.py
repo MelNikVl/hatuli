@@ -424,8 +424,15 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
     random_half = random.sample(rest, min(half, len(rest))) if rest else []
     to_fetch = top_half + random_half
 
-    from bot.core.apartment_details import fetch_apartment_details
+    from bot.core.apartment_details import (
+        fetch_apartment_details, detail_fetch_cooldown_remaining,
+    )
     for r in to_fetch:
+        cooldown = detail_fetch_cooldown_remaining()
+        if cooldown:
+            logger.info("apt_parser: detail-fetch batch paused for %.0f min after "
+                        "Krisha block; remaining candidates deferred", cooldown / 60)
+            break
         url = r.get("url", "")
         if url:
             logger.info("fetching details for %s (prelim_rank=%.2f)", r["id"], r["_prelim_rank"])

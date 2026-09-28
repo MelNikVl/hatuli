@@ -112,6 +112,96 @@ def _next_cycle_sleep_minutes(app_settings) -> float:
     return _random.uniform(lo, hi)
 
 
+# ── Дедлайн полного круга глубокого обхода ────────────────────────────
+# Задача 2026-09-28 ("один круг парсинга не более 2 суток"). Раньше
+# DEEP_SWEEP_BATCH был фиксированным, а длительность круга получалась
+# побочным эффектом: ~824 страницы каталога / 40 страниц за цикл = ~21
+# цикл, цикл ~120 мин (69.7 мин работы — среднее по parser_cycle_history
+# за 14 дней — плюс 30-70 мин паузы) = ~42 ч в идеальных условиях.
+# Идеальных условий не бывает: любой простой (DNS лёг, Крыша отдаёт 468)
+# сдвигает весь круг целиком, и по apartments.log реальные круги
+# занимали от 1.2 до 4.3 суток. Теперь батч планируется под дедлайн:
+# отстали от графика — батч растёт, идём с запасом — остаётся базовым.
+_CIRCLE_TARGET_HOURS_DEFAULT = 48.0
+# Планируем не на весь бюджет, а на 85% от него: оставшиеся 15% — запас
+# на простой в самом конце круга, когда наращивать батч уже поздно.
+_CIRCLE_PLAN_SAFETY = 0.85
+# Потолок батча. Нужен только для ДОГОНА после простоя: на здоровом
+# темпе (~2 ч/цикл, 24 цикла за 48 ч) хватает и 35-40 страниц. 160 —
+# это ~10 мин лишних запросов выдачи к циклу (страница = sleep 2-5 с +
+# сам запрос) и полный круг за 6 циклов в пределе, чего с запасом
+# хватает, чтобы вернуться в график после суточного простоя.
+_CIRCLE_BATCH_MAX_DEFAULT = 160
+# Оценка периода цикла (работа + пауза) в минутах — сид для EMA, пока не
+# набралось реальных замеров. 120 = ~70 мин цикл + ~50 мин средняя пауза.
+_CYCLE_PERIOD_SEED_MIN = 120.0
+# Границы правдоподобия ОДНОГО замера периода: короче — это рестарт
+# сервиса/двойной запуск, длиннее — сервис стоял. Ни то, ни другое не
+# должно утягивать EMA за собой.
+_CYCLE_PERIOD_SAMPLE_MIN, _CYCLE_PERIOD_SAMPLE_MAX = 10.0, 360.0
+_CYCLE_PERIOD_EMA_ALPHA = 0.3
+
+
+def _parse_iso(raw: str | None) -> datetime | None:
+    """ISO-строка из app_settings → aware datetime (или None). Наивное
+    время трактуем как UTC — всё, что пишет этот сервис, пишется в UTC."""
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        log.warning("не разобрал временную метку %r", raw)
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _plan_deep_batch(*, base_batch: int, max_batch: int, pages_left: int,
+                     elapsed_min: float, period_min: float,
+                     target_hours: float,
+                     safety: float = _CIRCLE_PLAN_SAFETY) -> int:
+    """Сколько страниц глубокого обхода взять в ЭТОМ цикле, чтобы круг
+    уложился в target_hours.
+
+    Возвращает base_batch, пока идём по графику (ниже базового не
+    опускаем — незачем тормозить обход, если успеваем), и поднимает
+    вплоть до max_batch, когда отстали. Чистая функция: всё состояние
+    приходит аргументами — проверяется тестом без БД и без сети."""
+    if base_batch <= 0 or pages_left <= 0:
+        return base_batch
+    max_batch = max(max_batch, base_batch)
+    period_min = max(period_min, 1.0)
+    remaining_min = target_hours * 60.0 * safety - elapsed_min
+    if remaining_min <= 0:
+        # Бюджет уже проеден — закрываем круг максимально быстро.
+        return max_batch
+    cycles_left = max(1, int(remaining_min // period_min))
+    need = -(-pages_left // cycles_left)  # ceil
+    return max(base_batch, min(need, max_batch))
+
+
+async def _record_cycle_period(app_settings) -> None:
+    """EMA реального периода цикла (работа + пауза, минуты) — по
+    интервалу между соседними ПРОДУКТИВНЫМИ проходами глубокого обхода.
+    Нужна планировщику батча: сколько ещё циклов влезет в остаток
+    бюджета круга.
+
+    Продуктивными — намеренно: цикл, где вся пачка легла на сети,
+    проходит быстро (запросы падают сразу) и утянул бы оценку вниз, а
+    планировать догон надо по здоровому темпу, иначе после простоя батч
+    окажется занижен ровно тогда, когда его надо поднимать."""
+    now = datetime.now(timezone.utc)
+    prev = _parse_iso(app_settings.get("DEEP_SWEEP_PRODUCTIVE_AT"))
+    await app_settings.set("DEEP_SWEEP_PRODUCTIVE_AT", now.isoformat())
+    if not prev:
+        return
+    sample = (now - prev).total_seconds() / 60.0
+    if not (_CYCLE_PERIOD_SAMPLE_MIN <= sample <= _CYCLE_PERIOD_SAMPLE_MAX):
+        return
+    current = app_settings.get_float("DEEP_SWEEP_CYCLE_PERIOD_MIN", _CYCLE_PERIOD_SEED_MIN)
+    ema = _CYCLE_PERIOD_EMA_ALPHA * sample + (1.0 - _CYCLE_PERIOD_EMA_ALPHA) * current
+    await app_settings.set("DEEP_SWEEP_CYCLE_PERIOD_MIN", f"{ema:.1f}")
+
+
 async def run_cycle():
     from bot.core.apartment_parser import analyze_apartments
     from bot.core.sheets_sync import sync_apartments_to_sheets_pg
@@ -132,8 +222,11 @@ async def run_cycle():
     # Выдача Астаны без ценового потолка и фильтра фото. Свежий парс покрывает
     # только первые max_pages, дальше живут объявления, которые никто не
     # «поднимает» — они никогда не попадут в базу без сквозного обхода.
-    # Каждый цикл дочитываем DEEP_SWEEP_BATCH страниц с сохранённой позиции;
-    # дойдя до конца выдачи — начинаем заново.
+    # Каждый цикл дочитываем страниц с сохранённой позиции; дойдя до конца
+    # выдачи — начинаем заново. Сколько именно страниц — решает
+    # _plan_deep_batch() из остатка бюджета круга (DEEP_SWEEP_CIRCLE_
+    # TARGET_HOURS, по умолчанию 48 ч), а DEEP_SWEEP_BATCH задаёт нижнюю
+    # границу: по графику идём базовым батчем, отстали — батч растёт.
     #
     # ФИКС (задача "adaptive recheck", 2026-08-13, предусловие — см.
     # docs/adaptive_recheck_plan.md, п.4/7): max_deep_page раньше
@@ -165,45 +258,139 @@ async def run_cycle():
                                    datetime.now(timezone.utc).isoformat())
             log.info("Deep sweep: новый круг, снимок max_deep_page=%d", max_deep_page)
 
-    deep_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
-    if deep_batch > 0:
+    base_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
+    if base_batch > 0:
         cursor = app_settings.get_int("DEEP_SWEEP_PAGE", max_pages + 1)
         if cursor <= max_pages:
             cursor = max_pages + 1
+
+        # Размер батча планируется под дедлайн круга, а не задан намертво
+        # (см. _plan_deep_batch): пока идём по графику — это базовый
+        # DEEP_SWEEP_BATCH, отстали после простоя — батч растёт, чтобы
+        # круг всё равно закрылся за DEEP_SWEEP_CIRCLE_TARGET_HOURS.
+        circle_started_at = _parse_iso(app_settings.get("DEEP_SWEEP_CIRCLE_STARTED_AT"))
+        if circle_started_at is None and max_deep_page:
+            # Снимок круга есть, а метки старта нет — значит круг идёт, но
+            # часы бюджета считать не от чего. Бывает при апгрейде с версии
+            # без дедлайна и если метку затёрли снаружи (её, например,
+            # удаляет tests/test_archive_check_pools.py, а он ходит в ту же
+            # БД). Заводим часы сейчас: дедлайн будет отсчитан от этого
+            # момента, а не проигнорирован молча. Ту же метку читает
+            # archive_check._select_candidates() как порог "пропало из
+            # каталога" — без неё cold-confirm пул просто не набирается.
+            circle_started_at = datetime.now(timezone.utc)
+            await app_settings.set("DEEP_SWEEP_CIRCLE_STARTED_AT",
+                                   circle_started_at.isoformat())
+            log.warning("Deep sweep: метка старта круга отсутствовала при "
+                        "снимке max_deep_page=%d — часы бюджета запущены сейчас",
+                        max_deep_page)
+        elapsed_min = 0.0
+        if circle_started_at:
+            elapsed_min = max(0.0, (datetime.now(timezone.utc)
+                                    - circle_started_at).total_seconds() / 60.0)
+        target_hours = app_settings.get_float("DEEP_SWEEP_CIRCLE_TARGET_HOURS",
+                                              _CIRCLE_TARGET_HOURS_DEFAULT)
+        pages_left = (max_deep_page - cursor + 1) if max_deep_page else 0
+        deep_batch = _plan_deep_batch(
+            base_batch=base_batch,
+            max_batch=app_settings.get_int("DEEP_SWEEP_BATCH_MAX", _CIRCLE_BATCH_MAX_DEFAULT),
+            pages_left=pages_left,
+            elapsed_min=elapsed_min,
+            period_min=app_settings.get_float("DEEP_SWEEP_CYCLE_PERIOD_MIN",
+                                              _CYCLE_PERIOD_SEED_MIN),
+            target_hours=target_hours,
+        )
+        if deep_batch != base_batch:
+            log.info("Deep sweep: круг идёт %.1f ч из целевых %.0f ч, осталось "
+                     "%d стр. — батч %d → %d, чтобы уложиться в дедлайн",
+                     elapsed_min / 60.0, target_hours, pages_left, base_batch, deep_batch)
         try:
+            deep_stats: dict = {}
             deep_results = await analyze_apartments(
-                "astana", max_pages=deep_batch, start_page=cursor)
+                "astana", max_pages=deep_batch, start_page=cursor, stats=deep_stats)
+            pages_ok = deep_stats.get("pages_ok", 0)
+            pages_failed = deep_stats.get("pages_failed", 0)
+            reached_end = deep_stats.get("reached_end", False)
             # Крыша на несуществующие страницы отдаёт последнюю (НЕ пустую!),
             # поэтому "пустая страница" как признак конца не работает —
             # только позиция курсора относительно снимка max_deep_page.
-            past_end = max_deep_page and cursor > max_deep_page
-            if deep_results and not past_end:
-                results.extend(deep_results)
+            past_end = bool(max_deep_page) and cursor > max_deep_page
+
+            results.extend(deep_results or [])
+            if not past_end and pages_ok == 0 and pages_failed:
+                # БАГ (найден 2026-09-28 по apartments.log): когда ВСЯ пачка
+                # ложилась на сети (наблюдали "[Errno -3] Temporary failure
+                # in name resolution" — 2878 упавших страниц за сутки),
+                # deep_results приходил пустым, и ветка ниже трактовала это
+                # ровно как "конец выдачи": засчитывала круг завершённым,
+                # сбрасывала курсор на начало и обнуляла снимок max_deep_
+                # page. За 20 часов 28.09 так "завершилось" 13 кругов
+                # подряд, каждые 1.5-2 часа, — реального обхода каталога в
+                # этот день не было вовсе. Побочно это ломало и archive_
+                # check: DEEP_SWEEP_CIRCLE_STARTED_AT для него — порог
+                # "пропало из каталога" (bot/core/archive_check.py::
+                # _select_candidates), и сдвиг этого порога на "полтора часа
+                # назад" подсовывал в cold-confirm пул живые объявления,
+                # которые просто не успели попасться заново.
+                # Пустая пачка из-за сети — НЕ конец круга: курсор стоит на
+                # месте, следующий цикл перечитает те же страницы.
+                #
+                # Условие намеренно НЕ смотрит на reached_end: "ни одной
+                # страницы не прочитали, при этом часть запросов упала" —
+                # это состояние, из которого мы про конец выдачи ничего не
+                # узнали, даже если последняя (единственная доехавшая)
+                # страница пришла без карточек. Честный конец выдачи — это
+                # pages_failed == 0 (см. ветку else ниже), он сюда не
+                # попадает.
+                next_cursor = cursor
+                log.warning("Deep sweep: страницы %d-%d — упали все %d запросов "
+                            "(сеть/блокировка), круг НЕ засчитан, курсор остаётся на %d",
+                            cursor, cursor + deep_batch - 1, pages_failed, cursor)
+            elif deep_results and not past_end:
+                if pages_failed:
+                    log.warning("Deep sweep: %d из %d страниц не прочитаны — "
+                                "их объявления этот круг пропустит",
+                                pages_failed, pages_ok + pages_failed)
                 next_cursor = cursor + deep_batch
                 log.info("Deep sweep: pages %d-%d → %d listings, cursor → %d",
                          cursor, cursor + deep_batch - 1, len(deep_results), next_cursor)
+                await _record_cycle_period(app_settings)
             else:
-                results.extend(deep_results or [])
                 next_cursor = max_pages + 1
+                # Причину пишем явно: именно смешение "курсор дошёл до
+                # конца" с "выдача не ответила" и было багом 28.09 —
+                # по логу эти два случая различить было невозможно.
+                if past_end:
+                    reason = "курсор за снимком max_deep_page"
+                elif reached_end:
+                    reason = "Крыша отдала страницу без карточек"
+                else:
+                    reason = "пачка без объявлений"
                 log.info("Deep sweep: страница %d (последняя ~%d по счётчику "
-                         "Крыши) — круг завершён, cursor → %d", cursor,
-                         max_deep_page, next_cursor)
-                # Метрика "за сколько мы обходим всю Крышу": засекаем момент
-                # завершения полного круга глубокого обхода и считаем дельту
-                # с предыдущим завершением — это и есть время полного обхода.
-                now_iso = datetime.now(timezone.utc).isoformat()
-                prev_completed = app_settings.get("DEEP_SWEEP_CIRCLE_COMPLETED_AT")
-                if prev_completed:
-                    try:
-                        prev_dt = datetime.fromisoformat(prev_completed)
-                        duration_sec = (datetime.now(timezone.utc) - prev_dt).total_seconds()
-                        await app_settings.set("DEEP_SWEEP_CIRCLE_DURATION_SEC", str(int(duration_sec)))
-                    except Exception as e:
-                        log.warning("circle duration calc failed: %s", e)
-                await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_AT", now_iso)
+                         "Крыши) — круг завершён (%s), cursor → %d", cursor,
+                         max_deep_page, reason, next_cursor)
+                # Метрика "за сколько мы обходим всю Крышу". Считаем от
+                # СТАРТА этого круга (DEEP_SWEEP_CIRCLE_STARTED_AT), а не
+                # от прошлого завершения: старт — это ровно тот момент, с
+                # которого круг реально идёт, тогда как дельта между
+                # завершениями прихватывала ещё и цикл-другой паузы между
+                # кругами. На прошлое завершение откатываемся только если
+                # метки старта нет (первый круг после деплоя).
+                now = datetime.now(timezone.utc)
+                started = circle_started_at or _parse_iso(
+                    app_settings.get("DEEP_SWEEP_CIRCLE_COMPLETED_AT"))
+                if started:
+                    duration_sec = int((now - started).total_seconds())
+                    await app_settings.set("DEEP_SWEEP_CIRCLE_DURATION_SEC", str(duration_sec))
+                    if duration_sec > target_hours * 3600:
+                        log.warning("Deep sweep: круг занял %.1f ч — больше "
+                                    "целевых %.0f ч (батч упирался в потолок?)",
+                                    duration_sec / 3600.0, target_hours)
+                await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_AT", now.isoformat())
                 # Обнуляем снимок — следующий цикл (курсор снова на первой
                 # deep-странице) снимет новый max_deep_page на СЛЕДУЮЩИЙ круг.
                 await app_settings.set("DEEP_SWEEP_CIRCLE_MAX_PAGE", "0")
+                await _record_cycle_period(app_settings)
             await app_settings.set("DEEP_SWEEP_PAGE", str(next_cursor))
             await app_settings.set("DEEP_SWEEP_LAST_AT",
                                    datetime.now(timezone.utc).isoformat())
