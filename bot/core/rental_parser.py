@@ -264,6 +264,10 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
     url = BASE_URL + path + (f"?page={page}" if page > 1 else "")
     result = await _fetch_page_result(client, url, prop_type)
     saved = await save_rental_listings(result.listings) if result.listings else 0
+    # save_rental_listings logs individual row errors and returns a count;
+    # a partial write is retryable too, even when it did not raise itself.
+    if saved != len(result.listings):
+        raise RuntimeError(f"Incomplete rental page save: {saved}/{len(result.listings)} ({url})")
     completed = cursor.advance(result)
     await app_settings.set(key, cursor.dumps())
     return {"page": page, "saved": saved, "completed": completed,

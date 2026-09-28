@@ -91,9 +91,13 @@ async def test_durable_page_step_resumes_and_does_not_advance_on_save_failure(mo
             await rentals.collect_rental_page(client, "/arenda/kvartiry/astana/", "apartment")
         assert rentals.RentalPagination.loads(values["RENTAL_CRAWL_V1_APARTMENT"]).page == 6
         save.side_effect = None
+        save.return_value = 0
+        with pytest.raises(RuntimeError, match="Incomplete rental page save"):
+            await rentals.collect_rental_page(client, "/arenda/kvartiry/astana/", "apartment")
+        assert rentals.RentalPagination.loads(values["RENTAL_CRAWL_V1_APARTMENT"]).page == 6
         save.return_value = 1
         result = await rentals.collect_rental_page(client, "/arenda/kvartiry/astana/", "apartment")
-    assert requested == ["6", "6"]
+    assert requested == ["6", "6", "6"]
     assert result["saved"] == 1 and not result["completed"]
     assert rentals.RentalPagination.loads(values["RENTAL_CRAWL_V1_APARTMENT"]).page == 7
 
@@ -117,3 +121,16 @@ async def test_sale_request_has_no_implicit_price_or_photo_filter(monkeypatch, e
         assert params["das[price][to]"] == [str(explicit_cap)]
     else:
         assert "das[price][to]" not in params
+
+
+@pytest.mark.asyncio
+async def test_expensive_sale_without_photo_is_returned(monkeypatch):
+    client_class = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(
+        200, text=card("123456789", "120 000 000")))
+    monkeypatch.setattr(sales.httpx, "AsyncClient", lambda **kw: client_class(transport=transport, **kw))
+    monkeypatch.setattr(sales.asyncio, "sleep", AsyncMock())
+    result = await sales.parse_apartments_for_sale(max_pages=1)
+    assert len(result) == 1
+    assert result[0]["price"] == 120_000_000
+    assert result[0]["photo_url"] is None
