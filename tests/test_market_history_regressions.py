@@ -116,3 +116,12 @@ def test_exit_followed_by_new_id_remains_in_first_30_day_window():
     result = _build_liquidity(rows, day(100))
     assert result["fraction_disappearing"]["within_30d"]["fraction"] == 1
     assert result["true_relist_count"] == 5
+
+
+def test_seller_change_keeps_previous_id_for_parallel_ads():
+    rows = [listing("a", seller_name="Иван"), listing("b", start=5, seller_name="Пётр")]
+    events = _build_events(rows, {}, {}, [])
+    changes = [e for e in events if e["type"] == "seller_observed_change"]
+    assert len(changes) == 1
+    assert changes[0]["evidence"]["previous_listing_id"] == "a"
+    assert not any(e["type"] == "listing_relist" for e in events)

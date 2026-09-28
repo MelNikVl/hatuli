@@ -429,6 +429,7 @@ def _build_events(listings: list[dict], price_history_by_listing: dict[str, list
                     "evidence": {"previous_listing_id": prev_listing_id, "listing_id": listing["listing_id"]},
                 })
             prev_seller_raw, prev_seller_norm = seller_raw, seller_norm
+        prev_listing_id = listing["listing_id"]
 
     # photo_evidence_observed — evidence event, НЕ raw фото-строки (задача,
     # явно: "не вставлять тысячи photo rows в timeline"). Только УЖЕ
