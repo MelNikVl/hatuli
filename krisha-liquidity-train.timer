@@ -1,0 +1,10 @@
+[Unit]
+Description=Таймер еженедельного переобучения моделей ликвидности (понедельник, до прогноза)
+
+[Timer]
+OnCalendar=Mon *-*-* 07:15:00
+Persistent=true
+Unit=krisha-liquidity-train.service
+
+[Install]
+WantedBy=timers.target

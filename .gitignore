@@ -9,3 +9,7 @@ static/cache/photos/
 backups/
 .claude/
 hype_tracker/hype.db
+
+# Фаза C/D: артефакты моделей и данные исследования
+models/
+research/phase_c/data/

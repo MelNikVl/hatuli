@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежедневного прогноза ликвидности — после снапшотов 08:30-08:45
+
+[Timer]
+OnCalendar=*-*-* 09:30:00
+RandomizedDelaySec=10m
+Persistent=true
+Unit=krisha-liquidity-predict.service
+
+[Install]
+WantedBy=timers.target
