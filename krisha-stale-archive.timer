@@ -1,0 +1,11 @@
+[Unit]
+Description=Таймер ежедневной архивации пропавших объявлений (до снапшотов 08:30)
+
+[Timer]
+OnCalendar=*-*-* 07:50:00
+RandomizedDelaySec=10m
+Persistent=true
+Unit=krisha-stale-archive.service
+
+[Install]
+WantedBy=timers.target

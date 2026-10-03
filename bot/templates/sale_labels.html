@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-title">🏷 Разметка исходов <small>продано / снято / перевыставлено — вход для модели P(продажа) (задача 2026-10-03)</small></div>
+
+<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px;">
+  <div style="flex:1 1 200px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">До обучения модели</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;">{{ stats.model_progress }} / {{ stats.model_min }}</div>
+    <div style="height:6px;background:var(--border);border-radius:3px;margin-top:8px;overflow:hidden;">
+      <div style="height:6px;width:{{ [100, (100 * stats.model_progress / stats.model_min)|round]|min }}%;background:#2563eb;"></div>
+    </div>
+    <div style="font-size:11.5px;color:var(--muted);margin-top:6px;">ручные «продано» + «снято»</div>
+  </div>
+  <div style="flex:1 1 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Продано / снято</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;"><span style="color:#16a34a;">{{ stats.manual.sold }}</span> / {{ stats.manual.withdrawn }}</div>
+  </div>
+  <div style="flex:1 1 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Перевыставлено</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;">{{ stats.manual.relisted }} <span style="font-size:14px;color:var(--muted);">+ {{ stats.auto_relisted }} авто</span></div>
+  </div>
+  <div style="flex:1 1 160px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Ушло за 60 дней</div>
+    <div style="font-size:26px;font-weight:800;margin-top:4px;">{{ stats.exited_60d }}</div>
+  </div>
+</div>
+
+<div style="font-size:13px;color:var(--muted);margin-bottom:14px;max-width:900px;">
+  Крыша не различает продажу и снятие: страница архива одинаковая. Отмечайте то, что знаете точно
+  (звонок продавцу, знакомый риелтор, данные застройщика); если не уверены — «Не знаю».
+  Очередь в псевдослучайном порядке, чтобы выборка не перекосилась к «интересным» объявлениям.
+  Объявления, которые система уже опознала как перевыставленные, в очередь не попадают.
+  Клавиши: <b>1</b> продано · <b>2</b> снято · <b>3</b> перевыставлено · <b>4</b> не знаю (для верхней карточки).
+</div>
+
+<form method="get" style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
+  <select name="market" onchange="this.form.submit()" style="padding:7px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;">
+    <option value="" {{ 'selected' if not market }}>Вся очередь</option>
+    <option value="secondary" {{ 'selected' if market == 'secondary' }}>Вторичка</option>
+    <option value="primary" {{ 'selected' if market == 'primary' }}>Первичка</option>
+  </select>
+</form>
+
+<div id="sl-queue" style="display:flex;flex-direction:column;gap:10px;">
+{% for r in rows %}
+  <div class="sl-card" id="sl-{{ r.id }}" data-id="{{ r.id }}" style="display:flex;gap:14px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px;align-items:flex-start;flex-wrap:wrap;">
+    {% if r.photo_url %}<img src="{{ r.photo_url }}" alt="" loading="lazy" style="width:120px;height:90px;object-fit:cover;border-radius:8px;flex:0 0 auto;">{% endif %}
+    <div style="flex:1 1 320px;min-width:0;">
+      <div style="font-weight:700;font-size:15px;">{{ '%.1f'|format((r.price or 0) / 1e6) }} млн ₸ · {{ r.rooms }}-комн · {{ r.area }} м²{% if r.floor %} · {{ r.floor }}/{{ r.floors_total or '?' }} эт.{% endif %}</div>
+      <div style="font-size:13px;margin-top:2px;">{{ r.complex_name or '' }}{% if r.complex_name and r.address %}, {% endif %}{{ r.address or '' }}{% if r.district %} · {{ r.district }}{% endif %}</div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:4px;">
+        {{ 'первичка' if r.market_type == 'primary' else 'вторичка' }} ·
+        {{ r.seller_name or 'продавец без имени' }} ({{ 'собственник' if r.is_owner else (r.seller_type or 'посредник') }}) ·
+        на рынке {{ r.first_seen }} → {{ r.last_seen or r.archived_at }}{% if r.dom_days is not none %} ({{ r.dom_days }} дн.){% endif %}
+        {% if r.cuts %} · снижений цены: {{ r.cuts }}{% endif %}
+        {% if r.price_change_pct %} · цена {{ '%+.1f'|format(r.price_change_pct) }}% от первой{% endif %}
+        {% if r.views_count %} · просмотров {{ r.views_count }}{% endif %}
+      </div>
+      <div style="margin-top:6px;font-size:12.5px;"><a href="{{ r.url }}" target="_blank" rel="noopener">открыть на Крыше ↗</a> · id {{ r.id }}</div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      <button onclick="slSave('{{ r.id }}','sold')" style="padding:8px 12px;border-radius:8px;border:none;background:#16a34a;color:#fff;font-weight:600;cursor:pointer;">Продано</button>
+      <button onclick="slSave('{{ r.id }}','withdrawn')" style="padding:8px 12px;border-radius:8px;border:none;background:#64748b;color:#fff;font-weight:600;cursor:pointer;">Снято</button>
+      <button onclick="slSave('{{ r.id }}','relisted')" style="padding:8px 12px;border-radius:8px;border:none;background:#f59e0b;color:#fff;font-weight:600;cursor:pointer;">Перевыставлено</button>
+      <button onclick="slSave('{{ r.id }}','unknown')" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:transparent;color:inherit;cursor:pointer;">Не знаю</button>
+    </div>
+  </div>
+{% else %}
+  <div style="padding:20px;color:var(--muted);">Очередь пуста.</div>
+{% endfor %}
+</div>
+{% if rows %}<div style="margin-top:14px;"><a href="">Загрузить следующие →</a></div>{% endif %}
+
+<script>
+function slSave(id, label) {
+  fetch('/admin/api/sale-labels/' + encodeURIComponent(id), {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({label: label})
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) { alert(d.error || 'ошибка'); return; }
+    const el = document.getElementById('sl-' + id);
+    if (el) el.remove();
+  });
+}
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+  const map = {'1': 'sold', '2': 'withdrawn', '3': 'relisted', '4': 'unknown'};
+  const first = document.querySelector('.sl-card');
+  if (map[e.key] && first) slSave(first.dataset.id, map[e.key]);
+});
+</script>
+{% endblock %}
