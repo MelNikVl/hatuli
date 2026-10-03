@@ -50,3 +50,9 @@ psutil==7.2.2
 playwright-stealth
 yt-dlp
 markdown==3.10.3
+
+# Модель ликвидности (Фаза C/D вердикт-стратегии, задача 2026-10-02):
+# liquidity_train.py / liquidity_predict.py, bot/core/liquidity_*.py
+pandas==3.0.6
+scikit-learn==1.9.1
+lightgbm==4.7.0

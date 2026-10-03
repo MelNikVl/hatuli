@@ -1,0 +1,10 @@
+[Unit]
+Description=Таймер авто-меток релиста (после stale archive)
+
+[Timer]
+OnCalendar=*-*-* 08:10:00
+Persistent=true
+Unit=krisha-sale-labels.service
+
+[Install]
+WantedBy=timers.target

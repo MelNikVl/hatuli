@@ -3250,6 +3250,34 @@ def make_extras_router(templates) -> APIRouter:
     # (та — hub со сложной табличной маршрутизацией по PARSERS_HUB_TABS,
     # интегрировать туда для одной новой сущности избыточно) — ссылка на
     # неё добавлена в шапку /admin/parsers (см. ниже).
+    # ── Разметка исходов «продано / снято / перевыставлено» (задача
+    # 2026-10-03) — вход для будущей модели P(продажа). Логика в
+    # bot/core/sale_labels.py ("роут не знает SQL").
+    @router.get("/admin/sale-labels", response_class=HTMLResponse)
+    async def sale_labels_page(request: Request, market: str = ""):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.core.sale_labels import label_queue, label_stats
+        stats = await label_stats()
+        rows = await label_queue(limit=20, market=market or None)
+        return templates.TemplateResponse("sale_labels.html", {
+            "request": request, "atab": "parsers", "stats": stats, "rows": rows, "market": market,
+        })
+
+    @router.post("/admin/api/sale-labels/{listing_id}")
+    async def sale_labels_save(request: Request, listing_id: str):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.sale_labels import save_label, LabelError
+        body = await request.json()
+        try:
+            await save_label(listing_id, str(body.get("label") or ""),
+                             labeled_by=request.cookies.get("admin_user") or "admin",
+                             note=(body.get("note") or None))
+        except LabelError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True})
+
     @router.get("/admin/kzk-registry", response_class=HTMLResponse)
     async def kzk_registry_page(request: Request, q: str = "", status: str = "", blacklisted: str = ""):
         if not is_authed(request):

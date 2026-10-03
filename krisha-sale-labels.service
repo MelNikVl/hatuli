@@ -1,0 +1,11 @@
+[Unit]
+Description=Авто-метки «перевыставлено» для ушедших объявлений (sale_outcome_labels) — задача 2026-10-03
+After=network.target postgresql.service krisha-stale-archive.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/sale_labels_heuristic.py
+StandardOutput=append:/home/nik/krisha_bot/sale_labels.log
+StandardError=append:/home/nik/krisha_bot/sale_labels.log

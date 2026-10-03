@@ -201,6 +201,10 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
     # ai_analysis/complex_housing_class — не пересчитывает их заново.
     # compute_listing_risks_safe гасит любую ошибку внутри (не роняет
     # открытие карточки), поэтому отдельного try/except здесь не нужно.
+    # Прогноз ликвидности (Фаза D вердикт-стратегии, задача 2026-10-02) —
+    # отдельный блок вердикта, score_total не трогает (freeze §6).
+    liquidity = await fetch_liquidity_forecast(listing_id)
+
     from bot.core.listing_risks import compute_listing_risks_safe
     risk_analysis = await compute_listing_risks_safe(
         listing_id, l, kzk_badge=kzk_badge, seller_profile=seller_profile,
@@ -259,6 +263,7 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
             (lambda v: (json.loads(v) if isinstance(v, str) else v) if v else None)(l.get("hex_details"))
         ),
         "risk_analysis": risk_analysis,
+        "liquidity": liquidity,
         # То же, что показывает страница /admin/analytics/{id} — доходность
         # и разбивка скора по компонентам, теперь дублируется и в модалке
         # на карте, чтобы не заставлять переходить на отдельную страницу.
@@ -289,6 +294,37 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
         },
         "negotiation_points": negotiation_points,
         "seller_questions": seller_questions,
+    }
+
+
+async def fetch_liquidity_forecast(listing_id: str) -> dict | None:
+    """Последний прогноз модели ликвидности (Фаза D, задача 2026-10-02,
+    liquidity_predict.py -> liquidity_predictions). Свежесть — не старше 3
+    дней (таймер ежедневный; старее — значит объявление выпало из живой
+    популяции или таймер не работал, показывать устаревший прогноз нельзя).
+    Отсутствие таблицы/строки — валидный случай (None), не ошибка карточки."""
+    from bot.db.pg import fetchrow as pg_fetchrow
+    try:
+        row = await pg_fetchrow(
+            "SELECT as_of, p_exit14, exit14_pct, p_cut30, cut30_pct, reasons, model_versions "
+            "FROM liquidity_predictions WHERE listing_id = $1 AND as_of >= current_date - 3 "
+            "ORDER BY as_of DESC LIMIT 1", listing_id)
+    except Exception:  # таблицы ещё нет (миграция 097 не применена) — карточка не должна падать
+        return None
+    if not row:
+        return None
+    reasons = row["reasons"]
+    if isinstance(reasons, str):
+        try:
+            reasons = json.loads(reasons)
+        except ValueError:
+            reasons = {}
+    f = lambda v: None if v is None else round(float(v), 3)  # noqa: E731
+    return {
+        "as_of": row["as_of"].strftime("%d.%m.%Y"),
+        "p_exit14": f(row["p_exit14"]), "exit14_pct": f(row["exit14_pct"]),
+        "p_cut30": f(row["p_cut30"]), "cut30_pct": f(row["cut30_pct"]),
+        "reasons": reasons or {},
     }
 
 

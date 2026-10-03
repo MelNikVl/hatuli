@@ -1,0 +1,12 @@
+[Unit]
+Description=Архивация объявлений, пропавших из выдачи Крыши (sweep_stale) — задача 2026-10-03
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/stale_archive.py
+StandardOutput=append:/home/nik/krisha_bot/stale_archive.log
+StandardError=append:/home/nik/krisha_bot/stale_archive.log
+SuccessExitStatus=3

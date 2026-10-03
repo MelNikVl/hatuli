@@ -1,0 +1,12 @@
+[Unit]
+Description=Еженедельное переобучение моделей ликвидности (гейт vs price_score) — Фаза D, задача 2026-10-02
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python /home/nik/krisha_bot/liquidity_train.py
+StandardOutput=append:/home/nik/krisha_bot/liquidity_train.log
+StandardError=append:/home/nik/krisha_bot/liquidity_train.log
+SuccessExitStatus=2
