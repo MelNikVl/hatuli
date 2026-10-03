@@ -130,6 +130,8 @@ async def run_cycle() -> None:
     # задача 2026-10-03) — после rebind/geocode, когда complex_name и координаты
     # уже обновлены этим циклом. complex_name не трогает.
     try:
+        from bot.core.complex_canonical import apply_canonical
+        log.info("complex_canonical: %s", await apply_canonical())
         from bot.core.complex_binding import resolve_complex_ids
         res = await resolve_complex_ids()
         log.info("complex_binding: changed=%d logged=%d", res["changed"], res["logged"])

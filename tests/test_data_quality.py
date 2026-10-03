@@ -32,3 +32,10 @@ def test_cycle_grades():
 def test_every_coverage_key_has_threshold():
     assert set(dq.COVERAGE_THRESHOLDS) == {'coords', 'complex_id', 'housing_class', 'views',
                                            'deal_score_today', 'liquidity_today'}
+
+
+def test_circle_coverage():
+    assert dq.circle_coverage_pct({'DEEP_SWEEP_CIRCLE_MAX_PAGE': '958', 'KRISHA_TOTAL_FOUND': '38688'}) == 49.5
+    assert dq.circle_coverage_pct({'DEEP_SWEEP_CIRCLE_MAX_PAGE': '1938', 'KRISHA_TOTAL_FOUND': '38688'}) == 100.0
+    assert dq.circle_coverage_pct({}) is None
+    assert dq.worst('ok', 'bad', 'warn') == 'bad'

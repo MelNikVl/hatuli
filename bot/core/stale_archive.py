@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 STALE_DAYS = 7
 MAX_CIRCLE_AGE = timedelta(hours=72)
 ARCHIVE_REASON = 'sweep_stale'
+PAGE_SIZE = 20
+MIN_COVERAGE = 0.95
 
 
 @dataclass
@@ -73,6 +75,19 @@ def sweep_health(settings: dict[str, str], now: datetime) -> SweepHealth:
     if duration_s > STALE_DAYS * 86400 / 2:
         return SweepHealth(False, f'круг длится {dur_h:.0f} ч — в окно {STALE_DAYS} дн. не влезает 2 круга',
                            completed, dur_h)
+    # Полнота: завершённый круг должен был пройти весь каталог. До 2026-10-03 снимок
+    # считал 40 объявлений на страницу вместо 20 — круг покрывал половину выдачи, и
+    # архивация по last_seen снимала живые объявления из нижней половины.
+    try:
+        pages = int(settings.get('DEEP_SWEEP_CIRCLE_COMPLETED_PAGES') or 0)
+        total = int(settings.get('DEEP_SWEEP_CIRCLE_COMPLETED_TOTAL') or 0)
+    except ValueError:
+        pages, total = 0, 0
+    if not pages or not total:
+        return SweepHealth(False, 'нет замера полноты завершённого круга', completed, dur_h)
+    if pages * PAGE_SIZE < MIN_COVERAGE * total:
+        return SweepHealth(False, f'круг покрыл {pages} стр. × {PAGE_SIZE} = {pages * PAGE_SIZE} из {total} '
+                                  f'объявлений каталога (< {MIN_COVERAGE:.0%})', completed, dur_h)
     return SweepHealth(True, 'ok', completed, dur_h)
 
 
@@ -84,6 +99,34 @@ async def _settings() -> dict[str, str]:
     from bot.db.pg import fetch
     rows = await fetch("SELECT key, value FROM app_settings WHERE key LIKE 'DEEP_SWEEP_CIRCLE_%'")
     return {r['key']: r['value'] for r in rows}
+
+
+async def reactivate_seen(*, dry_run: bool = False) -> int:
+    """Объявление, заархивированное по last_seen, снова попалось в выдаче (last_seen >
+    archived_at) — само появление в поиске Крыши доказывает, что оно живое, HTTP-проверка
+    (archive_check, ~40 в цикл и 468 от Крыши) не нужна. Старые archived_at/archive_reason
+    уходят в listing_archive_history — тот же контракт, что archive_check._confirm_reactivation."""
+    from bot.db.pg import fetchval
+    if dry_run:
+        return int(await fetchval("""SELECT count(*) FROM apartment_listings WHERE is_active = FALSE
+                                      AND archive_reason = $1 AND last_seen > archived_at""", ARCHIVE_REASON) or 0)
+    n = await fetchval("""
+        WITH candidate AS (
+            SELECT id, archived_at, archive_reason FROM apartment_listings
+             WHERE is_active = FALSE AND archive_reason = $1 AND last_seen > archived_at
+             FOR UPDATE
+        ), logged AS (
+            INSERT INTO listing_archive_history (listing_id, archived_at, archive_reason, reactivated_at)
+            SELECT id, archived_at, archive_reason, now() FROM candidate
+            RETURNING listing_id
+        ), upd AS (
+            UPDATE apartment_listings SET is_active = TRUE, archived_at = NULL, archive_reason = NULL
+             WHERE id IN (SELECT listing_id FROM logged)
+            RETURNING 1
+        )
+        SELECT count(*) FROM upd""", ARCHIVE_REASON)
+    logger.info('stale archive: реактивировано (снова в выдаче) %s', n)
+    return int(n or 0)
 
 
 async def archive_stale(*, dry_run: bool = False, now: datetime | None = None) -> dict:

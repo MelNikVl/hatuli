@@ -6,9 +6,10 @@ from bot.core import stale_archive as sa
 NOW = datetime(2026, 10, 3, 6, 0, tzinfo=timezone.utc)
 
 
-def _s(completed_h_ago=10, duration_h=33.5):
+def _s(completed_h_ago=10, duration_h=33.5, pages=1938, total=38688):
     return {'DEEP_SWEEP_CIRCLE_COMPLETED_AT': (NOW - timedelta(hours=completed_h_ago)).isoformat(),
-            'DEEP_SWEEP_CIRCLE_DURATION_SEC': str(duration_h * 3600)}
+            'DEEP_SWEEP_CIRCLE_DURATION_SEC': str(duration_h * 3600),
+            'DEEP_SWEEP_CIRCLE_COMPLETED_PAGES': str(pages), 'DEEP_SWEEP_CIRCLE_COMPLETED_TOTAL': str(total)}
 
 
 def test_healthy_sweep():
@@ -64,3 +65,14 @@ def test_rental_health_requires_measured_cycle():
     stale, _ = sa.rental_health({f'{sa.RENTAL_PREFIX}_COMPLETED_AT': (NOW - timedelta(days=5)).isoformat(),
                                  f'{sa.RENTAL_PREFIX}_DURATION_SEC': str(26 * 3600)}, NOW)
     assert not stale.healthy
+
+
+def test_half_catalog_circle_blocks_archiving():
+    """Круг 958 стр. × 20 = 19 160 из 38 688 — половина каталога: «не видели» ≠ «ушло»."""
+    h = sa.sweep_health(_s(pages=958), NOW)
+    assert not h.healthy and 'покрыл' in h.reason
+
+
+def test_unknown_coverage_blocks_archiving():
+    s = _s(); del s['DEEP_SWEEP_CIRCLE_COMPLETED_PAGES']
+    assert not sa.sweep_health(s, NOW).healthy
