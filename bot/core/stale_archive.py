@@ -107,3 +107,51 @@ async def archive_stale(*, dry_run: bool = False, now: datetime | None = None) -
     result['archived'] = int(status.split()[-1]) if status and status.startswith('UPDATE') else 0
     logger.info('stale archive: заархивировано %s (cutoff %s)', result['archived'], cutoff)
     return result
+
+
+# ---------------------------------------------------------------- аренда (задача 2026-10-03)
+# Тот же принцип для rental_listings: круг краулера аренды пишет
+# RENTAL_CRAWL_V1_APARTMENT_{STARTED_AT,COMPLETED_AT,DURATION_SEC} (bot/core/
+# rental_parser.collect_rental_page). Окно «не видели» — не меньше 2.5 кругов:
+# круг аренды заметно длиннее, чем у продажи.
+RENTAL_PREFIX = 'RENTAL_CRAWL_V1_APARTMENT'
+
+
+def rental_stale_days(duration_s: float) -> int:
+    return max(STALE_DAYS, int(-(-2.5 * duration_s // 86400)))
+
+
+def rental_health(settings: dict[str, str], now: datetime) -> tuple[SweepHealth, int]:
+    completed = _parse_ts(settings.get(f'{RENTAL_PREFIX}_COMPLETED_AT'))
+    try:
+        duration_s = float(settings.get(f'{RENTAL_PREFIX}_DURATION_SEC') or 0)
+    except ValueError:
+        duration_s = 0.0
+    days = rental_stale_days(duration_s)
+    if completed is None or duration_s <= 0:
+        return SweepHealth(False, 'нет завершённого круга аренды с замером длительности'), days
+    age = now - completed
+    if age > timedelta(seconds=max(2 * duration_s, MAX_CIRCLE_AGE.total_seconds())):
+        return SweepHealth(False, f'последний круг аренды завершён {age.total_seconds() / 3600:.0f} ч назад',
+                           completed, duration_s / 3600), days
+    return SweepHealth(True, 'ok', completed, duration_s / 3600), days
+
+
+async def archive_stale_rentals(*, dry_run: bool = False, now: datetime | None = None) -> dict:
+    from bot.db.pg import execute, fetch, fetchval
+    now = now or datetime.now(timezone.utc)
+    rows = await fetch("SELECT key, value FROM app_settings WHERE key LIKE $1", RENTAL_PREFIX + '%')
+    health, days = rental_health({r['key']: r['value'] for r in rows}, now)
+    cutoff = now - timedelta(days=days)
+    candidates = await fetchval("""SELECT count(*) FROM rental_listings WHERE is_active IS NOT FALSE
+                                   AND prop_type = 'apartment' AND last_seen < $1""", cutoff)
+    result = {'healthy': health.healthy, 'health_reason': health.reason, 'stale_days': days,
+              'cutoff': cutoff.isoformat(), 'candidates': int(candidates or 0), 'archived': 0, 'dry_run': dry_run}
+    if not health.healthy or dry_run:
+        return result
+    status = await execute("""
+        UPDATE rental_listings SET is_active = FALSE, archived_at = last_seen, archive_reason = $2
+         WHERE is_active IS NOT FALSE AND prop_type = 'apartment' AND last_seen < $1""", cutoff, ARCHIVE_REASON)
+    result['archived'] = int(status.split()[-1]) if status and status.startswith('UPDATE') else 0
+    logger.info('stale archive аренды: %s (cutoff %s)', result['archived'], cutoff)
+    return result

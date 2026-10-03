@@ -19,6 +19,8 @@
   5. geocode        — bot.core.rebind.geocode_missing_coords: Nominatim
                       фолбэк для объявлений с адресом, но без координат
                       (лимит батча — Nominatim 1 запрос/сек)
+  6. complex_binding — bot.core.complex_binding.resolve_complex_ids:
+                      apartment_listings.complex_id (дом/имя/гео ≤60 м)
 
 Разовая проверка (ничего не пишет во внешние источники, кроме БД):
     venv/bin/python service_geobind.py --once
@@ -124,6 +126,16 @@ async def run_cycle() -> None:
     except Exception as e:
         log.error("geocode stage failed: %s", e, exc_info=True)
 
+    # complex_id — привязка объявления к ЖК/дому по id (bot/core/complex_binding.py,
+    # задача 2026-10-03) — после rebind/geocode, когда complex_name и координаты
+    # уже обновлены этим циклом. complex_name не трогает.
+    try:
+        from bot.core.complex_binding import resolve_complex_ids
+        res = await resolve_complex_ids()
+        log.info("complex_binding: changed=%d logged=%d", res["changed"], res["logged"])
+    except Exception as e:
+        log.error("complex_binding stage failed: %s", e, exc_info=True)
+
     # Снимок для графика на /admin/unbound — в конце цикла, когда все стадии
     # (rebind/complex_audit/complex_coords/geocode) уже отразились в базе.
     try:
@@ -144,6 +156,8 @@ async def fast_rebind_loop() -> None:
             log.info("fast-rebind: bound=%d (url=%d addr=%d text=%d geo=%d) left=%d",
                       res["bound"], res["by_url"], res["by_addr"], res["by_text"], res["by_geo"], res["left"])
             await record_unbound_snapshot()
+            from bot.core.complex_binding import resolve_complex_ids
+            await resolve_complex_ids(active_only=True)
         except Exception as e:
             log.error("fast-rebind loop error: %s", e, exc_info=True)
 
