@@ -18,10 +18,12 @@ async def main(dry_run: bool) -> int:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
     from bot.db.pg import init_pool, close_pool
-    from bot.core.stale_archive import archive_stale, archive_stale_rentals
+    from bot.core.stale_archive import archive_stale, archive_stale_rentals, reactivate_seen
     await init_pool(os.environ['DATABASE_URL'])
     try:
+        reactivated = await reactivate_seen(dry_run=dry_run)
         res = await archive_stale(dry_run=dry_run)
+        res['reactivated'] = reactivated
         rent = await archive_stale_rentals(dry_run=dry_run)
     finally:
         await close_pool()

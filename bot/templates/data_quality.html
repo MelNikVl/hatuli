@@ -19,7 +19,9 @@
     <div style="font-size:13px;color:var(--muted);margin-top:4px;">
       видели за 2 дня: {{ s.seen_2d }} · первичка: {{ s.primary }}<br>
       полный обход: {% if s.completed_at %}{{ s.completed_at.astimezone().strftime('%d.%m %H:%M') }}, длился {{ '%.1f'|format(s.duration_h) }} ч{% else %}не было{% endif %}
-      (цель ≤ 48 ч) · сейчас страница {{ s.page or '?' }} из {{ s.max_page or '?' }}
+      (цель ≤ 48 ч) · сейчас страница {{ s.page or '?' }} из {{ s.max_page or '?' }}<br>
+      в каталоге Крыши: {{ '{:,}'.format(s.krisha_total).replace(',', ' ') if s.krisha_total else '?' }} объявлений ·
+      круг покрывает <b style="color:{{ C['ok'] if (s.circle_coverage_pct or 0) >= 95 else C['bad'] }};">{{ s.circle_coverage_pct if s.circle_coverage_pct is not none else '?' }}%</b> каталога
     </div>
   </div>
   {% set t = r.catalog.rent %}

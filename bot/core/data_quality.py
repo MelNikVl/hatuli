@@ -55,6 +55,21 @@ def grade_cycle(completed_at: datetime | None, duration_h: float | None, now: da
     return 'ok' if duration_h <= target_h and age_h <= 2 * target_h else 'warn'
 
 
+def circle_coverage_pct(settings: dict[str, str], page_size: int = 20) -> float | None:
+    """Какую долю каталога Крыши покрывает текущий круг deep sweep (снимок страниц × 20)."""
+    try:
+        pages = int(settings.get('DEEP_SWEEP_CIRCLE_MAX_PAGE') or settings.get('DEEP_SWEEP_CIRCLE_COMPLETED_PAGES') or 0)
+        total = int(settings.get('KRISHA_TOTAL_FOUND') or 0)
+    except ValueError:
+        return None
+    return round(min(100.0, 100.0 * pages * page_size / total), 1) if pages and total else None
+
+
+def worst(*statuses: str) -> str:
+    order = {'ok': 0, 'warn': 1, 'bad': 2}
+    return max(statuses, key=lambda x: order[x])
+
+
 def _pct(n, total) -> float | None:
     return round(100.0 * n / total, 1) if total else None
 
@@ -110,7 +125,8 @@ async def build_report(now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     today = now.astimezone().date()
     settings = {r['key']: r['value'] for r in await fetch(
-        "SELECT key, value FROM app_settings WHERE key LIKE 'DEEP_SWEEP_%' OR key LIKE 'RENTAL_CRAWL_V1_APARTMENT_%'")}
+        "SELECT key, value FROM app_settings WHERE key LIKE 'DEEP_SWEEP_%' OR key LIKE 'RENTAL_CRAWL_V1_APARTMENT_%'"
+        " OR key = 'KRISHA_TOTAL_FOUND'")}
 
     cov = dict(await fetchrow("""
         SELECT count(*) AS total,
@@ -159,7 +175,10 @@ async def build_report(now: datetime | None = None) -> dict:
         'sale': {'live': total, 'seen_2d': cov['seen_2d'], 'primary': cov['primary_n'],
                  'completed_at': sale_done, 'duration_h': sale_dur_h,
                  'page': settings.get('DEEP_SWEEP_PAGE'), 'max_page': settings.get('DEEP_SWEEP_CIRCLE_MAX_PAGE'),
-                 'status': grade_cycle(sale_done, sale_dur_h, now, target_h=48)},
+                 'krisha_total': int(settings.get('KRISHA_TOTAL_FOUND') or 0),
+                 'circle_coverage_pct': circle_coverage_pct(settings),
+                 'status': worst(grade_cycle(sale_done, sale_dur_h, now, target_h=48),
+                                 'ok' if (circle_coverage_pct(settings) or 0) >= 95 else 'bad')},
         'rent': {'active': rent_active, 'seen_7d': rent_seen, 'completed_at': rent_done, 'duration_h': rent_dur_h,
                  'last_pages': settings.get('RENTAL_CRAWL_V1_APARTMENT_LAST_PAGES'),
                  'status': grade_cycle(rent_done, rent_dur_h, now, target_h=36)},

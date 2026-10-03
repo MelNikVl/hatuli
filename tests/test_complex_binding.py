@@ -92,3 +92,25 @@ def test_scope_sql_builds():
     assert "a.is_active IS NOT FALSE" in build_sql(True)
     assert "{scope}" not in build_sql(False)
     assert "a.id LIKE $1" in build_sql(False, "x%")
+
+
+@pytest.mark.asyncio
+async def test_url_beats_name_and_canonical_applies(db):
+    from bot.core.complex_binding import resolve_complex_ids
+    from bot.db.pg import execute, fetchval
+    execute_ = db
+    lat, lon = 50.7, 70.7
+    real = await _cx(execute_, PFX + "Real", lat, lon)
+    other = await _cx(execute_, PFX + "Other", lat + 0.1, lon)
+    await execute("UPDATE complexes SET krisha_url = 'https://krisha.kz/complex/show/astana/__cxbind_real__/' WHERE id = $1", real)
+    dup = await _cx(execute_, PFX + "Real дубль", lat + 0.2, lon)
+    await execute("UPDATE complexes SET canonical_id = $2, canonical_reason = 'krisha_slug' WHERE id = $1", dup, real)
+    await _listing(execute_, PFX + "7", complex_name=PFX + "Other")
+    await execute(f"UPDATE apartment_listings SET complex_url = 'https://krisha.kz/complex/show/nur-sultan/__cxbind_real__/' WHERE id = '{PFX}7'")
+    await _listing(execute_, PFX + "8", complex_name=PFX + "Real дубль")     # имя дубля → канонический
+    try:
+        await resolve_complex_ids(id_like=PFX + '%')
+        assert await _get(PFX + "7") == {"complex_id": real, "complex_resolution": "url"}
+        assert await _get(PFX + "8") == {"complex_id": real, "complex_resolution": "name"}
+    finally:
+        await execute("UPDATE complexes SET canonical_id = NULL WHERE id = $1", dup)

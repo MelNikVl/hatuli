@@ -123,6 +123,8 @@ def _next_cycle_sleep_minutes(app_settings) -> float:
 # занимали от 1.2 до 4.3 суток. Теперь батч планируется под дедлайн:
 # отстали от графика — батч растёт, идём с запасом — остаётся базовым.
 _CIRCLE_TARGET_HOURS_DEFAULT = 48.0
+# Объявлений на странице выдачи Крыши (см. снимок max_deep_page ниже).
+KRISHA_PAGE_SIZE = 20
 # Планируем не на весь бюджет, а на 85% от него: оставшиеся 15% — запас
 # на простой в самом конце круга, когда наращивать батч уже поздно.
 _CIRCLE_PLAN_SAFETY = 0.85
@@ -250,8 +252,11 @@ async def run_cycle():
     max_deep_page = app_settings.get_int("DEEP_SWEEP_CIRCLE_MAX_PAGE", 0)
     if max_deep_page == 0:
         krisha_total = app_settings.get_int("KRISHA_TOTAL_FOUND", 0)
-        # Крыша отдаёт 40 объявлений/страницу (проверено вживую 2026-08-07).
-        max_deep_page = (krisha_total // 40 + 2) if krisha_total else 0
+        # Крыша отдаёт 20 объявлений/страницу (проверено 2026-10-03: 38 688 найдено,
+        # выдача идёт до ~1936-й страницы). Раньше здесь стояло 40 («проверено
+        # 2026-08-07») — снимок круга был вдвое меньше каталога, и нижнюю половину
+        # выдачи (~19К живых объявлений) deep sweep не видел вовсе.
+        max_deep_page = (krisha_total // KRISHA_PAGE_SIZE + 2) if krisha_total else 0
         if max_deep_page:
             await app_settings.set("DEEP_SWEEP_CIRCLE_MAX_PAGE", str(max_deep_page))
             await app_settings.set("DEEP_SWEEP_CIRCLE_STARTED_AT",
@@ -387,6 +392,12 @@ async def run_cycle():
                                     "целевых %.0f ч (батч упирался в потолок?)",
                                     duration_sec / 3600.0, target_hours)
                 await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_AT", now.isoformat())
+                # Сколько страниц реально покрыл завершённый круг и сколько было в каталоге —
+                # гейт полноты для stale_archive (архивировать «не видели» можно, только если
+                # круг прошёл весь каталог).
+                await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_PAGES", str(max_deep_page or 0))
+                await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_TOTAL",
+                                       str(app_settings.get_int("KRISHA_TOTAL_FOUND", 0)))
                 # Обнуляем снимок — следующий цикл (курсор снова на первой
                 # deep-странице) снимет новый max_deep_page на СЛЕДУЮЩИЙ круг.
                 await app_settings.set("DEEP_SWEEP_CIRCLE_MAX_PAGE", "0")
