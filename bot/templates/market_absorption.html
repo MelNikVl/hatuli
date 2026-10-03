@@ -63,6 +63,14 @@
     {% endfor %}
   </div>
 
+  {% if short_lived.exits_all %}
+  <div class="mkt-note" style="margin:-4px 0 14px;">
+    Из {{ short_lived.exits_all | fmt_num }} ушедших за период {{ short_lived.short_lived | fmt_num }}
+    ({{ short_lived.share_pct }}%) — однодневки: прожили меньше 2 дней (перевыставления агентов, модерация).
+    Они исключены из всех показателей страницы, иначе срок экспозиции схлопывается к нулю.
+  </div>
+  {% endif %}
+
   <!-- ── 1. Динамика нового и выбывшего предложения ─────────────── -->
   <div class="mkt-chart-panel">
     <h3>🔄 Динамика нового и выбывшего предложения</h3>
@@ -121,10 +129,69 @@
     </div>
   </div>
 
+  <!-- ── 4b. Реальный торг (план месяца, П8) ──────────────────────── -->
+  <div class="mkt-chart-panel">
+    <h3>🤝 Реальный торг: первая цена → последняя перед уходом</h3>
+    <p class="mkt-note">Ушедшие за период, без однодневок и без авто-перевыставлений (там квартира продолжает продаваться под новым id).
+      Скидка считается от первой известной цены объявления до последней. Цена предложения, без предположения о факте сделки.</p>
+    <div class="mkt-seg-toggle">
+      {% for d, lbl in [('rooms','Комнатность'),('class','Класс'),('district','Район'),('price_range','Цена'),('market_type','Рынок')] %}
+        <button type="button" class="{{ 'active' if bargain_dim == d }}" onclick="const u=new URL(location.href);u.searchParams.set('bargain_dim','{{ d }}');location.href=u.toString();">{{ lbl }}</button>
+      {% endfor %}
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="mkt-table">
+        <thead><tr><th>Сегмент</th><th class="num">Ушло</th><th class="num">Снижали цену</th>
+          <th class="num">Медианная скидка (все)</th><th class="num">Медианная скидка (у снижавших)</th><th class="num">90-й перцентиль</th></tr></thead>
+        <tbody>
+        {% for b in bargaining %}
+          <tr class="{{ 'insufficient-row' if b.insufficient }}">
+            <td>{{ b.segment }}{% if b.insufficient %}<span class="mkt-badge-insufficient">N&lt;20</span>{% endif %}</td>
+            <td class="num">{{ b.n | fmt_num }}</td>
+            <td class="num">{{ (b.cut_share_pct ~ '%') if b.cut_share_pct is not none else '—' }}</td>
+            <td class="num">{{ (b.median_discount_pct ~ '%') if b.median_discount_pct is not none else '—' }}</td>
+            <td class="num">{{ (b.median_discount_if_cut_pct ~ '%') if b.median_discount_if_cut_pct is not none else '—' }}</td>
+            <td class="num">{{ (b.p90_discount_if_cut_pct ~ '%') if b.p90_discount_if_cut_pct is not none else '—' }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6">Недостаточно накопленных данных</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── 4c. Спрос по планировкам (план месяца, П9) ────────────────── -->
+  <div class="mkt-chart-panel">
+    <h3>🧱 Спрос по планировкам: комнаты × площадь</h3>
+    <p class="mkt-note">{{ layout.note }} Скорость рынка в выборке: {{ layout.market_exit_rate_pct }}% за период.</p>
+    {% set VC = {'дефицит': '#16a34a', 'быстро уходит': '#22c55e', 'в балансе': '#94a3b8', 'медленно уходит': '#f59e0b', 'профицит': '#ef4444', 'мало данных': 'transparent'} %}
+    <div style="overflow-x:auto;">
+      <table class="mkt-table">
+        <thead><tr><th>Комнат \ м²</th>{% for a in layout.areas %}<th class="num">{{ a }}</th>{% endfor %}</tr></thead>
+        <tbody>
+        {% for rm in layout.rooms %}
+          <tr><td><b>{{ rm }}</b></td>
+          {% for a in layout.areas %}{% set c = layout.cells.get(rm ~ '|' ~ a) %}
+            {% if c and c.n_now %}
+            <td class="num" style="border-left:3px solid {{ VC[c.verdict] }};" title="Активных: {{ c.n_now }} · ушло {{ c.exit_rate_pct }}% · медиана экспозиции {{ c.median_dom_days }} дн. · просмотров/день {{ c.median_views_per_day }} · {{ c.median_ppm2 | fmt_num if c.median_ppm2 else '—' }} ₸/м²">
+              <div style="font-weight:700;">{{ c.verdict }}</div>
+              <div style="font-size:11.5px;color:var(--mkt-muted);">доля {{ c.share_pct }}% · индекс {{ c.demand_index if c.demand_index is not none else '—' }}</div>
+              <div style="font-size:11.5px;color:var(--mkt-muted);">{{ c.median_views_per_day if c.median_views_per_day is not none else '—' }} просм./день</div>
+            </td>
+            {% else %}<td class="num" style="color:var(--mkt-muted);">—</td>{% endif %}
+          {% endfor %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ── 5. Цена перед выбыванием ─────────────────────────────────── -->
   <div class="mkt-chart-panel">
     <h3>💰 Цена перед выбыванием</h3>
-    <p class="mkt-note">Группировка подтверждённо выбывших объявлений периода по совокупному снижению цены с момента публикации.</p>
+    <p class="mkt-note">Группировка ушедших из выдачи объявлений периода по совокупному снижению цены с момента публикации.</p>
     <div style="overflow-x:auto;">
       <table class="mkt-table">
         <thead><tr><th>Группа</th><th class="num">Объявлений</th><th class="num">Доля среди выбывших</th><th class="num">Медианная экспозиция</th></tr></thead>

@@ -28,7 +28,7 @@
       ('active_listings','📋','Активные объявления'),
       ('unique_properties','🏠','Уникальные физ. квартиры'),
       ('new_supply','🆕','Новое предложение'),
-      ('confirmed_exits','📤','Подтверждённо выбывшие'),
+      ('confirmed_exits','📤','Ушли из выдачи'),
       ('median_price','💰','Медианная цена квартиры'),
       ('median_ppm2','📐','Медианная цена за м²'),
       ('median_ppm2_change','📈','Δ цены/м² к пред. периоду'),
@@ -80,10 +80,45 @@
     {% endif %}
   </div>
 
+  <!-- ── 1b. Индекс цены м² с поправкой на состав (план месяца, П6) ── -->
+  <div class="mkt-chart-panel">
+    <h3>📈 Индекс цены м² (с поправкой на состав)</h3>
+    <p class="mkt-note">{{ price_index.note }}</p>
+    {% if price_index.labels|length < 2 %}
+      <div class="mkt-insufficient">Недостаточно накопленных данных</div>
+    {% else %}
+    {% set pi_last = price_index.index[-1] %}{% set pi_raw = price_index.raw_index[-1] %}
+    <div class="mkt-note" style="font-size:14px;">
+      С {{ price_index.labels[0] }}: индекс <b>{{ '%+.1f'|format(pi_last - 100) }}%</b>,
+      «наивная» медиана всего пула <b>{{ '%+.1f'|format((pi_raw or 100) - 100) }}%</b> —
+      разница {{ '%.1f'|format(((pi_raw or 100) - pi_last)|abs) }} п.п. объясняется сменой состава предложения, а не ценами.
+    </div>
+    <div class="mkt-canvas-wrap" style="height:260px;"><canvas id="mkt-chart-index"></canvas></div>
+    <div style="overflow-x:auto;margin-top:14px;">
+      <table class="mkt-table">
+        <thead><tr><th>Район</th><th>Класс</th><th class="num">Объявлений</th><th class="num">Медиана ₸/м²</th>
+          <th class="num">Δ за 4 недели</th><th class="num">Δ с {{ price_index.labels[0] }}</th></tr></thead>
+        <tbody>
+        {% for t in price_index.table %}
+          <tr class="{{ 'insufficient-row' if t.insufficient }}">
+            <td>{{ t.district }}</td>
+            <td>{{ t.klass }}{% if t.insufficient %}<span class="mkt-badge-insufficient">N&lt;20</span>{% endif %}</td>
+            <td class="num">{{ t.n | fmt_num }}</td>
+            <td class="num">{{ (t.median_ppm2 | fmt_num) if t.median_ppm2 else '—' }}</td>
+            <td class="num">{% if t.change_4w_pct is not none %}{{ '▲' if t.change_4w_pct > 0 else ('▼' if t.change_4w_pct < 0 else '→') }} {{ t.change_4w_pct }}%{% else %}—{% endif %}</td>
+            <td class="num">{{ '▲' if t.change_total_pct > 0 else ('▼' if t.change_total_pct < 0 else '→') }} {{ t.change_total_pct }}%</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+
   <!-- ── 2. Новое и выбывшее предложение ─────────────────────────── -->
   <div class="mkt-chart-panel">
     <h3>🔄 Новое и выбывшее предложение</h3>
-    <p class="mkt-note">Архивированные объявления — подтверждённое исчезновение с рынка, НЕ факт продажи.</p>
+    <p class="mkt-note">Ушедшие — объявление пропало из выдачи Крыши (HTTP-проверка или 7 дней вне полного обхода), НЕ факт продажи. Дубли и однодневки (прожили &lt; 2 дней) не учитываются.</p>
     {% if new_vs_exit.labels|length < 1 %}
       <div class="mkt-insufficient">Недостаточно накопленных данных</div>
     {% else %}
@@ -168,6 +203,22 @@
   const newVsExit = {{ new_vs_exit | tojson }};
   const structureByDim = {{ structure_by_dim | tojson }};
   const corridorByDim = {{ corridor_by_dim | tojson }};
+  const priceIndex = {{ price_index | tojson }};
+  if (priceIndex.labels && priceIndex.labels.length >= 2) {
+    new Chart(document.getElementById('mkt-chart-index'), {
+      type: 'line',
+      data: { labels: priceIndex.labels, datasets: [
+        { label: 'Индекс (поправка на состав)', data: priceIndex.index, borderColor: accent,
+          backgroundColor: accent + '33', tension: .25, pointRadius: 2, borderWidth: 2.5 },
+        { label: 'Медиана всего пула (без поправки)', data: priceIndex.raw_index, borderColor: '#9aa0a6',
+          borderDash: [5, 4], tension: .25, pointRadius: 0, borderWidth: 1.5 },
+      ]},
+      options: { responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: true, position: 'top' },
+          tooltip: { callbacks: { afterBody: items => 'объявлений в пуле: ' + priceIndex.n[items[0].dataIndex] } } },
+        scales: { y: { beginAtZero: false, title: { display: true, text: `${priceIndex.labels[0]} = 100` } } } },
+    });
+  }
 
   if (dynamics.labels && dynamics.labels.length >= 2) {
     new Chart(document.getElementById('mkt-chart-active'), {
