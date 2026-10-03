@@ -3250,6 +3250,17 @@ def make_extras_router(templates) -> APIRouter:
     # (та — hub со сложной табличной маршрутизацией по PARSERS_HUB_TABS,
     # интегрировать туда для одной новой сущности избыточно) — ссылка на
     # неё добавлена в шапку /admin/parsers (см. ниже).
+    # ── Качество данных (задача 2026-10-03, план месяца п.4) — можно ли
+    # сейчас верить аналитике. Логика в bot/core/data_quality.py.
+    @router.get("/admin/data-quality", response_class=HTMLResponse)
+    async def data_quality_page(request: Request):
+        if not is_authed(request):
+            return RedirectResponse(url="/admin/login", status_code=302)
+        from bot.core.data_quality import build_report
+        return templates.TemplateResponse("data_quality.html", {
+            "request": request, "atab": "parsers", "r": await build_report(),
+        })
+
     # ── Разметка исходов «продано / снято / перевыставлено» (задача
     # 2026-10-03) — вход для будущей модели P(продажа). Логика в
     # bot/core/sale_labels.py ("роут не знает SQL").

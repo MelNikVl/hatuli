@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+{% set C = {'ok': '#16a34a', 'warn': '#f59e0b', 'bad': '#ef4444'} %}
+{% set L = {'ok': 'норма', 'warn': 'внимание', 'bad': 'проблема'} %}
+{% macro pill(st) %}<span style="display:inline-block;font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:999px;background:{{ C[st] }}22;color:{{ C[st] }};">{{ L[st] }}</span>{% endmacro %}
+<div class="page-title">🩺 Качество данных <small>можно ли сейчас верить аналитике · {{ r.generated_at.astimezone().strftime('%d.%m.%Y %H:%M') }}</small></div>
+
+<div style="background:var(--surface);border:1px solid {{ C[r.overall] }}66;border-radius:12px;padding:14px 18px;margin-bottom:16px;font-size:15px;">
+  Итог: {{ pill(r.overall) }}
+  {% if r.overall == 'ok' %}данные полные и свежие.{% elif r.overall == 'warn' %}есть отклонения — смотрите жёлтые строки.{% else %}есть проблемы — цифры аналитики могут быть неверны, смотрите красные строки.{% endif %}
+</div>
+
+<h3 style="margin:18px 0 8px;">Каталог</h3>
+<div style="display:flex;gap:14px;flex-wrap:wrap;">
+  {% set s = r.catalog.sale %}
+  <div style="flex:1 1 300px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="display:flex;justify-content:space-between;"><b>Продажа</b>{{ pill(s.status) }}</div>
+    <div style="font-size:26px;font-weight:800;margin-top:6px;">{{ '{:,}'.format(s.live).replace(',', ' ') }} <span style="font-size:13px;font-weight:400;color:var(--muted);">живых (видели ≤ 7 дн.)</span></div>
+    <div style="font-size:13px;color:var(--muted);margin-top:4px;">
+      видели за 2 дня: {{ s.seen_2d }} · первичка: {{ s.primary }}<br>
+      полный обход: {% if s.completed_at %}{{ s.completed_at.astimezone().strftime('%d.%m %H:%M') }}, длился {{ '%.1f'|format(s.duration_h) }} ч{% else %}не было{% endif %}
+      (цель ≤ 48 ч) · сейчас страница {{ s.page or '?' }} из {{ s.max_page or '?' }}
+    </div>
+  </div>
+  {% set t = r.catalog.rent %}
+  <div style="flex:1 1 300px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
+    <div style="display:flex;justify-content:space-between;"><b>Аренда (квартиры)</b>{{ pill(t.status) }}</div>
+    <div style="font-size:26px;font-weight:800;margin-top:6px;">{{ t.active }} <span style="font-size:13px;font-weight:400;color:var(--muted);">активных · видели за 7 дн.: {{ t.seen_7d }}</span></div>
+    <div style="font-size:13px;color:var(--muted);margin-top:4px;">
+      полный обход: {% if t.completed_at and t.duration_h %}{{ t.completed_at.astimezone().strftime('%d.%m %H:%M') }}, {{ '%.1f'|format(t.duration_h) }} ч, {{ t.last_pages }} стр.{% else %}ещё не замерен (замер с 03.10){% endif %} (цель ≤ 36 ч)
+    </div>
+  </div>
+</div>
+
+<h3 style="margin:22px 0 8px;">Покрытие живых объявлений продажи</h3>
+<div class="tbl-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+  <thead><tr style="border-bottom:2px solid var(--border);text-align:left;">
+    <th style="padding:9px 12px;">Поле</th><th style="padding:9px 12px;">Есть у</th><th style="padding:9px 12px;">Доля</th><th style="padding:9px 12px;">Цель</th><th style="padding:9px 12px;">Статус</th></tr></thead>
+  <tbody>
+  {% for c in r.coverage %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px 12px;">{{ c.title }}{% if c.key == 'complex_id' and r.by_method %}<div style="font-size:11.5px;color:var(--muted);">по имени {{ r.by_method.get('name', 0) }} · гео {{ r.by_method.get('geo', 0) }} · дом под зонтиком {{ r.by_method.get('house', 0) }}</div>{% endif %}</td>
+      <td style="padding:8px 12px;">{{ c.n if c.n is not none else '—' }}</td>
+      <td style="padding:8px 12px;min-width:160px;">
+        {% if c.pct is not none %}<div style="display:flex;align-items:center;gap:8px;"><div style="flex:1;height:6px;background:var(--border);border-radius:3px;"><div style="height:6px;border-radius:3px;width:{{ c.pct }}%;background:{{ C[c.status] }};"></div></div><b>{{ c.pct }}%</b></div>{% else %}—{% endif %}
+      </td>
+      <td style="padding:8px 12px;color:var(--muted);">≥ {{ c.target }}%</td>
+      <td style="padding:8px 12px;">{{ pill(c.status) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h3 style="margin:22px 0 8px;">Свежесть расчётов</h3>
+<div class="tbl-wrap" style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+  <thead><tr style="border-bottom:2px solid var(--border);text-align:left;">
+    <th style="padding:9px 12px;">Таблица</th><th style="padding:9px 12px;">Последний расчёт</th><th style="padding:9px 12px;">Период</th><th style="padding:9px 12px;">Статус</th></tr></thead>
+  <tbody>
+  {% set K = {'daily': 'ежедневно', 'weekly': 'еженедельно', 'monthly': 'ежемесячно'} %}
+  {% for f in r.freshness %}
+    <tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px 12px;">{{ f.title }}</td>
+      <td style="padding:8px 12px;">{{ f.last.strftime('%d.%m.%Y') if f.last else 'нет данных' }}</td>
+      <td style="padding:8px 12px;color:var(--muted);">{{ K[f.kind] }}</td>
+      <td style="padding:8px 12px;">{{ pill(f.status) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<h3 style="margin:22px 0 8px;">Сбои фоновых задач</h3>
+{% if r.failed_units is none %}
+  <div style="color:var(--muted);">Не удалось опросить systemd.</div>
+{% elif not r.failed_units %}
+  <div style="color:#16a34a;">Все сервисы и таймеры: последний запуск успешен.</div>
+{% else %}
+<div class="tbl-wrap" style="background:var(--surface);border:1px solid rgba(239,68,68,.3);border-radius:12px;overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+  <thead><tr style="border-bottom:2px solid var(--border);text-align:left;"><th style="padding:9px 12px;">Юнит</th><th style="padding:9px 12px;">Состояние</th><th style="padding:9px 12px;">Последний выход</th></tr></thead>
+  <tbody>
+  {% for u in r.failed_units %}
+    <tr style="border-bottom:1px solid var(--border);"><td style="padding:8px 12px;"><b>{{ u.unit }}</b><div style="font-size:11.5px;color:var(--muted);">{{ u.desc }}</div></td>
+      <td style="padding:8px 12px;color:#ef4444;">{{ u.state }} / {{ u.result }}</td><td style="padding:8px 12px;">{{ u.last_exit }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}
