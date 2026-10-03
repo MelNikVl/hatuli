@@ -5,10 +5,12 @@
 проданной и снятой квартиры (бейдж «В архиве», в JSON "status":"archive") —
 сигнала продажи в источнике нет. Отсюда два слоя меток (sale_outcome_labels):
 
-* heuristic_relist (авто, ежедневно) — та же квартира появилась под НОВЫМ id
-  в окне [уход−3д, уход+30д]: те же комнаты, |Δплощадь| ≤ 1 м², и
-  (тот же дом/≤150 м И тот же этаж) или (тот же не-generic продавец И то же
-  место). Это НЕ продажа. ~30% уходов (docs/phase_c_liquidity_report.md).
+* heuristic_relist (авто, ежедневно, только вторичка) — та же квартира
+  появилась под НОВЫМ id в окне [уход−3д, уход+30д]: те же комнаты,
+  |Δплощадь| ≤ 1 м², цена ±15%, и (тот же дом/≤150 м И тот же этаж) или
+  (тот же не-generic продавец И этаж совпадает/неизвестен И то же место).
+  Это НЕ продажа. Первичку не размечаем: у застройщика десятки одинаковых
+  квартир в одном доме — эвристика их не различает.
 * manual — человек на /admin/sale-labels. Всегда главнее авто-метки.
 
 Модель P(продажа) обучается только при ≥ MIN_LABELS_FOR_MODEL ручных меток
@@ -26,6 +28,7 @@ LABEL_TITLES = {'sold': 'Продано', 'withdrawn': 'Снято', 'relisted':
 MIN_LABELS_FOR_MODEL = 300
 RELIST_WINDOW_BEFORE_D = 3
 RELIST_WINDOW_AFTER_D = 30
+PRICE_TOLERANCE = 0.15   # релист обычно ±15% к прежней цене
 GENERIC_SELLERS = frozenset({'хозяин', 'хозяйка', 'продавец', 'собственник', 'владелец', 'агент',
                              'риелтор', 'риэлтор', 'менеджер', 'отдел продаж'})
 
@@ -49,48 +52,84 @@ def is_same_flat(old: dict, new: dict) -> bool:
     s_old = (old.get('seller_norm') or '').strip()
     same_seller = bool(s_old) and s_old not in GENERIC_SELLERS and s_old == (new.get('seller_norm') or '').strip()
     no_coords = old.get('lat') is None or new.get('lat') is None
-    return (same_place and same_floor) or (same_seller and (same_place or no_coords))
+    floor_unknown = old.get('floor') is None or new.get('floor') is None
+    po, pn = old.get('price'), new.get('price')
+    price_close = po is None or pn is None or abs(float(pn) / float(po) - 1) <= PRICE_TOLERANCE
+    if not price_close:
+        return False
+    # У агентов/застройщиков много одинаковых квартир в одном доме — без совпадения
+    # этажа «тот же продавец» связывает РАЗНЫЕ квартиры, поэтому этаж обязателен,
+    # если он известен у обоих.
+    return (same_place and same_floor) or (same_seller and (same_floor or floor_unknown) and (same_place or no_coords))
 
 
 # ---------------------------------------------------------------- авто-метки (sync, psycopg2 + pandas)
+def match_relists(ex, al):
+    """Векторная версия is_same_flat для пар (ушедшее, новое). ex/al — DataFrame с колонками
+    id, rooms, area, floor, resolved_house_id, lat, lon, seller_norm; у ex ещё exit_at, у al — fs.
+    Кандидаты собираются блокингом (тот же дом / соседние ячейки ~220 м / тот же продавец),
+    без декартова произведения по всему рынку."""
+    import numpy as np
+    import pandas as pd
+    def prep(df):
+        df = df.copy()
+        df['ab'] = df.area.round()
+        df['cx'] = np.floor(df.lat / 0.002)
+        df['cy'] = np.floor(df.lon / 0.003)
+        return df
+    ex, al = prep(ex), prep(al).rename(columns={"fs": "fs_n"})
+    parts = []
+    for d in (-1, 0, 1):
+        e = ex.assign(ab=ex.ab + d)
+        parts.append(e.dropna(subset=['resolved_house_id']).merge(
+            al.dropna(subset=['resolved_house_id']), on=['rooms', 'ab', 'resolved_house_id'], suffixes=('', '_n'))
+            .assign(resolved_house_id_n=lambda x: x.resolved_house_id))
+        sn_ok = e.seller_norm.notna() & (e.seller_norm.str.strip() != '') & ~e.seller_norm.isin(GENERIC_SELLERS)
+        parts.append(e[sn_ok].merge(al, on=['rooms', 'ab', 'seller_norm'], suffixes=('', '_n'))
+                     .assign(seller_norm_n=lambda x: x.seller_norm))
+        el = e.dropna(subset=['cx', 'cy'])
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                parts.append(el.assign(cx=el.cx + dx, cy=el.cy + dy)
+                             .merge(al.dropna(subset=['cx', 'cy']), on=['rooms', 'ab', 'cx', 'cy'], suffixes=('', '_n')))
+    if not parts:
+        return pd.DataFrame(columns=['id', 'id_n'])
+    c = pd.concat(parts, ignore_index=True)
+    c = c[(c.id != c.id_n) & ((c.area - c.area_n).abs() <= 1)
+          & (c.fs_n >= c.exit_at - pd.Timedelta(days=RELIST_WINDOW_BEFORE_D))
+          & (c.fs_n <= c.exit_at + pd.Timedelta(days=RELIST_WINDOW_AFTER_D))]
+    dist = np.hypot((c.lat - c.lat_n) * 111_000, (c.lon - c.lon_n) * 111_000 * np.cos(np.radians(51.1)))
+    same_house = c.resolved_house_id.notna() & (c.resolved_house_id == c.resolved_house_id_n)
+    same_place = same_house | (dist < 150)
+    same_floor = c.floor.notna() & (c.floor == c.floor_n)
+    sn = c.seller_norm.fillna('').str.strip()
+    same_seller = (sn != '') & ~sn.isin(GENERIC_SELLERS) & (sn == c.seller_norm_n.fillna('').str.strip())
+    no_coords = c.lat.isna() | c.lat_n.isna()
+    floor_unknown = c.floor.isna() | c.floor_n.isna()
+    price_close = c.price.isna() | c.price_n.isna() | ((c.price_n / c.price - 1).abs() <= PRICE_TOLERANCE)
+    ok = price_close & ((same_place & same_floor) | (same_seller & (same_floor | floor_unknown) & (same_place | no_coords)))
+    return c.loc[ok, ['id', 'id_n']].drop_duplicates('id')
+
+
 def find_relists(conn, since_days: int = 60) -> list[tuple[str, str]]:
     """[(ушедший id, новый id)] для объявлений, ушедших за последние since_days."""
     import pandas as pd
-    q = """SELECT id, first_seen, last_seen, archived_at, is_active, rooms, area, floor, resolved_house_id, lat, lon,
+    q = """SELECT id, first_seen, last_seen, archived_at, is_active, rooms, area, floor, resolved_house_id, lat, lon, price, market_type,
                   lower(regexp_replace(trim(coalesce(seller_name,'')), '\\s+', ' ', 'g')) AS seller_norm
            FROM apartment_listings WHERE rooms IS NOT NULL AND area IS NOT NULL"""
     with conn.cursor() as cur:
         cur.execute(q)
         al = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
-    al['area'] = al.area.astype(float)
-    al['ab'] = al.area.round()
-    now = pd.Timestamp.now(tz='UTC')
-    ex = al[(al.is_active == False) & al.archived_at.notna()  # noqa: E712
-            & (pd.to_datetime(al.archived_at, utc=True) >= now - pd.Timedelta(days=since_days))].copy()
-    ex['exit_at'] = pd.to_datetime(ex.last_seen, utc=True).fillna(pd.to_datetime(ex.archived_at, utc=True))
+    for col in ('area', 'lat', 'lon', 'floor', 'resolved_house_id', 'price'):
+        al[col] = pd.to_numeric(al[col], errors='coerce').astype(float)
     al['fs'] = pd.to_datetime(al.first_seen, utc=True)
-    pairs = []
-    for d in (-1, 0, 1):
-        c = ex.assign(ab=ex.ab + d).merge(al, on=['rooms', 'ab'], suffixes=('', '_n'))
-        c = c[(c.id != c.id_n)
-              & (c.fs_n >= c.exit_at - pd.Timedelta(days=RELIST_WINDOW_BEFORE_D))
-              & (c.fs_n <= c.exit_at + pd.Timedelta(days=RELIST_WINDOW_AFTER_D))
-              & ((c.area - c.area_n).abs() <= 1)]
-        for r in c.itertuples(index=False):
-            o = {'id': r.id, 'rooms': r.rooms, 'area': r.area, 'floor': r.floor, 'resolved_house_id': r.resolved_house_id,
-                 'lat': r.lat, 'lon': r.lon, 'seller_norm': r.seller_norm}
-            n = {'id': r.id_n, 'rooms': r.rooms, 'area': r.area_n, 'floor': r.floor_n,
-                 'resolved_house_id': r.resolved_house_id_n, 'lat': r.lat_n, 'lon': r.lon_n,
-                 'seller_norm': r.seller_norm_n}
-            o = {k: (None if (isinstance(v, float) and math.isnan(v)) else v) for k, v in o.items()}
-            n = {k: (None if (isinstance(v, float) and math.isnan(v)) else v) for k, v in n.items()}
-            if is_same_flat(o, n):
-                pairs.append((r.id, r.id_n))
-    seen, out = set(), []
-    for a, b in pairs:
-        if a not in seen:
-            seen.add(a); out.append((a, b))
-    return out
+    now = pd.Timestamp.now(tz='UTC')
+    arch = pd.to_datetime(al.archived_at, utc=True)
+    ex = al[(al.is_active == False) & arch.notna() & (arch >= now - pd.Timedelta(days=since_days))  # noqa: E712
+            & (al.market_type.fillna('secondary') != 'primary')].copy()
+    ex['exit_at'] = pd.to_datetime(ex.last_seen, utc=True).fillna(arch[ex.index])
+    m = match_relists(ex.drop(columns=['fs']), al)
+    return list(m.itertuples(index=False, name=None))
 
 
 def upsert_heuristic_relists(conn, pairs: list[tuple[str, str]]) -> int:

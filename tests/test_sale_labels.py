@@ -54,3 +54,25 @@ def test_labels_match_migration_check():
     for l in sl.LABELS:
         assert f"'{l}'" in sql
     assert sl.MIN_LABELS_FOR_MODEL >= 300
+
+
+def test_same_seller_different_floor_is_not_relist():
+    """Агент продаёт несколько одинаковых квартир в одном доме — это разные квартиры."""
+    assert not sl.is_same_flat(BASE, _n(floor=6))
+
+
+def test_price_jump_breaks_link():
+    assert sl.is_same_flat({**BASE, 'price': 30_000_000}, _n(price=33_000_000))
+    assert not sl.is_same_flat({**BASE, 'price': 30_000_000}, _n(price=40_000_000))
+
+
+def test_vectorized_matches_reference():
+    import pandas as pd
+    olds = [BASE, {**BASE, 'id': 'c', 'floor': 9}, {**BASE, 'id': 'd', 'seller_norm': 'хозяин', 'floor': 2}]
+    news = [_n(), _n(id='e', floor=6, seller_norm='x'), _n(id='f', floor=2, seller_norm='хозяин', area=55.4)]
+    t = pd.Timestamp('2026-09-01', tz='UTC')
+    ex = pd.DataFrame([{**o, 'price': None} for o in olds]).assign(exit_at=t)
+    al = pd.DataFrame([{**n, 'price': None} for n in news]).assign(fs=t + pd.Timedelta(days=2))
+    got = set(map(tuple, sl.match_relists(ex, al)[['id', 'id_n']].itertuples(index=False, name=None)))
+    ref = {(o['id'], n['id']) for o in olds for n in news if sl.is_same_flat(o, n)}
+    assert {a for a, _ in got} == {a for a, _ in ref}
