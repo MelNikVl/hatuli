@@ -455,3 +455,94 @@ async def test_overview_kpis_query_count_bounded(scenario):
 
     # Фиксированное, небольшое число запросов (не пропорционально 30 строкам).
     assert n_for_30 < 15
+
+
+# ══════════════════════════════════════════════════════════════════════
+# План месяца, неделя 2 (2026-10): индекс цены, однодневки, торг, планировки
+# ══════════════════════════════════════════════════════════════════════
+
+def test_chain_index_composition_neutral():
+    """Цены в ячейках не изменились, сменился только состав — индекс стоит на месте."""
+    from bot.analytics.market_dashboards import chain_index
+    w1 = {"A": (100, 500_000.0), "B": (10, 1_000_000.0)}
+    w2 = {"A": (10, 500_000.0), "B": (100, 1_000_000.0)}   # дорогих стало больше
+    out = chain_index([("w1", w1), ("w2", w2)])
+    assert out[-1]["index"] == 100.0
+
+
+def test_chain_index_tracks_price_change_and_skips_small_cells():
+    from bot.analytics.market_dashboards import chain_index
+    w1 = {"A": (50, 500_000.0), "B": (2, 900_000.0)}
+    w2 = {"A": (50, 550_000.0), "B": (2, 100.0)}             # B мала — не влияет
+    out = chain_index([("w1", w1), ("w2", w2)], min_n=5)
+    assert out[-1]["index"] == pytest.approx(110.0)
+
+
+def test_chain_index_no_common_cells_keeps_level():
+    from bot.analytics.market_dashboards import chain_index
+    out = chain_index([("w1", {"A": (50, 1.0)}), ("w2", {"B": (50, 2.0)})])
+    assert out[-1]["index"] == 100.0 and out[-1]["linked"] is False
+
+
+def test_demand_verdict_rules():
+    from bot.analytics.market_dashboards import demand_verdict
+    assert demand_verdict(5, 1.3, 100) == "дефицит"
+    assert demand_verdict(20, 1.3, 100) == "быстро уходит"
+    assert demand_verdict(20, 0.7, 100) == "профицит"
+    assert demand_verdict(3, 0.7, 100) == "медленно уходит"
+    assert demand_verdict(20, 1.0, 100) == "в балансе"
+    assert demand_verdict(20, 2.0, 5) == "мало данных"
+
+
+@pytest.mark.asyncio
+async def test_short_lived_and_duplicates_excluded_from_exits(scenario):
+    from bot.analytics import market_dashboards as md
+    from bot.db.pg import execute
+    # нормальный уход: прожил 20 дней
+    await _insert(scenario, 1, first_seen=_days_ago(25), last_seen=_days_ago(5),
+                  archived_at=_days_ago(5), archive_reason="sweep_stale", is_active=False)
+    # однодневка: прожил 1 день
+    await _insert(scenario, 2, first_seen=_days_ago(10), last_seen=_days_ago(9),
+                  archived_at=_days_ago(9), archive_reason="sweep_stale", is_active=False)
+    # дубль
+    lid = await _insert(scenario, 3, first_seen=_days_ago(25), last_seen=_days_ago(4),
+                        archived_at=_days_ago(4), archive_reason="sweep_stale", is_active=False)
+    await execute("UPDATE apartment_listings SET is_duplicate = TRUE WHERE id = $1", lid)
+    f = _base_filters(scenario.complex_id)
+    k = await md.absorption_kpis(f)
+    assert k["confirmed_exits"]["value"] == 1
+    sl = await md.short_lived_stats(f)
+    assert sl["exits_all"] == 2 and sl["short_lived"] == 1     # дубль не считается и там
+
+
+@pytest.mark.asyncio
+async def test_bargaining_discount_and_relist_exclusion(scenario):
+    from bot.analytics import market_dashboards as md
+    from bot.db.pg import execute
+    a = await _insert(scenario, 1, price=27_000_000, first_seen=_days_ago(40), last_seen=_days_ago(3),
+                      archived_at=_days_ago(3), archive_reason="sweep_stale", is_active=False)
+    await _price_change(a, 30_000_000, 27_000_000, _days_ago(20))      # −10%
+    await _insert(scenario, 2, price=20_000_000, first_seen=_days_ago(40), last_seen=_days_ago(3),
+                  archived_at=_days_ago(3), archive_reason="sweep_stale", is_active=False)   # без снижения
+    c = await _insert(scenario, 3, price=10_000_000, first_seen=_days_ago(40), last_seen=_days_ago(3),
+                      archived_at=_days_ago(3), archive_reason="sweep_stale", is_active=False)
+    await _price_change(c, 20_000_000, 10_000_000, _days_ago(10))      # −50%, но перевыставлено
+    await execute("INSERT INTO sale_outcome_labels (listing_id, label, source) VALUES ($1, 'relisted', 'heuristic_relist')", c)
+    try:
+        rows = await md.bargaining_by_segment(_base_filters(scenario.complex_id), "rooms")
+        r = rows[0]
+        assert r["n"] == 2 and r["cut_share_pct"] == 50.0
+        assert r["median_discount_if_cut_pct"] == 10.0
+    finally:
+        await execute("DELETE FROM sale_outcome_labels WHERE listing_id = $1", c)
+
+
+@pytest.mark.asyncio
+async def test_price_index_flat_when_prices_flat(scenario):
+    from bot.analytics import market_dashboards as md
+    from bot.db.pg import execute
+    for i in range(12):
+        lid = await _insert(scenario, i, price=30_000_000, area=50.0, first_seen=_days_ago(120), last_seen=_NOW)
+        await execute("UPDATE apartment_listings SET photo_url = 'x' WHERE id = $1", lid)
+    out = await md.price_index(_base_filters(scenario.complex_id))
+    assert out["index"] and all(v == 100.0 for v in out["index"])

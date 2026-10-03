@@ -9,8 +9,10 @@ Deal Score/Property Identity/архивацию — только читает у
 
 apartment_listings — объявления, is_active/archived_at/first_seen — тот же
 контракт, что bot/core/archive_check.py уже использует ("is_active=FALSE AND
-archived_at IS NOT NULL" = подтверждённо проверено HTTP-чекером, НЕ просто
-"пропало из последнего скрола"). price_history — событийный лог изменений
+archived_at IS NOT NULL" = ушло из выдачи: HTTP-проверка archive_check ИЛИ, с
+2026-10-03, 7 дней вне полного обхода каталога (archive_reason='sweep_stale',
+bot/core/stale_archive.py, archived_at = last_seen). Дубли и «однодневки»
+исключены во всех пулах (_base_conditions)). price_history — событийный лог изменений
 цены. outcome_labels.time_on_market — уже посчитанный DOM (first_seen →
 archived_at), НЕ переизобретается здесь. properties/property_listings —
 Property Identity, используется только для чтения (уникальные физ. квартиры,
@@ -123,10 +125,21 @@ _CLASS_EXPR = """
 # COUNT(*) для объявлений этого ЖК. LATERAL гарантирует ровно одну строку
 # на объявление независимо от будущих дублей в complexes (эта таблица не
 # наша, не трогаем её тут — только защищаемся от fan-out в запросах).
+#
+# 2026-10-03 (план месяца, неделя 2): сначала apartment_listings.complex_id
+# (миграция 100, bot/core/complex_binding.py — 85% живых объявлений), иначе
+# прежний матч по имени. Класс — ручной housing_class, иначе модельный
+# predicted_housing_class при вероятности >= 0.6 (Фаза B, housing_class_model):
+# ручной класс есть лишь у ~26% живых объявлений, с уверенным модельным — ~74%.
 _COMPLEX_JOIN = """LEFT JOIN LATERAL (
-        SELECT c.id, c.name, c.housing_class FROM complexes c
-        WHERE lower(btrim(c.name)) = lower(btrim(a.complex_name))
-        ORDER BY c.id LIMIT 1
+        SELECT c.id, c.name,
+               COALESCE(NULLIF(btrim(c.housing_class), ''),
+                        CASE WHEN c.predicted_housing_class_probability >= 0.6
+                             THEN c.predicted_housing_class END) AS housing_class
+          FROM complexes c
+         WHERE c.id = a.complex_id
+            OR (a.complex_id IS NULL AND lower(btrim(c.name)) = lower(btrim(a.complex_name)))
+         ORDER BY (c.id = a.complex_id) DESC, c.id LIMIT 1
     ) mc ON TRUE"""
 
 # Минимальная выборка, ниже которой сегмент помечается "недостаточно
@@ -139,6 +152,9 @@ MIN_SEGMENT_N = 20
 MIN_STOCK_PERIOD_DAYS = 14
 
 INSUFFICIENT = "insufficient"  # маркер "Недостаточно накопленных данных"
+
+# Порог «однодневки» — меньше полного круга deep sweep (~1.5 суток) с запасом.
+SHORT_LIVED_SQL = "INTERVAL '2 days'"
 
 
 class _ParamBuilder:
@@ -216,7 +232,19 @@ def _base_conditions(filters: dict, pb: _ParamBuilder, alias: str = "a") -> list
     """Условия, НЕ зависящие от статуса/даты — район/ЖК/класс/комнатность/
     первичка-вторичка. Общие для всех запросов ниже (требует, чтобы alias
     был присоединён вместе с _COMPLEX_JOIN как `mc`)."""
-    cond: list[str] = []
+    cond: list[str] = [
+        # Дубли (то же объявление, выложенное повторно) — не отдельное предложение.
+        f"COALESCE({alias}.is_duplicate, FALSE) = FALSE",
+        # «Однодневки» — объявления, которые прожили меньше одного полного обхода
+        # каталога (< 2 дней между первым и последним появлением, затем ушли):
+        # ~⅓ всех объявлений, по выборочной проверке — перевыставления агентов и
+        # модерация (docs/plan_2026_10_week1.md). Не рыночное предложение: если их
+        # считать, медиана срока экспозиции схлопывается к нулю, а приток и выбытие
+        # раздуваются одинаково. Исключаются из ВСЕХ пулов (старт, приток, выбытие,
+        # текущие) — арифметика воронки остаётся согласованной.
+        f"NOT ({alias}.archived_at IS NOT NULL AND "
+        f"LEAST({alias}.last_seen, {alias}.archived_at) - {alias}.first_seen < {SHORT_LIVED_SQL})",
+    ]
     if filters["district"]:
         cond.append(f"{alias}.district = {pb.add(filters['district'])}")
     if filters["market_type"]:
@@ -488,7 +516,7 @@ async def overview_kpis(filters: dict) -> dict:
                 "COUNT(*) WHERE first_seen попадает в выбранный период"),
             "confirmed_exits": _kpi(
                 flow_row["confirmed_exits"] if flow_row else 0, "шт",
-                "COUNT(*) WHERE archived_at попадает в выбранный период (подтверждено HTTP-проверкой архивации)",
+                "COUNT(*) WHERE archived_at в периоде: ушло из выдачи Крыши (HTTP-проверка или 7 дней вне полного обхода), без однодневок",
                 limitation="Не означает продажу — см. пояснение на странице «Поглощение и ликвидность»."),
             "median_price": _kpi(
                 float(row["median_price"]) if row and row["median_price"] else None, "₸",
@@ -842,7 +870,7 @@ async def list_complexes_for_filter(limit: int = 300) -> list[dict]:
 #
 # Термины (задача, явно): «выбывание» — НЕ «продажа». Ничего в этом
 # разделе не утверждает факт сделки — только наблюдаемое исчезновение
-# объявления (archived_at, подтверждено HTTP-проверкой).
+# объявления (archived_at — ушло из выдачи, см. модульный докстринг).
 # ══════════════════════════════════════════════════════════════════════
 
 async def absorption_kpis(filters: dict) -> dict:
@@ -961,7 +989,7 @@ async def absorption_kpis(filters: dict) -> dict:
         return {
             "new_supply": _kpi(new_supply, "шт", "COUNT(*) WHERE first_seen в периоде"),
             "confirmed_exits": _kpi(confirmed_exits, "шт",
-                "COUNT(*) WHERE archived_at в периоде — подтверждено HTTP-проверкой, НЕ факт продажи"),
+                "COUNT(*) WHERE archived_at в периоде — ушло из выдачи Крыши, без однодневок; НЕ факт продажи"),
             "exit_rate": _kpi(
                 round(exit_rate, 1) if exit_rate is not None else None, "%",
                 "confirmed_exits_in_period / active_at_period_start × 100%",
@@ -1242,3 +1270,313 @@ async def price_drop_buckets(filters: dict) -> list[dict]:
             })
         return result
     return await _cached(("price_drop_buckets", _filters_key(filters)), compute)
+
+
+
+# ══════════════════════════════════════════════════════════════════════
+# План месяца, неделя 2 (2026-10): индекс цены, торг, спрос по планировкам
+# ══════════════════════════════════════════════════════════════════════
+
+# ── П6. Индекс цены м² с поправкой на состав ───────────────────────────
+#
+# Медиана цены/м² «всего рынка» гуляет от состава: неделя, когда вышло много
+# дорогих новостроек, выглядит как рост цен. Индекс сравнивает ОДИНАКОВЫЕ
+# ячейки (район × класс × комнатность) между соседними неделями и
+# взвешивает их долей в предложении предыдущей недели (цепной индекс
+# Ласпейреса по медианам ячеек): I_t = I_{t-1} · Σ w_c·med_c,t / Σ w_c·med_c,t-1.
+#
+# Пул недели D — объявления, живые на D: first_seen ≤ D ≤ last_seen (last_seen
+# обновляется полным обходом каталога), без дублей и однодневок. Цена на D —
+# то же правило price_at, что _median_ppm2_reconstructed_at. Сегмент ≤ 80 млн и
+# с фото — во всём ряду: до 28.09 парсер не видел остального, иначе ряд был бы
+# несопоставим по времени.
+INDEX_START = "2026-07-13"     # первый понедельник после старта price_history (09.07)
+INDEX_MIN_CELL_N = 5
+INDEX_MAX_PRICE = 80_000_000
+
+
+def chain_index(cells_by_week: list[tuple[str, dict[str, tuple[int, float]]]],
+                min_n: int = INDEX_MIN_CELL_N) -> list[dict]:
+    """Чистая функция: [(неделя, {ячейка: (n, медиана)})] → цепной индекс (база 100).
+    Неделя без общих ячеек с предыдущей наследует уровень (и помечается)."""
+    out, level, prev = [], 100.0, None
+    for week, cells in cells_by_week:
+        matched_share = None
+        if prev is None:
+            out.append({"week": week, "index": level, "matched_share": 1.0, "linked": True})
+        else:
+            common = [c for c in cells if c in prev and cells[c][0] >= min_n and prev[c][0] >= min_n]
+            total_prev = sum(n for n, _ in prev.values()) or 1
+            num = sum(prev[c][0] * cells[c][1] for c in common)
+            den = sum(prev[c][0] * prev[c][1] for c in common)
+            linked = bool(common) and den > 0
+            if linked:
+                level = level * num / den
+                matched_share = sum(prev[c][0] for c in common) / total_prev
+            out.append({"week": week, "index": round(level, 2),
+                        "matched_share": round(matched_share, 3) if matched_share is not None else None,
+                        "linked": linked})
+        prev = cells
+    return out
+
+
+async def price_index(filters: dict) -> dict:
+    async def compute():
+        pb = _ParamBuilder()
+        cond = _base_conditions(filters, pb, alias="a")
+        start_p = pb.add(datetime.fromisoformat(INDEX_START).replace(tzinfo=timezone.utc))
+        cap_p = pb.add(INDEX_MAX_PRICE)
+        where = " AND ".join(cond) if cond else "TRUE"
+        rows = await fetch(f"""
+            WITH weeks AS (
+                SELECT gs AS d FROM generate_series({start_p}::timestamptz, now() - interval '4 days',
+                                                    interval '1 week') gs
+                UNION
+                -- текущая точка: 4 дня назад — за меньшее окно полный обход каталога успевает
+                -- обновить last_seen не у всех живых объявлений (пул недооценивается)
+                SELECT date_trunc('hour', now() - interval '4 days')
+            ),
+            pool AS (
+                SELECT w.d, a.id, a.area, a.price AS cur_price, a.district, a.rooms, ({_CLASS_EXPR}) AS klass
+                  FROM weeks w
+                  JOIN apartment_listings a ON a.first_seen <= w.d AND a.last_seen >= w.d
+                  {_COMPLEX_JOIN}
+                 WHERE a.area > 0 AND a.price > 0 AND a.photo_url IS NOT NULL
+                   AND a.district IN {_REAL_DISTRICTS_SQL} AND a.rooms IS NOT NULL AND {where}
+            ),
+            priced AS (
+                SELECT p.*, COALESCE(
+                    (SELECT ph.new_price FROM price_history ph WHERE ph.listing_id = p.id AND ph.changed_at <= p.d
+                      ORDER BY ph.changed_at DESC LIMIT 1),
+                    (SELECT ph.old_price FROM price_history ph WHERE ph.listing_id = p.id
+                      ORDER BY ph.changed_at ASC LIMIT 1),
+                    p.cur_price) AS price_at
+                  FROM pool p
+            )
+            SELECT d, district, klass, CASE WHEN rooms >= 4 THEN '4+' ELSE rooms::text END AS rooms,
+                   COUNT(*) AS n, percentile_cont(0.5) WITHIN GROUP (ORDER BY price_at / area) AS med,
+                   GROUPING(district) AS is_total
+              FROM priced WHERE price_at <= {cap_p}
+             GROUP BY GROUPING SETS ((d, district, klass, CASE WHEN rooms >= 4 THEN '4+' ELSE rooms::text END), (d))
+             ORDER BY 1
+        """, *pb.params)
+        by_week: dict = {}
+        overall: dict = {}
+        for r in rows:
+            if r["is_total"]:
+                overall[r["d"]] = float(r["med"]) if r["med"] is not None else None
+                continue
+            key = f"{r['district']}|{r['klass']}|{r['rooms']}"
+            by_week.setdefault(r["d"], {})[key] = (int(r["n"]), float(r["med"]))
+        weeks = sorted(by_week)
+        series = chain_index([(w, by_week[w]) for w in weeks])
+        # «Наивная» медиана цены м² всего пула недели — для сравнения с индексом: разница между ними
+        # и есть эффект смены состава предложения.
+        raw = [overall.get(w) for w in weeks]
+        base_raw = raw[0] if raw else None
+        # Таблица район × класс: медиана сейчас, изменение за 4 недели и с начала ряда (тот же индексный
+        # метод внутри сегмента, по комнатности как ячейкам).
+        table = []
+        if weeks:
+            last = weeks[-1]
+            seg_keys = sorted({"|".join(k.split("|")[:2]) for k in by_week[last]})
+            for seg in seg_keys:
+                seg_weeks = [(w, {k: v for k, v in by_week[w].items() if k.startswith(seg + "|")}) for w in weeks]
+                seg_series = chain_index(seg_weeks)
+                n_now = sum(n for n, _ in seg_weeks[-1][1].values())
+                med_now = (sum(n * m for n, m in seg_weeks[-1][1].values()) / n_now) if n_now else None
+                idx_now = seg_series[-1]["index"]
+                idx_4w = seg_series[-5]["index"] if len(seg_series) >= 5 else None
+                district, klass = seg.split("|")
+                table.append({
+                    "district": district, "klass": klass, "n": n_now,
+                    "median_ppm2": round(med_now) if med_now else None,
+                    "change_4w_pct": round((idx_now / idx_4w - 1) * 100, 1) if idx_4w else None,
+                    "change_total_pct": round(idx_now - 100, 1),
+                    "insufficient": n_now < MIN_SEGMENT_N,
+                })
+            table.sort(key=lambda x: -x["n"])
+        return {
+            "labels": [w.strftime("%d.%m") for w in weeks],
+            "index": [x["index"] for x in series],
+            "matched_share": [x["matched_share"] for x in series],
+            "raw_index": [round(v / base_raw * 100, 2) if v and base_raw else None for v in raw],
+            "raw_median": [round(v) if v else None for v in raw],
+            "n": [sum(n for n, _ in by_week[w].values()) for w in weeks],
+            "table": table,
+            "note": ("Индекс asking-цены м² с поправкой на состав: сравниваются одинаковые ячейки "
+                     "район × класс × комнатность между соседними неделями, веса — доли в предложении "
+                     "предыдущей недели. Сегмент ≤ 80 млн с фото (до 28.09 парсер не видел остального). "
+                     "Это цены предложения, не сделок."),
+        }
+    return await _cached(("price_index", _filters_key(filters)), compute)
+
+
+
+# ── П7. Однодневки — сколько исключено из метрик скорости ──────────────
+
+async def short_lived_stats(filters: dict) -> dict:
+    """Сколько ушедших в периоде объявлений — однодневки (исключены из всех метрик
+    страницы, см. _base_conditions). Показывается рядом с KPI, чтобы было видно масштаб."""
+    async def compute():
+        floor = await fetchval("SELECT MIN(first_seen) FROM apartment_listings")
+        period_start = _period_start(filters, floor)
+        f2 = dict(filters)
+        pb = _ParamBuilder()
+        cond = [c for c in _base_conditions(f2, pb, alias="a") if "LEAST(" not in c]
+        ps = pb.add(period_start)
+        where = " AND ".join(cond) if cond else "TRUE"
+        row = await fetchrow(f"""
+            SELECT COUNT(*) AS exits_all,
+                   COUNT(*) FILTER (WHERE LEAST(a.last_seen, a.archived_at) - a.first_seen < {SHORT_LIVED_SQL}) AS short_lived
+              FROM apartment_listings a {_COMPLEX_JOIN}
+             WHERE a.archived_at >= {ps} AND {where}
+        """, *pb.params)
+        total = row["exits_all"] or 0
+        return {"exits_all": total, "short_lived": row["short_lived"] or 0,
+                "share_pct": round(row["short_lived"] / total * 100, 1) if total else None}
+    return await _cached(("short_lived_stats", _filters_key(filters)), compute)
+
+
+# ── П8. Реальный торг: первая цена → последняя цена перед уходом ──────
+
+_BARGAIN_DIMENSIONS = {
+    "rooms": _STRUCTURE_DIMENSIONS["rooms"],
+    "class": _STRUCTURE_DIMENSIONS["class"],
+    "district": _STRUCTURE_DIMENSIONS["district"],
+    "price_range": _STRUCTURE_DIMENSIONS["price_range"],
+    "market_type": ("CASE WHEN a.market_type = 'primary' THEN 'первичка' ELSE 'вторичка' END", "TRUE"),
+}
+
+
+async def bargaining_by_segment(filters: dict, dimension: str) -> list[dict]:
+    """Ушедшие в периоде объявления (без однодневок и без авто-перевыставлений —
+    sale_outcome_labels.label='relisted': там квартира продолжает продаваться под новым
+    id). Скидка = (первая известная цена − последняя цена) / первая. Первая цена —
+    old_price самого раннего изменения, иначе текущая (цену не меняли)."""
+    if dimension not in _BARGAIN_DIMENSIONS:
+        dimension = "rooms"
+    expr, guard = _BARGAIN_DIMENSIONS[dimension]
+
+    async def compute():
+        floor = await fetchval("SELECT MIN(first_seen) FROM apartment_listings")
+        period_start = _period_start(filters, floor)
+        pb = _ParamBuilder()
+        cond = _base_conditions(filters, pb, alias="a")
+        ps = pb.add(period_start)
+        where = " AND ".join([guard, "a.price > 0", *cond])
+        rows = await fetch(f"""
+            WITH exited AS (
+                SELECT ({expr}) AS segment, a.price AS last_price,
+                       COALESCE((SELECT ph.old_price FROM price_history ph WHERE ph.listing_id = a.id
+                                  ORDER BY ph.changed_at ASC LIMIT 1), a.price) AS first_price
+                  FROM apartment_listings a {_COMPLEX_JOIN}
+                 WHERE a.archived_at >= {ps} AND {where}
+                   AND NOT EXISTS (SELECT 1 FROM sale_outcome_labels s
+                                    WHERE s.listing_id = a.id AND s.label = 'relisted')
+            )
+            SELECT segment, COUNT(*) AS n,
+                   COUNT(*) FILTER (WHERE last_price < first_price) AS n_cut,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY (first_price - last_price)::float / first_price * 100) AS med_all,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY (first_price - last_price)::float / first_price * 100)
+                       FILTER (WHERE last_price < first_price) AS med_cut,
+                   percentile_cont(0.9) WITHIN GROUP (ORDER BY (first_price - last_price)::float / first_price * 100)
+                       FILTER (WHERE last_price < first_price) AS p90_cut
+              FROM exited GROUP BY 1 ORDER BY n DESC
+        """, *pb.params)
+        return [{
+            "segment": r["segment"], "n": r["n"],
+            "cut_share_pct": round(r["n_cut"] / r["n"] * 100, 1) if r["n"] else None,
+            "median_discount_pct": round(float(r["med_all"]), 1) if r["med_all"] is not None else None,
+            "median_discount_if_cut_pct": round(float(r["med_cut"]), 1) if r["med_cut"] is not None else None,
+            "p90_discount_if_cut_pct": round(float(r["p90_cut"]), 1) if r["p90_cut"] is not None else None,
+            "insufficient": r["n"] < MIN_SEGMENT_N,
+        } for r in rows]
+    return await _cached(("bargaining_by_segment", dimension, _filters_key(filters)), compute)
+
+
+# ── П9. Спрос по планировкам: комнаты × площадь ───────────────────────
+
+LAYOUT_AREA_BUCKETS = [(0, 35, "< 35"), (35, 45, "35–45"), (45, 60, "45–60"), (60, 80, "60–80"),
+                       (80, 110, "80–110"), (110, 10_000, "110+")]
+LAYOUT_ROOMS = ["1", "2", "3", "4+"]
+
+
+def _area_bucket_sql(col: str = "a.area") -> str:
+    parts = " ".join(f"WHEN {col} < {hi} THEN '{lbl}'" for lo, hi, lbl in LAYOUT_AREA_BUCKETS)
+    return f"CASE {parts} END"
+
+
+def demand_verdict(share_pct: float | None, demand_index: float | None, n_start: int) -> str:
+    """Чистая функция: ярлык ячейки матрицы для квартирографии.
+    demand_index — скорость ухода ячейки относительно рынка (1.0 = как рынок)."""
+    if demand_index is None or n_start < MIN_SEGMENT_N:
+        return "мало данных"
+    if demand_index >= 1.15:
+        return "дефицит" if (share_pct or 0) < 10 else "быстро уходит"
+    if demand_index <= 0.85:
+        return "профицит" if (share_pct or 0) >= 10 else "медленно уходит"
+    return "в балансе"
+
+
+async def layout_demand_matrix(filters: dict) -> dict:
+    """Ячейка = комнатность × площадь. Предложение — живые сейчас; скорость — доля ушедших
+    в периоде от активных на начало периода (без однодневок); интерес — медиана просмотров
+    в день по живым объявлениям с известными просмотрами; индекс спроса = скорость ячейки /
+    скорость рынка в той же выборке. Фильтр комнатности игнорируется — это ось матрицы."""
+    async def compute():
+        f2 = dict(filters, rooms="")
+        floor = await fetchval("SELECT MIN(first_seen) FROM apartment_listings")
+        period_start = _period_start(f2, floor)
+        pb = _ParamBuilder()
+        cond = _base_conditions(f2, pb, alias="a")
+        ps = pb.add(period_start)
+        where = " AND ".join(["a.rooms IS NOT NULL", "a.area > 0", *cond])
+        rooms_expr = "CASE WHEN a.rooms >= 4 THEN '4+' ELSE a.rooms::text END"
+        area_expr = _area_bucket_sql()
+        rows = await fetch(f"""
+            SELECT {rooms_expr} AS rooms, {area_expr} AS area_b,
+                   COUNT(*) FILTER (WHERE a.is_active IS NOT FALSE) AS n_now,
+                   COUNT(*) FILTER (WHERE a.first_seen <= {ps} AND (a.archived_at IS NULL OR a.archived_at > {ps})) AS n_start,
+                   COUNT(*) FILTER (WHERE a.archived_at >= {ps}
+                                      AND a.first_seen <= {ps}) AS n_exits_from_start,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM a.archived_at - a.first_seen) / 86400)
+                       FILTER (WHERE a.archived_at >= {ps}) AS med_dom,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY a.views_count::float
+                       / GREATEST(EXTRACT(EPOCH FROM now() - a.first_seen) / 86400, 1))
+                       FILTER (WHERE a.is_active IS NOT FALSE AND a.views_count IS NOT NULL) AS med_views_day,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY a.price / a.area)
+                       FILTER (WHERE a.is_active IS NOT FALSE AND a.price > 0) AS med_ppm2
+              FROM apartment_listings a {_COMPLEX_JOIN}
+             WHERE {where}
+             GROUP BY 1, 2
+        """, *pb.params)
+        tot_now = sum(r["n_now"] for r in rows) or 0
+        tot_start = sum(r["n_start"] for r in rows) or 0
+        tot_exits = sum(r["n_exits_from_start"] for r in rows) or 0
+        market_rate = tot_exits / tot_start if tot_start else None
+        cells = {}
+        for r in rows:
+            rate = r["n_exits_from_start"] / r["n_start"] if r["n_start"] else None
+            share = r["n_now"] / tot_now * 100 if tot_now else None
+            di = (rate / market_rate) if (rate is not None and market_rate) else None
+            cells[(r["rooms"], r["area_b"])] = {
+                "n_now": r["n_now"], "share_pct": round(share, 1) if share is not None else None,
+                "n_start": r["n_start"],
+                "exit_rate_pct": round(rate * 100, 1) if rate is not None else None,
+                "demand_index": round(di, 2) if di is not None else None,
+                "median_dom_days": round(float(r["med_dom"]), 1) if r["med_dom"] is not None else None,
+                "median_views_per_day": round(float(r["med_views_day"]), 1) if r["med_views_day"] is not None else None,
+                "median_ppm2": round(float(r["med_ppm2"])) if r["med_ppm2"] is not None else None,
+                "verdict": demand_verdict(share, di, r["n_start"]),
+            }
+        return {
+            "rooms": LAYOUT_ROOMS, "areas": [lbl for _, _, lbl in LAYOUT_AREA_BUCKETS], "cells": {
+                f"{k[0]}|{k[1]}": v for k, v in cells.items()},
+            "market_exit_rate_pct": round(market_rate * 100, 1) if market_rate else None,
+            "total_now": tot_now,
+            "note": ("Скорость = доля ушедших за период среди активных на его начало (без однодневок и дублей). "
+                     "Индекс спроса 1.0 = как рынок в этой выборке. «Дефицит» — уходит ≥15% быстрее рынка при "
+                     "доле в предложении < 10%; «профицит» — ≥15% медленнее при доле ≥ 10%. Уход ≠ продажа."),
+        }
+    return await _cached(("layout_demand_matrix", _filters_key(filters)), compute)

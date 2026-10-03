@@ -516,7 +516,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
         (kpis, dynamics, new_vs_exit, complex_options, freshness,
          struct_rooms, struct_class, struct_district, struct_price_range, struct_area,
-         corridor_rooms, corridor_class, segments) = await asyncio.gather(
+         corridor_rooms, corridor_class, segments, price_idx) = await asyncio.gather(
             md.overview_kpis(filters),
             md.market_dynamics_series(filters),
             md.new_vs_exit_series(filters),
@@ -530,10 +530,11 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             md.price_corridors(filters, "rooms"),
             md.price_corridors(filters, "class"),
             md.segment_table(filters),
+            md.price_index(filters),
         )
 
         ctx = {
-            "request": request, "atab": "market_overview",
+            "request": request, "atab": "market_overview", "price_index": price_idx,
             "kpis": kpis, "dynamics": dynamics, "new_vs_exit": new_vs_exit,
             "freshness": freshness, "segments": segments,
             "structure_by_dim": {
@@ -549,7 +550,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     async def market_absorption_page(
         request: Request, period: str = "30", district: str = "", complex_id: str = "",
         klass: str = "", rooms: str = "", market_type: str = "", status: str = "active",
-        exit_speed_dim: str = "district", exit_speed_metric: str = "exit_rate",
+        exit_speed_dim: str = "district", exit_speed_metric: str = "exit_rate", bargain_dim: str = "rooms",
     ):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
@@ -563,7 +564,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
         (kpis, new_vs_exit, funnel, complex_options, freshness,
          speed_rooms, speed_class, speed_district, speed_complex,
-         scatter, drop_buckets) = await asyncio.gather(
+         scatter, drop_buckets, short_lived, bargaining, layout) = await asyncio.gather(
             md.absorption_kpis(filters),
             md.new_vs_exit_series(filters),
             md.supply_funnel(filters),
@@ -575,6 +576,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             md.segment_exit_speed(filters, "complex"),
             md.price_vs_liquidity_scatter(filters),
             md.price_drop_buckets(filters),
+            md.short_lived_stats(filters),
+            md.bargaining_by_segment(filters, bargain_dim),
+            md.layout_demand_matrix(filters),
         )
 
         ctx = {
@@ -584,6 +588,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "rooms": speed_rooms, "class": speed_class, "district": speed_district, "complex": speed_complex,
             },
             "scatter": scatter, "drop_buckets": drop_buckets,
+            "short_lived": short_lived, "bargaining": bargaining, "layout": layout,
+            "bargain_dim": bargain_dim if bargain_dim in md._BARGAIN_DIMENSIONS else "rooms",
         }
         ctx.update(_mkt_filters_context(request, filters, complex_options))
         return templates.TemplateResponse("market_absorption.html", ctx)
