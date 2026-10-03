@@ -18,13 +18,14 @@ async def main(dry_run: bool) -> int:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
     from bot.db.pg import init_pool, close_pool
-    from bot.core.stale_archive import archive_stale
+    from bot.core.stale_archive import archive_stale, archive_stale_rentals
     await init_pool(os.environ['DATABASE_URL'])
     try:
         res = await archive_stale(dry_run=dry_run)
+        rent = await archive_stale_rentals(dry_run=dry_run)
     finally:
         await close_pool()
-    print(json.dumps(res, ensure_ascii=False))
+    print(json.dumps({'sale': res, 'rent': rent}, ensure_ascii=False))
     return 0 if res['healthy'] else 3
 
 

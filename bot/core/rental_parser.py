@@ -178,6 +178,8 @@ def _parse_card(card, prop_type: str) -> RentalListing | None:
 class RentalPage:
     listings: list[RentalListing]
     card_ids: tuple[str, ...]
+    # Номер последней страницы из пагинации выдачи (None — пагинации на странице нет).
+    last_page: int | None = None
 
 
 @dataclass
@@ -188,10 +190,20 @@ class RentalPagination:
 
     def advance(self, result: RentalPage) -> bool:
         signature = hashlib.sha256("\n".join(sorted(set(result.card_ids))).encode()).hexdigest()
-        if not result.card_ids or signature in self.signatures:
+        repeated = signature in self.signatures
+        # Повтор набора карточек — конец выдачи ТОЛЬКО если мы уже на последней
+        # странице по пагинации (за последней страницей Крыша отдаёт её же).
+        # Иначе это сдвиг выдачи: между запросами (минуты) сверху появилось ровно
+        # 20 новых объявлений, и страница k+1 совпала с прежней k. Раньше это
+        # считалось концом — круг аренды обрывался на 28/44/97-й странице из ~198
+        # (задача 2026-10-03, rental.log).
+        if not result.card_ids or (repeated and (result.last_page is None or self.page >= result.last_page)):
             self.page = 1
             self.signatures.clear()
             return True
+        if repeated:
+            self.page += 1
+            return False
         self.signatures.add(signature)
         self.page += 1
         return False
@@ -229,6 +241,9 @@ async def _fetch_page_result(client: httpx.AsyncClient, url: str, prop_type: str
             raise ValueError(f"Unrecognised rental search response: {url}")
         return RentalPage([], ())
 
+    page_nums = [int(m.group(1)) for a in soup.select('a[href*="page="]')
+                 for m in [re.search(r"[?&]page=(\d+)", a.get("href", ""))] if m]
+    last_page = max(page_nums) if page_nums else None
     results, card_ids = [], []
     for card in cards:
         listing_id = str(card.get("data-id", "")).strip()
@@ -242,7 +257,7 @@ async def _fetch_page_result(client: httpx.AsyncClient, url: str, prop_type: str
         listing = _parse_card(card, prop_type)
         if listing:
             results.append(listing)
-    return RentalPage(results, tuple(card_ids))
+    return RentalPage(results, tuple(card_ids), last_page)
 
 
 async def _fetch_page(client: httpx.AsyncClient, url: str, prop_type: str) -> list[RentalListing]:
@@ -261,6 +276,11 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
     key = f"RENTAL_CRAWL_V1_{prop_type.upper()}"
     cursor = RentalPagination.loads(app_settings.get(key, ""))
     page = cursor.page
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    if page == 1 and not cursor.signatures:
+        # Начало круга — для метрики длительности обхода (гейт stale-архивации аренды).
+        await app_settings.set(f"{key}_STARTED_AT", now.isoformat())
     url = BASE_URL + path + (f"?page={page}" if page > 1 else "")
     result = await _fetch_page_result(client, url, prop_type)
     saved = await save_rental_listings(result.listings) if result.listings else 0
@@ -270,6 +290,15 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
         raise RuntimeError(f"Incomplete rental page save: {saved}/{len(result.listings)} ({url})")
     completed = cursor.advance(result)
     await app_settings.set(key, cursor.dumps())
+    if completed:
+        started = app_settings.get(f"{key}_STARTED_AT", "")
+        await app_settings.set(f"{key}_COMPLETED_AT", now.isoformat())
+        try:
+            dur = (now - datetime.fromisoformat(started)).total_seconds() if started else 0
+        except ValueError:
+            dur = 0
+        await app_settings.set(f"{key}_DURATION_SEC", str(int(dur)))
+        await app_settings.set(f"{key}_LAST_PAGES", str(page))
     return {"page": page, "saved": saved, "completed": completed,
             "raw_card_count": len(result.card_ids)}
 

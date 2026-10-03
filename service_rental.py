@@ -163,7 +163,9 @@ async def main():
             log.warning("Rental geo-bind failed: %s", e)
 
 
-        sleep_sec = random.uniform(5 * 60, 15 * 60)
+        # Было 5-15 мин: при ~198 страницах квартир и ротации 3 типов круг шёл ~5 суток.
+        # 1-3 мин — круг квартир ~1 сутки (задача 2026-10-03); нагрузка ~на порядок ниже deep sweep продажи.
+        sleep_sec = random.uniform(60, 180)
         log.info("Sleeping %.0f min...\n", sleep_sec / 60)
         await asyncio.sleep(sleep_sec)
 

@@ -48,3 +48,19 @@ def test_migration_allows_new_reason():
     from pathlib import Path
     sql = (Path(__file__).resolve().parents[1] / 'migrations' / '098_sweep_stale_archive_and_sale_labels.sql').read_text()
     assert "'sweep_stale'" in sql and "'archived_badge'" in sql and "'confirmed_gone'" in sql
+
+
+def test_rental_window_at_least_two_and_half_cycles():
+    assert sa.rental_stale_days(26 * 3600) == 7          # круг ~сутки → 7 дн. минимум
+    assert sa.rental_stale_days(5 * 86400) == 13         # круг 5 суток → 12.5 → 13
+
+
+def test_rental_health_requires_measured_cycle():
+    h, _ = sa.rental_health({}, NOW)
+    assert not h.healthy
+    ok, days = sa.rental_health({f'{sa.RENTAL_PREFIX}_COMPLETED_AT': (NOW - timedelta(hours=3)).isoformat(),
+                                 f'{sa.RENTAL_PREFIX}_DURATION_SEC': str(26 * 3600)}, NOW)
+    assert ok.healthy and days == 7
+    stale, _ = sa.rental_health({f'{sa.RENTAL_PREFIX}_COMPLETED_AT': (NOW - timedelta(days=5)).isoformat(),
+                                 f'{sa.RENTAL_PREFIX}_DURATION_SEC': str(26 * 3600)}, NOW)
+    assert not stale.healthy

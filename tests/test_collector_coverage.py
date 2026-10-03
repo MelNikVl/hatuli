@@ -134,3 +134,28 @@ async def test_expensive_sale_without_photo_is_returned(monkeypatch):
     assert len(result) == 1
     assert result[0]["price"] == 120_000_000
     assert result[0]["photo_url"] is None
+
+
+def test_shifted_page_is_not_end_when_pagination_says_more():
+    """Сдвиг выдачи: страница 45 совпала с прежней 44, но пагинация говорит 198 — не конец."""
+    cursor = rentals.RentalPagination(page=44)
+    assert not cursor.advance(rentals.RentalPage([], ("1", "2"), last_page=198))
+    assert not cursor.advance(rentals.RentalPage([], ("2", "1"), last_page=198))
+    assert cursor.page == 46
+
+
+def test_repeat_on_last_page_completes():
+    cursor = rentals.RentalPagination(page=198)
+    assert not cursor.advance(rentals.RentalPage([], ("1", "2"), last_page=198))
+    assert cursor.advance(rentals.RentalPage([], ("1", "2"), last_page=198))
+    assert cursor.page == 1
+
+
+@pytest.mark.asyncio
+async def test_last_page_parsed_from_pagination():
+    html = card("5") + '<nav class="paginator"><a href="/arenda/kvartiry/astana/?page=2">2</a>' \
+           '<a href="/arenda/kvartiry/astana/?page=197">197</a></nav>'
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, text=html))) as client:
+        page = await rentals._fetch_page_result(client, "https://krisha.kz/test", "apartment")
+    assert page.last_page == 197
