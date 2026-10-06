@@ -5,19 +5,21 @@ import asyncio
 from collections import OrderedDict
 from html import escape
 import logging
+import os
 import secrets
 import time
 
-from aiogram import F, Router
+from aiogram import F, Router, BaseMiddleware
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from bot.core.buyer import analyze_for_buyer, extract_krisha_url, money
 from bot.core.buyer_store import ensure_user, save_favorite, save_profile
 from bot.core.buyer_locations import search_locations
 from bot.core.geo import in_astana_bbox
+from bot.core import buyer_map
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -25,6 +27,43 @@ router.message.filter(F.chat.type == 'private')
 router.callback_query.filter(F.message.chat.type == 'private')
 _cache: OrderedDict = OrderedDict()
 _analysis_slots = asyncio.Semaphore(4)
+
+
+class MapCompletionMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        state = data.get('state')
+        if state:
+            nonce = (await state.get_data()).get('map_nonce')
+            if nonce and await buyer_map.session_completed(event.from_user.id, nonce):
+                await state.clear()
+                data['raw_state'] = None
+                for key in list(_cache):
+                    if key[0] == event.from_user.id:
+                        _cache.pop(key, None)
+                message = event.message if isinstance(event, CallbackQuery) else event
+                await message.answer('✅ Места сохранены. Учту выбранные участки при оценке квартир.')
+        return await handler(event, data)
+
+
+router.message.outer_middleware(MapCompletionMiddleware())
+router.callback_query.outer_middleware(MapCompletionMiddleware())
+
+
+async def reset_profile_state(state):
+    nonce = (await state.get_data()).get('map_nonce')
+    if nonce:
+        await buyer_map.cancel_session(state.key.user_id, nonce)
+    await state.clear()
+
+
+async def map_markup(state, profile=None):
+    url = os.getenv('BUYER_MAP_URL', '').rstrip('/')
+    if not url.startswith('https://'):
+        return None
+    data = await state.get_data()
+    nonce = await buyer_map.create_session(state.key.user_id, profile, data.get('listing_anchor'))
+    await state.update_data(map_nonce=nonce)
+    return InlineKeyboardButton(text='🗺 Выбрать участки на карте', web_app=WebAppInfo(url=url+'?nonce='+nonce))
 
 START = ('👋 Пришли ссылку на квартиру с Krisha.kz.\n\n'
          'Я быстро скажу:\n• что в ней хорошо;\n• что настораживает;\n'
@@ -159,15 +198,27 @@ def recalled(uid: int, lid: str) -> dict | None:
 
 @router.message(CommandStart())
 async def start(message: Message, state: FSMContext) -> None:
-    await state.clear()
+    await reset_profile_state(state)
     await ensure_user(message.from_user.id, message.from_user.username)
     await message.answer(START)
 
 
 @router.message(Command('cancel'))
 async def cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
+    await reset_profile_state(state)
     await message.answer('Настройка отменена. Пришлите ссылку на квартиру.')
+
+
+@router.message(Command('map'))
+async def map_command(message: Message, state: FSMContext) -> None:
+    await reset_profile_state(state)
+    button = await map_markup(state)
+    if not button:
+        await message.answer('Карта пока недоступна. Выберите место через /profile.')
+        return
+    await message.answer('Отметьте участки, где хотите жить, и нажмите «Сохранить места». '
+                         'Можно выбрать несколько отдельных зон.',
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[button]]))
 
 
 # Registered before FSM text handlers: a URL works even mid-onboarding.
@@ -243,7 +294,7 @@ async def action(callback: CallbackQuery) -> None:
 
 
 async def begin_profile(message: Message, state: FSMContext, uid: int) -> None:
-    await state.clear()
+    await reset_profile_state(state)
     for (user, lid), (created, result) in reversed(_cache.items()):
         d = result['listing']
         if user == uid and time.monotonic() - created < 600 and in_astana_bbox(d.get('lat'), d.get('lon')):
@@ -360,15 +411,24 @@ async def ask_location(message: Message, state: FSMContext) -> None:
             [('🗺 Точка на карте', 'p:where:pin')]]
     if (await state.get_data()).get('listing_anchor'):
         rows.append([('Рядом с присланной квартирой', 'p:where:listing')])
-    await message.answer('5/5. Где хотите жить? Выберите ЖК, адрес или точку на карте. '
-                         'Затем укажите радиус вокруг неё — он будет учитываться при оценке и сравнении квартир.',
-                         reply_markup=keyboard(rows))
+    markup = keyboard(rows)
+    button = await map_markup(state, await state.get_data())
+    if button:
+        markup.inline_keyboard.insert(0, [button])
+    await message.answer('5/5. Где хотите жить? На карте отметьте удобные участки — можно несколько отдельных мест. '
+                         'Поиск ЖК и адреса поможет найти нужную точку. Нажмите «Сохранить места» на карте. '
+                         'Либо выберите точку и радиус кнопками ниже.', reply_markup=markup)
+
 
 
 @router.callback_query(Profile.location, F.data.startswith('p:where:'))
 async def location_mode(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     kind = callback.data.rsplit(':', 1)[1]
+    nonce = (await state.get_data()).get('map_nonce')
+    if nonce:
+        await buyer_map.cancel_session(callback.from_user.id, nonce)
+        await state.update_data(map_nonce=None)
     if kind == 'listing':
         point = (await state.get_data()).get('listing_anchor')
         if point:

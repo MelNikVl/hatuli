@@ -17,6 +17,7 @@ from bot.analytics.dom_scenario import compute_dom_scenario_cached
 from bot.core.listing_detail import build_listing_detail, build_price_history, ListingNotFound
 from bot.core.listing_intel import detect_finish_level
 from bot.core.geo import haversine_km, in_astana_bbox
+from bot.core.hexgrid import hex_id
 from bot.core.buyer_store import get_profile
 from bot.db import pg
 
@@ -106,14 +107,19 @@ def profile_mismatches(d: dict, profile: dict) -> list[str]:
     if kind and d.get('market') and d['market'] != kind:
         reasons.append('Не соответствует выбранному типу рынка')
     if has_location(profile) and d.get('lat') is not None and d.get('lon') is not None:
-        distance = haversine_km(profile['location_lat'], profile['location_lon'], d['lat'], d['lon'])
-        if distance > profile['radius_km']:
-            reasons.append(f"От выбранной точки {distance:.1f} км — дальше вашего радиуса {profile['radius_km']} км")
+        area = profile.get('buyer_area') or {}
+        if area.get('hex_ids'):
+            if hex_id(d['lat'], d['lon'], area['edge_m']) not in area['hex_ids']:
+                reasons.append('Квартира вне выбранных на карте участков')
+        else:
+            distance = haversine_km(profile['location_lat'], profile['location_lon'], d['lat'], d['lon'])
+            if distance > profile['radius_km']:
+                reasons.append(f"От выбранной точки {distance:.1f} км — дальше вашего радиуса {profile['radius_km']} км")
     return reasons
 
 
 def has_location(profile: dict) -> bool:
-    return (profile.get('location_lat') is not None and profile.get('location_lon') is not None
+    return bool((profile.get('buyer_area') or {}).get('hex_ids')) or (profile.get('location_lat') is not None and profile.get('location_lon') is not None
             and bool(profile.get('radius_km')))
 
 

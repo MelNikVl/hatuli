@@ -14,9 +14,14 @@ async def ensure_user(user_id: int, username: str | None = None) -> None:
 
 
 async def get_profile(user_id: int) -> dict:
-    row = await pg.fetchrow("""SELECT budget_max, rooms, area_min, property_type, location_lat, location_lon, radius_km
+    row = await pg.fetchrow("""SELECT budget_max, rooms, area_min, property_type, location_lat, location_lon, radius_km, buyer_map
         FROM users WHERE user_id=$1""", user_id)
     profile = dict(row) if row else {}
+    map_data = profile.pop('buyer_map', None) or {}
+    if isinstance(map_data, str):
+        map_data = json.loads(map_data)
+    if map_data.get('selection'):
+        profile['buyer_area'] = map_data['selection']
     rooms = profile.get('rooms') or []
     if isinstance(rooms, str):
         try:
@@ -57,16 +62,18 @@ def validate_profile(profile: dict) -> dict:
     return result
 
 
-async def save_profile(user_id: int, profile: dict) -> None:
+async def save_profile(user_id: int, profile: dict, *, execute=None) -> None:
     p = validate_profile(profile)
-    await pg.execute("""INSERT INTO users
+    execute = execute or pg.execute
+    await execute("""INSERT INTO users
         (user_id, budget_max, rooms, area_min, property_type, location_lat, location_lon, radius_km, notify_frequency)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'off') ON CONFLICT (user_id) DO UPDATE SET
         budget_max=EXCLUDED.budget_max, rooms=EXCLUDED.rooms,
         area_min=EXCLUDED.area_min, property_type=EXCLUDED.property_type,
         location_lat=CASE WHEN $9 THEN EXCLUDED.location_lat ELSE users.location_lat END,
         location_lon=CASE WHEN $9 THEN EXCLUDED.location_lon ELSE users.location_lon END,
-        radius_km=CASE WHEN $9 THEN EXCLUDED.radius_km ELSE users.radius_km END, updated_at=now()""",
+        radius_km=CASE WHEN $9 THEN EXCLUDED.radius_km ELSE users.radius_km END,
+        buyer_map=CASE WHEN $9 THEN users.buyer_map-'selection'-'draft' ELSE users.buyer_map END, updated_at=now()""",
         user_id, p['budget_max'], json.dumps(p['rooms']), p['area_min'], p['property_type'],
         p.get('location_lat'), p.get('location_lon'), p.get('radius_km'), 'location_lat' in p)
 

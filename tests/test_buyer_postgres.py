@@ -89,3 +89,35 @@ async def test_actual_price_events_visible_in_buyer_detail(seeded):
     assert result['price_history']['changes'] == 1
     assert '−2 000 000 ₸' in render_summary(result)
     assert '06.10.2026' in render_summary(result)
+
+
+@pytest.mark.asyncio
+async def test_map_selection_atomic_round_trip_and_stale_tabs(seeded):
+    from bot.core import buyer_map as bm
+    uid, _ = seeded
+    old=dict(budget_max=35_000_000, rooms=[2], area_min=50., property_type=None,
+             location_lat=51.13,location_lon=71.43,radius_km=2)
+    new=dict(budget_max=25_000_000, rooms=[1], area_min=30., property_type='secondary')
+    await buyer_store.save_profile(uid,old)
+    nonce=await bm.create_session(uid,new)
+    assert (await buyer_store.get_profile(uid))['budget_max']==old['budget_max']
+    assert (await bm.load_session(uid,nonce))['selection']['hex_ids']==[]
+    with pytest.raises(bm.MapSessionExpired): await bm.save_selection(uid-1,nonce,['0:0'])
+    assert (await bm.save_selection(uid,nonce,['0:0','1:0']))['count']==2
+    profile=await buyer_store.get_profile(uid)
+    assert profile['budget_max']==new['budget_max'] and profile['area_min']==30
+    assert 'radius_km' not in profile
+    assert profile['buyer_area']['hex_ids']==['0:0','1:0']
+    assert await bm.session_completed(uid,nonce)
+    assert (await bm.save_selection(uid,nonce,['1:0','0:0']))['already_saved']
+    with pytest.raises(bm.MapSessionExpired): await bm.save_selection(uid,nonce,['2:0'])
+    first=await bm.create_session(uid)
+    second=await bm.create_session(uid)
+    with pytest.raises(bm.MapSessionExpired): await bm.save_selection(uid,first,['2:0'])
+    await bm.save_selection(uid,second,['2:0'])
+    assert (await buyer_store.get_profile(uid))['budget_max']==new['budget_max']
+    pending=await bm.create_session(uid)
+    await bm.cancel_session(uid,pending)
+    with pytest.raises(bm.MapSessionExpired): await bm.save_selection(uid,pending,['3:0'])
+    await buyer_store.save_profile(uid,old)
+    assert 'buyer_area' not in await buyer_store.get_profile(uid)

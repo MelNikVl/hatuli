@@ -14,6 +14,11 @@ from bot.core.buyer import summarize
 from tests.test_buyer import listing
 
 
+@pytest.fixture(autouse=True)
+def map_disabled_unless_requested(monkeypatch):
+    monkeypatch.delenv('BUYER_MAP_URL', raising=False)
+
+
 def message(text='https://krisha.kz/a/show/123456'):
     return SimpleNamespace(text=text, caption=None, entities=None, caption_entities=None,
         from_user=SimpleNamespace(id=42, username='test'), answer=AsyncMock(), edit_reply_markup=AsyncMock(), answer_location=AsyncMock(), location=None)
@@ -243,3 +248,24 @@ def test_price_history_pagination_keeps_every_event():
 def test_history_failure_is_not_reported_as_no_changes():
     result = summarize(listing(price_history={'available': False}))
     assert 'История цены временно недоступна' in ui.render_summary(result)
+
+
+@pytest.mark.asyncio
+async def test_map_button_carries_user_draft_and_completion_clears_cache(monkeypatch):
+    monkeypatch.setenv('BUYER_MAP_URL', 'https://example.test/buyer/map')
+    msg, ctx = message(), state()
+    await ctx.update_data(budget_max=25000000, rooms=[1], area_min=30, property_type=None)
+    with patch.object(ui.buyer_map, 'create_session', AsyncMock(return_value='safe_nonce')) as create:
+        await ui.ask_location(msg, ctx)
+    assert create.await_args.args[0] == 42
+    button=msg.answer.await_args.kwargs['reply_markup'].inline_keyboard[0][0]
+    assert button.web_app.url=='https://example.test/buyer/map?nonce=safe_nonce'
+    assert create.await_args.args[1]['area_min']==30
+    ui.remember(42,dict(summarize(listing()),found=True))
+    handler=AsyncMock()
+    data={'state':ctx,'raw_state':ui.Profile.location.state}
+    with patch.object(ui.buyer_map,'session_completed',AsyncMock(return_value=True)):
+        await ui.MapCompletionMiddleware()(handler,msg,data)
+    assert await ctx.get_state() is None and data['raw_state'] is None
+    assert not any(key[0]==42 for key in ui._cache)
+    handler.assert_awaited_once()

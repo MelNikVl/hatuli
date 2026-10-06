@@ -2185,4 +2185,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     from bot.ai_tools.router import make_ai_tools_router
     app.include_router(make_ai_tools_router())
 
+    from bot.buyer.map_web import router as buyer_map_router
+    app.include_router(buyer_map_router)
+
     return app
