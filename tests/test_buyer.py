@@ -209,7 +209,8 @@ async def test_profile_persistence_existing_columns_only():
     p = dict(budget_max=35_000_000, rooms=[2, 4], area_min=50, property_type='new')
     with patch.object(buyer_store.pg, 'execute', AsyncMock()) as execute:
         await buyer_store.save_profile(42, p)
-    sql, uid, budget, rooms, area, kind = execute.await_args.args
+    sql, uid, budget, rooms, area, kind, lat, lon, radius, replace_location = execute.await_args.args
+    assert (lat, lon, radius, replace_location) == (None, None, None, False)
     assert (uid, budget, json.loads(rooms), area, kind) == (42, 35_000_000, [2, 4], 50, 'new')
     assert 'INSERT INTO users' in sql and 'CREATE' not in sql
     # Existing notification consent is never changed on conflict.
@@ -255,3 +256,51 @@ def test_legacy_location_not_used_as_amenity_score():
 
 def test_malformed_url_cannot_break_filter():
     assert buyer.extract_krisha_url('https://[invalid/a/show/123456') is None
+
+
+def test_long_exposure_has_exact_observation_and_comparison():
+    from datetime import datetime, timedelta, timezone
+    from bot.core.listing_risks import _liquidity_signals
+    row = listing(first_seen=datetime.now(timezone.utc) - timedelta(days=180))
+    items, _ = _liquidity_signals(row, {}, [], {'available': True, 'confidence': 'low',
+        'current': {'days_low': 30, 'days_high': 60}})
+    risk = next(r for r in items if r['code'] == 'LONGER_THAN_EXPECTED')
+    result = buyer.summarize(listing(risk_analysis={'overall_level': 'medium', 'items': [risk]}))
+    text = result['negatives'][0]
+    assert '180 дн.' in text and '30–60 дн.' in text and '120 дн.' in text
+    assert 'ненадёжна' in text
+
+
+def test_older_exposure_record_uses_description_not_vague_title():
+    risk = dict(code='LONGER_THAN_EXPECTED', title='На рынке заметно дольше аналогов',
+                description='Объявление активно уже 90 дн.; аналоги ~20–40 дн.')
+    assert buyer.risk_text(risk) == risk['description']
+
+
+def test_history_preserves_ups_downs_and_zero_net_change():
+    events = [dict(at='01.10.2026', old_price=30_000_000, new_price=28_000_000),
+              dict(at='02.10.2026', old_price=28_000_000, new_price=30_000_000)]
+    result = buyer.summarize(listing(price_history={'events': events}))
+    assert result['price_history']['changes'] == 2
+    assert result['price_history']['net_change'] == 0
+    assert result['price_history']['events'] == events
+
+
+def test_geo_profile_filters_alternatives_and_is_neutral_without_coords():
+    profile = dict(location_lat=51.15, location_lon=71.43, radius_km=1)
+    base = listing()
+    assert any('радиуса 1 км' in r for r in buyer.profile_mismatches(base, profile))
+    assert buyer.rank_alternatives(base, [listing(id='123457', price=28_000_000)], profile) == []
+    missing = buyer.summarize(listing(lat=None, lon=None), profile)
+    assert missing['location_unverified']
+    assert missing['verdict']['code'] == 'view'
+    assert not any('радиуса' in r for r in missing['negatives'])
+    assert buyer.profile_mismatches(base, dict(location_lat=51.13, location_lon=71.43, radius_km=1)) == []
+
+
+@pytest.mark.parametrize('coordinates', [dict(location_lat=43.2, location_lon=76.9, radius_km=1),
+    dict(location_lat=51.13), dict(location_lat=float('nan'), location_lon=71.43, radius_km=1),
+    dict(location_lat=51.13, location_lon=71.43, radius_km=1.5)])
+def test_profile_rejects_invalid_location(coordinates):
+    with pytest.raises(ValueError):
+        buyer_store.validate_profile(dict(budget_max=30_000_000, rooms=[1], **coordinates))

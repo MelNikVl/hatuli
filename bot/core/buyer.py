@@ -14,9 +14,9 @@ from urllib.parse import urlsplit
 
 from bot.ai_tools.core import resolve_listing, _extract_listing_id_from_input
 from bot.analytics.dom_scenario import compute_dom_scenario_cached
-from bot.core.listing_detail import build_listing_detail, ListingNotFound
+from bot.core.listing_detail import build_listing_detail, build_price_history, ListingNotFound
 from bot.core.listing_intel import detect_finish_level
-from bot.core.geo import haversine_km
+from bot.core.geo import haversine_km, in_astana_bbox
 from bot.core.buyer_store import get_profile
 from bot.db import pg
 
@@ -99,13 +99,45 @@ def profile_mismatches(d: dict, profile: dict) -> list[str]:
     rooms = profile.get('rooms') or []
     n = d.get('rooms')
     if rooms and n and n not in rooms and not (4 in rooms and n >= 4):
-        reasons.append(f'{n} комнат — не подходит под выбранную комнатность')
+        reasons.append(f'{n}-комнатная квартира — не подходит под выбранную комнатность')
     if profile.get('area_min') and d.get('area') and d['area'] < profile['area_min']:
         reasons.append(f"Площадь меньше выбранных {profile['area_min']:g} м²")
     kind = {'new': 'primary', 'secondary': 'secondary'}.get(profile.get('property_type'))
     if kind and d.get('market') and d['market'] != kind:
         reasons.append('Не соответствует выбранному типу рынка')
+    if has_location(profile) and d.get('lat') is not None and d.get('lon') is not None:
+        distance = haversine_km(profile['location_lat'], profile['location_lon'], d['lat'], d['lon'])
+        if distance > profile['radius_km']:
+            reasons.append(f"От выбранной точки {distance:.1f} км — дальше вашего радиуса {profile['radius_km']} км")
     return reasons
+
+
+def has_location(profile: dict) -> bool:
+    return (profile.get('location_lat') is not None and profile.get('location_lon') is not None
+            and bool(profile.get('radius_km')))
+
+
+def risk_text(item: dict) -> str:
+    if item.get('code') != 'LONGER_THAN_EXPECTED':
+        return item['title']
+    evidence = item.get('exposure') or {}
+    days, low, high = (evidence.get(k) for k in ('observed_days', 'expected_days_low', 'expected_days_high'))
+    if days is None or high is None:
+        # Older cached risk records still carry the numbers in the description.
+        return item.get('description') or 'Срок наблюдения требует уточнения'
+    expected = f'{low:g}–{high:g}' if low is not None else f'до {high:g}'
+    text = f'Наблюдаем {days:g} дн.; аналоги ~{expected} дн. — дольше верхнего ориентира на {days-high:g} дн.'
+    if evidence.get('confidence') == 'low':
+        text += ' Оценка аналогов ненадёжна.'
+    return text
+
+
+def summarize_price_history(history: dict) -> dict:
+    events = [e for e in history.get('events', [])
+              if e.get('old_price') is not None and e.get('new_price') is not None
+              and e['old_price'] != e['new_price']]
+    return {'available': history.get('available', True), 'events': events, 'changes': len(events),
+            'net_change': events[-1]['new_price'] - events[0]['old_price'] if events else None}
 
 
 def price_summary(d: dict) -> dict:
@@ -166,6 +198,8 @@ def summarize(d: dict, profile: dict | None = None) -> dict:
     price = price_summary(d)
     plus, minus, warnings = [], [], []
     score = _deal(d)
+    if has_location(profile) and (d.get('lat') is None or d.get('lon') is None):
+        warnings.append('Нет координат квартиры — соответствие вашей локации не проверено.')
     if price['fair'] and price['asking']:
         ratio = price['asking'] / price['fair']
         if ratio <= .95:
@@ -197,7 +231,7 @@ def summarize(d: dict, profile: dict | None = None) -> dict:
     items = risk.get('items') or []
     significant = [r for r in items if _SEVERITY.get(r.get('severity'), 0) >= 2]
     mismatch = profile_mismatches(d, profile)
-    minus = mismatch + [r['title'] for r in significant] + minus
+    minus = mismatch + [risk_text(r) for r in significant] + minus
     if d.get('is_active') is False:
         minus.insert(0, 'Объявление снято с публикации')
     if risk.get('overall_level') in (None, 'unknown'):
@@ -237,6 +271,8 @@ def summarize(d: dict, profile: dict | None = None) -> dict:
     return {'listing': d, 'verdict': {'code': code, 'label': VERDICTS[code], 'reasons': reasons},
             'score': score, 'positives': list(dict.fromkeys(plus))[:3],
             'negatives': list(dict.fromkeys(minus))[:3], 'price_summary': price,
+            'price_history': summarize_price_history(d.get('price_history') or {}),
+            'location_unverified': has_location(profile) and (d.get('lat') is None or d.get('lon') is None),
             'urgency': urgent, 'risks': checks, 'better_nearby': [],
             'confidence': 'sufficient' if price['reliable'] and score is not None else 'limited',
             'warnings': warnings}
@@ -347,6 +383,11 @@ async def _detail(lid: str, *, similar_limit: int = 0) -> dict:
             detail['location_score'] = await _build_score(detail['complex_id'])
         except Exception:
             detail['location_score'] = None
+    try:
+        detail['price_history'] = await build_price_history(lid)
+    except Exception:
+        log.warning('Price history unavailable for %s', lid, exc_info=True)
+        detail['price_history'] = {'available': False}
     return detail
 
 
@@ -364,7 +405,7 @@ async def analyze_for_buyer(listing_url_or_id: str, user_id: int | None = None) 
         d = await _detail(lid, similar_limit=40)
     except ListingNotFound:
         return {'found': False, 'message': 'Объявление больше не доступно в базе.'}
-    if d.get('lat') is not None and d.get('lon') is not None and not (50.9 <= d['lat'] <= 51.4 and 71.1 <= d['lon'] <= 71.9):
+    if d.get('lat') is not None and d.get('lon') is not None and not in_astana_bbox(d['lat'], d['lon']):
         return {'found': False, 'message': 'Пока анализируем только покупку квартир в Астане.'}
     try:
         d['dom_scenario'] = await asyncio.wait_for(compute_dom_scenario_cached(lid), timeout=5)

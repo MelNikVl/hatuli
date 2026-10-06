@@ -28,6 +28,7 @@ async def seeded():
     finally:
         await pg.execute('DELETE FROM favorites WHERE user_id=$1', uid)
         await pg.execute('DELETE FROM users WHERE user_id=$1', uid)
+        await pg.execute('DELETE FROM price_history WHERE listing_id=ANY($1::text[])', lids)
         await pg.execute('DELETE FROM apartment_listings WHERE id=ANY($1::text[])', lids)
         await pg.close_pool()
 
@@ -59,3 +60,32 @@ async def test_full_core_uses_real_detail_and_similar_search(seeded):
     assert result['better_nearby'][0]['listing']['id'] == lids[1]
     assert result['better_nearby'][0]['rank_points'] >= 3
     assert result['score'] is None  # do not fabricate Deal Score for a fresh row
+
+
+@pytest.mark.asyncio
+async def test_geolocation_profile_round_trip_and_legacy_update_preserves_point(seeded):
+    uid, _ = seeded
+    profile = dict(budget_max=35_000_000, rooms=[1], area_min=30., property_type='secondary',
+                   location_lat=51.13, location_lon=71.43, radius_km=2)
+    await buyer_store.save_profile(uid, profile)
+    loaded = await buyer_store.get_profile(uid)
+    assert loaded['location_lat'] == pytest.approx(51.13)
+    assert loaded['location_lon'] == pytest.approx(71.43)
+    assert loaded['radius_km'] == 2
+    # A caller using the earlier four-field contract must not clear location.
+    await buyer_store.save_profile(uid, dict(budget_max=30_000_000, rooms=[1], area_min=30., property_type=None))
+    loaded = await buyer_store.get_profile(uid)
+    assert loaded['radius_km'] == 2 and loaded['location_lat'] == pytest.approx(51.13)
+
+
+@pytest.mark.asyncio
+async def test_actual_price_events_visible_in_buyer_detail(seeded):
+    from bot.buyer.telegram import render_summary
+    _, lids = seeded
+    await pg.execute("""INSERT INTO price_history (listing_id, old_price, new_price, changed_at)
+        VALUES ($1,34000000,32000000,'2026-10-06T00:00:00Z')""", lids[0])
+    detail = await buyer._detail(lids[0])
+    result = buyer.summarize(detail)
+    assert result['price_history']['changes'] == 1
+    assert '−2 000 000 ₸' in render_summary(result)
+    assert '06.10.2026' in render_summary(result)

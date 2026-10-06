@@ -16,7 +16,7 @@ from tests.test_buyer import listing
 
 def message(text='https://krisha.kz/a/show/123456'):
     return SimpleNamespace(text=text, caption=None, entities=None, caption_entities=None,
-        from_user=SimpleNamespace(id=42, username='test'), answer=AsyncMock(), edit_reply_markup=AsyncMock())
+        from_user=SimpleNamespace(id=42, username='test'), answer=AsyncMock(), edit_reply_markup=AsyncMock(), answer_location=AsyncMock(), location=None)
 
 
 def callback(data, msg):
@@ -62,7 +62,7 @@ async def test_unknown_link_and_service_failure():
 
 
 @pytest.mark.asyncio
-async def test_four_step_profile_multiple_rooms_and_manual_inputs():
+async def test_five_step_profile_multiple_rooms_and_manual_inputs():
     msg, ctx = message(), state()
     with patch.object(ui, 'save_profile', AsyncMock()) as save:
         await ui.profile_start(callback('p:start', msg), ctx)
@@ -78,8 +78,20 @@ async def test_four_step_profile_multiple_rooms_and_manual_inputs():
         await ui.area_text(msg, ctx)
         assert await ctx.get_state() == ui.Profile.kind.state
         await ui.kind_button(callback('p:kind:new', msg), ctx)
+        assert await ctx.get_state() == ui.Profile.location.state
+        save.assert_not_called()
+        await ui.location_mode(callback('p:where:pin', msg), ctx)
+        msg.location = SimpleNamespace(latitude=51.13, longitude=71.43)
+        await ui.location_pin(msg, ctx)
+        assert await ctx.get_state() == ui.Profile.radius.state
+        msg.answer_location.assert_awaited_once_with(latitude=51.13, longitude=71.43)
+        save.assert_not_called()
+        await ui.radius_button(callback('p:radius:2', msg), ctx)
         assert await ctx.get_state() is None
-    save.assert_awaited_once_with(42, dict(budget_max=32_500_000, rooms=[2, 4], area_min=55, property_type='new'))
+    save.assert_awaited_once()
+    saved = save.await_args.args[1]
+    assert {k: saved[k] for k in ('budget_max', 'rooms', 'area_min', 'property_type', 'location_lat', 'location_lon', 'radius_km')} == dict(
+        budget_max=32_500_000, rooms=[2, 4], area_min=55, property_type='new', location_lat=51.13, location_lon=71.43, radius_km=2)
     assert 'именно под вас' in msg.answer.await_args.args[0]
 
 
@@ -158,3 +170,76 @@ async def test_dispatcher_routes_url_during_profile_and_ignores_group():
     dp.sub_routers.remove(ui.router)
     ui.router._parent_router = None
     await dp.storage.close()
+
+
+@pytest.mark.asyncio
+async def test_one_room_area_has_thirty_metres():
+    msg, ctx = message(), state()
+    await ctx.update_data(rooms=[1])
+    await ui.rooms_button(callback('p:rooms:done', msg), ctx)
+    buttons = [b for row in msg.answer.await_args.kwargs['reply_markup'].inline_keyboard for b in row]
+    assert any(b.text == '30+' and b.callback_data == 'p:area:30' for b in buttons)
+    await ui.area_button(callback('p:area:30', msg), ctx)
+    assert (await ctx.get_data())['area_min'] == 30
+
+
+@pytest.mark.asyncio
+async def test_location_search_requires_choice_and_confirmation():
+    msg, ctx = message('Highvill'), state()
+    await ctx.set_state(ui.Profile.location)
+    await ui.location_mode(callback('p:where:complex', msg), ctx)
+    choices = [{'label': 'ЖК Highvill', 'lat': 51.13, 'lon': 71.43}]
+    with patch.object(ui, 'search_locations', AsyncMock(return_value=choices)) as search, \
+         patch.object(ui, 'save_profile', AsyncMock()) as save:
+        await ui.location_text(msg, ctx)
+        search.assert_awaited_once_with('Highvill', 'complex')
+        assert await ctx.get_state() == ui.Profile.location_query.state
+        data = await ctx.get_data()
+        stale = callback('p:loc:stale:0', msg)
+        await ui.location_choice(stale, ctx)
+        msg.answer_location.assert_not_called()
+        await ui.location_choice(callback(f"p:loc:{data['location_nonce']}:0", msg), ctx)
+        assert await ctx.get_state() == ui.Profile.radius.state
+        msg.answer_location.assert_awaited_once()
+        save.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_geo_outside_astana_and_empty_search_not_saved():
+    msg, ctx = message('неизвестный адрес'), state()
+    await ctx.update_data(location_kind='address')
+    await ctx.set_state(ui.Profile.location_query)
+    with patch.object(ui, 'search_locations', AsyncMock(return_value=[])), patch.object(ui, 'save_profile', AsyncMock()) as save:
+        await ui.location_text(msg, ctx)
+        assert 'Не удалось найти' in msg.answer.await_args.args[0]
+        msg.location = SimpleNamespace(latitude=43.2, longitude=76.9)
+        await ui.location_pin(msg, ctx)
+        assert 'Астане' in msg.answer.await_args.args[0]
+        assert await ctx.get_state() == ui.Profile.location_query.state
+        save.assert_not_called()
+
+
+def test_price_changes_always_visible_even_when_three_negatives():
+    result = summarize(listing(price_history={'events': [
+        {'at': '06.10.2026', 'old_price': 32_000_000, 'new_price': 31_990_000}]}))
+    result['negatives'] = ['Один', 'Два', 'Три']
+    text = ui.render_summary(result)
+    assert '06.10.2026' in text and '31 990 000 ₸' in text and '−10 000 ₸' in text
+    buttons = [b.text for row in ui.actions('123456', True).inline_keyboard for b in row]
+    assert '📉 История цены' in buttons
+
+
+def test_price_history_pagination_keeps_every_event():
+    result = summarize(listing(price_history={'events': [
+        {'at': f'{i+1:02}.10.2026', 'old_price': 32_000_000 - i*100_000, 'new_price': 31_900_000 - i*100_000}
+        for i in range(19)]}))
+    pages = [ui.render_history(result, page)[0] for page in range(3)]
+    assert all(p.count('→') <= 8 for p in pages)
+    assert sum(p.count('→') for p in pages) == 19
+    assert '19.10.2026' in pages[0] and '01.10.2026' in pages[-1]
+    assert '1/3' in pages[0] and '3/3' in pages[-1]
+
+
+def test_history_failure_is_not_reported_as_no_changes():
+    result = summarize(listing(price_history={'available': False}))
+    assert 'История цены временно недоступна' in ui.render_summary(result)

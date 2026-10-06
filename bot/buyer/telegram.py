@@ -5,6 +5,7 @@ import asyncio
 from collections import OrderedDict
 from html import escape
 import logging
+import secrets
 import time
 
 from aiogram import F, Router
@@ -15,6 +16,8 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKe
 
 from bot.core.buyer import analyze_for_buyer, extract_krisha_url, money
 from bot.core.buyer_store import ensure_user, save_favorite, save_profile
+from bot.core.buyer_locations import search_locations
+from bot.core.geo import in_astana_bbox
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -34,6 +37,9 @@ class Profile(StatesGroup):
     rooms = State()
     area = State()
     kind = State()
+    location = State()
+    location_query = State()
+    radius = State()
 
 
 def keyboard(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
@@ -41,9 +47,54 @@ def keyboard(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=text, callback_data=data) for text, data in row] for row in rows])
 
 
-def actions(lid: str) -> InlineKeyboardMarkup:
-    return keyboard([[('🔥 Показать лучше', f'b:better:{lid}'), ('⭐ Сохранить', f'b:save:{lid}')],
-                     [('⚠️ Что проверить', f'b:check:{lid}')], [('🎯 Подбирать под меня', 'p:start')]])
+def actions(lid: str, has_history: bool = False) -> InlineKeyboardMarkup:
+    rows = [[('🔥 Показать лучше', f'b:better:{lid}'), ('⭐ Сохранить', f'b:save:{lid}')],
+            [('⚠️ Что проверить', f'b:check:{lid}')]]
+    if has_history:
+        rows.append([('📉 История цены', f'b:history_0:{lid}')])
+    rows.append([('🎯 Подбирать под меня', 'p:start')])
+    return keyboard(rows)
+
+
+def exact_money(value: float) -> str:
+    return f'{value:,.0f} ₸'.replace(',', ' ')
+
+
+def price_event_text(event: dict) -> str:
+    delta = event['new_price'] - event['old_price']
+    sign = '−' if delta < 0 else '+'
+    return (f"{event['at']}: {exact_money(event['old_price'])} → {exact_money(event['new_price'])} "
+            f"({sign}{exact_money(abs(delta))})")
+
+
+def price_history_lines(history: dict) -> list[str]:
+    if history.get('available') is False:
+        return ['История цены временно недоступна.']
+    events = history.get('events') or []
+    if not events:
+        return []
+    arrow = '📉' if events[-1]['new_price'] < events[-1]['old_price'] else '📈'
+    lines = [arrow + ' ' + price_event_text(events[-1])]
+    if len(events) > 1:
+        net = history['net_change']
+        signed = ('−' if net < 0 else '+') + exact_money(abs(net)) if net else 'без итогового изменения'
+        lines.append(f"Всего изменений: {len(events)}; за записанную историю: {signed}.")
+    return lines
+
+
+def render_history(result: dict, page: int) -> tuple[str, InlineKeyboardMarkup]:
+    events = list(reversed(result.get('price_history', {}).get('events', [])))
+    pages = max(1, (len(events) + 7) // 8)
+    page = max(0, min(page, pages - 1))
+    lines = [f'История цены · {page+1}/{pages}', 'Последние изменения сверху.']
+    lines += [price_event_text(e) for e in events[page*8:(page+1)*8]]
+    lid = str(result['listing']['id'])
+    buttons = []
+    if page:
+        buttons.append(('← Новее', f'b:history_{page-1}:{lid}'))
+    if page + 1 < pages:
+        buttons.append(('Старее →', f'b:history_{page+1}:{lid}'))
+    return '\n'.join(lines), keyboard([buttons] if buttons else [])
 
 
 def render_summary(result: dict) -> str:
@@ -60,6 +111,9 @@ def render_summary(result: dict) -> str:
         lines += [f"Рыночный ориентир: ~{money(p['fair'])}", f"Попробовать предложить: ~{money(p['offer'])}"]
     else:
         lines.append('Мало хороших аналогов — оценка цены ненадёжна.')
+    lines += price_history_lines(result.get('price_history') or {})
+    if result.get('location_unverified'):
+        lines.append('Нет координат — соответствие вашей локации не проверено.')
     lines += ['', escape(result['urgency']['text'])]
     n = len(result['better_nearby'])
     lines += ['', f'Вариантов рядом с преимуществами: {n}.' if n else 'Убедительно лучших вариантов в проверенной выборке не нашёл.']
@@ -81,6 +135,8 @@ def render_alternative(r: dict, base: dict) -> str:
         lines.append('<b>Компромисс:</b> ' + escape('; '.join(r['tradeoffs'])))
     if r.get('urgency', {}).get('level') == 'high':
         lines.append(escape(r['urgency']['text']))
+    from bot.core.buyer import summarize_price_history
+    lines.extend(price_history_lines(summarize_price_history(d.get('price_history') or {})))
     lines.extend(escape(w) for w in r['warnings'])
     return '\n'.join(lines)
 
@@ -130,7 +186,7 @@ async def link(message: Message, state: FSMContext) -> None:
             return
         remember(message.from_user.id, result)
         await message.answer(render_summary(result), parse_mode='HTML',
-                             reply_markup=actions(str(result['listing']['id'])))
+                             reply_markup=actions(str(result['listing']['id']), bool(result.get('price_history', {}).get('changes'))))
     except Exception:
         log.exception('Buyer analysis failed')
         await message.answer('Не удалось завершить анализ. Попробуйте отправить ссылку чуть позже.')
@@ -164,7 +220,12 @@ async def action(callback: CallbackQuery) -> None:
         if not result:
             await callback.message.answer('Анализ устарел. Пришлите ссылку ещё раз — обновлю данные.')
             return
-        if command == 'check':
+        if command.startswith('history_'):
+            page = command.removeprefix('history_')
+            if page.isdigit():
+                text, markup = render_history(result, int(page))
+                await callback.message.answer(text, reply_markup=markup)
+        elif command == 'check':
             checks = result['risks']
             text = '⚠️ На просмотре проверьте\n\n' + '\n'.join(f'{i}. {t}' for i, t in enumerate(checks, 1)) if checks else 'Для этой квартиры пока нет конкретных пунктов проверки: данных недостаточно. Это не означает отсутствие рисков.'
             await callback.message.answer(text)
@@ -181,14 +242,28 @@ async def action(callback: CallbackQuery) -> None:
         await callback.message.answer('Не удалось выполнить действие. Попробуйте позже.')
 
 
+async def begin_profile(message: Message, state: FSMContext, uid: int) -> None:
+    await state.clear()
+    for (user, lid), (created, result) in reversed(_cache.items()):
+        d = result['listing']
+        if user == uid and time.monotonic() - created < 600 and in_astana_bbox(d.get('lat'), d.get('lon')):
+            await state.update_data(listing_anchor={'label': 'Рядом с присланной квартирой', 'lat': d['lat'], 'lon': d['lon']})
+            break
+    await state.set_state(Profile.budget)
+    await message.answer('1/5. Максимальный бюджет? Можно ввести сумму в млн ₸. /cancel — отмена.',
+        reply_markup=keyboard([[(f'до {n} млн', f'p:budget:{n}') for n in (25, 30)],
+                               [(f'до {n} млн', f'p:budget:{n}') for n in (35, 40)]]))
+
+
 @router.callback_query(F.data == 'p:start')
 async def profile_start(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await state.clear()
-    await state.set_state(Profile.budget)
-    await callback.message.answer('1/4. Максимальный бюджет? Можно ввести сумму в млн ₸. /cancel — отмена.',
-        reply_markup=keyboard([[(f'до {n} млн', f'p:budget:{n}') for n in (25, 30)],
-                               [(f'до {n} млн', f'p:budget:{n}') for n in (35, 40)]]))
+    await begin_profile(callback.message, state, callback.from_user.id)
+
+
+@router.message(Command('profile'))
+async def profile_command(message: Message, state: FSMContext) -> None:
+    await begin_profile(message, state, message.from_user.id)
 
 
 async def choose_budget(message: Message, state: FSMContext, value: str) -> None:
@@ -201,7 +276,7 @@ async def choose_budget(message: Message, state: FSMContext, value: str) -> None
         return
     await state.update_data(budget_max=round(amount * 1e6), rooms=[])
     await state.set_state(Profile.rooms)
-    await message.answer('2/4. Сколько комнат? Выберите несколько, затем «Готово».', reply_markup=rooms_keyboard([]))
+    await message.answer('2/5. Сколько комнат? Выберите несколько, затем «Готово».', reply_markup=rooms_keyboard([]))
 
 
 def rooms_keyboard(selected: list[int]) -> InlineKeyboardMarkup:
@@ -230,9 +305,9 @@ async def rooms_button(callback: CallbackQuery, state: FSMContext) -> None:
             return
         await callback.answer()
         await state.set_state(Profile.area)
-        await callback.message.answer('3/4. Минимальная площадь? Можно ввести число в м².',
-            reply_markup=keyboard([[('Не важно', 'p:area:0'), ('40+', 'p:area:40'), ('50+', 'p:area:50')],
-                                   [('60+', 'p:area:60'), ('70+', 'p:area:70')]]))
+        await callback.message.answer('3/5. Минимальная площадь? Можно ввести число в м².',
+            reply_markup=keyboard([[('Не важно', 'p:area:0'), ('30+', 'p:area:30'), ('40+', 'p:area:40')],
+                                   [('50+', 'p:area:50'), ('60+', 'p:area:60'), ('70+', 'p:area:70')]]))
         return
     if value not in ('1', '2', '3', '4'):
         await callback.answer()
@@ -254,7 +329,7 @@ async def choose_area(message: Message, state: FSMContext, value: str) -> None:
         return
     await state.update_data(area_min=area or None)
     await state.set_state(Profile.kind)
-    await message.answer('4/4. Что рассматриваете?', reply_markup=keyboard([
+    await message.answer('4/5. Что рассматриваете?', reply_markup=keyboard([
         [('Вторичку', 'p:kind:secondary'), ('Первичку', 'p:kind:new'), ('Всё', 'p:kind:all')]]))
 
 
@@ -275,19 +350,129 @@ async def kind_button(callback: CallbackQuery, state: FSMContext) -> None:
     kind = callback.data.rsplit(':', 1)[1]
     if kind not in ('secondary', 'new', 'all'):
         return
+    await state.update_data(property_type=None if kind == 'all' else kind)
+    await ask_location(callback.message, state)
+
+
+async def ask_location(message: Message, state: FSMContext) -> None:
+    await state.set_state(Profile.location)
+    rows = [[('🏢 Название ЖК', 'p:where:complex'), ('📍 Улица / адрес', 'p:where:address')],
+            [('🗺 Точка на карте', 'p:where:pin')]]
+    if (await state.get_data()).get('listing_anchor'):
+        rows.append([('Рядом с присланной квартирой', 'p:where:listing')])
+    await message.answer('5/5. Где хотите жить? Выберите ЖК, адрес или точку на карте. '
+                         'Затем укажите радиус вокруг неё — он будет учитываться при оценке и сравнении квартир.',
+                         reply_markup=keyboard(rows))
+
+
+@router.callback_query(Profile.location, F.data.startswith('p:where:'))
+async def location_mode(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    kind = callback.data.rsplit(':', 1)[1]
+    if kind == 'listing':
+        point = (await state.get_data()).get('listing_anchor')
+        if point:
+            await preview_point(callback.message, state, point)
+        return
+    if kind not in ('complex', 'address', 'pin'):
+        return
+    await state.update_data(location_kind=kind, location_choices=[])
+    await state.set_state(Profile.location_query)
+    instructions = {
+        'complex': 'Напишите название ЖК. Предложу варианты из справочника Clearly.',
+        'address': 'Напишите улицу и номер дома или перекрёсток в Астане. '
+                   'У длинной улицы важно выбрать конкретный участок. Найденную точку покажу на карте.',
+        'pin': 'Нажмите скрепку → «Геопозиция» и выберите желаемое место на карте. '
+               'Можно отправить любую точку, не обязательно ваше текущее местоположение.',
+    }
+    await callback.message.answer(instructions[kind])
+
+
+async def preview_point(message: Message, state: FSMContext, point: dict) -> None:
+    if not in_astana_bbox(point.get('lat'), point.get('lon')):
+        await message.answer('Выберите точку в Астане.')
+        return
+    await state.update_data(location_lat=point['lat'], location_lon=point['lon'], location_label=point['label'])
+    await state.set_state(Profile.radius)
+    await message.answer_location(latitude=point['lat'], longitude=point['lon'])
+    await message.answer(f"{point['label']}\nПроверьте точку на карте. Как далеко от неё рассматриваете квартиры? "
+                         'Выбор радиуса подтвердит место и сохранит профиль.',
+        reply_markup=keyboard([[('1 км', 'p:radius:1'), ('2 км', 'p:radius:2'), ('3 км', 'p:radius:3')],
+                               [('Изменить место', 'p:relocate')]]))
+
+
+@router.callback_query(Profile.radius, F.data == 'p:relocate')
+async def relocate(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await ask_location(callback.message, state)
+
+
+@router.message(Profile.location, F.location)
+@router.message(Profile.location_query, F.location)
+async def location_pin(message: Message, state: FSMContext) -> None:
+    await preview_point(message, state, {'label': 'Выбранная точка',
+        'lat': message.location.latitude, 'lon': message.location.longitude})
+
+
+@router.message(Profile.location_query)
+async def location_text(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    data['property_type'] = None if kind == 'all' else kind
+    kind = data.get('location_kind')
+    if kind == 'pin':
+        await message.answer('Пришлите геопозицию через скрепку → «Геопозиция» или /cancel для отмены.')
+        return
+    query = (message.text or '').strip()
+    if not 2 <= len(query) <= 150:
+        await message.answer('Введите название ЖК или адрес длиной от 2 до 150 символов.')
+        return
+    await state.update_data(location_choices=[])
+    try:
+        choices = await asyncio.wait_for(search_locations(query, kind), timeout=15)
+    except Exception:
+        log.exception('Buyer location search failed')
+        choices = []
+    if not choices:
+        await message.answer('Не удалось найти точное место. Уточните название/адрес или пришлите точку на карте через скрепку → «Геопозиция».')
+        return
+    nonce = secrets.token_hex(3)
+    await state.update_data(location_choices=choices, location_nonce=nonce)
+    await message.answer('Выберите найденное место. Если ни одно не подходит — напишите другой запрос или пришлите точку.',
+        reply_markup=keyboard([[(c['label'][:80], f'p:loc:{nonce}:{i}')] for i, c in enumerate(choices)]))
+
+
+@router.callback_query(Profile.location_query, F.data.startswith('p:loc:'))
+async def location_choice(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    parts = callback.data.split(':')
+    choices = data.get('location_choices') or []
+    if len(parts) != 4 or parts[2] != data.get('location_nonce') or not parts[3].isdigit() or int(parts[3]) >= len(choices):
+        await callback.answer('Результаты устарели. Повторите поиск.')
+        return
+    await callback.answer()
+    await preview_point(callback.message, state, choices[int(parts[3])])
+
+
+@router.callback_query(Profile.radius, F.data.startswith('p:radius:'))
+async def radius_button(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    value = callback.data.rsplit(':', 1)[1]
+    if value not in ('1', '2', '3'):
+        return
+    data = await state.get_data()
+    data['radius_km'] = int(value)
     try:
         await save_profile(callback.from_user.id, data)
     except Exception:
         log.exception('Buyer profile save failed')
-        await callback.message.answer('Не удалось сохранить профиль. Нажмите выбранный вариант ещё раз.')
+        await callback.message.answer('Не удалось сохранить профиль. Нажмите выбранный радиус ещё раз.')
         return
     await state.clear()
     for key in list(_cache):
         if key[0] == callback.from_user.id:
             del _cache[key]
-    await callback.message.answer('✅ Понял. Теперь буду оценивать квартиры именно под вас. Пришлите ссылку.')
+    await callback.message.answer(f"✅ Понял. Теперь буду оценивать квартиры именно под вас.\n"
+        f"Локация: {data.get('location_label', 'выбранная точка')}, радиус {value} км.\n"
+        'Пришлите ссылку. Изменить параметры — /profile.')
 
 
 @router.callback_query(F.data.startswith('p:'))

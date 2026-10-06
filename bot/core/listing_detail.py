@@ -359,4 +359,7 @@ async def build_price_history(listing_id: str) -> dict:
         "points": points,
         "current": cur["price"] if cur else None,
         "changes": len(rows),
+        "events": [{"at": r["changed_at"].strftime("%d.%m.%Y"),
+                    "old_price": r["old_price"], "new_price": r["new_price"]}
+                   for r in rows],
     }
