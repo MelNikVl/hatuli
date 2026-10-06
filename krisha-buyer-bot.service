@@ -1,0 +1,15 @@
+[Unit]
+Description=Clearly buyer Telegram bot (optional experiment)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python service_buyer_bot.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
