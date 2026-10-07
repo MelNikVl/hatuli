@@ -5,6 +5,7 @@ import os
 
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand, MenuButtonCommands
 from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from bot.buyer.telegram import router
 from bot.db.pg import init_pool, close_pool
@@ -22,6 +23,12 @@ async def main() -> None:
     dp.include_router(router)
     try:
         async with Bot(token) as bot:
+            await bot.set_my_commands([BotCommand(command=c,description=d) for c,d in [
+                ('menu','Главное меню'),('check','Проверить квартиру по ссылке'),
+                ('nearby','Варианты рядом на карте'),('profile','Настроить подбор'),
+                ('map','Выбрать места, где хочу жить'),('favorites','Сохранённые квартиры'),
+                ('cancel','Отменить настройку')]])
+            await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
             await dp.start_polling(bot)
     finally:
         await close_pool()

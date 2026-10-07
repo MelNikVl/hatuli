@@ -52,7 +52,7 @@ async def test_link_handler_short_answer_and_buttons():
     answer = msg.answer.await_args
     assert len(answer.args[0]) < 1200
     buttons = [b.text for row in answer.kwargs['reply_markup'].inline_keyboard for b in row]
-    assert buttons == ['🏘 Все варианты рядом', '⭐ Сохранить', '⚠️ Что проверить', '🎯 Подбирать под меня']
+    assert buttons == ['📋 Сравнить списком', '⭐ Сохранить', '⚠️ Что проверить', '🎯 Подбирать под меня']
 
 
 @pytest.mark.asyncio
@@ -312,3 +312,42 @@ async def test_two_similar_cards_sent_automatically():
         await ui.link(msg,state())
     cards=[call.args[0] for call in msg.answer.await_args_list if 'Похожий вариант' in call.args[0]]
     assert len(cards)==2 and all('Почему лучше' not in text for text in cards)
+
+
+@pytest.mark.asyncio
+async def test_nearby_map_replaces_automatic_cards_when_available(monkeypatch):
+    from bot.core.buyer import recommend_nearby
+    monkeypatch.setenv('BUYER_MAP_URL','https://example.test/buyer/map')
+    base=listing();result=dict(summarize(base),found=True)
+    result['better_nearby']=recommend_nearby(base,[listing(id='123457'),listing(id='123458',lat=51.14)],{})
+    msg=message()
+    with patch.object(ui,'ensure_user',AsyncMock()),patch.object(ui,'analyze_for_buyer',AsyncMock(return_value=result)):
+        await ui.link(msg,state())
+    assert msg.answer.await_count==2
+    markup=msg.answer.await_args.kwargs['reply_markup']
+    assert markup.inline_keyboard[0][0].web_app.url=='https://example.test/buyer/map/nearby?ids=123456,123457,123458'
+    assert msg.answer.await_args_list[0].kwargs['reply_markup'].is_persistent
+
+
+@pytest.mark.asyncio
+async def test_menu_explains_next_step_and_works_during_onboarding():
+    msg,ctx=message('🔎 Проверить квартиру'),state()
+    await ctx.set_state(ui.Profile.budget)
+    await ui.menu_choice(msg,ctx)
+    assert await ctx.get_state() is None
+    assert 'Пришлите ссылку' in msg.answer.await_args.args[0]
+    assert len(msg.answer.await_args.kwargs['reply_markup'].keyboard)==3
+    ui._cache.clear()
+    await ui.nearby_command(msg,ctx)
+    assert 'Сначала пришлите ссылку' in msg.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_favorites_uses_only_current_user_and_escapes_labels():
+    msg=message()
+    with patch.object(ui,'list_favorites',AsyncMock(return_value=[{
+        'listing_id':'123456','price':25000000,'rooms':1,'area':'<bad>','is_active':False}])) as saved:
+        await ui.favorites_command(msg,state())
+    saved.assert_awaited_once_with(42)
+    assert '&lt;bad&gt;' in msg.answer.await_args.args[0]
+    assert 'снято с публикации' in msg.answer.await_args.args[0]

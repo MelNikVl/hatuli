@@ -13,11 +13,12 @@ from aiogram import F, Router, BaseMiddleware
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BufferedInputFile
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BufferedInputFile, ReplyKeyboardMarkup, KeyboardButton
 
 from bot.core.buyer import analyze_for_buyer, extract_krisha_url, money
 from bot.core.buyer_store import ensure_user, save_favorite, save_profile
 from bot.core.buyer_locations import search_locations
+from bot.core.site_auth import list_favorites
 from bot.core.geo import in_astana_bbox
 from bot.core import buyer_map
 
@@ -41,7 +42,7 @@ class MapCompletionMiddleware(BaseMiddleware):
                     if key[0] == event.from_user.id:
                         _cache.pop(key, None)
                 message = event.message if isinstance(event, CallbackQuery) else event
-                await message.answer('✅ Места сохранены. Учту выбранные участки при оценке квартир.')
+                await message.answer('✅ Места сохранены. Пришлите ссылку на квартиру — оценю её по вашим параметрам.', reply_markup=main_menu())
         return await handler(event, data)
 
 
@@ -65,10 +66,29 @@ async def map_markup(state, profile=None):
     await state.update_data(map_nonce=nonce)
     return InlineKeyboardButton(text='🗺 Выбрать участки на карте', web_app=WebAppInfo(url=url+'?nonce='+nonce))
 
+
+MENU_LABELS = ('🔎 Проверить квартиру', '🏘 Варианты рядом', '🎯 Настроить подбор', '🗺 Где хочу жить', '⭐ Избранное', '☰ Меню')
+
+
+def main_menu() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text=label) for label in MENU_LABELS[i:i+2]] for i in range(0,6,2)],
+        resize_keyboard=True, is_persistent=True, input_field_placeholder='Пришлите ссылку на квартиру или выберите действие')
+
+
+def nearby_button(result: dict) -> InlineKeyboardButton | None:
+    url=os.getenv('BUYER_MAP_URL','').rstrip('/')
+    if not url.startswith('https://') or not result.get('better_nearby'):
+        return None
+    ids=[str(result['listing']['id'])]+[str(r['listing']['id']) for r in result['better_nearby'][:3]]
+    if not all(lid.isdigit() for lid in ids):
+        return None
+    return InlineKeyboardButton(text='🗺 Варианты на карте', web_app=WebAppInfo(url=url+'/nearby?ids='+','.join(ids)))
+
 START = ('👋 Пришли ссылку на квартиру с Krisha.kz.\n\n'
          'Я быстро скажу:\n• что в ней хорошо;\n• что настораживает;\n'
          '• нормальная ли цена;\n• стоит ли ехать смотреть;\n'
-         '• есть ли рядом варианты лучше.\n\nПока — покупка квартир в Астане.')
+         '• какие квартиры посмотреть рядом.\n\nПришлите ссылку или выберите действие в меню внизу. Пока — Астана.')
 
 
 class Profile(StatesGroup):
@@ -86,13 +106,17 @@ def keyboard(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=text, callback_data=data) for text, data in row] for row in rows])
 
 
-def actions(lid: str, has_history: bool = False) -> InlineKeyboardMarkup:
-    rows = [[('🏘 Все варианты рядом', f'b:better:{lid}'), ('⭐ Сохранить', f'b:save:{lid}')],
+def actions(lid: str, has_history: bool = False, result: dict | None = None) -> InlineKeyboardMarkup:
+    rows = [[('📋 Сравнить списком', f'b:better:{lid}'), ('⭐ Сохранить', f'b:save:{lid}')],
             [('⚠️ Что проверить', f'b:check:{lid}')]]
     if has_history:
         rows.append([('📉 История цены', f'b:history_0:{lid}')])
     rows.append([('🎯 Подбирать под меня', 'p:start')])
-    return keyboard(rows)
+    markup = keyboard(rows)
+    button = nearby_button(result) if result else None
+    if button:
+        markup.inline_keyboard.insert(0, [button])
+    return markup
 
 
 def exact_money(value: float) -> str:
@@ -163,7 +187,7 @@ def render_summary(result: dict) -> str:
     if result.get('budget_gap'):
         lines += ['', f"Чтобы уложиться в ваш бюджет, нужно обсудить снижение на {money(result['budget_gap'])}."]
     n = len(result['better_nearby'])
-    lines += ['', f'Подобрал вариантов рядом: {n}. Покажу ниже.' if n else 'В радиусе 2 км пока нет проверенных вариантов, подходящих под ваши параметры.']
+    lines += ['', f'Вариантов рядом: {n}. Откройте карту или сравните списком кнопками ниже.' if n else 'В радиусе 2 км пока нет проверенных вариантов, подходящих под ваши параметры.']
     if result['confidence'] == 'limited':
         lines.append('Вывод предварительный: данные неполные.')
     lid = str(result['listing']['id'])
@@ -224,13 +248,75 @@ def recalled(uid: int, lid: str) -> dict | None:
 async def start(message: Message, state: FSMContext) -> None:
     await reset_profile_state(state)
     await ensure_user(message.from_user.id, message.from_user.username)
-    await message.answer(START)
+    await message.answer(START, reply_markup=main_menu())
+
+
+@router.message(Command('menu', 'help'))
+async def menu_command(message: Message, state: FSMContext) -> None:
+    await message.answer('Что хотите сделать?\n\n'
+        '🔎 Проверить квартиру — пришлите ссылку Krisha.\n'
+        '🏘 Варианты рядом — карта последнего подбора.\n'
+        '🎯 Настроить подбор — бюджет, комнаты и площадь.\n'
+        '🗺 Где хочу жить — выбрать желаемые участки.\n'
+        '⭐ Избранное — сохранённые квартиры.', reply_markup=main_menu())
+
+
+@router.message(Command('check'))
+async def check_command(message: Message, state: FSMContext) -> None:
+    await reset_profile_state(state)
+    await message.answer('Пришлите ссылку на квартиру с Krisha.kz. Я проверю её и подберу варианты рядом.', reply_markup=main_menu())
+
+
+@router.message(Command('nearby'))
+async def nearby_command(message: Message, state: FSMContext) -> None:
+    result = next((r for (uid,lid),(created,r) in reversed(_cache.items())
+                   if uid==message.from_user.id and time.monotonic()-created<600), None)
+    if not result:
+        await message.answer('Сначала пришлите ссылку на квартиру. После анализа появится карта вариантов рядом.', reply_markup=main_menu())
+        return
+    button=nearby_button(result)
+    if button:
+        await message.answer('На карте: исходная квартира и варианты последнего подбора. Нажмите метку, чтобы открыть объявление.',
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[button]]))
+    elif result['better_nearby']:
+        await send_nearby(message,result)
+    else:
+        await message.answer('Для последней квартиры не нашлось подходящих вариантов. Можно изменить параметры подбора или прислать другую ссылку.',reply_markup=main_menu())
+
+
+@router.message(Command('favorites'))
+async def favorites_command(message: Message, state: FSMContext) -> None:
+    try:
+        items=await list_favorites(message.from_user.id)
+    except Exception:
+        log.exception('Buyer favorites unavailable')
+        await message.answer('Не удалось загрузить избранное. Попробуйте ещё раз.', reply_markup=main_menu())
+        return
+    if not items:
+        await message.answer('Здесь будут сохранённые квартиры. Пришлите ссылку, затем нажмите «⭐ Сохранить» под оценкой.',reply_markup=main_menu())
+        return
+    lines=['⭐ Последние сохранённые квартиры:']
+    for d in items[:10]:
+        lid=str(d['listing_id'])
+        if not lid.isdigit():
+            continue
+        title=f"{money(d.get('price'))} · {d.get('rooms') or '?'} комн. · {d.get('area') or '?'} м²"
+        suffix=' — снято с публикации' if d.get('is_active') is False else ''
+        lines.append(f'<a href="https://krisha.kz/a/show/{lid}">{escape(title)}</a>{suffix}')
+    lines.append('Чтобы проверить заново, пришлите ссылку на выбранную квартиру.')
+    await message.answer('\n\n'.join(lines),parse_mode='HTML',disable_web_page_preview=True,reply_markup=main_menu())
+
+
+@router.message(F.text.in_(MENU_LABELS))
+async def menu_choice(message: Message, state: FSMContext) -> None:
+    handlers=(check_command,nearby_command,profile_command,map_command,favorites_command,menu_command)
+    await handlers[MENU_LABELS.index(message.text)](message,state)
 
 
 @router.message(Command('cancel'))
 async def cancel(message: Message, state: FSMContext) -> None:
     await reset_profile_state(state)
-    await message.answer('Настройка отменена. Пришлите ссылку на квартиру.')
+    await message.answer('Настройка отменена. Пришлите ссылку на квартиру или выберите действие.', reply_markup=main_menu())
 
 
 @router.message(Command('map'))
@@ -251,7 +337,7 @@ async def link(message: Message, state: FSMContext) -> None:
     if _analysis_slots.locked():
         await message.answer('Сейчас много запросов. Попробуйте через минуту.')
         return
-    await message.answer('Смотрю цену, риски и варианты рядом…')
+    await message.answer('Смотрю цену, риски и варианты рядом…', reply_markup=main_menu())
     try:
         async with _analysis_slots:
             await ensure_user(message.from_user.id, message.from_user.username)
@@ -261,7 +347,7 @@ async def link(message: Message, state: FSMContext) -> None:
             return
         remember(message.from_user.id, result)
         await message.answer(render_summary(result), parse_mode='HTML', disable_web_page_preview=True,
-                             reply_markup=actions(str(result['listing']['id']), bool(result.get('price_history', {}).get('changes'))))
+                             reply_markup=actions(str(result['listing']['id']), bool(result.get('price_history', {}).get('changes')), result))
         if result.get('price_history', {}).get('changes'):
             try:
                 from bot.core.buyer_price_chart import render_price_chart
@@ -271,7 +357,8 @@ async def link(message: Message, state: FSMContext) -> None:
                         caption='История цены объявления · только зафиксированные изменения')
             except Exception:
                 log.exception('Buyer price chart unavailable')
-        await send_nearby(message, result, limit=2)
+        if not nearby_button(result):
+            await send_nearby(message, result, limit=2)
 
     except Exception:
         log.exception('Buyer analysis failed')
@@ -576,4 +663,4 @@ async def help_message(message: Message, state: FSMContext) -> None:
     if await state.get_state():
         await message.answer('Выберите ответ кнопкой или /cancel для отмены. Ссылку на квартиру можно прислать в любой момент.')
     else:
-        await message.answer('Пришлите ссылку https://krisha.kz/a/show/…')
+        await message.answer('Пришлите ссылку https://krisha.kz/a/show/… или выберите действие в меню.', reply_markup=main_menu())

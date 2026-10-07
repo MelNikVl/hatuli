@@ -150,3 +150,19 @@ async def test_nearby_query_uses_profile_before_area_of_source(seeded):
     candidates=await buyer.nearby_candidates(base,{'budget_max':26000000,'rooms':[1],'area_min':30})
     assert lids[1] in [c['id'] for c in candidates]
     assert lids[1] not in [c['id'] for c in await buyer.nearby_candidates(base,{})]
+
+
+@pytest.mark.asyncio
+async def test_nearby_map_real_postgres_payload(seeded):
+    from fastapi import FastAPI
+    from httpx import AsyncClient, ASGITransport
+    from bot.buyer.map_web import router
+    _,lids=seeded
+    app=FastAPI();app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
+        response=await client.get('/buyer/map/api/nearby',params={'ids':','.join(lids)})
+    assert response.status_code==200
+    items=response.json()['items']
+    assert [r['id'] for r in items]==lids
+    assert items[0]['price']==32000000 and items[1]['index']==1
+    assert 'buyer_map' not in items[0] and 'user_id' not in items[0]

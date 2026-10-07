@@ -94,3 +94,37 @@ async def save(request: Request):
         return JSONResponse(result, headers={'Cache-Control': 'no-store'})
     except (ValueError, TypeError) as exc:
         failure(exc)
+
+
+@router.get('/nearby')
+async def nearby_page():
+    return FileResponse(ROOT / 'bot/templates/buyer_nearby.html', headers={
+        'Cache-Control': 'no-store', 'Referrer-Policy': 'origin'})
+
+
+@router.get('/api/nearby')
+async def nearby_data(ids: str):
+    # Public listing facts only. No user profile or saved search is exposed.
+    import re
+    from bot.db import pg
+    from bot.core.geo import in_astana_bbox, haversine_km
+    values = ids.split(',')
+    if not 1 <= len(values) <= 4 or any(not re.fullmatch(r'\d{5,20}', v) for v in values):
+        raise HTTPException(400, 'Неверная ссылка. Откройте карту из результата анализа в боте.')
+    values = list(dict.fromkeys(values))
+    rows = await pg.fetch('''SELECT id,lat,lon,price,area,rooms,complex_name,address,is_active
+        FROM apartment_listings WHERE id=ANY($1::text[])''', values)
+    found = {str(r['id']): dict(r) for r in rows if in_astana_bbox(r['lat'], r['lon'])}
+    base = found.get(values[0])
+    items = []
+    for index, lid in enumerate(values):
+        row = found.get(lid)
+        if not row:
+            continue
+        row['index'] = index
+        row['distance_m'] = (round(haversine_km(base['lat'],base['lon'],row['lat'],row['lon'])*100)
+                             *10 if base and index else None)
+        items.append(row)
+    from fastapi.encoders import jsonable_encoder
+    return JSONResponse(jsonable_encoder({'items':items,'missing':len(values)-len(items)}),
+                        headers={'Cache-Control':'no-store'})

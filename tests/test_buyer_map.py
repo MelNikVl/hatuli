@@ -58,3 +58,20 @@ def test_selected_hexes_replace_radius_and_missing_coordinates_are_neutral():
     lat,lon=hex_center('2:0',100)
     assert buyer.profile_mismatches({'lat':lat,'lon':lon},profile)==['Квартира вне выбранных на карте участков']
     assert buyer.profile_mismatches({},profile)==[]
+
+
+@pytest.mark.asyncio
+async def test_nearby_map_returns_only_requested_public_listing_fields():
+    from bot.db import pg
+    app=FastAPI();app.include_router(router)
+    async with AsyncClient(transport=ASGITransport(app=app),base_url='http://test') as client:
+        for ids in ['','12345,abc','1,2,3,4,5','12345 OR 1=1']:
+            assert (await client.get('/buyer/map/api/nearby',params={'ids':ids})).status_code==400
+        rows=[dict(id='123456',lat=51.128,lon=71.43,price=25000000,area=31,rooms=1,complex_name='A',address=None,is_active=True),
+              dict(id='123457',lat=51.13,lon=71.43,price=26000000,area=32,rooms=1,complex_name='B',address=None,is_active=False)]
+        with patch.object(pg,'fetch',AsyncMock(return_value=list(reversed(rows)))) as fetch:
+            result=(await client.get('/buyer/map/api/nearby?ids=123456,123457,123458')).json()
+        assert [r['id'] for r in result['items']]==['123456','123457']
+        assert result['items'][0]['index']==0 and result['items'][1]['distance_m']>0
+        assert result['items'][1]['is_active'] is False and result['missing']==1
+        assert fetch.await_args.args[1]==['123456','123457','123458']
