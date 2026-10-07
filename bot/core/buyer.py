@@ -93,9 +93,9 @@ async def import_listing(lid: str) -> bool:
         return True
 
 
-def profile_mismatches(d: dict, profile: dict) -> list[str]:
+def profile_mismatches(d: dict, profile: dict, *, include_budget: bool = True) -> list[str]:
     reasons = []
-    if profile.get('budget_max') and d.get('price') and d['price'] > profile['budget_max']:
+    if include_budget and profile.get('budget_max') and d.get('price') and d['price'] > profile['budget_max']:
         reasons.append(f"Выше вашего бюджета на {money(d['price']-profile['budget_max'])}")
     rooms = profile.get('rooms') or []
     n = d.get('rooms')
@@ -214,8 +214,6 @@ def summarize(d: dict, profile: dict | None = None) -> dict:
             minus.append(f'Цена примерно на {(ratio-1)*100:.0f}% выше аналогов')
         else:
             plus.append('Цена близка к медиане аналогов')
-    else:
-        warnings.append('Недостаточно хороших аналогов, оценка цены ненадёжна.')
     loc = _location(d)
     if loc is not None and loc >= 75:
         plus.append('Высокая оценка локации ЖК')
@@ -236,7 +234,7 @@ def summarize(d: dict, profile: dict | None = None) -> dict:
     risk = d.get('risk_analysis') or {}
     items = risk.get('items') or []
     significant = [r for r in items if _SEVERITY.get(r.get('severity'), 0) >= 2]
-    mismatch = profile_mismatches(d, profile)
+    mismatch = profile_mismatches(d, profile, include_budget=False)
     minus = mismatch + [risk_text(r) for r in significant] + minus
     if d.get('is_active') is False:
         minus.insert(0, 'Объявление снято с публикации')
@@ -277,6 +275,7 @@ def summarize(d: dict, profile: dict | None = None) -> dict:
     return {'listing': d, 'verdict': {'code': code, 'label': VERDICTS[code], 'reasons': reasons},
             'score': score, 'positives': list(dict.fromkeys(plus))[:3],
             'negatives': list(dict.fromkeys(minus))[:3], 'price_summary': price,
+            'budget_gap': (d['price'] - profile['budget_max']) if profile.get('budget_max') and d.get('price', 0) > profile['budget_max'] * 1.10 else None,
             'price_history': summarize_price_history(d.get('price_history') or {}),
             'location_unverified': has_location(profile) and (d.get('lat') is None or d.get('lon') is None),
             'urgency': urgent, 'risks': checks, 'better_nearby': [],

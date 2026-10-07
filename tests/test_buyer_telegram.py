@@ -21,7 +21,7 @@ def map_disabled_unless_requested(monkeypatch):
 
 def message(text='https://krisha.kz/a/show/123456'):
     return SimpleNamespace(text=text, caption=None, entities=None, caption_entities=None,
-        from_user=SimpleNamespace(id=42, username='test'), answer=AsyncMock(), edit_reply_markup=AsyncMock(), answer_location=AsyncMock(), location=None)
+        from_user=SimpleNamespace(id=42, username='test'), answer=AsyncMock(), answer_photo=AsyncMock(), edit_reply_markup=AsyncMock(), answer_location=AsyncMock(), location=None)
 
 
 def callback(data, msg):
@@ -269,3 +269,24 @@ async def test_map_button_carries_user_draft_and_completion_clears_cache(monkeyp
     assert await ctx.get_state() is None and data['raw_state'] is None
     assert not any(key[0]==42 for key in ui._cache)
     handler.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_changed_price_sends_chart_and_quiet_summary():
+    msg=message()
+    result=dict(summarize(listing(bargain={}, price_history={'events':[
+        {'at':'07.10.2026','old_price':35000000,'new_price':33000000}]}),
+        {'budget_max':32000000}),found=True)
+    text=ui.render_summary(result)
+    assert 'бюджет' not in text and 'ненадёжна' not in text and 'Срочность неизвестна' not in text
+    assert 'Посмотреть подробнее</a>' in text
+    with patch.object(ui,'ensure_user',AsyncMock()), patch.object(ui,'analyze_for_buyer',AsyncMock(return_value=result)):
+        await ui.link(msg,state())
+    msg.answer_photo.assert_awaited_once()
+    assert msg.answer_photo.await_args.args[0].data.startswith(b'\x89PNG')
+
+
+def test_large_budget_gap_is_separate_from_negatives():
+    result=summarize(listing(price=40000000),{'budget_max':30000000})
+    assert not any('бюджет' in n for n in result['negatives'])
+    assert 'обсудить снижение на 10.0 млн' in ui.render_summary(result)

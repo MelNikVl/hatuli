@@ -13,7 +13,7 @@ from aiogram import F, Router, BaseMiddleware
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BufferedInputFile
 
 from bot.core.buyer import analyze_for_buyer, extract_krisha_url, money
 from bot.core.buyer_store import ensure_user, save_favorite, save_profile
@@ -148,16 +148,20 @@ def render_summary(result: dict) -> str:
     lines += ['', f"💰 <b>{money(p['asking'])}</b>"]
     if p['reliable']:
         lines += [f"Рыночный ориентир: ~{money(p['fair'])}", f"Попробовать предложить: ~{money(p['offer'])}"]
-    else:
-        lines.append('Мало хороших аналогов — оценка цены ненадёжна.')
     lines += price_history_lines(result.get('price_history') or {})
     if result.get('location_unverified'):
         lines.append('Нет координат — соответствие вашей локации не проверено.')
-    lines += ['', escape(result['urgency']['text'])]
+    if result['urgency']['level'] != 'unknown':
+        lines += ['', escape(result['urgency']['text'])]
+    if result.get('budget_gap'):
+        lines += ['', f"Чтобы уложиться в ваш бюджет, нужно обсудить снижение на {money(result['budget_gap'])}."]
     n = len(result['better_nearby'])
     lines += ['', f'Вариантов рядом с преимуществами: {n}.' if n else 'Убедительно лучших вариантов в проверенной выборке не нашёл.']
     if result['confidence'] == 'limited':
         lines.append('Вывод предварительный: данные неполные.')
+    lid = str(result['listing']['id'])
+    if lid.isdigit():
+        lines += ['', f'<a href="https://hatuli.ai-groundtruth.com/listing/{lid}">Посмотреть подробнее</a>']
     return '\n'.join(lines)
 
 
@@ -236,8 +240,18 @@ async def link(message: Message, state: FSMContext) -> None:
             await message.answer(result['message'])
             return
         remember(message.from_user.id, result)
-        await message.answer(render_summary(result), parse_mode='HTML',
+        await message.answer(render_summary(result), parse_mode='HTML', disable_web_page_preview=True,
                              reply_markup=actions(str(result['listing']['id']), bool(result.get('price_history', {}).get('changes'))))
+        if result.get('price_history', {}).get('changes'):
+            try:
+                from bot.core.buyer_price_chart import render_price_chart
+                chart = await asyncio.to_thread(render_price_chart, result['price_history'])
+                if chart:
+                    await message.answer_photo(BufferedInputFile(chart, filename='price-history.png'),
+                        caption='История цены объявления · только зафиксированные изменения')
+            except Exception:
+                log.exception('Buyer price chart unavailable')
+
     except Exception:
         log.exception('Buyer analysis failed')
         await message.answer('Не удалось завершить анализ. Попробуйте отправить ссылку чуть позже.')

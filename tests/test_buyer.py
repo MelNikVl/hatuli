@@ -124,7 +124,7 @@ def test_optional_profile_changes_decision_and_ranking():
     profile = dict(budget_max=30_000_000, rooms=[2, 4], area_min=50, property_type='secondary')
     base = listing()
     assert buyer.summarize(base)['verdict']['code'] == 'view'
-    assert buyer.summarize(base, profile)['verdict']['code'] == 'skip'
+    assert buyer.summarize(base, profile)['verdict']['code'] == 'view'
     candidates = [listing(id='123457', price=31_000_000, area=58), listing(id='123458', price=29_000_000)]
     assert [r['listing']['id'] for r in buyer.rank_alternatives(base, candidates, profile)] == ['123458']
     assert buyer.profile_mismatches(listing(rooms=5, price=29_000_000), profile) == []
