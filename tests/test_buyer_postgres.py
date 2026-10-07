@@ -87,8 +87,9 @@ async def test_actual_price_events_visible_in_buyer_detail(seeded):
     detail = await buyer._detail(lids[0])
     result = buyer.summarize(detail)
     assert result['price_history']['changes'] == 1
-    assert '−2 000 000 ₸' in render_summary(result)
-    assert '06.10.2026' in render_summary(result)
+    from bot.buyer.telegram import render_history
+    assert '−2 000 000 ₸' in render_history(result, 0)[0]
+    assert '06.10.2026' not in render_summary(result)
 
 
 @pytest.mark.asyncio

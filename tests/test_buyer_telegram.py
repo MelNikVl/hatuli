@@ -224,12 +224,14 @@ async def test_geo_outside_astana_and_empty_search_not_saved():
         save.assert_not_called()
 
 
-def test_price_changes_always_visible_even_when_three_negatives():
+def test_summary_replaces_price_history_with_negotiation():
     result = summarize(listing(price_history={'events': [
         {'at': '06.10.2026', 'old_price': 32_000_000, 'new_price': 31_990_000}]}))
     result['negatives'] = ['Один', 'Два', 'Три']
     text = ui.render_summary(result)
-    assert '06.10.2026' in text and '31 990 000 ₸' in text and '−10 000 ₸' in text
+    assert '06.10.2026' not in text and '→' not in text and 'Всего изменений' not in text
+    assert '💰' not in text and '🤝 Торг:' in text
+    assert 'на 1 000 000 ₸ ниже' in text
     buttons = [b.text for row in ui.actions('123456', True).inline_keyboard for b in row]
     assert '📉 История цены' in buttons
 
@@ -247,7 +249,8 @@ def test_price_history_pagination_keeps_every_event():
 
 def test_history_failure_is_not_reported_as_no_changes():
     result = summarize(listing(price_history={'available': False}))
-    assert 'История цены временно недоступна' in ui.render_summary(result)
+    assert result['price_history']['available'] is False
+    assert 'История цены' not in ui.render_summary(result)
 
 
 @pytest.mark.asyncio
@@ -290,3 +293,9 @@ def test_large_budget_gap_is_separate_from_negatives():
     result=summarize(listing(price=40000000),{'budget_max':30000000})
     assert not any('бюджет' in n for n in result['negatives'])
     assert 'обсудить снижение на 10.0 млн' in ui.render_summary(result)
+
+
+def test_negotiation_does_not_invent_discount_without_target():
+    text=' '.join(ui.negotiation_lines({'reliable':False,'asking':26300000}))
+    assert 'Какую скидку' in text and '₸' not in text
+    assert 'Сошлитесь' in ' '.join(ui.negotiation_lines({'reliable':True,'asking':35000000,'offer':32000000,'fair':33000000}))

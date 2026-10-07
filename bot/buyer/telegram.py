@@ -136,6 +136,17 @@ def render_history(result: dict, page: int) -> tuple[str, InlineKeyboardMarkup]:
     return '\n'.join(lines), keyboard([buttons] if buttons else [])
 
 
+def negotiation_lines(price: dict) -> list[str]:
+    asking, offer, fair = (price.get(k) for k in ('asking', 'offer', 'fair'))
+    if price.get('reliable') and asking and offer and 0 < offer < asking:
+        argument = ('Сошлитесь на цены похожих квартир и назовите конкретную сумму.'
+                    if fair and asking > fair else
+                    'Предложите эту сумму после просмотра; замеченные недостатки обсудите отдельно.')
+        return [f"🤝 Торг: начните с ~{money(offer)} — на {exact_money(asking-offer)} ниже цены продавца.", argument]
+    return ['🤝 Торг: после просмотра спросите «Какую скидку готовы обсудить?» '
+            'Если найдёте недостатки, подкрепите предложение сметой их устранения.']
+
+
 def render_summary(result: dict) -> str:
     score = f" · {result['score']/10:.1f}/10" if result['score'] is not None else ''
     lines = [f"<b>{escape(result['verdict']['label'])}{score}</b>"]
@@ -144,11 +155,7 @@ def render_summary(result: dict) -> str:
             lines += ['', f'<b>{label}</b>'] + [f'{sign} {escape(t)}' for t in result[key][:3]]
     if not result['positives'] and not result['negatives']:
         lines += [escape(t) for t in result['verdict']['reasons'][:2]]
-    p = result['price_summary']
-    lines += ['', f"💰 <b>{money(p['asking'])}</b>"]
-    if p['reliable']:
-        lines += [f"Рыночный ориентир: ~{money(p['fair'])}", f"Попробовать предложить: ~{money(p['offer'])}"]
-    lines += price_history_lines(result.get('price_history') or {})
+    lines += [''] + negotiation_lines(result['price_summary'])
     if result.get('location_unverified'):
         lines.append('Нет координат — соответствие вашей локации не проверено.')
     if result['urgency']['level'] != 'unknown':
