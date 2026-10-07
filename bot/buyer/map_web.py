@@ -38,7 +38,7 @@ def failure(exc):
 
 @router.get('')
 async def page():
-    return FileResponse(ROOT / 'bot/templates/buyer_map.html', headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
+    return FileResponse(ROOT / 'bot/templates/buyer_map.html', headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'origin'})
 
 
 @router.get('/api/grid')

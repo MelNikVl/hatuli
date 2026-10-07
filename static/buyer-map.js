@@ -5,7 +5,7 @@ tg?.ready();tg?.expand();
 const nonce=new URLSearchParams(location.search).get('nonce')||'', auth=tg?.initData||'';
 let allowed=false, busy=false, saved=false, max=200, selected=new Set(), undo=[], geometry=new Map(), gridAbort;
 const map=L.map('map',{zoomControl:false,minZoom:11,maxZoom:19}).setView([51.128,71.43],15);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,referrerPolicy:'origin',attribution:'© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
 const gridLayer=L.layerGroup().addTo(map), selectionLayer=L.layerGroup().addTo(map);
 const status=t=>{$('status').textContent=t;};
 async function api(path,opts={}){const r=await fetch('/buyer/map/api/'+path,{...opts,headers:{Authorization:'tma '+auth,'Content-Type':'application/json',...opts.headers}});const data=await r.json();if(!r.ok)throw Error(typeof data.detail==='string'?data.detail:'Не удалось загрузить данные. Попробуйте снова.');return data;}

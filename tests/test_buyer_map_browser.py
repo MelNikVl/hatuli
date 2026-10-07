@@ -24,6 +24,11 @@ async def test_mobile_map_selection_search_undo_and_save():
         async with async_playwright() as p:
             browser=await p.chromium.launch()
             page=await browser.new_page(viewport={'width':390,'height':844},device_scale_factor=1)
+            tile_headers=[]
+            async def tile(route):
+                tile_headers.append(await route.request.all_headers())
+                await route.fulfill(content_type='image/svg+xml',body='<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="#eef3ed"/></svg>')
+            await page.route('https://tile.openstreetmap.org/**',tile)
             errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
             await page.route('https://telegram.org/js/telegram-web-app.js',lambda r:r.fulfill(content_type='text/javascript',body="window.Telegram={WebApp:{initData:'test',ready(){},expand(){},enableClosingConfirmation(){},disableClosingConfirmation(){},close(){}}};"))
             await page.route('**/buyer/map/api/session?*',lambda r:r.fulfill(json={'selection':{'hex_ids':[]},'cells':[],'center':[51.128,71.43],'max_cells':200}))
@@ -54,6 +59,7 @@ async def test_mobile_map_selection_search_undo_and_save():
             await page.wait_for_function("document.getElementById('save').textContent.includes('Сохранено')")
             assert submitted[0]['edge_m']==100 and len(submitted[0]['hex_ids'])==2
             assert submitted[0]['nonce']=='test'
+            assert tile_headers and all(h.get('referer')=='http://127.0.0.1:8098/' for h in tile_headers)
             assert not errors
             await browser.close()
     finally:
