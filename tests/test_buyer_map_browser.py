@@ -31,6 +31,8 @@ async def test_mobile_map_selection_search_undo_and_save():
             await page.route('https://tile.openstreetmap.org/**',tile)
             errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
             await page.route('https://telegram.org/js/telegram-web-app.js',lambda r:r.fulfill(content_type='text/javascript',body="window.Telegram={WebApp:{initData:'test',ready(){},expand(){},enableClosingConfirmation(){},disableClosingConfirmation(){},close(){}}};"))
+            session_methods=[]
+            page.on('request',lambda r:session_methods.append(r.method) if '/api/session?' in r.url else None)
             await page.route('**/buyer/map/api/session?*',lambda r:r.fulfill(json={'selection':{'hex_ids':[]},'cells':[],'center':[51.128,71.43],'max_cells':200}))
             await page.route('**/buyer/map/api/search?*',lambda r:r.fulfill(json={'results':[{'label':'ЖК Тест','lat':51.135,'lon':71.44}]}))
             submitted=[]
@@ -59,6 +61,13 @@ async def test_mobile_map_selection_search_undo_and_save():
             await page.wait_for_function("document.getElementById('save').textContent.includes('Сохранено')")
             assert submitted[0]['edge_m']==100 and len(submitted[0]['hex_ids'])==2
             assert submitted[0]['nonce']=='test'
+            assert session_methods==['POST','POST']
+            await page.route('**/buyer/map/api/session?*',lambda r:r.fulfill(status=409,json={'detail':'Откройте новую карту через /map'}))
+            await page.reload(wait_until='networkidle')
+            await page.mouse.click(195,400)
+            assert 'Выбрано: 0 /' in await page.locator('#count').inner_text()
+            assert await page.locator('#save').is_disabled()
+            assert '/map' in await page.locator('#status').inner_text()
             assert tile_headers and all(h.get('referer')=='http://127.0.0.1:8098/' for h in tile_headers)
             assert not errors
             await browser.close()

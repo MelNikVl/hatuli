@@ -94,6 +94,18 @@ def check_draft(data: dict, nonce: str) -> dict:
     return draft
 
 
+async def renew_session(uid: int, nonce: str) -> dict:
+    # Only the current draft can be renewed by its authenticated owner.
+    # A superseded/cancelled/saved link must never become current again.
+    row = await pg.fetchrow("""UPDATE users SET buyer_map=jsonb_set(
+        buyer_map,'{draft,expires}',$3::jsonb)
+        WHERE user_id=$1 AND buyer_map->'draft'->>'nonce'=$2
+        RETURNING user_id""", uid, nonce, json.dumps(time.time()+SESSION_SECONDS))
+    if not row:
+        raise MapSessionExpired('Эта ссылка уже не действует. Отправьте /map боту и откройте новую карту.')
+    return await load_session(uid, nonce)
+
+
 async def load_session(uid: int, nonce: str) -> dict:
     row = await pg.fetchrow('SELECT buyer_map,location_lat,location_lon FROM users WHERE user_id=$1', uid)
     data = as_object(row['buyer_map']) if row else {}

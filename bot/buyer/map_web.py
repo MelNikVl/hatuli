@@ -58,6 +58,15 @@ async def session(request: Request, nonce: str):
         failure(exc)
 
 
+@router.post('/api/session')
+async def renew(request: Request, nonce: str):
+    uid = authenticate(request)
+    try:
+        return JSONResponse(await buyer_map.renew_session(uid, nonce), headers={'Cache-Control': 'no-store'})
+    except ValueError as exc:
+        failure(exc)
+
+
 @router.get('/api/search')
 async def search(request: Request, nonce: str, q: str, kind: str = 'complex'):
     uid = authenticate(request)

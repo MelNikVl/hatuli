@@ -121,3 +121,21 @@ async def test_map_selection_atomic_round_trip_and_stale_tabs(seeded):
     with pytest.raises(bm.MapSessionExpired): await bm.save_selection(uid,pending,['3:0'])
     await buyer_store.save_profile(uid,old)
     assert 'buyer_area' not in await buyer_store.get_profile(uid)
+
+
+@pytest.mark.asyncio
+async def test_expired_current_map_renews_but_superseded_map_does_not(seeded):
+    from bot.core import buyer_map as bm
+    uid, _ = seeded
+    prefs=dict(budget_max=25_000_000, rooms=[1], area_min=30., property_type=None)
+    nonce=await bm.create_session(uid,prefs)
+    await pg.execute("UPDATE users SET buyer_map=jsonb_set(buyer_map,'{draft,expires}','0'::jsonb) WHERE user_id=$1",uid)
+    with pytest.raises(bm.MapSessionExpired): await bm.load_session(uid,nonce)
+    with pytest.raises(bm.MapSessionExpired): await bm.renew_session(uid-1,nonce)
+    await bm.renew_session(uid,nonce)
+    await bm.save_selection(uid,nonce,['0:0'])
+    assert (await buyer_store.get_profile(uid))['area_min']==30
+    with pytest.raises(bm.MapSessionExpired): await bm.renew_session(uid,nonce)
+    old=await bm.create_session(uid)
+    await bm.create_session(uid)
+    with pytest.raises(bm.MapSessionExpired): await bm.renew_session(uid,old)
