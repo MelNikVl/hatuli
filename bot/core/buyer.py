@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import time
 from urllib.parse import urlsplit
@@ -232,7 +233,7 @@ def summarize(d: dict, profile: dict | None = None) -> dict:
     if finish is not None:
         (plus if finish >= 2 else minus).append('Заявлена готовая отделка' if finish >= 2 else 'Потребуются расходы на ремонт')
     risk = d.get('risk_analysis') or {}
-    items = risk.get('items') or []
+    items = [r for r in (risk.get('items') or []) if r.get('code') not in ('PRICE_MULTIPLE_REDUCTIONS', 'PRICE_CUT_STILL_ACTIVE')]
     significant = [r for r in items if _SEVERITY.get(r.get('severity'), 0) >= 2]
     mismatch = profile_mismatches(d, profile, include_budget=False)
     minus = mismatch + [risk_text(r) for r in significant] + minus
@@ -283,7 +284,7 @@ def summarize(d: dict, profile: dict | None = None) -> dict:
             'warnings': warnings}
 
 
-def compare_alternative(base: dict, candidate: dict, profile: dict | None = None) -> dict | None:
+def compare_alternative(base: dict, candidate: dict, profile: dict | None = None, *, comparable: bool = False) -> dict | None:
     """Pairwise benefit points: 1 per price %, 0.7 per area %, and capped
     secondary signals. >=3 points + material gain; no presumed benefit for
     unknowns. This is a transparent prioritisation, not a probability.
@@ -299,9 +300,10 @@ def compare_alternative(base: dict, candidate: dict, profile: dict | None = None
     if min(base['price'], candidate['price'], base['area'], candidate['area']) <= 0:
         return None
     distance = haversine_km(base['lat'], base['lon'], candidate['lat'], candidate['lon']) * 1000
-    if distance > 500 or profile_mismatches(candidate, profile or {}):
+    if distance > (2000 if comparable else 500) or profile_mismatches(candidate, profile or {}):
         return None
-    if base.get('market') and candidate.get('market') and base['market'] != candidate['market']:
+    expected_market = {'new': 'primary', 'secondary': 'secondary'}.get((profile or {}).get('property_type')) or base.get('market')
+    if expected_market and candidate.get('market') and expected_market != candidate['market']:
         return None
     if base.get('rooms') and candidate.get('rooms') and base['rooms'] != candidate['rooms'] and not (profile or {}).get('rooms'):
         return None
@@ -311,7 +313,19 @@ def compare_alternative(base: dict, candidate: dict, profile: dict | None = None
     dp = (base['price'] - candidate['price']) / base['price'] * 100
     da = (candidate['area'] - base['area']) / base['area'] * 100
     # Keep the generic alternative financially comparable.
-    if dp < -5 or da < -10:
+    if comparable:
+        p = profile or {}
+        if candidate['price'] > (p.get('budget_max') or base['price']*1.05):
+            return None
+        if not p.get('budget_max') and candidate['price'] < base['price']*.85:
+            return None
+        if candidate['area'] < (p.get('area_min') or base['area']*.85):
+            return None
+        if not p.get('rooms') and candidate['area'] > base['area']*1.15:
+            return None
+        if not candidate.get('rooms') or (expected_market and not candidate.get('market')):
+            return None
+    elif dp < -5 or da < -10:
         return None
     value = max(-10, min(10, dp)) + .7 * max(-10, min(10, da))
     advantages, tradeoffs = [], []
@@ -347,13 +361,15 @@ def compare_alternative(base: dict, candidate: dict, profile: dict | None = None
         value += 2 * delta
         if delta:
             (advantages if delta > 0 else tradeoffs).append('Ниже выявленные риски' if delta > 0 else 'Выше выявленные риски')
-    if not material or value < 3 or not advantages:
+    better = material and value >= 3 and bool(advantages)
+    if not comparable and not better:
         return None
     unknown = any(a is None or b is None for a, b, *_ in pairs) or r2 in (None, 'unknown')
     return {'listing': candidate, 'distance_m': int(round(distance / 10) * 10),
             'advantages': advantages, 'tradeoffs': tradeoffs,
             'warnings': ['Сравнение неполное: часть характеристик неизвестна.'] if unknown else [],
             'rank_points': round(value, 2), 'method': 'buyer_pairwise_v1',
+            'category': 'better' if better else 'similar',
             'urgency': urgency(candidate, p2)}
 
 
@@ -370,6 +386,44 @@ def rank_alternatives(base: dict, candidates: list[dict], profile: dict | None =
             seen.add(key)
         if len(result) == 3:
             break
+    return result
+
+
+async def nearby_candidates(base: dict, profile: dict) -> list[dict]:
+    """Buyer-only search: onboarding constraints before detailed analytics."""
+    if any(base.get(k) is None for k in ('lat', 'lon', 'price', 'area')):
+        return []
+    lat, lon = base['lat'], base['lon']
+    dlat = 2/111
+    dlon = 2/(111*math.cos(math.radians(lat)))
+    rooms = profile.get('rooms') or [base.get('rooms')]
+    rooms = [int(r) for r in rooms if r]
+    market = {'new':'primary','secondary':'secondary'}.get(profile.get('property_type')) or base.get('market')
+    rows = await pg.fetch("""SELECT id,price,area,rooms,lat,lon,market_type AS market,
+        is_active,is_duplicate FROM apartment_listings
+        WHERE id!=$1 AND is_active=TRUE AND COALESCE(is_duplicate,FALSE)=FALSE
+        AND lat BETWEEN $2 AND $3 AND lon BETWEEN $4 AND $5
+        AND price BETWEEN $6 AND $7 AND area >= $8
+        AND (rooms=ANY($9::int[]) OR (4=ANY($9::int[]) AND rooms>=4))
+        AND ($10::text IS NULL OR market_type=$10)
+        ORDER BY ((lat-$11)*(lat-$11)+(lon-$12)*(lon-$12)*0.4), ABS(price-$13)
+        LIMIT 500""", str(base['id']),lat-dlat,lat+dlat,lon-dlon,lon+dlon,
+        1 if profile.get('budget_max') else base['price']*.85,
+        profile.get('budget_max') or base['price']*1.05,
+        profile.get('area_min') or base['area']*.85, rooms, market, lat,lon,base['price'])
+    return [dict(r) for r in rows if compare_alternative(base,dict(r),profile,comparable=True)]
+
+
+def recommend_nearby(base: dict, candidates: list[dict], profile: dict) -> list[dict]:
+    ranked = [r for c in candidates if (r := compare_alternative(base,c,profile,comparable=True))]
+    ranked.sort(key=lambda r:(r['category']!='better',r['distance_m'],abs(r['listing']['price']-base['price'])))
+    result, seen = [], set()
+    for r in ranked:
+        d=r['listing']
+        key=('property',d['property_id']) if d.get('property_id') else ('listing',str(d['id']))
+        if key not in seen:
+            result.append(r);seen.add(key)
+        if len(result)==3: break
     return result
 
 
@@ -419,25 +473,25 @@ async def analyze_for_buyer(listing_url_or_id: str, user_id: int | None = None) 
     profile = await get_profile(user_id) if user_id is not None else {}
     result = summarize(d, profile)
     result['found'] = True
-    # Same candidate search as listing detail; cheap pairwise screening before
-    # costly risk/comparables analytics. Bounded work for a public bot.
+    # Use profile-aware nearby search; legacy detail candidates are a fallback
+    # if that query fails. Bound detailed analytics for the public bot.
     candidates = d.get('similar') or []
     candidates.sort(key=lambda c: ((c.get('price') or float('inf')) / max(c.get('area') or 1, 1)))
     sem = asyncio.Semaphore(3)
     async def load(c):
         async with sem:
             try:
-                candidate = await asyncio.wait_for(_detail(str(c['id'])), timeout=8)
-                try:
-                    candidate['dom_scenario'] = await asyncio.wait_for(
-                        compute_dom_scenario_cached(str(c['id'])), timeout=2)
-                except Exception:
-                    candidate['dom_scenario'] = {'available': False}
+                candidate = await asyncio.wait_for(_detail(str(c['id'])), timeout=4)
                 return candidate
             except Exception:
                 return None
-    loaded = await asyncio.gather(*(load(c) for c in candidates[:9]))
-    result['better_nearby'] = rank_alternatives(d, [c for c in loaded if c], profile)
+    try:
+        candidates = await nearby_candidates(d, profile)
+    except Exception:
+        log.exception('Buyer nearby search failed')
+        result['warnings'].append('Поиск рядом временно недоступен.')
+    loaded = await asyncio.gather(*(load(c) for c in candidates[:18]))
+    result['better_nearby'] = recommend_nearby(d, [c for c in loaded if c], profile)
     if candidates:
         result['warnings'].append('Сравнение по доступной выборке рядом; актуальность проверяйте на Krisha.')
     if any(c is None for c in loaded):

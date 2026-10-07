@@ -140,3 +140,13 @@ async def test_expired_current_map_renews_but_superseded_map_does_not(seeded):
     old=await bm.create_session(uid)
     await bm.create_session(uid)
     with pytest.raises(bm.MapSessionExpired): await bm.renew_session(uid,old)
+
+
+@pytest.mark.asyncio
+async def test_nearby_query_uses_profile_before_area_of_source(seeded):
+    uid,lids=seeded
+    await pg.execute('UPDATE apartment_listings SET price=25000000,area=31,rooms=1,lat=51.14 WHERE id=$1',lids[1])
+    base=await buyer._detail(lids[0])
+    candidates=await buyer.nearby_candidates(base,{'budget_max':26000000,'rooms':[1],'area_min':30})
+    assert lids[1] in [c['id'] for c in candidates]
+    assert lids[1] not in [c['id'] for c in await buyer.nearby_candidates(base,{})]

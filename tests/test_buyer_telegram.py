@@ -52,7 +52,7 @@ async def test_link_handler_short_answer_and_buttons():
     answer = msg.answer.await_args
     assert len(answer.args[0]) < 1200
     buttons = [b.text for row in answer.kwargs['reply_markup'].inline_keyboard for b in row]
-    assert buttons == ['🔥 Показать лучше', '⭐ Сохранить', '⚠️ Что проверить', '🎯 Подбирать под меня']
+    assert buttons == ['🏘 Все варианты рядом', '⭐ Сохранить', '⚠️ Что проверить', '🎯 Подбирать под меня']
 
 
 @pytest.mark.asyncio
@@ -299,3 +299,16 @@ def test_negotiation_does_not_invent_discount_without_target():
     text=' '.join(ui.negotiation_lines({'reliable':False,'asking':26300000}))
     assert 'Какую скидку' in text and '₸' not in text
     assert 'Сошлитесь' in ' '.join(ui.negotiation_lines({'reliable':True,'asking':35000000,'offer':32000000,'fair':33000000}))
+
+
+@pytest.mark.asyncio
+async def test_two_similar_cards_sent_automatically():
+    from bot.core.buyer import recommend_nearby
+    base=listing()
+    result=dict(summarize(base),found=True)
+    result['better_nearby']=recommend_nearby(base,[listing(id='123457'),listing(id='123458',lat=51.14)],{})
+    msg=message()
+    with patch.object(ui,'ensure_user',AsyncMock()),patch.object(ui,'analyze_for_buyer',AsyncMock(return_value=result)):
+        await ui.link(msg,state())
+    cards=[call.args[0] for call in msg.answer.await_args_list if 'Похожий вариант' in call.args[0]]
+    assert len(cards)==2 and all('Почему лучше' not in text for text in cards)

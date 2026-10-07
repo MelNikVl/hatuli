@@ -87,7 +87,7 @@ def keyboard(rows: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup:
 
 
 def actions(lid: str, has_history: bool = False) -> InlineKeyboardMarkup:
-    rows = [[('🔥 Показать лучше', f'b:better:{lid}'), ('⭐ Сохранить', f'b:save:{lid}')],
+    rows = [[('🏘 Все варианты рядом', f'b:better:{lid}'), ('⭐ Сохранить', f'b:save:{lid}')],
             [('⚠️ Что проверить', f'b:check:{lid}')]]
     if has_history:
         rows.append([('📉 История цены', f'b:history_0:{lid}')])
@@ -163,7 +163,7 @@ def render_summary(result: dict) -> str:
     if result.get('budget_gap'):
         lines += ['', f"Чтобы уложиться в ваш бюджет, нужно обсудить снижение на {money(result['budget_gap'])}."]
     n = len(result['better_nearby'])
-    lines += ['', f'Вариантов рядом с преимуществами: {n}.' if n else 'Убедительно лучших вариантов в проверенной выборке не нашёл.']
+    lines += ['', f'Подобрал вариантов рядом: {n}. Покажу ниже.' if n else 'В радиусе 2 км пока нет проверенных вариантов, подходящих под ваши параметры.']
     if result['confidence'] == 'limited':
         lines.append('Вывод предварительный: данные неполные.')
     lid = str(result['listing']['id'])
@@ -174,13 +174,18 @@ def render_summary(result: dict) -> str:
 
 def render_alternative(r: dict, base: dict) -> str:
     d = r['listing']
-    lines = [f"🔥 <b>Вариант с преимуществами — около {r['distance_m']} м</b>",
+    lines = [f"🏘 <b>{'Вариант с преимуществами' if r.get('category', 'better') == 'better' else 'Похожий вариант'} — около {r['distance_m']} м</b>",
              f"{money(d['price'])} вместо {money(base.get('price'))}",
              f"{d['area']:g} м² вместо {base['area']:g} м²"]
+    if d.get('rooms'):
+        lines.append(f"Комнат: {d['rooms']}")
     if d.get('floor') and d.get('floors_total'):
         old = f" вместо {base['floor']}/{base['floors_total']}" if base.get('floor') and base.get('floors_total') else ''
         lines.append(f"{d['floor']}/{d['floors_total']} этаж{old}")
-    lines += ['', '<b>Почему лучше:</b> ' + escape('; '.join(r['advantages'][:3]))]
+    if r['advantages']:
+        lines += ['', '<b>Плюсы в сравнении:</b> ' + escape('; '.join(r['advantages'][:3]))]
+    elif r.get('category') == 'similar':
+        lines.append('Сопоставимый вариант для просмотра и сравнения.')
     if r['tradeoffs']:
         lines.append('<b>Компромисс:</b> ' + escape('; '.join(r['tradeoffs'])))
     if r.get('urgency', {}).get('level') == 'high':
@@ -189,6 +194,14 @@ def render_alternative(r: dict, base: dict) -> str:
     lines.extend(price_history_lines(summarize_price_history(d.get('price_history') or {})))
     lines.extend(escape(w) for w in r['warnings'])
     return '\n'.join(lines)
+
+
+async def send_nearby(message: Message, result: dict, limit: int = 3) -> None:
+    for r in result['better_nearby'][:limit]:
+        lid = str(r['listing']['id'])
+        markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text='Открыть Krisha', url=f'https://krisha.kz/a/show/{lid}')]])
+        await message.answer(render_alternative(r, result['listing']), parse_mode='HTML', reply_markup=markup)
 
 
 def remember(uid: int, result: dict) -> None:
@@ -258,6 +271,7 @@ async def link(message: Message, state: FSMContext) -> None:
                         caption='История цены объявления · только зафиксированные изменения')
             except Exception:
                 log.exception('Buyer price chart unavailable')
+        await send_nearby(message, result, limit=2)
 
     except Exception:
         log.exception('Buyer analysis failed')
@@ -303,12 +317,8 @@ async def action(callback: CallbackQuery) -> None:
             await callback.message.answer(text)
         elif command == 'better':
             if not result['better_nearby']:
-                await callback.message.answer('В проверенной выборке рядом убедительно лучших вариантов не нашёл.')
-            for r in result['better_nearby']:
-                lid2 = str(r['listing']['id'])
-                markup = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-                    text='Открыть Krisha', url=f'https://krisha.kz/a/show/{lid2}')]])
-                await callback.message.answer(render_alternative(r, result['listing']), parse_mode='HTML', reply_markup=markup)
+                await callback.message.answer('В радиусе 2 км пока нет проверенных вариантов под ваши параметры. Изменить их можно через /profile.')
+            await send_nearby(callback.message, result)
     except Exception:
         log.exception('Buyer action failed')
         await callback.message.answer('Не удалось выполнить действие. Попробуйте позже.')

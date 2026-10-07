@@ -304,3 +304,27 @@ def test_geo_profile_filters_alternatives_and_is_neutral_without_coords():
 def test_profile_rejects_invalid_location(coordinates):
     with pytest.raises(ValueError):
         buyer_store.validate_profile(dict(budget_max=30_000_000, rooms=[1], **coordinates))
+
+
+def test_price_cuts_are_not_buyer_negatives_or_checks():
+    result=buyer.summarize(listing(risk_analysis={'overall_level':'medium','items':[
+        {'code':'PRICE_MULTIPLE_REDUCTIONS','severity':'medium','title':'Неоднократные снижения цены','recommendation':'Проверить снижения'}]}))
+    assert not any('снижени' in x.lower() for x in result['negatives']+result['risks'])
+
+
+def test_similar_nearby_returned_without_proven_advantage():
+    base=listing()
+    candidates=[listing(id='123457'),listing(id='123458',lat=51.14)]
+    assert buyer.rank_alternatives(base,candidates)==[]
+    result=buyer.recommend_nearby(base,candidates,{})
+    assert len(result)==2 and all(r['category']=='similar' for r in result)
+    assert result[1]['distance_m']>500
+
+
+def test_onboarding_overrides_source_characteristics_but_not_selected_location():
+    base=listing(price=32000000,area=52,rooms=2)
+    candidate=listing(id='123457',price=25000000,area=31,rooms=1,lat=51.14)
+    profile={'budget_max':26000000,'rooms':[1],'area_min':30}
+    assert buyer.recommend_nearby(base,[candidate],profile)
+    assert not buyer.recommend_nearby(base,[candidate],{})
+    assert not buyer.recommend_nearby(base,[candidate],{**profile,'buyer_area':{'edge_m':100,'hex_ids':['0:0']}})
