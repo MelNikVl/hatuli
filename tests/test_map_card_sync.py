@@ -73,13 +73,30 @@ async def page(live_server):
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         pg = await browser.new_page(viewport={"width": 1400, "height": 900})
-        await pg.goto(live_server + "/", wait_until="networkidle", timeout=25000)
-        # Ждём, пока сам dashboard.html объявит нужные глобальные функции
-        # (скрипт большой, но синхронный — networkidle уже гарантирует это).
-        await pg.wait_for_function("typeof renderSidePanelIds === 'function'", timeout=10000)
-        await pg.evaluate(_SEED_JS)
-        yield pg
-        await browser.close()
+        try:
+            # Данные здесь синтетические: поздний ответ начальной загрузки
+            # карты не должен перерисовать уже инжектированные карточки.
+            for endpoint in ("map-points", "map-points-lite", "newbuild-map-points"):
+                await pg.route(
+                    f"**/admin/api/{endpoint}?*",
+                    lambda route: route.fulfill(json={"points": [], "has_more": False}),
+                )
+            # Тайлы OSM/фоновые запросы не определяют готовность DOM-панели.
+            # CDN-скрипты остаются настоящими; проверяем их и живую карту.
+            await pg.goto(live_server + "/", wait_until="domcontentloaded", timeout=25000)
+            await pg.wait_for_function("""() =>
+                typeof L !== 'undefined' && typeof L.markerClusterGroup === 'function' &&
+                L.Draw && typeof L.Draw.Polygon === 'function' && map._loaded &&
+                saleCluster instanceof L.MarkerClusterGroup &&
+                typeof renderSidePanelIds === 'function' &&
+                typeof selectPin === 'function' && typeof openSidePanel === 'function' &&
+                document.getElementById('side-panel-body') &&
+                !document.getElementById('result-count').classList.contains('loading')
+            """, timeout=10000)
+            await pg.evaluate(_SEED_JS)
+            yield pg
+        finally:
+            await browser.close()
 
 
 async def _card_metrics(page, card_id):

@@ -151,9 +151,9 @@ Production backup восстановлен в изолированную shadow-
 #33129→#2056; семь отношений с evidence и семь проверенных aliases.
 Reviewer явно указан как `codex_source_audit_2026_10_08`: это проверка
 источников агентом, без заявления о вымышленном human review.
-
-Небольшой воспроизводимый план с ID, решениями и source evidence сохранён
-в [complex_identity_reviewed_plan_2026_10_08.json](complex_identity_reviewed_plan_2026_10_08.json).
+Небольшой план с исходными URL, адресными доказательствами и запретами
+сохранён для воспроизводимости в
+[complex_identity_reviewed_plan_2026_10_08.json](complex_identity_reviewed_plan_2026_10_08.json).
 
 Финальный план и resolver v4 дают:
 
@@ -206,6 +206,8 @@ registry baseline, включая source rejections. Forward и reverse журн
 `complex_identity_final_shadow_deploy_manifest_20261008.json` и независимый
 verification report. Это проверка копии БД; production на момент её завершения
 ещё не изменена.
+После окончательного reapply независимый verifier прошёл **38 проверок**,
+включая постоянный source rejection и сохранение его evidence.
 
 ## Кандидаты, которые остаются на разборе
 
@@ -229,3 +231,56 @@ verification report. Это проверка копии БД; production на м
 Следующий data review должен установить верный внешний объект и адреса,
 а затем сделать небольшой обратимый batch. Массовый fuzzy/translit merge
 этих кандидатов по одному тексту не выполняется.
+
+## Применение на рабочем сервере
+
+Код `3cd23f7` развёрнут fast-forward из `ba9a4e5`. На время изменения
+остановлены только ранее активные 10 сервисов и 26 таймеров приложения;
+их список сохранён, все затем восстановлены. Перед изменением сделан
+свежий PostgreSQL custom dump (447 391 666 байт), его catalog читается.
+Ранее полная резервная копия была успешно восстановлена для shadow-проверок.
+
+После остановки writers база содержала 124 012 объявлений, 3 585 ЖК,
+121 655 properties, 121 634 property_listings, 15 846 newbuild_units и
+1 984 source links. Расхождение с первоначальным аудитом — работа ingest
+между аудитом и остановкой; новый before/after manifest построен по
+зафиксированной рабочей базе, старый shadow manifest не переиспользован.
+
+Миграции 103–106 применены. В одной транзакции записаны reviewed decisions,
+наблюдения имён/адресов, canonical mappings, listing transitions и текущие
+метрики; сегодняшний снимок пересчитан, более ранняя история сохранена.
+
+| Измерение production | Результат |
+|---|---:|
+| Изменения canonical ID/reason | 362 |
+| Переходы listing ID/метода, все с provenance | 6 012 |
+| Изменения complex_id / только метода | 4 687 / 1 325 |
+| Отвязки прежнего ID / прежний NULL с маркером unbound | 3 206 / 200 |
+| Новые привязки прежнего NULL | 388 |
+| Name / geo / URL / unbound переходы | 2 118 / 415 / 73 / 3 406 |
+| Повторный binding preview | 0 изменений, 2,35–2,36 с |
+| Независимые проверки до / после запуска сервисов | 52 / 45, все прошли |
+
+Сверены все frozen property и unit identities, полные source rows с evidence,
+каждый переход manifest и журнал. Исходные строки сохранены. В рабочей базе
+20 именованных конфликтных Tumar-фрагментов получили явный `unbound`.
+Один из 21 первоначальных рядов обновлён ingest до остановки: объявление
+1016234751 уже не содержит имени или URL ЖК, находится на Туркестан и
+разрешено существующим geo-правилом в #3482. Оно не перенесено в #854.
+
+Живой браузер проверил `/` и `/investments` на реальном ответе heat API:
+24 399 объявлений с расчётной доходностью. На dashboard 3 241 гекс,
+325 лучших тёмно-зелёных; на Investments 1 557 гексов, 160 лучших.
+Проверены медианы, выбор верхнего перцентиля, цвет `#14532d`, tooltip,
+легенда и размеры Leaflet SVG. Ошибок JavaScript или heat API нет.
+`/complex/3017` и `/complex/4230` перенаправляют на #854 с сохранением
+query filters; «ЖК Tumar Club», «ЖК Тумар Клаб» и опечатка «Tumar Clab»
+с пробелами/кавычками разрешаются в #854, поиск не повторяет его карточку.
+
+Private before/after и SELECT-only verification artifacts сохранены
+отдельно от Git: `complex_identity_production_manifest_20261008.json`,
+`complex_identity_frozen_production_baseline_20261008.json`,
+`complex_identity_production_verified_frozen_20261008.json`,
+`complex_identity_production_verified_live_20261008.json` и
+`identity_live_verification_20261008.json` со скриншотами обеих карт.
+Исходный код и план сохранены в draft [PR #61](https://github.com/MelNikVl/hatuli/pull/61).
