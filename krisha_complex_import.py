@@ -167,6 +167,14 @@ async def fetch_all(limit: int = 0, delay: tuple = (4.0, 8.0)) -> dict[int, dict
         FROM complexes c
         LEFT JOIN al_url ON al_url.key = lower(trim(c.name))
         WHERE COALESCE(c.is_street, FALSE) = FALSE
+          AND COALESCE(c.is_garbage, FALSE) = FALSE
+          AND COALESCE(c.canonical_reason, '') <> 'junk_unmatched'
+          AND NOT EXISTS (
+              SELECT 1 FROM complex_source_rejections rejected
+              WHERE rejected.complex_id=COALESCE(c.canonical_id,c.id)
+                AND rejected.source='krisha'
+                AND rejected.source_id=COALESCE(c.krisha_url,al_url.complex_url)
+          )
         ORDER BY c.id
     """)
     rows = [r for r in rows if r["url"]]
@@ -204,6 +212,12 @@ async def save_to_db(found: dict[int, dict]) -> int:
     saved = 0
     for cid, d in found.items():
         try:
+            if d.get('url') and await fetchrow('''SELECT 1 FROM complex_source_rejections rejected
+                JOIN complexes c ON c.id=$1
+                WHERE rejected.complex_id=COALESCE(c.canonical_id,c.id)
+                  AND rejected.source='krisha' AND rejected.source_id=$2''',cid,d['url']):
+                log.warning('skip reviewed wrong source URL for complex %s',cid)
+                continue
             row = await fetchrow("SELECT source_info, parent_complex_id FROM complexes WHERE id=$1", cid)
             if not row:
                 continue

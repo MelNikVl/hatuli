@@ -16,6 +16,41 @@ def test_slug():
     assert cc.krisha_slug(None) is None and cc.krisha_slug("https://krisha.kz/a/show/1") is None
 
 
+def test_manual_redirect_and_target_survive_auto_reranking():
+    url = 'https://krisha.kz/complex/show/astana/club/'
+    rows = [c(1, 'Club', url), c(2, 'ЖК Club', url, newbuild=True), c(3, 'Клаб')]
+    overrides = [{'complex_id': 3, 'canonical_id': 1}]
+    out = cc.compute_canonical(rows, {2: 1000}, manual_overrides=overrides)
+    assert out[1] == (None, None)
+    assert out[2] == (1, 'krisha_slug')
+    assert out[3] == (1, 'manual_review')
+
+
+def test_manual_standalone_pin_is_not_reclassified_as_junk():
+    assert cc.compute_canonical([c(1, 'На Улице')], {},
+        manual_overrides=[{'complex_id': 1, 'canonical_id': None}])[1] == (None, None)
+
+
+def test_manual_invalid_maps_fail_before_mutation():
+    rows = [c(1, 'Club'), c(2, 'Клаб'), c(3, 'Club 2', parent=1)]
+    for overrides in [
+        [{'complex_id': 1, 'canonical_id': 2}, {'complex_id': 2, 'canonical_id': 1}],
+        [{'complex_id': 1, 'canonical_id': 99}],
+        [{'complex_id': 3, 'canonical_id': 1}],
+    ]:
+        with pytest.raises(ValueError):
+            cc.compute_canonical(rows, {}, manual_overrides=overrides)
+    with pytest.raises(ValueError, match='separate relation'):
+        cc.compute_canonical(rows, {}, [{'complex_id_a': 1, 'complex_id_b': 2,
+            'relation_type': 'separate_neighbor_complex'}], [{'complex_id': 2, 'canonical_id': 1}])
+
+
+def test_street_qualified_fragment_cannot_fall_back_to_short_brand():
+    rows = [c(1, 'Nova City'), c(2, 'Nova City на Рыскулбекова'),
+            c(3, 'Nova City На Рыскулбекова От Од')]
+    assert cc.compute_canonical(rows, {})[3] == (None, 'junk_unmatched')
+
+
 def test_junk_detection():
     for n in ["Sandi Qala 2 Продается 3-Комнат", "Бизнес Класса", "На 188-Ой Улице", "- Чистый И Ухоженный Подъезд",
               "Arena Towers От Надёжного Застр", "Комфорт+", "Премиум"]:

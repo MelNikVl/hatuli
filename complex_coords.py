@@ -74,18 +74,8 @@ def _fetch_homsters(url: str) -> str | None:
 
 async def fill_from_centroids(execute, test: bool) -> int:
     """Центроиды объявлений -> complexes.lat/lon (нормализованный матч имени)."""
-    sql = """
-        UPDATE complexes c SET lat = s.lat, lon = s.lon, coords_source = 'listings'
-        FROM (
-            SELECT lower(trim(regexp_replace(complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i'))) AS n,
-                   AVG(lat) AS lat, AVG(lon) AS lon
-            FROM apartment_listings
-            WHERE lat IS NOT NULL AND complex_name IS NOT NULL AND complex_name != ''
-            GROUP BY 1
-        ) s
-        WHERE c.lat IS NULL
-          AND lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i'))) = s.n
-    """
+    from bot.core.complex_metrics import CENTROID_SQL
+    sql = CENTROID_SQL
     if test:
         log.info("[test] центроиды: пропущено (запись отключена)")
         return 0

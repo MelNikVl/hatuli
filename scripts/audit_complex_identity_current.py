@@ -46,8 +46,12 @@ async def audit(dsn: str, *, binding_preview: bool = False) -> dict:
             relations = [dict(row) for row in await conn.fetch("""
                 SELECT complex_id_a, complex_id_b, relation_type FROM complex_relations
             """)]
+            overrides = []
+            if await conn.fetchval("SELECT to_regclass('complex_canonical_overrides') IS NOT NULL"):
+                overrides = [dict(row) for row in await conn.fetch(
+                    'SELECT complex_id, canonical_id FROM complex_canonical_overrides')]
             eligible = [row for row in rows if not row['is_garbage'] and not row['is_street']]
-            proposed = compute_canonical(eligible, counts, relations)
+            proposed = compute_canonical(eligible, counts, relations, overrides)
             changes = []
             for row in eligible:
                 target, reason = proposed[row['id']]
