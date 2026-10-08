@@ -9,12 +9,13 @@ homeportal, текст объявлений), поэтому:
 В отчёте застройщику это ложные конкуренты и расщеплённая статистика.
 
 Правила (физически записи не сливаются — только canonical_id/canonical_reason):
-  1. name_prefix — имя-обрывок начинается с имени реального ЖК (≥ 4 символов,
-     граница слова) → этот ЖК (самое длинное совпадение).
+  1. name_prefix — имя-обрывок начинается с имени реального ЖК (≥ 4 символов),
+     далее идёт служебный текст → однозначный ЖК (самое длинное совпадение).
   2. krisha_slug — записи с одинаковой ссылкой Крыши на ЖК (/complex/show/<город>/<slug>/),
      если имена — варианты одного (или запись — обрывок). Каноническая — не-обрывок,
      затем зонтик/с классом/новостройка, затем больше объявлений, затем меньший id.
-     Дома под зонтиком (parent_complex_id внутри группы) не сливаются с зонтиком.
+     Общий префикс, номер очереди и общий неоднозначный slug не доказывают дубль.
+     Дома под зонтиком (parent_complex_id) не сливаются с зонтиком.
   3. junk_unmatched — обрывок без реального ЖК → в аналитике не используется
      (объявление останется без ЖК, а не с ложным).
 """
@@ -49,6 +50,11 @@ def norm_name(name: str | None) -> str:
 _CLASS_WORDS = {"эконом", "комфорт", "комфорт+", "бизнес", "бизнес+", "премиум", "элит", "элитный",
                 "стандарт", "комфорт класса", "бизнес класса", "премиум класса"}
 _BRAND_PREFIX_RE = re.compile(r"^(бигвилль|bigville)\s+", re.I)
+_DEVELOPER_SUFFIX_RE = re.compile(
+    r"\s+от\s+(?:nak|нак|bi|bi group|би групп|bazis[- ]a|базис[- ]а|"
+    r"sensata|sensata group|сенсата|orda invest|орда инвест)$", re.I)
+_CITY_SUFFIX_RE = re.compile(r"(?:,\s*|\s+)(?:город|г\.)\s+(?:астана|нур[- ]султан)$", re.I)
+_SEPARATE_RELATIONS = {"sibling_phase", "same_umbrella_project", "separate_neighbor_complex"}
 
 
 def is_junk_name(name: str | None, *, trusted: bool = False) -> bool:
@@ -70,39 +76,91 @@ def is_junk_name(name: str | None, *, trusted: bool = False) -> bool:
 
 
 def _core(name: str | None) -> str:
-    return _BRAND_PREFIX_RE.sub("", norm_name(name))
+    n = _BRAND_PREFIX_RE.sub("", norm_name(name))
+    # Удаляем только полное имя известного застройщика в самом конце.
+    # «от NAK 2 очередь» / «от BI Group Garden» содержат идентификатор проекта,
+    # а неизвестный хвост «от …» тоже требует review, не автоматического strip.
+    # Номера очередей, Garden/Headliner и прочие собственные названия сохраняются.
+    while True:
+        stripped = _DEVELOPER_SUFFIX_RE.sub("", _CITY_SUFFIX_RE.sub("", n)).strip()
+        if stripped == n:
+            return n
+        n = stripped
 
 
 def names_related(a: str | None, b: str | None) -> bool:
-    """Одна запись — вариант имени другой («Бигвилль X» / «X», «X от NAK» / «X»)."""
+    """Точные варианты с явными метаданными («Бигвилль X», «X от NAK»).
+
+    Общий префикс/подстрока не доказывает, что это один ЖК: «Нурсая 2» и
+    «Нурсая», «Arena Towers» и «Arena» могут быть разными проектами/очередями.
+    """
     x, y = _core(a), _core(b)
-    if not x or not y:
-        return False
-    short, long_ = sorted((x, y), key=len)
-    return len(short) >= 3 and (long_ == short or long_.startswith(short) or short in long_.split()
-                                or f" {short}" in f" {long_}")
+    return len(x) >= 3 and x == y
 
 
 def _trusted(c: dict) -> bool:
     return bool(c.get("housing_class") or c.get("is_newbuild"))
 
 
-def _prefix_match(junk: str, real: dict[str, int]) -> int | None:
+def _prefix_match(junk: str, real: dict[str, set[int]]) -> int | None:
     j = norm_name(junk)
-    best, best_len = None, 0
-    for rn, rid in real.items():
-        if len(rn) >= 4 and len(rn) > best_len and (j == rn or j.startswith(rn + " ") or j.startswith(rn + ",")
-                                                    or j.startswith(rn + "-")):
-            best, best_len = rid, len(rn)
-    return best
+    best: set[int] = set()
+    best_len = 0
+    for rn, ids in real.items():
+        if len(rn) < 4 or len(rn) < best_len or not j.startswith(rn):
+            continue
+        tail = j[len(rn):]
+        # «Нурсая-2 Продается» не является обрывком имени «Нурсая».
+        # После точного имени допускается только явно служебный текст.
+        if tail:
+            if tail[0] not in " ,:;—–-":
+                continue
+            description = tail.lstrip(" ,:;—–-")
+            if not (_JUNK_RE.match(description) or _LEADING_JUNK_RE.match(description)):
+                continue
+        if len(rn) > best_len:
+            best, best_len = set(ids), len(rn)
+        else:
+            best.update(ids)
+    return next(iter(best)) if len(best) == 1 else None
 
 
-def compute_canonical(complexes: list[dict], listing_counts: dict[int, int]) -> dict[int, tuple[int | None, str | None]]:
+def compute_canonical(complexes: list[dict], listing_counts: dict[int, int],
+                      reviewed_relations: list[dict] | None = None) -> dict[int, tuple[int | None, str | None]]:
     """Чистая функция. complexes: [{id, name, krisha_url, parent_complex_id, is_umbrella,
     housing_class, is_newbuild}] (уже без мусора/улиц). Возвращает {id: (canonical_id, reason)}
-    только для НЕканонических записей; канонические — (None, None)."""
-    by_id = {c["id"]: c for c in complexes}
+    только для НЕканонических записей; канонические — (None, None).
+    reviewed_relations — факты complex_relations; отдельные проекты/очереди
+    нельзя свести даже через промежуточную запись. Positive duplicate/renamed
+    пока не создают алиасы автоматически: для них нужен отдельный review flow.
+    """
     out: dict[int, tuple[int | None, str | None]] = {c["id"]: (None, None) for c in complexes}
+    roots = {cid: cid for cid in out}
+    component_members = {cid: {cid} for cid in out}
+    separate: dict[int, set[int]] = defaultdict(set)
+    for relation in reviewed_relations or []:
+        if relation["relation_type"] in _SEPARATE_RELATIONS:
+            a, b = relation["complex_id_a"], relation["complex_id_b"]
+            separate[a].add(b)
+            separate[b].add(a)
+
+    def root(cid: int) -> int:
+        if roots[cid] != cid:
+            roots[cid] = root(roots[cid])
+        return roots[cid]
+
+    def assign(cid: int, target: int, reason: str) -> bool:
+        source_root, target_root = root(cid), root(target)
+        if source_root == target_root:
+            return True
+        # Проверяем не только предлагаемую пару, но и уже присоединённые алиасы:
+        # A→B, B→C также запрещено, если reviewer разделил A и C.
+        if any(separate[mid] & component_members[target_root] for mid in component_members[source_root]):
+            return False
+        roots[source_root] = target_root
+        component_members[target_root].update(component_members.pop(source_root))
+        out[cid] = (target_root, reason)
+        return True
 
     def junk(c: dict) -> bool:
         return is_junk_name(c["name"], trusted=_trusted(c))
@@ -115,12 +173,15 @@ def compute_canonical(complexes: list[dict], listing_counts: dict[int, int]) -> 
     #    Крыши у самой записи complexes: krisha_url таким записям проставлялся из одного
     #    объявления и бывает чужим («Arena Towers От Надёжного Застр» → slug Tandau).
     #    У объявлений со своей ссылкой на ЖК работает правило url в complex_binding.
-    real = {norm_name(c["name"]): c["id"] for c in complexes if not junk(c) and norm_name(c["name"])}
+    real: dict[str, set[int]] = defaultdict(set)
     for c in complexes:
-        if junk(c):
+        if not junk(c) and norm_name(c["name"]):
+            real[norm_name(c["name"])].add(c["id"])
+    for c in complexes:
+        if junk(c) and not c.get("parent_complex_id"):
             target = _prefix_match(c["name"], real)
             if target and target != c["id"]:
-                out[c["id"]] = (target, "name_prefix")
+                assign(c["id"], target, "name_prefix")
 
     # 2) Одинаковая ссылка Крыши — варианты одного имени и оставшиеся обрывки.
     groups: dict[str, list[dict]] = defaultdict(list)
@@ -129,17 +190,38 @@ def compute_canonical(complexes: list[dict], listing_counts: dict[int, int]) -> 
         if s_ and out[c["id"]][0] is None:
             groups[s_].append(c)
     for members in groups.values():
-        ids = {m["id"] for m in members}
-        heads = [m for m in members if m.get("parent_complex_id") not in ids]   # дома под зонтиком — сами по себе
+        heads = [m for m in members if not m.get("parent_complex_id")]  # дома под зонтиком — сами по себе
         if len(heads) < 2:
             continue
-        canon = min(heads, key=rank)
+        families: dict[str, list[dict]] = defaultdict(list)
         for m in heads:
-            # krisha_url местами проставлен ошибочно — по slug сводим только варианты
-            # одного имени или обрывки; разные имена с общим slug не трогаем (такой slug
-            # и в привязке объявлений не используется — неоднозначен).
-            if m["id"] != canon["id"] and (junk(m) or names_related(m["name"], canon["name"])):
-                out[m["id"]] = (canon["id"], "krisha_slug")
+            if not junk(m) and len(_core(m["name"])) >= 3:
+                families[_core(m["name"])].append(m)
+        # Не выбираем обрывок каноном. В неоднозначном slug объединяем только
+        # доказанные варианты внутри каждой семьи, сохраняя разные ЖК/очереди.
+        for variants in families.values():
+            canon = min(variants, key=rank)
+            for m in sorted(variants, key=rank):
+                if m["id"] != canon["id"]:
+                    assign(m["id"], canon["id"], "krisha_slug")
+        if len(families) == 1 and len({root(m["id"]) for m in next(iter(families.values()))}) == 1:
+            canon = min(next(iter(families.values())), key=rank)
+            for m in heads:
+                n = norm_name(m["name"])
+                # Только безымянный служебный текст можно уточнить по уникальному
+                # slug. «Нурсая 2 Продается» нельзя назначать «Нурсае» по чужой ссылке.
+                if junk(m) and (_JUNK_RE.match(n) or _LEADING_JUNK_RE.match(n) or n in _CLASS_WORDS):
+                    assign(m["id"], canon["id"], "krisha_slug")
+
+    # Повторяющиеся названия могли стать однозначными после доказанного сведения
+    # по slug. Без такого доказательства порядок строк/число объявлений не решают
+    # неоднозначность имени.
+    resolved_real = {n: {root(cid) for cid in ids} for n, ids in real.items()}
+    for c in complexes:
+        if junk(c) and not c.get("parent_complex_id") and out[c["id"]][0] is None:
+            target = _prefix_match(c["name"], resolved_real)
+            if target is not None:
+                assign(c["id"], target, "name_prefix")
 
     # 3) Обрывки, которые не удалось свести, — в аналитике не используются.
     for c in complexes:
@@ -152,7 +234,6 @@ def compute_canonical(complexes: list[dict], listing_counts: dict[int, int]) -> 
             seen.add(tgt)
             tgt = out[tgt][0]
         out[cid] = (tgt, reason)
-    _ = by_id
     return out
 
 
@@ -165,7 +246,9 @@ async def apply_canonical() -> dict:
     counts = {r["cid"]: r["n"] for r in await fetch("""
         SELECT complex_id AS cid, count(*) AS n FROM apartment_listings
          WHERE complex_id IS NOT NULL GROUP BY 1""")}
-    res = compute_canonical(rows, counts)
+    relations = [dict(r) for r in await fetch("""
+        SELECT complex_id_a, complex_id_b, relation_type FROM complex_relations""")]
+    res = compute_canonical(rows, counts, reviewed_relations=relations)
     changed = 0
     stats = {"krisha_slug": 0, "name_prefix": 0, "junk_unmatched": 0}
     for r in rows:
