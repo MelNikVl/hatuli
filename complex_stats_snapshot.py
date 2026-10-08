@@ -7,10 +7,9 @@ complex_stats_history даёт снимок "на дату" для будущи�
 динамики цены по ЖК.
 
 Один INSERT...SELECT на всю базу разом (не цикл по ЖК) — считает
-avg_price_m2/avg_yield/listings_count заново из apartment_listings,
-тем же паттерном "имя ИЛИ resolved_house_id" (_listing_id_match), что
-everywhere в проекте после волны 1 скоринга (House-resolution в
-скоринге) — снимок ЖК-дома под зонтиком не смешивается с зонтиком.
+avg_price_m2/avg_yield/listings_count заново из apartment_listings.
+Приоритет: complex_id, иначе resolved_house_id, иначе однозначное имя.
+canonical_id объединяет aliases; дом под зонтиком остаётся отдельным ЖК.
 
 avg_yield считается из apartment_listings.yield_pct напрямую (НЕ из
 complexes.avg_yield — та колонка существует в схеме, но не имеет ни
@@ -22,7 +21,7 @@ UNIQUE(complex_id, date) — повторный запуск в тот же де
 **avg_dom_days/price_drop_share_30d/price_drop_share_60d** (Фаза L1
 продуктового трека «Локация», docs/location_product_design.md §7,
 задача 2026-08-14, миграция 072) — тот же писатель, тот же
-listing_complex CTE (resolved_house_id-приоритет), не второй скрипт:
+listing_complex CTE, не второй скрипт:
 
   avg_dom_days — среди АКТИВНЫХ объявлений комплекса, средний возраст
   (now() - first_seen) в днях. Это НЕ время до продажи (даты продажи в
@@ -64,23 +63,31 @@ log = logging.getLogger("complex_stats_snapshot")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
 
 SNAPSHOT_SQL = """
-    -- listing_complex: КАЖДОЕ объявление -> РОВНО один complex_id — не
-    -- OR-джойн (тот считал бы одно и то же объявление и в доме, и в
-    -- зонтике разом, если resolved_house_id указывает на дом, а текст
-    -- complex_name всё ещё называет зонтика: живой баг, найденный тестом
-    -- этого же коммита). resolved_house_id — приоритетный путь (тот же
-    -- принцип, что _listing_id_match everywhere в проекте); byname
-    -- активируется, ТОЛЬКО когда resolved_house_id не задан.
-    WITH listing_complex AS (
+    -- На объявление ровно одна строка: явный complex_id авторитетен,
+    -- legacy house/name используются только до его назначения. Алиасы
+    -- нормализуются по canonical_id, родитель дома НЕ заменяет его id.
+    WITH cx AS (
+        SELECT id, COALESCE(canonical_id, id) AS cid, lower(btrim(name)) AS n
+        FROM complexes
+        WHERE COALESCE(is_garbage, FALSE) = FALSE
+          AND COALESCE(is_street, FALSE) = FALSE
+          AND COALESCE(canonical_reason, '') <> 'junk_unmatched'
+    ), name_keys AS (
+        SELECT n, min(cid) AS cid
+        FROM cx
+        WHERE n <> ''
+        GROUP BY n
+        HAVING count(DISTINCT cid) = 1
+    ), listing_complex AS (
         SELECT al.id AS listing_id, al.price, al.area, al.yield_pct, al.is_active, al.first_seen,
-               COALESCE(house.id, byname.id) AS complex_id
+               COALESCE(bound.cid, house.cid, byname.cid) AS complex_id
         FROM apartment_listings al
-        LEFT JOIN complexes house
-          ON house.id = al.resolved_house_id AND COALESCE(house.is_garbage, FALSE) = FALSE
-        LEFT JOIN complexes byname
-          ON al.resolved_house_id IS NULL
-         AND lower(trim(byname.name)) = lower(trim(al.complex_name))
-         AND COALESCE(byname.is_garbage, FALSE) = FALSE
+        LEFT JOIN cx bound ON bound.id = al.complex_id
+        LEFT JOIN cx house
+          ON al.complex_id IS NULL AND house.id = al.resolved_house_id
+        LEFT JOIN name_keys byname
+          ON al.complex_id IS NULL AND al.resolved_house_id IS NULL
+         AND byname.n = lower(btrim(al.complex_name))
         WHERE COALESCE(al.is_duplicate, FALSE) = FALSE
     ),
     -- Фаза L1 (миграция 072): у кого из listing_complex было снижение

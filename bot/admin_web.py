@@ -2033,7 +2033,12 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # в шаблоне через is_admin(request)
         from bot.db.pg import fetch as pg_fetch
 
-        conditions = ["COALESCE(c.is_street, FALSE) = FALSE"]  # улицы не показываем в таблице ЖК
+        conditions = [
+            "COALESCE(c.is_street, FALSE) = FALSE",
+            "COALESCE(c.is_garbage, FALSE) = FALSE",
+            "c.canonical_id IS NULL",
+            "COALESCE(c.canonical_reason, '') <> 'junk_unmatched'",
+        ]  # каталог показывает канонические ЖК, а не варианты их имён
         params = []
         i = 1
 
@@ -2042,7 +2047,17 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             params.append(district)
             i += 1
         if search:
-            conditions.append(f"c.name ILIKE '%' || ${i} || '%'")
+            conditions.append(f"""(
+                c.name ILIKE '%' || ${i} || '%'
+                OR EXISTS (
+                    SELECT 1 FROM complexes alias
+                    WHERE alias.canonical_id = c.id
+                      AND COALESCE(alias.is_garbage, FALSE) = FALSE
+                      AND COALESCE(alias.is_street, FALSE) = FALSE
+                      AND COALESCE(alias.canonical_reason, '') <> 'junk_unmatched'
+                      AND alias.name ILIKE '%' || ${i} || '%'
+                )
+            )""")
             params.append(search)
             i += 1
 
@@ -2068,6 +2083,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             *params,
         )
         total_all = await pg_fetch(f"SELECT COUNT(*) AS n FROM complexes c {where}", *params)
+        # TODO: cached listings_count/avg_price_m2 всё ещё вычисляются старым
+        # writer по именам; карточка уже использует каноническую принадлежность.
 
         def _serialize(r):
             d = dict(r)

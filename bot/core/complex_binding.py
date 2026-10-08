@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 GEO_MAX_M = 60
 GEO_MARGIN_M = 15
-RESOLVER_VERSION = 'complex_binding_v2'
+RESOLVER_VERSION = 'complex_binding_v3'
 
 # Кандидат на каждое объявление; DISTINCT ON + ORDER BY приоритет правила.
 _PROPOSE_SQL = f"""
@@ -74,10 +74,11 @@ geo AS (
       FROM apartment_listings a
       CROSS JOIN LATERAL (
           SELECT (array_agg(cid ORDER BY d))[1] AS c1, (array_agg(d ORDER BY d))[1] AS d1, (array_agg(d ORDER BY d))[2] AS d2
-            FROM (SELECT cx.cid, sqrt(((cx.lat - a.lat) * 111000)^2 + ((cx.lon - a.lon) * 111000 * cos(radians(a.lat)))^2) AS d
+            FROM (SELECT cx.cid, min(sqrt(((cx.lat - a.lat) * 111000)^2 + ((cx.lon - a.lon) * 111000 * cos(radians(a.lat)))^2)) AS d
                     FROM cx
                    WHERE cx.lat BETWEEN a.lat - 0.0015 AND a.lat + 0.0015
-                     AND cx.lon BETWEEN a.lon - 0.0025 AND a.lon + 0.0025) near
+                     AND cx.lon BETWEEN a.lon - 0.0025 AND a.lon + 0.0025
+                   GROUP BY cx.cid) near
       ) g
      WHERE nullif(btrim(a.complex_name), '') IS NULL AND a.lat IS NOT NULL
        AND g.d1 <= {GEO_MAX_M} AND (g.d2 IS NULL OR g.d2 - g.d1 >= {GEO_MARGIN_M}) {{scope}}
@@ -88,7 +89,8 @@ prop AS (
      ORDER BY listing_id, prio
 ),
 target AS (
-    SELECT a.id AS listing_id, p.complex_id, p.method, p.evidence, a.complex_name
+    SELECT a.id AS listing_id, p.complex_id, p.method, p.evidence, a.complex_name,
+           a.complex_id AS previous_complex_id, a.complex_resolution AS previous_complex_resolution
       FROM apartment_listings a LEFT JOIN prop p ON p.listing_id = a.id
      WHERE (a.complex_id IS DISTINCT FROM p.complex_id OR a.complex_resolution IS DISTINCT FROM p.method) {{scope}}
 )
@@ -125,11 +127,24 @@ SELECT count(*) AS total,
 """
 
 
-def build_sql(active_only: bool, id_like: str | None = None) -> str:
+def _scope_sql(active_only: bool, id_like: str | None = None) -> str:
     scope = "AND a.is_active IS NOT FALSE" if active_only else ""
     if id_like is not None:
         scope += " AND a.id LIKE $1"   # только для тестов: не трогать боевые строки
-    return _APPLY_SQL.replace('{scope}', scope)
+    return scope
+
+
+def build_sql(active_only: bool, id_like: str | None = None) -> str:
+    return _APPLY_SQL.replace('{scope}', _scope_sql(active_only, id_like))
+
+
+def build_preview_sql(active_only: bool = False, id_like: str | None = None) -> str:
+    """Read-only proposal using the CURRENT canonical map; no UPDATE or log writes."""
+    return _PROPOSE_SQL.replace('{scope}', _scope_sql(active_only, id_like)) + """
+SELECT listing_id, previous_complex_id, previous_complex_resolution,
+       complex_id, method, evidence
+  FROM target ORDER BY listing_id
+"""
 
 
 async def resolve_complex_ids(*, active_only: bool = False, id_like: str | None = None) -> dict:

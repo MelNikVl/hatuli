@@ -7,9 +7,9 @@ House-resolution — задача 2026-08-13: когда ЖК стал "зонт
 вытаскивать из адреса/текста/координат самого объявления.
 
 Приоритет резолва (решение заказчика):
-  1. Адрес — номер дома/участка (extract_house_token из адреса)
+  1. Адрес — улица + номер дома; для участка — номер и доступная улица
   2. Текстовый токен ("блок N"/"очередь N"/"- N") в title/description
-  3. Гео ≤150м до координат дома
+  3. Гео ≤150м до координат дома, без близкого конкурирующего дома
 
 Неуверенность на любом шаге -> None (остаётся на зонтике, НЕ гадаем).
 Если адрес указывает на НЕСКОЛЬКО домов сразу (коллизия участка — живой
@@ -24,6 +24,7 @@ import re
 from bot.core.entity_resolution import _haversine_m
 
 GEO_MAX_M = 150.0
+GEO_MARGIN_M = 15.0
 
 
 def _extract_house_number(addr: str | None) -> str | None:
@@ -43,6 +44,52 @@ def _extract_house_number(addr: str | None) -> str | None:
     if m2:
         return m2.group(1).lower()
     return None
+
+
+def _address_street_key(addr: str | None) -> str | None:
+    """Консервативный ключ улицы без номера дома и административных префиксов.
+
+    Номер сам по себе не идентифицирует адрес: «Анет баба, 4» и
+    «Туркестан, 4» — разные дома. Переименования улиц/транслит здесь
+    не угадываем; если ключ получить нельзя, остаются текст и гео.
+    """
+    if not addr:
+        return None
+    head = re.split(r"\s+[—-]\s+", addr.strip())[0].strip()
+    plot = re.search(r"уч\.?\s*\d+", head, re.IGNORECASE)
+    if plot:
+        head = head[:plot.start()].strip(" ,")
+    else:
+        number = re.search(r"\d+(?:/\d+)?[а-яa-zА-ЯA-Z]?\s*$", head)
+        if number:
+            head = head[:number.start()].strip(" ,")
+    markers = list(re.finditer(
+        r"(?<!\w)(?:улица|ул\.|проспект|пр\.|переулок|пер\.)\s*", head,
+        re.IGNORECASE))
+    if markers:
+        street = head[markers[-1].end():]
+    else:
+        parts = [part.strip() for part in head.split(",") if part.strip()]
+        street = parts[-1] if parts else ""
+    street = re.sub(r"[\W_]+", " ", street.casefold().replace("ё", "е")).strip()
+    if not street or street in {"астана", "г астана", "рк"}:
+        return None
+    if re.search(r"\b(?:район|р н|р он|р)\b", street):
+        return None
+    return street
+
+
+def _same_house_address(listing_address: str | None, child_address: str | None) -> bool:
+    number = _extract_house_number(listing_address)
+    if not number or number != _extract_house_number(child_address):
+        return False
+    listing_street = _address_street_key(listing_address)
+    child_street = _address_street_key(child_address)
+    if listing_street and child_street:
+        return listing_street == child_street
+    # Участок часто приходит без улицы. Сохраняем его как кандидата;
+    # коллизии нескольких домов разрешаются только внутри этой группы.
+    return number.startswith("уч")
 
 
 def _house_text_token(house_name: str, umbrella_name: str) -> str | None:
@@ -89,26 +136,26 @@ async def get_umbrella_children(umbrella_id: int) -> list[dict]:
 
 
 async def resolve_complex_geo_centroid(complex_id: int, complex_name: str) -> tuple[float, float] | None:
-    """Координаты ЖК/дома = центроид координат его объявлений (в
-    complexes своих координат нет). Вынесено из terminal_extras.py
-    (Фаза B, п.5, задача 2026-08-14, docs/verdict_strategy.md) — этот
-    запрос дублировался буквально (карточка ЖК + /admin/api/complex/
-    {id}/location-score), обе точки теперь зовут одну функцию.
+    """Observed listing centroid under the same canonical membership as the page.
 
-    resolved_house_id (задача "House-resolution в скоринге", 2026-08-13) —
-    объявления дома под зонтиком могут по-прежнему называть его именем
-    зонтика в тексте; resolve_house() уже привязал их к ЭТОМУ дому по
-    адресу/токену/гео. Без OR resolved_house_id = $2 центроид дома либо
-    молча считался бы по чужим (умбреловым) координатам, либо не
-    находился бы вовсе. Возвращает None, если объявлений с координатами
-    нет вообще (Unknown != average — не гадаем, не 404 с нулями)."""
+    An umbrella includes its children; a child includes only its own listings.
+    Display names cannot override a bound ID. This remains an observed centroid,
+    not a verified building location (outlier filtering is a separate step).
+    complex_name is retained for compatibility with existing callers.
+    """
     from bot.db.pg import fetchrow
-    geo = await fetchrow("""
+    from bot.core.complex_membership import listing_complex_match_sql
+    canonical = await fetchrow("SELECT COALESCE(canonical_id, id) AS id FROM complexes WHERE id = $1", complex_id)
+    if not canonical:
+        return None
+    membership = listing_complex_match_sql(include_children=True)
+    geo = await fetchrow(f"""
         SELECT AVG(lat) AS lat, AVG(lon) AS lon
         FROM apartment_listings
-        WHERE (lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)
-          AND lat IS NOT NULL
-    """, complex_name, complex_id)
+        WHERE {membership}
+          AND lat IS NOT NULL AND lon IS NOT NULL
+          AND COALESCE(is_duplicate, FALSE) = FALSE
+    """, canonical['id'])
     if not geo or geo["lat"] is None:
         return None
     return float(geo["lat"]), float(geo["lon"])
@@ -127,33 +174,42 @@ async def resolve_house(
     if not children:
         return None
 
-    # ── 1. Адрес — номер дома/участка ────────────────────────────────────
+    # ── 1. Адрес — улица + номер дома/участка ────────────────────────────
+    candidates = children
     listing_num = _extract_house_number(listing_address)
     if listing_num:
-        matched = [c for c in children if _extract_house_number(c.get("address")) == listing_num]
+        matched = [c for c in children if _same_house_address(listing_address, c.get("address"))]
         if len(matched) == 1:
             return {"house_id": matched[0]["id"], "method": "address",
-                    "detail": f"номер «{listing_num}» совпал с адресом дома"}
-        if len(matched) > 1 and listing_lat and listing_lon:
+                    "detail": f"адрес дома совпал (номер «{listing_num}»)"}
+        if len(matched) > 1:
+            candidates = matched
             # Коллизия участка на несколько домов (живой случай UIA.DARYN,
             # несколько домов на одном "уч. 6") — сужаем гео-тайбрейком
             # ТОЛЬКО среди уже отфильтрованных по адресу кандидатов.
-            best = _nearest_within(matched, listing_lat, listing_lon)
+            best = (_nearest_within(matched, listing_lat, listing_lon)
+                    if listing_lat is not None and listing_lon is not None else None)
             if best:
                 house, dist = best
                 return {"house_id": house["id"], "method": "address_geo",
                         "detail": f"номер «{listing_num}» совпал с {len(matched)} домами, ближайший — {dist:.0f}м"}
 
     # ── 2. Текстовый токен (очередь/блок) в title/description ───────────
-    for c in children:
+    token_matches = []
+    for c in candidates:
         token = _house_text_token(c["name"], umbrella_name)
         if token and _text_token_match(token, listing_title, listing_description):
-            return {"house_id": c["id"], "method": "token",
-                    "detail": f"токен «{token}» найден в тексте объявления"}
+            token_matches.append((c, token))
+    if len(token_matches) == 1:
+        house, token = token_matches[0]
+        return {"house_id": house["id"], "method": "token",
+                "detail": f"токен «{token}» найден в тексте объявления"}
+    if len(token_matches) > 1:
+        return None
 
-    # ── 3. Гео ≤150м ──────────────────────────────────────────────────────
-    if listing_lat and listing_lon:
-        best = _nearest_within(children, listing_lat, listing_lon)
+    # ── 3. Гео ≤150м и без близкого конкурента ──────────────────────────
+    if listing_lat is not None and listing_lon is not None:
+        best = _nearest_within(candidates, listing_lat, listing_lon)
         if best:
             house, dist = best
             return {"house_id": house["id"], "method": "geo",
@@ -163,14 +219,20 @@ async def resolve_house(
 
 
 def _nearest_within(candidates: list[dict], lat: float, lon: float) -> tuple[dict, float] | None:
-    best = None
+    distances = []
     for c in candidates:
-        if not c.get("lat") or not c.get("lon"):
+        if c.get("lat") is None or c.get("lon") is None:
             continue
         d = _haversine_m(lat, lon, float(c["lat"]), float(c["lon"]))
-        if d <= GEO_MAX_M and (best is None or d < best[1]):
-            best = (c, d)
-    return best
+        distances.append((c, d))
+    distances.sort(key=lambda item: item[1])
+    if not distances or distances[0][1] > GEO_MAX_M:
+        return None
+    # Второй дом учитываем и за границей радиуса: 149м против 151м
+    # не превращаются в уверенный выбор из-за порога в 150м.
+    if len(distances) > 1 and distances[1][1] - distances[0][1] < GEO_MARGIN_M:
+        return None
+    return distances[0]
 
 
 async def maybe_resolve_listing_house(listing_id: str, complex_name: str | None, *,

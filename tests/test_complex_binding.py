@@ -94,6 +94,16 @@ def test_scope_sql_builds():
     assert "a.id LIKE $1" in build_sql(False, "x%")
 
 
+def test_preview_sql_contains_no_mutations():
+    import re
+    from bot.core.complex_binding import build_preview_sql
+
+    sql = build_preview_sql(True, PFX + '%')
+    assert not re.search(r'\b(INSERT|UPDATE|DELETE)\s', sql, re.I)
+    assert '{scope}' not in sql
+    assert 'previous_complex_id' in sql
+
+
 @pytest.mark.asyncio
 async def test_url_beats_name_and_canonical_applies(db):
     from bot.core.complex_binding import resolve_complex_ids
@@ -114,3 +124,29 @@ async def test_url_beats_name_and_canonical_applies(db):
         assert await _get(PFX + "8") == {"complex_id": real, "complex_resolution": "name"}
     finally:
         await execute("UPDATE complexes SET canonical_id = NULL WHERE id = $1", dup)
+
+
+@pytest.mark.asyncio
+async def test_geo_distinct_identity_and_preview_is_read_only(db):
+    from bot.core.complex_binding import build_preview_sql, resolve_complex_ids
+    from bot.db.pg import fetch, fetchval
+
+    lat, lon = 50.8, 70.8
+    canonical = await _cx(db, PFX + 'geo canonical', lat, lon)
+    alias = await _cx(db, PFX + 'geo alias', lat + 0.00005, lon)
+    await db("UPDATE complexes SET canonical_id=$2, canonical_reason='krisha_slug' WHERE id=$1", alias, canonical)
+    lid = PFX + 'geoalias'
+    await _listing(db, lid, lat=lat + 0.000025, lon=lon)
+    preview = await fetch(build_preview_sql(id_like=lid), lid)
+    assert len(preview) == 1
+    assert preview[0]['complex_id'] == canonical
+    assert preview[0]['method'] == 'geo'
+    assert (await _get(lid))['complex_id'] is None
+    assert await fetchval('SELECT count(*) FROM listing_complex_resolution_log WHERE listing_id=$1', lid) == 0
+    await resolve_complex_ids(id_like=lid)
+    assert await _get(lid) == {'complex_id': canonical, 'complex_resolution': 'geo'}
+
+    # A second different identity is a real competitor, unlike the alias.
+    await _cx(db, PFX + 'geo other', lat + 0.000025, lon)
+    await resolve_complex_ids(id_like=lid)
+    assert (await _get(lid))['complex_id'] is None
