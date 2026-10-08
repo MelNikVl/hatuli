@@ -162,6 +162,22 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
     if result["is_price_from"]:
         result["price_warning"] = "⚠️ ЦЕНА 'ОТ' — маркетинговая ловушка, реальная цена выше"
 
+    # Minimal identity for a single-listing import. Only explicit breadcrumbs
+    # establish scope; a link in recommendations/footer is not evidence.
+    breadcrumbs = soup.select('[itemtype="https://schema.org/BreadcrumbList"] a, '
+                              '.breadcrumbs a, .bread-crumbs a')
+    sale_astana = any(re.fullmatch(r"(?:https://krisha\.kz)?/prodazha/kvartiry/astana/?",
+                                  a.get('href', '')) for a in breadcrumbs)
+    room_match = re.search(r"(\d+)[-\s]*комнат", title, re.I)
+    title_area = re.search(r"(\d+(?:[.,]\d+)?)\s*м²", title)
+    price_digits = re.sub(r"\D", "", price_text)
+    result["listing_identity"] = {
+        "sale_astana": sale_astana,
+        "rooms": int(room_match.group(1)) if room_match else None,
+        "area": float(title_area.group(1).replace(',', '.')) if title_area else None,
+        "price": int(price_digits) if price_digits and ('₸' in price_text or 'тг' in price_text) else None,
+    }
+
     # ── Structured parameters from offer__info-item ──────────────────────
     params = {}
     for item in soup.select("div.offer__info-item"):

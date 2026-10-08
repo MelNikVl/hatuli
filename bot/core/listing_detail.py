@@ -35,10 +35,12 @@ RESTRICTED_MESSAGE = (
 )
 
 
-async def build_listing_detail(listing_id: str, tier: str) -> dict:
+async def build_listing_detail(listing_id: str, tier: str, *, similar_limit: int = 10) -> dict:
     """Полные данные объявления для модалки (фото, адрес, торг, похожие).
     tier уже посчитан вызывающим роутом (он один знает про Request/куки) —
     сюда приходит строкой, эта функция про HTTP ничего не знает.
+    similar_limit=0 skips related-listing queries for candidate comparisons;
+    the default preserves the existing site/API response.
 
     Бросает ListingNotFound / ListingRestricted вместо статус-кодов —
     только роут решает, как исключение превращается в HTTP-ответ."""
@@ -83,7 +85,8 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
     # которому это всё равно не покажется. tier здесь уже не может быть
     # "public" (см. raise ListingRestricted выше), условие оставлено 1:1
     # с исходным кодом ради минимальной дельты при переносе.
-    similar_listings = [] if tier == "public" else await compute_similar_listings(l, listing_id, limit=10)
+    similar_listings = (await compute_similar_listings(l, listing_id, limit=similar_limit)
+                        if tier != "public" and similar_limit else [])
 
     layers = l.get("layer_details")
     if isinstance(layers, str):
@@ -171,7 +174,7 @@ async def build_listing_detail(listing_id: str, tier: str) -> dict:
 
     # Лента "рядом" — 3 ближайших активных объявления по прямому расстоянию
     nearby = []
-    if l.get("lat") is not None and l.get("lon") is not None:
+    if similar_limit and l.get("lat") is not None and l.get("lon") is not None:
         from bot.db.pg import fetch as pg_fetch
         nb_rows = await pg_fetch("""
             SELECT id, url, price, rooms, area, photos
@@ -356,4 +359,7 @@ async def build_price_history(listing_id: str) -> dict:
         "points": points,
         "current": cur["price"] if cur else None,
         "changes": len(rows),
+        "events": [{"at": r["changed_at"].strftime("%d.%m.%Y"),
+                    "old_price": r["old_price"], "new_price": r["new_price"]}
+                   for r in rows],
     }

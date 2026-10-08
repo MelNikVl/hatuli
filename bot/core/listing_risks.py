@@ -523,6 +523,12 @@ def _liquidity_signals(l: dict, price_stats: dict, siblings: list[dict],
                     f"~{current.get('days_low')}–{days_high} дн.).",
                     "Прогноз срока экспозиции (сегментный анализ)",
                 ))
+                items[-1]["exposure"] = {
+                    "observed_days": age_days,
+                    "expected_days_low": current.get("days_low"),
+                    "expected_days_high": days_high,
+                    "confidence": dom_forecast.get("confidence"),
+                }
         if dom_forecast.get("confidence") == "low":
             unknowns.append(_unknown(
                 "DOM_FORECAST_WEAK", "Слабый прогноз срока экспозиции",
