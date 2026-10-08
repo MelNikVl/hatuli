@@ -918,68 +918,20 @@ async def run_cycle():
     # (раньше listings_count был заморожен со времён миграции — отсюда
     # "рейтинг 1" у большинства ЖК; теперь пересчитывается каждый цикл)
     try:
-        await pg_exec("""
-            UPDATE complexes c SET
-                listings_count = s.active_cnt,
-                sold_count     = s.sold_cnt,
-                avg_price_m2   = s.avg_m2
-            FROM (
-                SELECT complex_name,
-                       COUNT(*) FILTER (WHERE is_active IS NOT FALSE)             AS active_cnt,
-                       COUNT(*) FILTER (WHERE is_active IS FALSE)                 AS sold_cnt,
-                       AVG(price / NULLIF(area,0)) FILTER (WHERE is_active IS NOT FALSE) AS avg_m2
-                FROM apartment_listings
-                WHERE complex_name IS NOT NULL AND complex_name != ''
-                  AND COALESCE(is_duplicate, FALSE) = FALSE
-                GROUP BY complex_name
-            ) s
-            WHERE lower(c.name) = lower(s.complex_name)
-        """)
-        await pg_exec("""
-            UPDATE complexes c SET rental_listings_count = s.cnt
-            FROM (
-                SELECT complex_name, COUNT(*) AS cnt FROM rental_listings
-                WHERE complex_name IS NOT NULL AND complex_name != ''
-                  AND last_seen > now() - interval '14 days'
-                GROUP BY complex_name
-            ) s
-            WHERE lower(c.name) = lower(s.complex_name)
-        """)
-        # Координаты ЖК из центроидов объявлений (только пустые)
-        await pg_exec("""
-            UPDATE complexes c SET lat = s.lat, lon = s.lon, coords_source = 'listings'
-            FROM (
-                SELECT lower(trim(regexp_replace(complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i'))) AS n,
-                       AVG(lat) AS lat, AVG(lon) AS lon
-                FROM apartment_listings
-                WHERE lat IS NOT NULL AND complex_name IS NOT NULL AND complex_name != ''
-                GROUP BY 1
-            ) s
-            WHERE c.lat IS NULL
-              AND lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i'))) = s.n
-        """)
-
-        # Фото ЖК = первое фото любого его объявления
-        await pg_exec("""
+        from bot.core.complex_ingest_identity import RESOLVER_VERSION
+        from bot.core.listing_complex_ingest import seed_listing_complexes
+        from bot.core.complex_metrics import CURRENT_METRICS_SQL, CENTROID_SQL, IDENTITY_CTES
+        seed_stats = await seed_listing_complexes()
+        log.info("complex catalog ingest (%s): %s", RESOLVER_VERSION, seed_stats)
+        await pg_exec(CURRENT_METRICS_SQL)
+        await pg_exec(CENTROID_SQL)
+        await pg_exec(IDENTITY_CTES + """
             UPDATE complexes c SET photo_url = s.photo
             FROM (
-                SELECT DISTINCT ON (lower(trim(complex_name)))
-                       lower(trim(complex_name)) AS cname,
-                       photos->>0 AS photo
-                FROM apartment_listings
-                WHERE photos IS NOT NULL AND complex_name IS NOT NULL
-            ) s
-            WHERE lower(trim(c.name)) = s.cname AND c.photo_url IS NULL
-        """)
-        # Новые ЖК, которых ещё нет в справочнике — создаём
-        await pg_exec("""
-            INSERT INTO complexes (name, district, listings_count)
-            SELECT al.complex_name, MAX(al.district),
-                   COUNT(*) FILTER (WHERE al.is_active IS NOT FALSE)
-            FROM apartment_listings al
-            WHERE al.complex_name IS NOT NULL AND al.complex_name != ''
-              AND NOT EXISTS (SELECT 1 FROM complexes c WHERE lower(c.name) = lower(al.complex_name))
-            GROUP BY al.complex_name
+                SELECT DISTINCT ON (cid) cid, photos->>0 AS photo
+                FROM listings WHERE cid IS NOT NULL AND photos IS NOT NULL
+                ORDER BY cid, is_active DESC NULLS LAST, first_seen DESC
+            ) s WHERE c.id = s.cid AND c.photo_url IS NULL
         """)
     except Exception as e:
         log.warning("complex stats refresh failed: %s", e)

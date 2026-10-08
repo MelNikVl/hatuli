@@ -10,6 +10,7 @@
 {% set admin = is_admin(request) %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/yield-heat.js?v=20261008"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
@@ -1471,6 +1472,12 @@ const HeatControls = L.Control.extend({
       <input id="f-heat-edge" type="range" min="10" max="150" step="5" value="80" oninput="document.getElementById('f-heat-edge-val').textContent=this.value" onchange="setHeatEdge(this.value)" style="width:100%;">
       <label style="font-size:9.5px;font-weight:700;color:#333;margin-top:2px;white-space:nowrap;">Прозрачность: <span id="f-heat-opacity-val">30</span>%</label>
       <input id="f-heat-opacity" type="range" min="10" max="50" step="5" value="30" oninput="document.getElementById('f-heat-opacity-val').textContent=this.value;setHeatOpacity(this.value)" style="width:100%;">
+      <div id="heat-yield-legend" style="display:none;color:#333;font-size:9.5px;line-height:1.4;margin-top:3px;">
+        <div style="height:7px;border-radius:3px;background:linear-gradient(90deg,#ef4444,#facc15,#86efac,#16a34a,#14532d);"></div>
+        <div style="display:flex;justify-content:space-between;"><span>Ниже</span><span>Выше</span></div>
+        <b>Тёмно-зелёный — лучшие гексы по доходности</b>
+        <div>По медиане расчётной годовой аренды / цены.</div>
+      </div>
       <div id="f-heat-period-row" style="display:none;flex-direction:column;gap:2px;margin-top:2px;">
         <label style="font-size:9.5px;font-weight:700;color:#333;white-space:nowrap;">Период:</label>
         <div style="display:flex;gap:3px;">
@@ -3985,24 +3992,18 @@ function drawLiquidityHeat(points) {
   });
 }
 
-// Доходность аренды (задача "тепловая карта доходности — увидеть, что на
-// правом берегу выгоднее") — медиана yield_pct по гексу. Семантика цвета
-// ОБРАТНАЯ цене: высокая доходность = хорошо для инвестора = зелёный (как
-// низкая цена), поэтому t считается от (hi - value), а не (value - lo).
+// Медиана yield_pct по гексу. Отдельная общая с /investments палитра:
+// большая доходность — тёмно-зелёный; верх шкалы выделен рамкой и подписью.
 function drawYieldHeat(points) {
   const withYield = p => p.yield_pct != null && p.yield_pct > 0;
   const buckets = hexBucket(points.filter(withYield), p => [p.lat, p.lon]);
   const medians = [];
   buckets.forEach(b => { b.value = median(b.items.map(i => i.yield_pct)); medians.push(b.value); });
   if (!medians.length) return;
-  const lo = percentile(medians, 0.10), hi = percentile(medians, 0.90);
+  const range = YieldHeat.scale(medians);
   buckets.forEach(b => {
-    const t = hi > lo ? (hi - b.value) / (hi - lo) : 0.5;
-    const tGamma = Math.pow(Math.max(0, Math.min(1, t)), PRICE_GAMMA);
-    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), {
-      color: '#fff', weight: 0.5,
-      fillColor: priceHeatColor(t), fillOpacity: 0.4 + tGamma * 0.4,
-    }).bindTooltip(`медиана доходности: ${b.value.toFixed(1)}% · ${b.items.length} объявл.`, {sticky:true}).addTo(heatTargetLayer);
+    L.polygon(hexCorners(b.q, b.r, HEAT_EDGE_M), YieldHeat.style(b.value, range))
+      .bindTooltip(YieldHeat.tooltip(b.value, b.items.length, range), {sticky:true}).addTo(heatTargetLayer);
   });
 }
 
@@ -4460,6 +4461,8 @@ async function toggleHeat(mode) {
   map.removeLayer(fineNoiseLayer);
   fineNoiseLayer.clearLayers();
   heatMode = mode;
+  const yieldLegend = document.getElementById('heat-yield-legend');
+  if (yieldLegend) yieldLegend.style.display = mode === 'yield' ? 'block' : 'none';
   // Внешний шум по умолчанию — гекс 30м (задача 2026-08-13, было 40) и
   // прозрачность 25%, в отличие от цен/аренды/доходности (80м/30%) —
   // мелкий шум сильнее размазывается по соседним домам, крупный гекс его

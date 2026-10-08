@@ -145,18 +145,41 @@ def compute_address_hash(address: str | None, floor: int | None, area: float | N
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 
-async def _resolve_complex_id(complex_name: str | None) -> int | None:
-    """complex_name (свободный текст на apartment_listings) -> complexes.id
-    — тот же lower(trim(name))-лукап, что уже используется в
-    bot/core/listing_detail.py (единый источник правды для этого
-    сопоставления, не вторая параллельная реализация)."""
-    if not complex_name:
+async def _canonical_complex_or_none(complex_id: int | None) -> int | None:
+    from bot.core.complex_ingest_identity import canonical_complex_id, InvalidComplexIdentity
+    if complex_id is None:
         return None
-    from bot.db.pg import fetchval
-    return await fetchval(
-        "SELECT id FROM complexes WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
-        complex_name,
-    )
+    try:
+        return await canonical_complex_id(complex_id)
+    except InvalidComplexIdentity:
+        return None
+
+
+async def _resolve_complex_id(listing_row: dict) -> int | None:
+    """Explicit listing ID > resolved house > one eligible catalog name/alias.
+
+    An invalid explicit binding remains unknown; a stale name cannot replace
+    it. Legacy callers may omit the ID columns, so read those missing fields
+    from the stored listing before considering their raw name.
+    """
+    fields = dict(listing_row)
+    missing_ids = "complex_id" not in fields or "resolved_house_id" not in fields
+    missing_resolution = fields.get("complex_id") is None and "complex_resolution" not in fields
+    if (missing_ids or missing_resolution) and fields.get("id"):
+        from bot.db.pg import fetchrow
+        stored = await fetchrow(
+            "SELECT complex_id, resolved_house_id, complex_resolution FROM apartment_listings WHERE id = $1", fields["id"])
+        if stored:
+            for key in ("complex_id", "resolved_house_id", "complex_resolution"):
+                fields.setdefault(key, stored[key])
+    if fields.get("complex_id") is not None:
+        return await _canonical_complex_or_none(fields["complex_id"])
+    if fields.get("complex_resolution") == "unbound":
+        return None
+    if fields.get("resolved_house_id") is not None:
+        return await _canonical_complex_or_none(fields["resolved_house_id"])
+    from bot.core.complex_ingest_identity import resolve_complex_name
+    return await resolve_complex_name(fields.get("complex_name"))
 
 
 # Допуск fuzzy-совпадения по площади (задача: "±1м²").
@@ -214,7 +237,7 @@ async def _find_fuzzy_candidate(complex_id: int, floor: int, area: float) -> dic
     return await fetchrow(
         """
         SELECT property_id, area_sqm FROM properties
-        WHERE complex_id = $1 AND floor = $2
+        WHERE complex_id IN (SELECT id FROM complexes WHERE COALESCE(canonical_id, id) = $1) AND floor = $2
           AND area_sqm BETWEEN $3::real - $4::real AND $3::real + $4::real
         ORDER BY ABS(area_sqm - $3::real) ASC
         LIMIT 1
@@ -250,7 +273,9 @@ def _fuzzy_confidence(area: float, candidate_area: float) -> float:
 # ── candidate_only: bootstrap + candidate generation (задача 2026-08-16,
 # "безопасная инфраструктура кандидатов" — миграция 086) ────────────────
 
-_MATCHER_VERSION = "candidate_only_v2"  # v1 -> v2 задача 2026-08-17, "photo
+_MATCHER_VERSION = "candidate_only_v3_complex_identity"  # v3: explicit canonical
+# complex ID and verified, unambiguous name aliases replace raw-name lookup.
+# v1 -> v2 задача 2026-08-17, "photo
 # evidence + review": house_number/price перестали быть БЕЗУСЛОВНЫМ
 # auto-reject (см. _is_hard_conflict ниже) — правило, которым НАЙДЕН
 # candidate, не изменилось (тот же exact_hash/fuzzy/dedup_listings), но
@@ -482,7 +507,7 @@ async def _find_fuzzy_properties(complex_id: int, floor: int, area: float, toler
         FROM properties p
         JOIN property_listings pl ON pl.property_id = p.property_id
         JOIN apartment_listings al ON al.id = pl.listing_id
-        WHERE p.complex_id = $1 AND p.floor = $2
+        WHERE p.complex_id IN (SELECT id FROM complexes WHERE COALESCE(canonical_id, id) = $1) AND p.floor = $2
           AND p.area_sqm BETWEEN $3::real - $4::real AND $3::real + $4::real
     """, complex_id, floor, area, tolerance)
 
@@ -874,7 +899,7 @@ async def bootstrap_all_provisional(rows: list[dict], dry_run: bool) -> dict[str
                                     "skip_reason": _skip_reason(address, floor, area)}
             continue
 
-        complex_id = await _resolve_complex_id(row.get("complex_name"))
+        complex_id = await _resolve_complex_id(row)
         row = dict(row)
         row["_address_hash"] = address_hash
         row["_complex_id"] = complex_id
@@ -1066,7 +1091,8 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
                                     dry_run_cache: "DryRunCache | BootstrapIndex | None" = None,
                                     match_mode: str = "candidate_only") -> dict:
     """Основная точка входа. listing_row — строка apartment_listings (или
-    dict с теми же ключами): id, address, floor, area, rooms, complex_name.
+    dict с теми же ключами): id, address, floor, area, rooms, complex_name,
+    complex_id, resolved_house_id. Для старых callers недостающие ID читаются из БД.
 
     match_mode — см. докстринг модуля ("false positive merge хуже false
     negative duplicate"): "candidate_only" (ДЕФОЛТ, задача 2026-08-16
@@ -1140,7 +1166,6 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
     floor = listing_row.get("floor")
     area = listing_row.get("area")
     rooms = listing_row.get("rooms")
-    complex_name = listing_row.get("complex_name")
     listing_first_seen = listing_row.get("first_seen")
     listing_evidence_at = listing_row.get("archived_at") or listing_row.get("last_seen")
 
@@ -1150,7 +1175,7 @@ async def link_listing_to_property(listing_row: dict, dry_run: bool = False,
                 "match_mode": match_mode, "fuzzy_candidate": None,
                 "skip_reason": _skip_reason(address, floor, area)}
 
-    complex_id = await _resolve_complex_id(complex_name)
+    complex_id = await _resolve_complex_id(listing_row)
 
     if match_mode == "candidate_only":
         return await _link_candidate_only(listing_row, address_hash, complex_id, dry_run, dry_run_cache)
@@ -1313,9 +1338,10 @@ async def _corroborating_base_methods(listing_row: dict, prop: dict) -> list[str
     if address_hash is not None and address_hash == prop.get("address_hash"):
         methods.append("exact_hash")
 
-    complex_id = await _resolve_complex_id(listing_row.get("complex_name"))
+    complex_id = await _resolve_complex_id(listing_row)
+    property_complex_id = await _canonical_complex_or_none(prop.get("complex_id"))
     floor, area = listing_row.get("floor"), listing_row.get("area")
-    if (complex_id is not None and prop.get("complex_id") == complex_id
+    if (complex_id is not None and property_complex_id == complex_id
             and prop.get("floor") == floor and floor is not None
             and area is not None and prop.get("area_sqm") is not None
             and abs(prop["area_sqm"] - area) <= _FUZZY_AREA_TOLERANCE):
@@ -1377,7 +1403,7 @@ async def recompute_corroborating_methods(candidate_id: int) -> list[str]:
         raise ValueError(f"candidate_id {candidate_id} не найден")
 
     listing_row = await fetchrow(
-        "SELECT id, address, floor, area, complex_name, duplicate_of, dup_match "
+        "SELECT id, address, floor, area, complex_name, complex_id, resolved_house_id, complex_resolution, duplicate_of, dup_match "
         "FROM apartment_listings WHERE id = $1", c["listing_id"],
     )
     prop = await _property_row(c["candidate_property_id"])
