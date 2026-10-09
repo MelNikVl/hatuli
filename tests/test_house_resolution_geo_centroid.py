@@ -81,3 +81,33 @@ async def test_centroid_none_when_no_listings_have_coords(db):
         assert centroid is None
     finally:
         await execute("DELETE FROM complexes WHERE id = $1", cid)
+
+
+@pytest.mark.asyncio
+async def test_centroid_uses_canonical_ids_and_excludes_stale_foreign_name(db):
+    from bot.db.pg import fetchval, execute
+    from bot.core.house_resolution import resolve_complex_geo_centroid
+    name = '__test_geo_canonical_identity__'
+    canonical = await fetchval('INSERT INTO complexes (name) VALUES ($1) RETURNING id', name)
+    alias = await fetchval("""
+        INSERT INTO complexes (name, canonical_id, canonical_reason)
+        VALUES ($1, $2, 'krisha_slug') RETURNING id
+    """, name + ' alias', canonical)
+    other = await fetchval('INSERT INTO complexes (name) VALUES ($1) RETURNING id', name + ' other')
+    prefix = '__test_geo_canonical_listing__'
+    try:
+        for suffix, complex_name, cid, lat in [
+            ('1', 'unrelated display text', canonical, 51.20),
+            ('2', 'another display text', alias, 51.20),
+            ('3', name, other, 52.20),
+        ]:
+            await execute("""
+                INSERT INTO apartment_listings (id, complex_name, complex_id, lat, lon, price, area, rooms)
+                VALUES ($1, $2, $3, $4, 71.4, 30000000, 60, 2)
+            """, prefix + suffix, complex_name, cid, lat)
+        centroid = await resolve_complex_geo_centroid(alias, name + ' alias')
+        assert centroid is not None
+        assert round(centroid[0], 2) == 51.20
+    finally:
+        await execute('DELETE FROM apartment_listings WHERE id LIKE $1', prefix + '%')
+        await execute('DELETE FROM complexes WHERE id = ANY($1::int[])', [canonical, alias, other])

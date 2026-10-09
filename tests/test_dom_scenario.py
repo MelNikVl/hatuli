@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 import pytest_asyncio
+from tests.admin_auth_helpers import admin_cookies
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -547,7 +548,7 @@ async def client(db):
     app = create_admin_app(bdb, ADMIN_PASSWORD, "test", DB_PATH)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test",
-                                  cookies={"admin_auth": "1"}) as c:
+                                  cookies=await admin_cookies()) as c:
         yield c
 
 
@@ -621,9 +622,9 @@ async def test_main_listing_card_still_opens_when_dom_scenario_errors(client, sc
 
 @pytest.mark.asyncio
 async def test_dashboard_popup_shell_contains_dom_scenario_block(client, db):
-    """Рендер главной страницы (та же карта/шелл, что открывает попап через
+    """Рендер страницы /map (та же карта/шелл, что открывает попап через
     openDetailModal) — блок и JS-функции присутствуют в разметке."""
-    r = await client.get("/")
+    r = await client.get("/map")
     assert r.status_code == 200
     html = r.text
     assert "Ожидаемый срок экспозиции" in html
@@ -700,7 +701,7 @@ async def test_dom_scenario_block_fits_on_mobile_width(mobile_live_server):
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page(viewport={"width": 360, "height": 720})
-        await page.goto(mobile_live_server + "/", wait_until="networkidle", timeout=25000)
+        await page.goto(mobile_live_server + "/map", wait_until="networkidle", timeout=25000)
         await page.wait_for_function("typeof renderDomScenarioBody === 'function'", timeout=10000)
 
         metrics = await page.evaluate(

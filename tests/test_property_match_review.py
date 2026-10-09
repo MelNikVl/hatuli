@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 import pytest_asyncio
+from tests.admin_auth_helpers import authenticate_admin
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -408,8 +409,7 @@ async def test_decide_endpoint_requires_auth(simple_candidate, admin_client):
 
 @pytest.mark.asyncio
 async def test_review_page_renders_pair_for_authed_user(simple_candidate, admin_client):
-    admin_client.cookies.set("admin_auth", "1")
-    admin_client.cookies.set("admin_user", "pytest")
+    await authenticate_admin(admin_client, "pytest")
     # candidate_id ЯВНО (не полагаемся на get_next_candidate — прод-таблица
     # property_match_candidates содержит десятки тысяч РЕАЛЬНЫХ pending
     # строк, "следующая по очереди" почти никогда не окажется именно
@@ -423,8 +423,7 @@ async def test_review_page_renders_pair_for_authed_user(simple_candidate, admin_
 
 @pytest.mark.asyncio
 async def test_decide_endpoint_records_decision_and_no_physical_merge(simple_candidate, admin_client):
-    admin_client.cookies.set("admin_auth", "1")
-    admin_client.cookies.set("admin_user", "pytest_http")
+    await authenticate_admin(admin_client, "pytest_http")
 
     from bot.db.pg import fetchval
     pl_before = await fetchval("SELECT count(*) FROM property_listings")
@@ -482,8 +481,7 @@ async def candidate_with_photos(db):
 
 
 async def _get_review_page(admin_client, candidate_id):
-    admin_client.cookies.set("admin_auth", "1")
-    admin_client.cookies.set("admin_user", "pytest")
+    await authenticate_admin(admin_client, "pytest")
     r = await admin_client.get(f"/admin/property-match-review?candidate_id={candidate_id}")
     assert r.status_code == 200
     return r.text
@@ -603,8 +601,7 @@ async def test_decide_redirect_has_no_url_fragment_for_fresh_page_top(candidate_
     редирект БЕЗ #fragment — браузер грузит страницу с нуля и скроллит
     в начало по умолчанию, если сама страница не восстанавливает позицию
     (она не восстанавливает — нет relevant JS)."""
-    admin_client.cookies.set("admin_auth", "1")
-    admin_client.cookies.set("admin_user", "pytest")
+    await authenticate_admin(admin_client, "pytest")
     r = await admin_client.post(
         f"/admin/property-match-review/{candidate_with_photos['candidate_id']}/decide",
         data={"decision": "skip"}, follow_redirects=False)

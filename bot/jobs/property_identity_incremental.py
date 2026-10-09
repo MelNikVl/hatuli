@@ -117,7 +117,7 @@ _ADVISORY_LOCK_KEY = 728151
 _CANDIDATE_STAT_KEY = {"exact_hash": "exact_candidates", "fuzzy": "fuzzy_candidates",
                        "dedup_listings": "dedup_candidates"}
 
-_COLUMNS = ("id, address, floor, area, rooms, complex_name, first_seen, last_seen, archived_at, "
+_COLUMNS = ("id, address, floor, area, rooms, complex_name, complex_id, resolved_house_id, complex_resolution, first_seen, last_seen, archived_at, "
             "price, seller_name, is_duplicate, duplicate_of, dup_match")
 
 # Мониторинг (задача, п.4) — пороги для warning-логов ниже.

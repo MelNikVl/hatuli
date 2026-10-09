@@ -31,8 +31,32 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from bot.db import settings as app_settings
 from bot.db.pg import fetch
+from bot.core.complex_metrics import IDENTITY_CTES
+from bot.core.complex_membership import listing_complex_column_match_sql, rental_complex_match_sql, unit_complex_match_sql
 
 logger = logging.getLogger(__name__)
+
+# Aggregate once by physical identity instead of matching display strings on
+# each map marker. UNION counts an umbrella listing only once in each family.
+_COMPLEX_MAP_METRICS_SQL = IDENTITY_CTES + """,
+map_membership AS (
+    SELECT l.id, l.cid FROM listings l WHERE l.cid IS NOT NULL
+    UNION
+    SELECT l.id, COALESCE(parent.canonical_id, parent.id)
+    FROM listings l JOIN complexes child ON child.id = l.cid
+    JOIN complexes parent ON parent.id = child.parent_complex_id
+    WHERE COALESCE(parent.is_garbage, FALSE) = FALSE
+      AND COALESCE(parent.is_street, FALSE) = FALSE
+      AND COALESCE(parent.canonical_reason, '') <> 'junk_unmatched'
+), map_stats AS (
+    SELECT m.cid, AVG(l.lat) AS lat, AVG(l.lon) AS lon,
+           AVG(l.effective_score) FILTER (WHERE l.is_active IS NOT FALSE) AS avg_score,
+           AVG(EXTRACT(EPOCH FROM (l.archived_at - l.first_seen))/86400)
+               FILTER (WHERE l.archived_at IS NOT NULL) AS avg_days_to_sell,
+           COUNT(*) FILTER (WHERE l.archived_at >= now() - interval '30 days') AS sold_30d
+    FROM map_membership m JOIN listings l ON l.id = m.id GROUP BY m.cid
+)
+"""
 
 # Сервисы, которыми управляет кнопка "Запустить проект".
 # Веб-терминал (krisha-web) сюда не входит — он всегда работает.
@@ -318,8 +342,7 @@ def _hype_db_conn():
 def make_extras_router(templates) -> APIRouter:
     router = APIRouter()
 
-    def is_authed(request: Request) -> bool:
-        return request.cookies.get("admin_auth") == "1"
+    from bot.core.admin_sessions import is_admin as is_authed, admin_username
 
     # Доступно во всех шаблонах: {{ is_admin(request) }} — для скрытия
     # админ-элементов на публичных страницах
@@ -330,6 +353,11 @@ def make_extras_router(templates) -> APIRouter:
     # нужна и в admin_web.py, для /listing/{id} — раньше была задублирована
     # тут как локальная), см. её докстринг.
     from bot.core.site_auth import get_user_tier
+
+    async def private_data_denied(request: Request):
+        if await get_user_tier(request) == "public":
+            return JSONResponse({"error": "restricted"}, status_code=403)
+        return None
     # Admin IA cleanup (2026-08-30, этап 1): удалён недостижимый дубль этого
     # роута — bot/admin_web.py::hype_analytics_page_old регистрирует тот же
     # путь НА app напрямую (redirect на /admin/analytics/heatmaps?tab=hype,
@@ -1122,6 +1150,9 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/api/geo-kepler.json")
     async def geo_kepler_map_file(request: Request, type: str = "sale",
                                    lat: float = None, lon: float = None, radius_km: float = None):
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         # Полноценный экспортированный kepler.gl map-файл (данные + config в
         # одном JSON) вместо голого geojson — публичный kepler.gl/demo умеет
         # грузить такой файл через mapUrl= и ПРИМЕНЯЕТ наш config: heatmap-слой
@@ -1241,6 +1272,9 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/geo-rentals.geojson")
     async def geo_rentals_geojson(request: Request, lat: float = None, lon: float = None, radius_km: float = None):
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         # Аналог geo-sales.geojson, но по rental_listings — для переключателя
         # "Продажа"/"Аренда" в Kepler-панели попапа (Task 5).
         from bot.db.pg import fetch as pg_fetch
@@ -1275,6 +1309,8 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.post("/admin/api/parse-settings")
     async def parse_settings_api(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch
         body = await request.json()
         for key, val in (("delay", body.get("delay")), ("batch", body.get("batch")),
@@ -1456,7 +1492,7 @@ def make_extras_router(templates) -> APIRouter:
     async def cabinet_page(request: Request):
         from bot.core.site_auth import get_user_by_session, list_favorites, list_favorite_complexes
         user = await get_user_by_session(_site_session_cookie(request))
-        favorites = await list_favorites(user["user_id"]) if user else []
+        favorites = await list_favorites(user["user_id"]) if user and await get_user_tier(request) != "public" else []
         favorite_complexes = await list_favorite_complexes(user["user_id"]) if user else []
         return templates.TemplateResponse("cabinet.html", {
             "request": request, "user": user, "favorites": favorites,
@@ -1470,7 +1506,7 @@ def make_extras_router(templates) -> APIRouter:
         раньше избранное было видно только внутри /cabinet одним списком."""
         from bot.core.site_auth import get_user_by_session, list_favorites, list_favorite_complexes
         user = await get_user_by_session(_site_session_cookie(request))
-        favorites = await list_favorites(user["user_id"]) if user else []
+        favorites = await list_favorites(user["user_id"]) if user and await get_user_tier(request) != "public" else []
         favorite_complexes = await list_favorite_complexes(user["user_id"]) if user else []
         return templates.TemplateResponse("favorites.html", {
             "request": request, "user": user, "favorites": favorites,
@@ -1547,14 +1583,17 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/api/auth/poll")
     async def api_auth_poll(request: Request, token: str):
-        from bot.core.site_auth import get_token_status, create_session
+        from bot.core.site_auth import get_token_status, consume_login_token
         status = await get_token_status(token)
         if not status:
             return JSONResponse({"status": "not_found"})
         if status["status"] == "verified":
-            session_id = await create_session(status["telegram_id"])
+            session_id = await consume_login_token(token)
+            if not session_id:
+                return JSONResponse({"status": "expired"})
             resp = JSONResponse({"status": "verified"})
-            resp.set_cookie("site_session", session_id, httponly=True, max_age=180 * 86400)
+            resp.set_cookie("site_session", session_id, httponly=True, max_age=180 * 86400,
+                            secure=request.url.scheme == "https", samesite="lax")
             return resp
         return JSONResponse({"status": status["status"]})
 
@@ -1587,6 +1626,9 @@ def make_extras_router(templates) -> APIRouter:
         user = await get_user_by_session(_site_session_cookie(request))
         if not user:
             return JSONResponse({"error": "auth"}, status_code=401)
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         favs = await list_favorites(user["user_id"])
         return JSONResponse({"favorites": favs})
 
@@ -1596,7 +1638,7 @@ def make_extras_router(templates) -> APIRouter:
         на карточках дашборда (публичный запрос, но без user'а всегда пусто)."""
         from bot.core.site_auth import get_user_by_session, is_favorite_ids
         user = await get_user_by_session(_site_session_cookie(request))
-        if not user:
+        if not user or await get_user_tier(request) == "public":
             return JSONResponse({"ids": []})
         listing_ids = [i for i in ids.split(",") if i]
         found = await is_favorite_ids(user["user_id"], listing_ids)
@@ -1608,6 +1650,9 @@ def make_extras_router(templates) -> APIRouter:
         user = await get_user_by_session(_site_session_cookie(request))
         if not user:
             return JSONResponse({"error": "auth"}, status_code=401)
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         await add_favorite(user["user_id"], listing_id)
         return JSONResponse({"ok": True})
 
@@ -2364,7 +2409,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.core.auth_users import ensure_seeded, list_users
         await ensure_seeded(os.getenv("ADMIN_PASSWORD", "123"))
         users = await list_users()
-        current_username = request.cookies.get("admin_user") or "admin"
+        current_username = admin_username(request)
 
         return templates.TemplateResponse("settings.html", {
             "request": request,
@@ -3283,7 +3328,7 @@ def make_extras_router(templates) -> APIRouter:
         body = await request.json()
         try:
             await save_label(listing_id, str(body.get("label") or ""),
-                             labeled_by=request.cookies.get("admin_user") or "admin",
+                             labeled_by=admin_username(request),
                              note=(body.get("note") or None))
         except LabelError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -3582,9 +3627,10 @@ def make_extras_router(templates) -> APIRouter:
         total_active = await pg_fval(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
             "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
-        missing_year = await pg_fval("""
+        missing_year = await pg_fval(IDENTITY_CTES + """
             SELECT COUNT(*) FROM apartment_listings a
-            LEFT JOIN complexes c ON lower(trim(c.name)) = lower(trim(a.complex_name))
+            LEFT JOIN listings identity ON identity.id = a.id
+            LEFT JOIN complexes c ON c.id = identity.cid
             WHERE a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
               AND COALESCE(a.year_built, c.year_built) IS NULL
         """) or 0
@@ -3638,6 +3684,9 @@ def make_extras_router(templates) -> APIRouter:
         подтверждённых выбываний физически меньше, чем активных
         объявлений, сама природа показателя). Клиент бакетирует точки в
         гексы и красит по медиане days на гекс (см. drawLiquidityHeat)."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT a.lat, a.lon, ol.time_on_market AS days
@@ -3851,13 +3900,9 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/complex/find")
     async def complex_find(request: Request, name: str = ""):
         """Переход на карточку ЖК по имени (для ссылок из попапов карты).
-        Точное совпадение lower/trim; если ЖК нет — на список с поиском."""
-        from bot.db.pg import fetchval as pg_fv
-        cid = None
-        if name.strip():
-            cid = await pg_fv(
-                "SELECT id FROM complexes WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
-                name)
+        Однозначное нормализованное имя/проверенный alias; иначе список с поиском."""
+        from bot.core.complex_ingest_identity import resolve_complex_name
+        cid = await resolve_complex_name(name)
         if cid:
             return RedirectResponse(url=f"/admin/complex/{cid}", status_code=302)
         from urllib.parse import quote
@@ -3869,7 +3914,7 @@ def make_extras_router(templates) -> APIRouter:
         Лёгкая версия complexes-map — без сортировки/coverage, только то,
         что нужно нарисовать на карте и показать в превью."""
         from bot.db.pg import fetch as pg_fetch
-        rows = await pg_fetch("""
+        rows = await pg_fetch(_COMPLEX_MAP_METRICS_SQL + """
             SELECT c.id, c.name, c.year_built, c.housing_class,
                    COALESCE(c.listings_count, 0) AS active_cnt,
                    COALESCE(d.name,
@@ -3879,15 +3924,12 @@ def make_extras_router(templates) -> APIRouter:
                    c.lat AS c_lat, c.lon AS c_lon, g.lat, g.lon, g.avg_score
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
-            LEFT JOIN LATERAL (
-                SELECT AVG(al.lat) AS lat, AVG(al.lon) AS lon,
-                       AVG(al.effective_score) FILTER (WHERE is_active IS NOT FALSE) AS avg_score
-                FROM apartment_listings al
-                WHERE lower(trim(regexp_replace(al.complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
-                      = lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
-            ) g ON TRUE
+            LEFT JOIN map_stats g ON g.cid = c.id
             WHERE COALESCE(c.lat, g.lat) IS NOT NULL
               AND COALESCE(c.is_street, FALSE) = FALSE
+              AND COALESCE(c.is_garbage, FALSE) = FALSE
+              AND c.canonical_id IS NULL
+              AND COALESCE(c.canonical_reason, '') <> 'junk_unmatched'
             ORDER BY c.id
             LIMIT 5000
         """)
@@ -3917,7 +3959,7 @@ def make_extras_router(templates) -> APIRouter:
         developer = cx["developer_name"]
         developer_logo = None
         if cx.get("developer_id"):
-            _dl = await fetchrow("SELECT logo FROM developers WHERE id = $1", cx["developer_id"])
+            _dl = await pg_fetchrow("SELECT logo FROM developers WHERE id = $1", cx["developer_id"])
             if _dl:
                 developer_logo = _dl["logo"]
         if not developer and cx["source_info"]:
@@ -3936,7 +3978,7 @@ def make_extras_router(templates) -> APIRouter:
         # только текстом (korter/homsters), не терял бы логотип, если он
         # уже есть в справочнике developers под тем же именем.
         if developer and not developer_logo:
-            _dl2 = await fetchrow(
+            _dl2 = await pg_fetchrow(
                 "SELECT logo FROM developers WHERE lower(trim(name)) = lower(trim($1))", developer)
             if _dl2:
                 developer_logo = _dl2["logo"]
@@ -3945,8 +3987,9 @@ def make_extras_router(templates) -> APIRouter:
             FROM apartment_listings
             WHERE lower(trim(complex_name)) = lower(trim($1))
               AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND $2::boolean
             ORDER BY score_total DESC NULLS LAST LIMIT 8
-        """, cx["name"])
+        """, cx["name"], await get_user_tier(request) != "public")
         import json as _json_cs
 
         def _first_photo(v):
@@ -4125,48 +4168,59 @@ def make_extras_router(templates) -> APIRouter:
         )
         import json as _json_nbcu
         cx = await pg_fetchrow("""
-            SELECT c.id, c.name, c.completion_year, c.completion_quarter, c.district,
+            SELECT c.id, c.name, c.is_umbrella, c.completion_year, c.completion_quarter, c.district,
                    c.address, c.photos, d.id AS developer_id, d.name AS developer,
                    d.sales_phone, d.logo
-            FROM complexes c JOIN developers d ON d.id = c.developer_id
-            WHERE c.id = $1 AND c.is_newbuild
+            FROM complexes requested JOIN complexes c ON c.id = COALESCE(requested.canonical_id, requested.id)
+            JOIN developers d ON d.id = c.developer_id
+            WHERE requested.id = $1 AND c.is_newbuild
         """, complex_id)
         if not cx:
             return JSONResponse({"error": "not_found"}, status_code=404)
+        complex_id = cx["id"]
+        from bot.core.complex_membership import listing_complex_match_sql
+        include_children = bool(cx.get('is_umbrella')) or bool(await pg_fetchrow(
+            "SELECT id FROM complexes WHERE parent_complex_id=$1 AND canonical_id IS NULL "
+            "AND COALESCE(is_garbage,FALSE)=FALSE AND COALESCE(is_street,FALSE)=FALSE LIMIT 1", complex_id))
+        _unit_match = unit_complex_match_sql(include_children=include_children)
+        _unit_link_match = unit_complex_match_sql(unit_alias='nu', include_children=include_children)
+        _person_match = listing_complex_match_sql(include_children=include_children)
         room_list = [int(r) for r in rooms.split(",") if r.strip().isdigit()]
-        dev_units = await pg_fetch("""
+        dev_units = await pg_fetch(f"""
             SELECT id, rooms, area, floor, floors_total, price, price_per_m2, layout_photo_url, status
             FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved')
-              AND ($2::int[] = '{}' OR rooms = ANY($2::int[]))
+            WHERE {_unit_match} AND status IN ('available','reserved')
+              AND ($2::int[] = '{{}}' OR rooms = ANY($2::int[]))
+              AND (source NOT IN ('person','krisha','krisha.kz') OR $3::boolean)
             ORDER BY price ASC NULLS LAST LIMIT 30
-        """, complex_id, room_list)
+        """, complex_id, room_list, await get_user_tier(request) != "public")
 
         # Прайс-индекс застройщика — по ВСЕМ доступным/забронированным
         # юнитам ЖК (не только тем 30, что попали в dev_units выше под
         # текущий фильтр комнатности), чтобы дельта у людских предложений
         # считалась честно, даже если сам фильтр комнатности урезал
         # видимую часть официального supply.
-        _dev_all_rows = await pg_fetch("""
+        _dev_all_rows = await pg_fetch(f"""
             SELECT id, rooms, price, area, price_per_m2 FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved')
+            WHERE {_unit_match} AND status IN ('available','reserved')
         """, complex_id)
         _price_index = build_developer_price_index([dict(r) for r in _dev_all_rows])
-        _unit_link_rows = await pg_fetch("""
+        _unit_link_rows = await pg_fetch(f"""
             SELECT usl.source_id AS listing_id, usl.unit_id
             FROM unit_source_links usl JOIN newbuild_units nu ON nu.id = usl.unit_id
-            WHERE nu.complex_id = $1 AND usl.source = 'krisha'
+            WHERE {_unit_link_match} AND usl.source = 'krisha'
         """, complex_id)
         _unit_id_by_listing = {r["listing_id"]: r["unit_id"] for r in _unit_link_rows}
 
-        person_rows = await pg_fetch("""
+        person_rows = await pg_fetch(f"""
             SELECT id, title, description, rooms, area, price, photos, floor, floors_total, first_seen
             FROM apartment_listings
-            WHERE (lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)
+            WHERE {_person_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE AND is_active IS NOT FALSE
-              AND ($3::int[] = '{}' OR rooms = ANY($3::int[]))
+              AND ($2::int[] = '{{}}' OR rooms = ANY($2::int[]))
+              AND $3::boolean
             ORDER BY score_total DESC NULLS LAST, first_seen DESC LIMIT 20
-        """, cx["name"], complex_id, room_list)
+        """, complex_id, room_list, await get_user_tier(request) != "public")
 
         # photos — jsonb, asyncpg отдаёт строкой (см. тот же паттерн в complex_detail)
         cx_photos = cx["photos"]
@@ -4234,6 +4288,10 @@ def make_extras_router(templates) -> APIRouter:
         """, unit_id)
         if not u:
             return JSONResponse({"error": "not_found"}, status_code=404)
+        if u.get("source") in ("person", "krisha", "krisha.kz"):
+            denied = await private_data_denied(request)
+            if denied is not None:
+                return denied
         cx_photos = u["complex_photos"]
         if isinstance(cx_photos, str):
             try:
@@ -4263,7 +4321,7 @@ def make_extras_router(templates) -> APIRouter:
         ручка кормит карту на ней, раньше 401'ила анонимам, из-за чего карта
         оставалась пустой для любого незалогиненного посетителя."""
         from bot.db.pg import fetch as pg_fetch
-        rows = await pg_fetch("""
+        rows = await pg_fetch(_COMPLEX_MAP_METRICS_SQL + """
             SELECT c.id, c.name, c.year_built, c.housing_class,
                    COALESCE(c.listings_count, 0) AS active_cnt,
                    COALESCE(c.sold_count, 0) AS sold_cnt,
@@ -4276,19 +4334,12 @@ def make_extras_router(templates) -> APIRouter:
                    g.lat, g.lon, g.avg_score, g.avg_days_to_sell, g.sold_30d
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
-            LEFT JOIN LATERAL (
-                SELECT AVG(al.lat) AS lat, AVG(al.lon) AS lon,
-                       AVG(al.effective_score) FILTER (WHERE is_active IS NOT FALSE) AS avg_score,
-                       AVG(EXTRACT(EPOCH FROM (al.archived_at - al.first_seen))/86400)
-                         FILTER (WHERE al.archived_at IS NOT NULL) AS avg_days_to_sell,
-                       COUNT(*) FILTER (WHERE al.archived_at >= now() - interval '30 days')
-                         AS sold_30d
-                FROM apartment_listings al
-                WHERE lower(trim(regexp_replace(al.complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
-                      = lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
-            ) g ON TRUE
+            LEFT JOIN map_stats g ON g.cid = c.id
             WHERE COALESCE(c.lat, g.lat) IS NOT NULL
               AND COALESCE(c.is_street, FALSE) = FALSE
+              AND COALESCE(c.is_garbage, FALSE) = FALSE
+              AND c.canonical_id IS NULL
+              AND COALESCE(c.canonical_reason, '') <> 'junk_unmatched'
             ORDER BY c.id
             LIMIT 5000
         """)
@@ -4437,15 +4488,15 @@ def make_extras_router(templates) -> APIRouter:
             # таблицы) — это и было причиной долгой загрузки. Вместо этого считаем
             # центроиды всех ЖК ОДНИМ GROUP BY и джойним как обычную таблицу.
             complex_geo = {r2["cx"]: (float(r2["lat"]), float(r2["lon"]))
-                           for r2 in await pg_fetch("""
-                SELECT lower(trim(complex_name)) AS cx, AVG(lat) AS lat, AVG(lon) AS lon
-                FROM apartment_listings
-                WHERE lat IS NOT NULL AND complex_name IS NOT NULL AND btrim(complex_name) != ''
-                GROUP BY lower(trim(complex_name))""")}
+                           for r2 in await pg_fetch(IDENTITY_CTES + """
+                SELECT nk.n AS cx, AVG(l.lat) AS lat, AVG(l.lon) AS lon
+                FROM name_keys nk JOIN listings l ON l.cid = nk.cid
+                WHERE l.lat IS NOT NULL AND l.lon IS NOT NULL
+                GROUP BY nk.n""")}
             rows = await pg_fetch(f"""
                 SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.district, r.found_at,
                        r.lat AS own_lat, r.lon AS own_lon, r.area, r.floor, r.floors_total,
-                       r.address, r.photos,
+                       r.address, r.photos, complex_name_key(r.complex_name) AS complex_key,
                        ph.old_price AS prev_price, ph.changed_at AS price_changed_at
                 FROM rental_listings r
                 LEFT JOIN LATERAL (
@@ -4485,7 +4536,7 @@ def make_extras_router(templates) -> APIRouter:
 
             for r in rows:
                 d = dict(r)
-                cx_geo = complex_geo.get(str(d.get("complex_name") or "").strip().lower())
+                cx_geo = complex_geo.get(d["complex_key"])
                 if d.get("own_lat") is not None:
                     # свои координаты с детальной страницы — самая точная привязка
                     lat, lon, binding, jit = float(d["own_lat"]), float(d["own_lon"]), "точно", 0.0
@@ -4601,7 +4652,7 @@ def make_extras_router(templates) -> APIRouter:
         order_by = "a.price ASC" if cheapest_only else "eff_score DESC"
         limit_idx, offset_idx = i, i + 1
         params.append(limit); params.append(offset)
-        rows = await pg_fetch(f"""
+        rows = await pg_fetch(IDENTITY_CTES + f"""
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
                    a.is_owner, a.seller_name, a.seller_type, a.trust_score, a.year_built, a.views_count,
@@ -4616,7 +4667,7 @@ def make_extras_router(templates) -> APIRouter:
                    ph.changed_at AS price_changed_at,
                    dv.id AS developer_id, dv.name AS developer_name, dv.logo AS developer_logo,
                    cx.photos AS complex_photos
-            FROM apartment_listings a
+            FROM listings a
             LEFT JOIN LATERAL (
                 -- Исторический максимум, а не последнее изменение — просили
                 -- показывать "цена упала с максимума до текущей".
@@ -4624,7 +4675,7 @@ def make_extras_router(templates) -> APIRouter:
                 FROM price_history h
                 WHERE h.listing_id = a.id
             ) ph ON TRUE
-            LEFT JOIN complexes cx ON lower(trim(cx.name)) = lower(trim(a.complex_name))
+            LEFT JOIN complexes cx ON cx.id = a.cid
             LEFT JOIN developers dv ON dv.id = cx.developer_id
             WHERE a.lat IS NOT NULL AND a.lon IS NOT NULL
               AND a.is_active IS NOT FALSE
@@ -4763,6 +4814,9 @@ def make_extras_router(templates) -> APIRouter:
         ссылался на него, получал 404 → heatCache.sale оставался пустым
         массивом), из-за чего гексы тепловой карты продажи не рисовались
         нигде на карте, хотя сами объявления/ЖК были видны."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT lat, lon, price, rooms, area, yield_pct
@@ -4786,6 +4840,9 @@ def make_extras_router(templates) -> APIRouter:
         Окно — 30 дней (согласовано с archived-rental-points), раньше было
         180 — тепловая карта должна отражать последний месяц рынка, а не
         полгода истории."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT id, lat, lon, price, rooms, area, yield_pct
@@ -4810,6 +4867,9 @@ def make_extras_router(templates) -> APIRouter:
         Последняя цена аренды перед уходом в архив за последний месяц —
         гексагоны без активных объявлений аренды всё ещё показывают, что
         там недавно сдавалось."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT id, lat, lon, price, rooms
@@ -5070,24 +5130,26 @@ def make_extras_router(templates) -> APIRouter:
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         limit = max(50, min(limit, 5000))
-        rows = await fetch("""
+        _audit_membership = listing_complex_column_match_sql('identity_root.id', 'a')
+        rows = await fetch(f"""
             SELECT c.id, c.name, c.developer_id, d.name AS developer_name,
                    c.residents_notes, c.photo_url, c.photos, c.avg_price_m2,
                    c.housing_class, c.year_built, c.korter_url, c.source_info,
                    c.has_parking, c.has_closed_territory, c.has_security,
                    ts.construction_type, ts.facade_type, ts.lifts_brand,
                    ts.ceiling_height_min,
-                   COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE
-                       AND COALESCE(a.is_duplicate, FALSE) = FALSE) AS active_cnt,
-                   COUNT(a2.id) AS ever_cnt
+                   s.active_cnt, s.ever_cnt
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
             LEFT JOIN complex_tech_specs ts ON ts.complex_id = c.id
-            LEFT JOIN apartment_listings a ON lower(trim(a.complex_name)) = lower(trim(c.name))
-                AND a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
-            LEFT JOIN apartment_listings a2 ON lower(trim(a2.complex_name)) = lower(trim(c.name))
+            CROSS JOIN LATERAL (SELECT COALESCE(c.canonical_id, c.id) AS id) identity_root
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) FILTER (WHERE a.is_active IS NOT FALSE
+                           AND COALESCE(a.is_duplicate, FALSE) = FALSE) AS active_cnt,
+                       COUNT(*) AS ever_cnt
+                FROM apartment_listings a WHERE {_audit_membership}
+            ) s ON TRUE
             WHERE COALESCE(c.is_street, FALSE) = FALSE
-            GROUP BY c.id, d.name, ts.construction_type, ts.facade_type, ts.lifts_brand, ts.ceiling_height_min
             ORDER BY active_cnt DESC
             LIMIT $1
         """, limit)
@@ -5120,16 +5182,18 @@ def make_extras_router(templates) -> APIRouter:
                 "has_origin": bool(d["korter_url"] or d["source_info"]),
             })
         total_cx = await fetch("SELECT COUNT(*) AS n FROM complexes WHERE COALESCE(is_street, FALSE) = FALSE")
-        orphan_cx = await fetch("""
+        orphan_cx = await fetch(f"""
             SELECT COUNT(*) AS n FROM complexes c
+            CROSS JOIN LATERAL (SELECT COALESCE(c.canonical_id, c.id) AS id) identity_root
             WHERE COALESCE(c.is_street, FALSE) = FALSE
-              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE lower(trim(a.complex_name)) = lower(trim(c.name)))
+              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE {_audit_membership})
         """)
-        orphan_no_origin = await fetch("""
+        orphan_no_origin = await fetch(f"""
             SELECT COUNT(*) AS n FROM complexes c
+            CROSS JOIN LATERAL (SELECT COALESCE(c.canonical_id, c.id) AS id) identity_root
             WHERE COALESCE(c.is_street, FALSE) = FALSE
               AND c.korter_url IS NULL AND c.source_info IS NULL
-              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE lower(trim(a.complex_name)) = lower(trim(c.name)))
+              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE {_audit_membership})
         """)
         return templates.TemplateResponse("complexes_audit.html", {
             "request": request, "rows": out, "limit": limit,
@@ -5231,13 +5295,21 @@ def make_extras_router(templates) -> APIRouter:
         # целое — она не показывает отдельных объявлений вторички, только
         # агрегаты). Админ-элементы (редактирование фото/контактов)
         # скрываются в шаблоне через is_admin(request).
-        from bot.db.pg import fetchrow
+        from bot.db.pg import fetchrow, fetchval
         cx = await fetchrow("""
             SELECT c.*, d.name AS developer_name
             FROM complexes c LEFT JOIN developers d ON d.id = c.developer_id
             WHERE c.id = $1
         """, complex_id)
         if not cx:
+            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+        if cx.get("canonical_id") is not None:
+            prefix = "/admin" if request.url.path.startswith("/admin/") else ""
+            target = f"{prefix}/complex/{cx['canonical_id']}"
+            if request.url.query:
+                target += f"?{request.url.query}"
+            return RedirectResponse(url=target, status_code=302)
+        if cx.get("canonical_reason") == "junk_unmatched":
             return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
         if cx.get("is_garbage") is True:
             return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
@@ -5278,13 +5350,28 @@ def make_extras_router(templates) -> APIRouter:
         # буквально в /admin/api/complex/{id}/location-score, см. докстринг
         # функции про resolved_house_id/зонтик.
         from bot.core.house_resolution import resolve_complex_geo_centroid
+        from bot.core.complex_membership import listing_complex_match_sql
+        include_children = bool(cx.get("is_umbrella")) or bool(await fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM complexes
+                WHERE parent_complex_id = $1
+                  AND COALESCE(is_garbage, FALSE) = FALSE
+                  AND COALESCE(is_street, FALSE) = FALSE
+                  AND canonical_id IS NULL
+                  AND COALESCE(canonical_reason, '') <> 'junk_unmatched'
+            )
+        """, complex_id))
+        _listing_id_match = listing_complex_match_sql(include_children=include_children)
+        _rental_id_match = rental_complex_match_sql(include_children=include_children)
+        _unit_id_match = unit_complex_match_sql(include_children=include_children)
+        _unit_link_match = unit_complex_match_sql(unit_alias='nu', include_children=include_children)
         centroid = await resolve_complex_geo_centroid(complex_id, cname)
-        addr_row = await fetchrow("""
+        addr_row = await fetchrow(f"""
             SELECT address, COUNT(*) AS cnt FROM apartment_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1))
+            WHERE {_listing_id_match}
               AND address IS NOT NULL AND address != ''
             GROUP BY address ORDER BY cnt DESC LIMIT 1
-        """, cname)
+        """, complex_id)
 
         # Застройщик: справочник developers -> Korter -> Homsters
         developer = cx["developer_name"]
@@ -5330,17 +5417,10 @@ def make_extras_router(templates) -> APIRouter:
         from bot.core.complex_detail import get_kzk_info
         kzk_info = await get_kzk_info(complex_id, cx.get("developer_id"))
 
-        # House-resolution (задача 2026-08-13, "аналитика по домам считает
-        # только атрибутированные"): на странице ДОМА (parent_complex_id
-        # стоит) листинги — не только точное имя-совпадение (старое
-        # поведение, для домов с собственным явным именем в объявлении —
-        # напр. "Qaiyndy 3"), но и `resolved_house_id = $2` — привязанные
-        # к ЭТОМУ дому по адресу/токену/гео (bot/core/house_resolution.py),
-        # хотя их complex_name всё ещё говорит "ЖК Qaiyndy" (имя зонтика).
-        # Для НЕ-дома (обычный ЖК/сам зонтик) $2 = complex_id, а
-        # resolved_house_id никогда не равен ID зонтика (то поле указывает
-        # только на детей) — условие безвредно, ничего лишнего не добавляет.
-        _listing_id_match = "(lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)"
+        # Одна принадлежность для всех агрегатов и предложений карточки:
+        # подтверждённый complex_id сильнее текста; legacy-объявления без
+        # привязки учитываются через дом или канонические варианты имени.
+        # Зонтик собирает своих детей и объявления с неизвестным домом.
         sale_listings = await fetch(f"""
             SELECT id, title, rooms, area, floor, floors_total, price, yield_pct,
                    score_total, url, is_active, first_seen, last_seen, archived_at,
@@ -5350,7 +5430,7 @@ def make_extras_router(templates) -> APIRouter:
               AND COALESCE(is_duplicate, FALSE) = FALSE
             ORDER BY is_active DESC NULLS FIRST, score_total DESC NULLS LAST
             LIMIT 60
-        """, cname, complex_id)
+        """, complex_id)
 
         # Карточки "Объявления в этом доме" (задача 2026-08-13, "на всех
         # страницах домов должны быть 5 объявлений в этом доме, под блоками
@@ -5367,9 +5447,10 @@ def make_extras_router(templates) -> APIRouter:
             WHERE {_listing_id_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE
               AND is_active IS NOT FALSE
+              AND $2::boolean
             ORDER BY score_total DESC NULLS LAST, first_seen DESC
             LIMIT 5
-        """, cname, complex_id)
+        """, complex_id, await get_user_tier(request) != "public")
         house_listings = []
         for _hl in _house_listing_rows:
             _hld = dict(_hl)
@@ -5397,16 +5478,16 @@ def make_extras_router(templates) -> APIRouter:
                 FROM apartment_listings
                 WHERE {_listing_id_match} AND COALESCE(is_duplicate, FALSE) = FALSE
                 GROUP BY 1 ORDER BY 2 DESC
-            """, cname, complex_id)
+            """, complex_id)
             if _attr_rows:
                 attribution_breakdown = [dict(r) for r in _attr_rows]
 
-        rentals = await fetch("""
+        rentals = await fetch(f"""
             SELECT rooms, price, area, found_at
             FROM rental_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1)) AND price > 0
+            WHERE {_rental_id_match} AND price > 0
             ORDER BY found_at DESC LIMIT 30
-        """, cname)
+        """, complex_id)
 
         # Блок «6 соседних гексагонов» убран со страницы ЖК (см. задачу
         # "убрать hex-блок") — hex_price_cells() больше НЕ вызывается здесь.
@@ -5428,7 +5509,7 @@ def make_extras_router(templates) -> APIRouter:
             WHERE {_listing_id_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE AND price > 500000
             GROUP BY rooms ORDER BY rooms
-        """, cname, complex_id)
+        """, complex_id)
 
         # Период наблюдения за ЖК (для контекста цифр выше)
         from bot.db.pg import fetchrow as _fetchrow
@@ -5436,7 +5517,7 @@ def make_extras_router(templates) -> APIRouter:
             SELECT MIN(first_seen) AS since, MAX(last_seen) AS until
             FROM apartment_listings
             WHERE {_listing_id_match}
-        """, cname, complex_id)
+        """, complex_id)
 
         # Темп продаж по ЖК: ушло в архив всего / за 30 дней, ср. дней до архива
         pace = await _fetchrow(f"""
@@ -5447,27 +5528,24 @@ def make_extras_router(templates) -> APIRouter:
             FROM apartment_listings
             WHERE {_listing_id_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE AND price > 500000
-        """, cname, complex_id)
+        """, complex_id)
 
         # "Дом неизвестен: N" (задача 2026-08-13, п.3) — только для
         # зонтиков (child_complexes ниже), не для обычных ЖК/домов: сколько
-        # из листингов ПОД ИМЕНЕМ САМОГО ЗОНТИКА не удалось (пока) привязать
-        # к конкретному дому. "Зонтик = агрегат включая неизвестен" (п.4) —
-        # сами sale_listings/stats выше НЕ фильтруются по resolved_house_id
-        # для зонтика (остаются как есть, полный пул под именем зонтика),
-        # этот счётчик — просто прозрачность, сколько из них "не уверены".
+        # из листингов зонтика не удалось (пока) привязать к конкретному дому.
+        # Direct membership исключает complex_id известных детей;
+        # resolved_house_id исключает дома, привязанные отдельно от ЖК.
         from bot.db.pg import fetchval as _fetchval_house_unknown
-        house_unknown_count = await _fetchval_house_unknown("""
+        _parent_listing_match = listing_complex_match_sql()
+        house_unknown_count = await _fetchval_house_unknown(f"""
             SELECT COUNT(*) FROM apartment_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1))
+            WHERE {_parent_listing_match}
               AND resolved_house_id IS NULL
               AND COALESCE(is_duplicate, FALSE) = FALSE
-        """, cname) if await _fetchval_house_unknown(
-            "SELECT EXISTS(SELECT 1 FROM complexes WHERE parent_complex_id = $1)", complex_id
-        ) else None
+        """, complex_id) if include_children else None
 
         # Аренда: скорость ухода. "Ушло" = не видели парсером > 3 дней.
-        rental_stats = await fetch("""
+        rental_stats = await fetch(f"""
             SELECT rooms,
                    COUNT(*) AS cnt,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_rent,
@@ -5477,9 +5555,9 @@ def make_extras_router(templates) -> APIRouter:
                                AND last_seen IS NOT NULL AND last_seen > found_at)
                        AS avg_days_listed
             FROM rental_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1)) AND price > 0
+            WHERE {_rental_id_match} AND price > 0
             GROUP BY rooms ORDER BY rooms
-        """, cname)
+        """, complex_id)
 
         # Карта ЖК убрана со страницы (задача "убери карту", 2026-08-12) —
         # cx_map_points/cx_total больше не нужны, geo остаётся (гейтит блок
@@ -5710,22 +5788,23 @@ def make_extras_router(templates) -> APIRouter:
         # "показать все" (nb_all=1), полный список никуда не делся.
         # Публичная ручка, is_authed не нужен — та же логика, что у
         # остальных newbuild-эндпоинтов.
-        newbuild_units_total = await fetchrow("""
+        newbuild_units_total = await fetchrow(f"""
             SELECT COUNT(*) AS cnt FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved')
+            WHERE {_unit_id_match} AND status IN ('available','reserved')
               AND ($2::int = -1 OR rooms = $2)
         """, complex_id, nb_rooms)
-        newbuild_units_list = await fetch("""
+        newbuild_units_list = await fetch(f"""
             SELECT id, rooms, area, floor, floors_total, price, layout_photo_url, status
             FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved')
+            WHERE {_unit_id_match} AND status IN ('available','reserved')
               AND ($2::int = -1 OR rooms = $2)
+              AND (source NOT IN ('person','krisha','krisha.kz') OR $3::boolean)
             ORDER BY rooms, price ASC NULLS LAST
-            {limit_clause}
-        """.format(limit_clause="" if nb_all else "LIMIT 5"), complex_id, nb_rooms)
-        newbuild_rooms_available = await fetch("""
+            {"" if nb_all else "LIMIT 5"}
+        """, complex_id, nb_rooms, await get_user_tier(request) != "public")
+        newbuild_rooms_available = await fetch(f"""
             SELECT DISTINCT rooms FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved') AND rooms IS NOT NULL
+            WHERE {_unit_id_match} AND status IN ('available','reserved') AND rooms IS NOT NULL
             ORDER BY rooms
         """, complex_id)
 
@@ -5747,7 +5826,7 @@ def make_extras_router(templates) -> APIRouter:
         is_newbuild_page = bool(cx.get("is_newbuild")) or bool(newbuild_rooms_available)
         people_offers: list[dict] = []
         people_offers_total = 0
-        if is_newbuild_page:
+        if is_newbuild_page and await get_user_tier(request) != "public":
             from bot.core.newbuild_person_offers import (
                 classify_person_offer, build_developer_price_index,
                 developer_price_for_listing, price_delta_pct,
@@ -5756,7 +5835,7 @@ def make_extras_router(templates) -> APIRouter:
                 SELECT COUNT(*) AS cnt FROM apartment_listings
                 WHERE {_listing_id_match}
                   AND COALESCE(is_duplicate, FALSE) = FALSE AND is_active IS NOT FALSE
-            """, cname, complex_id)
+            """, complex_id)
             people_offers_total = (_po_total_row["cnt"] or 0) if _po_total_row else 0
             _po_rows = await fetch(f"""
                 SELECT id, title, description, rooms, area, price, photos, first_seen
@@ -5765,24 +5844,24 @@ def make_extras_router(templates) -> APIRouter:
                   AND COALESCE(is_duplicate, FALSE) = FALSE AND is_active IS NOT FALSE
                 ORDER BY score_total DESC NULLS LAST, first_seen DESC
                 LIMIT 20
-            """, cname, complex_id)
+            """, complex_id)
             # Прайс-индекс застройщика строится ОДИН раз на весь ЖК (не на
             # каждое объявление) — все доступные/забронированные юниты, без
             # LIMIT/фильтра комнатности (в отличие от newbuild_units_list
             # выше, той для карточек хватает 5).
-            _dev_unit_rows = await fetch("""
+            _dev_unit_rows = await fetch(f"""
                 SELECT id, rooms, price, area, price_per_m2
                 FROM newbuild_units
-                WHERE complex_id = $1 AND status IN ('available','reserved')
+                WHERE {_unit_id_match} AND status IN ('available','reserved')
             """, complex_id)
             _price_index = build_developer_price_index([dict(r) for r in _dev_unit_rows])
             # unit_source_links (Фаза 2) — только для юнитов ЭТОГО ЖК, чтобы
             # не тянуть всю таблицу; source_id у неё TEXT = apartment_listings.id.
-            _unit_link_rows = await fetch("""
+            _unit_link_rows = await fetch(f"""
                 SELECT usl.source_id AS listing_id, usl.unit_id
                 FROM unit_source_links usl
                 JOIN newbuild_units nu ON nu.id = usl.unit_id
-                WHERE nu.complex_id = $1 AND usl.source = 'krisha'
+                WHERE {_unit_link_match} AND usl.source = 'krisha'
             """, complex_id)
             _unit_id_by_listing = {r["listing_id"]: r["unit_id"] for r in _unit_link_rows}
             for _po in _po_rows:
@@ -5831,19 +5910,26 @@ def make_extras_router(templates) -> APIRouter:
         # — не только точное имя-совпадение, но и resolved_house_id=c2.id
         # (объявления зонтика, привязанные к ЭТОМУ дому по адресу/токену/
         # гео, см. bot/core/house_resolution.py).
-        child_complexes = await fetch("""
+        # c2.id — доверенное SQL-выражение этого запроса; подставляется только
+        # вместо технического параметра helper, пользовательского текста нет.
+        _child_listing_match = listing_complex_match_sql(listing_alias="al").replace("$1", "c2.id")
+        child_complexes = await fetch(f"""
             SELECT c2.id, c2.name, c2.krisha_url,
                    (SELECT count(*) FROM apartment_listings al
-                     WHERE lower(trim(al.complex_name)) = lower(trim(c2.name))
-                        OR al.resolved_house_id = c2.id) AS listings_count,
+                     WHERE {_child_listing_match}
+                       AND COALESCE(al.is_duplicate, FALSE) = FALSE) AS listings_count,
                    c2.source_info->'krisha'->>'deadline' AS deadline,
                    COALESCE(c2.address, (
                        SELECT al.address FROM apartment_listings al
-                       WHERE lower(trim(al.complex_name)) = lower(trim(c2.name))
+                       WHERE {_child_listing_match}
                          AND al.address IS NOT NULL AND al.address != ''
                        GROUP BY al.address ORDER BY count(*) DESC LIMIT 1
                    )) AS address
             FROM complexes c2 WHERE c2.parent_complex_id = $1
+              AND COALESCE(c2.is_garbage, FALSE) = FALSE
+              AND COALESCE(c2.is_street, FALSE) = FALSE
+              AND c2.canonical_id IS NULL
+              AND COALESCE(c2.canonical_reason, '') <> 'junk_unmatched'
             ORDER BY c2.name
         """, complex_id)
         child_addresses_differ = len({
@@ -6025,6 +6111,35 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse({"error": "failed"}, status_code=500)
         return JSONResponse(detail)
 
+    async def _complex_listing_query_context(complex_id: int):
+        """Canonical identity and the same sale/rental family as the detail page."""
+        from bot.db.pg import fetchrow, fetchval
+        from bot.core.complex_membership import listing_complex_match_sql
+
+        cx = await fetchrow("""
+            SELECT c.id, c.name, c.is_umbrella
+            FROM complexes requested
+            JOIN complexes c ON c.id = COALESCE(requested.canonical_id, requested.id)
+            WHERE requested.id = $1
+              AND COALESCE(c.is_garbage, FALSE) = FALSE
+              AND COALESCE(c.is_street, FALSE) = FALSE
+              AND COALESCE(c.canonical_reason, '') <> 'junk_unmatched'
+        """, complex_id)
+        if not cx:
+            return None
+        include_children = bool(cx.get("is_umbrella")) or bool(await fetchval("""
+            SELECT EXISTS (
+                SELECT 1 FROM complexes
+                WHERE parent_complex_id = $1
+                  AND COALESCE(is_garbage, FALSE) = FALSE
+                  AND COALESCE(is_street, FALSE) = FALSE
+                  AND canonical_id IS NULL
+                  AND COALESCE(canonical_reason, '') <> 'junk_unmatched'
+            )
+        """, cx["id"]))
+        return (cx, listing_complex_match_sql(include_children=include_children),
+                rental_complex_match_sql(include_children=include_children))
+
     @router.get("/admin/api/complex/{complex_id}/price-dynamics")
     async def complex_price_dynamics(request: Request, complex_id: int,
                                       kind: str = "sale", days: int = 90, rooms: str = ""):
@@ -6033,18 +6148,20 @@ def make_extras_router(templates) -> APIRouter:
         каждую комнатность, с фильтром периода (3/7/30/90 дней) и опциональным
         фильтром одной комнатности. Публичный роут (страница ЖК не требует
         логина), как и сам /admin/complex/{id}."""
-        from bot.db.pg import fetchrow, fetch as pg_fetch
-        cx = await fetchrow("SELECT name FROM complexes WHERE id = $1", complex_id)
-        if not cx:
+        from bot.db.pg import fetch as pg_fetch
+        context = await _complex_listing_query_context(complex_id)
+        if context is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        cname = cx["name"]
+        cx, sale_match, rental_match = context
         if kind == "rental":
             table, time_col = "rental_listings", "found_at"
+            membership = rental_match
         else:
             table, time_col = "apartment_listings", "first_seen"
+            membership = f"{sale_match} AND COALESCE(is_duplicate, FALSE) = FALSE"
         days = max(1, min(int(days), 365))
         room_cond = ""
-        params: list = [cname, str(days)]
+        params: list = [cx["id"], str(days)]
         if rooms == "4":
             room_cond = "AND rooms >= 4"
         elif rooms in ("1", "2", "3"):
@@ -6055,7 +6172,7 @@ def make_extras_router(templates) -> APIRouter:
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_price,
                    COUNT(*) AS n
             FROM {table}
-            WHERE lower(trim(complex_name)) = lower(trim($1))
+            WHERE {membership}
               AND rooms IS NOT NULL AND price > 0 AND {time_col} IS NOT NULL
               AND {time_col} >= now() - ($2 || ' days')::interval
               {room_cond}
@@ -6084,14 +6201,14 @@ def make_extras_router(templates) -> APIRouter:
         по неделям (день/день не годится: "ушло" — редкое событие, дневные
         бакеты почти всегда пустые или из 1 объявления). Публичный роут,
         как и сам /admin/complex/{id}."""
-        from bot.db.pg import fetchrow, fetch as pg_fetch
-        cx = await fetchrow("SELECT name FROM complexes WHERE id = $1", complex_id)
-        if not cx:
+        from bot.db.pg import fetch as pg_fetch
+        context = await _complex_listing_query_context(complex_id)
+        if context is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        cname = cx["name"]
+        cx, sale_match, rental_match = context
         days = max(7, min(int(days), 365))
         room_cond = ""
-        params: list = [cname, str(days)]
+        params: list = [cx["id"], str(days)]
         if rooms == "4":
             room_cond = "AND rooms >= 4"
         elif rooms in ("1", "2", "3"):
@@ -6105,7 +6222,7 @@ def make_extras_router(templates) -> APIRouter:
                        AVG(EXTRACT(EPOCH FROM (COALESCE(last_seen, found_at) - found_at))/86400) AS avg_days,
                        COUNT(*) AS n
                 FROM rental_listings
-                WHERE lower(trim(complex_name)) = lower(trim($1)) AND price > 0
+                WHERE {rental_match} AND price > 0
                   AND rooms IS NOT NULL
                   AND COALESCE(last_seen, found_at) < now() - interval '3 days'
                   AND last_seen IS NOT NULL AND last_seen > found_at
@@ -6120,7 +6237,7 @@ def make_extras_router(templates) -> APIRouter:
                        AVG(EXTRACT(EPOCH FROM (archived_at - first_seen))/86400) AS avg_days,
                        COUNT(*) AS n
                 FROM apartment_listings
-                WHERE lower(trim(complex_name)) = lower(trim($1))
+                WHERE {sale_match}
                   AND COALESCE(is_duplicate, FALSE) = FALSE AND price > 500000
                   AND rooms IS NOT NULL AND archived_at IS NOT NULL
                   AND archived_at >= now() - ($2 || ' days')::interval
@@ -6442,7 +6559,8 @@ def make_extras_router(templates) -> APIRouter:
         dev = await fetchrow("SELECT * FROM developers WHERE id = $1", dev_id)
         if not dev:
             return HTMLResponse("<h2>Застройщик не найден</h2>", status_code=404)
-        complexes = await fetch("""
+        _developer_listing_match = listing_complex_column_match_sql('c.id', 'al', include_children=True)
+        complexes = await fetch(f"""
             SELECT c.id, c.name, c.district, c.year_built, c.housing_class,
                    c.photo_url, c.lat, c.lon,
                    COALESCE(c.listings_count, 0) AS active_cnt,
@@ -6454,18 +6572,21 @@ def make_extras_router(templates) -> APIRouter:
                 SELECT AVG(EXTRACT(EPOCH FROM (al.archived_at - al.first_seen))/86400)
                          FILTER (WHERE al.archived_at IS NOT NULL) AS avg_days_to_sell
                 FROM apartment_listings al
-                WHERE lower(trim(al.complex_name)) = lower(trim(c.name))
+                WHERE {_developer_listing_match}
                   AND COALESCE(al.is_duplicate, FALSE) = FALSE
             ) g ON TRUE
             LEFT JOIN LATERAL (
                 SELECT al.address, COUNT(*) AS cnt
                 FROM apartment_listings al
-                WHERE lower(trim(al.complex_name)) = lower(trim(c.name))
+                WHERE {_developer_listing_match}
                   AND al.address IS NOT NULL AND al.address != ''
                 GROUP BY al.address ORDER BY cnt DESC LIMIT 1
             ) a ON TRUE
             WHERE c.developer_id = $1
               AND COALESCE(c.is_street, FALSE) = FALSE
+              AND COALESCE(c.is_garbage, FALSE) = FALSE
+              AND c.canonical_id IS NULL
+              AND COALESCE(c.canonical_reason, '') <> 'junk_unmatched'
             ORDER BY active_cnt DESC, sold_cnt DESC
         """, dev_id)
         # Официальные данные homeportal.kz: контакты + проекты застройщика
@@ -6566,6 +6687,9 @@ def make_extras_router(templates) -> APIRouter:
         Публичный (как и сама карта) — ничего чувствительного тут нет.
         Сборка вынесена в bot/core/listing_detail.build_price_history()
         (Фаза B, п.5, "роут не знает SQL")."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.core.listing_detail import build_price_history
         return JSONResponse(await build_price_history(listing_id))
 

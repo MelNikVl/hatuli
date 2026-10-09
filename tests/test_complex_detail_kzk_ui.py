@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 import pytest_asyncio
+from tests.admin_auth_helpers import admin_cookies
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,7 +33,7 @@ async def client():
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test",
-                                 cookies={"admin_auth": "1"}) as c:
+                                 cookies=await admin_cookies()) as c:
         yield c
     await close_pool()
 

@@ -28,6 +28,7 @@ async def db():
 async def _cleanup(execute):
     await execute(f"DELETE FROM listing_complex_resolution_log WHERE listing_id LIKE '{PFX}%'")
     await execute(f"DELETE FROM apartment_listings WHERE id LIKE '{PFX}%'")
+    await execute(f"DELETE FROM complex_aliases WHERE complex_id IN (SELECT id FROM complexes WHERE name LIKE '{PFX}%')")
     await execute(f"DELETE FROM complexes WHERE name LIKE '{PFX}%'")
 
 
@@ -94,8 +95,18 @@ def test_scope_sql_builds():
     assert "a.id LIKE $1" in build_sql(False, "x%")
 
 
+def test_preview_sql_contains_no_mutations():
+    import re
+    from bot.core.complex_binding import build_preview_sql
+
+    sql = build_preview_sql(True, PFX + '%')
+    assert not re.search(r'\b(INSERT|UPDATE|DELETE)\s', sql, re.I)
+    assert '{scope}' not in sql
+    assert 'previous_complex_id' in sql
+
+
 @pytest.mark.asyncio
-async def test_url_beats_name_and_canonical_applies(db):
+async def test_conflicting_url_and_name_quarantine_and_canonical_applies(db):
     from bot.core.complex_binding import resolve_complex_ids
     from bot.db.pg import execute, fetchval
     execute_ = db
@@ -110,7 +121,55 @@ async def test_url_beats_name_and_canonical_applies(db):
     await _listing(execute_, PFX + "8", complex_name=PFX + "Real дубль")     # имя дубля → канонический
     try:
         await resolve_complex_ids(id_like=PFX + '%')
-        assert await _get(PFX + "7") == {"complex_id": real, "complex_resolution": "url"}
+        assert await _get(PFX + "7") == {"complex_id": None, "complex_resolution": 'unbound'}
         assert await _get(PFX + "8") == {"complex_id": real, "complex_resolution": "name"}
     finally:
         await execute("UPDATE complexes SET canonical_id = NULL WHERE id = $1", dup)
+
+
+@pytest.mark.asyncio
+async def test_geo_distinct_identity_and_preview_is_read_only(db):
+    from bot.core.complex_binding import build_preview_sql, resolve_complex_ids
+    from bot.db.pg import fetch, fetchval
+
+    lat, lon = 50.8, 70.8
+    canonical = await _cx(db, PFX + 'geo canonical', lat, lon)
+    alias = await _cx(db, PFX + 'geo alias', lat + 0.00005, lon)
+    await db("UPDATE complexes SET canonical_id=$2, canonical_reason='krisha_slug' WHERE id=$1", alias, canonical)
+    lid = PFX + 'geoalias'
+    await _listing(db, lid, lat=lat + 0.000025, lon=lon)
+    preview = await fetch(build_preview_sql(id_like=lid), lid)
+    assert len(preview) == 1
+    assert preview[0]['complex_id'] == canonical
+    assert preview[0]['method'] == 'geo'
+    assert (await _get(lid))['complex_id'] is None
+
+    assert await fetchval('SELECT count(*) FROM listing_complex_resolution_log WHERE listing_id=$1', lid) == 0
+    await resolve_complex_ids(id_like=lid)
+    assert await _get(lid) == {'complex_id': canonical, 'complex_resolution': 'geo'}
+
+    # A second different identity is a real competitor, unlike the alias.
+    await _cx(db, PFX + 'geo other', lat + 0.000025, lon)
+    await resolve_complex_ids(id_like=lid)
+    assert (await _get(lid))['complex_id'] is None
+    log = await fetch("SELECT previous_complex_id, complex_id, resolution_method FROM listing_complex_resolution_log WHERE listing_id=$1 ORDER BY log_id DESC LIMIT 1", lid)
+    assert log[0]['previous_complex_id'] == canonical
+    assert log[0]['complex_id'] is None
+    assert log[0]['resolution_method'] == 'unbound'
+
+
+@pytest.mark.asyncio
+async def test_verified_alias_and_normalized_names_reject_collision(db):
+    from bot.core.complex_binding import resolve_complex_ids
+    first = await _cx(db, PFX + 'name root', 50.9, 70.9)
+    second = await _cx(db, PFX + 'another root', 50.8, 70.8)
+    alias = PFX + 'old spelling'
+    for cid, status in [(first, 'verified'), (second, 'observed')]:
+        await db("INSERT INTO complex_aliases (complex_id,name,normalized_name,source,source_id,status) VALUES ($1,$2,complex_name_key($2),'test',($1::integer)::text,$3)", cid, alias, status)
+    lid = PFX + 'normalized'
+    await _listing(db, lid, complex_name='ЖК «' + alias.upper() + '»')
+    await resolve_complex_ids(id_like=lid)
+    assert (await _get(lid))['complex_id'] == first
+    await db("UPDATE complex_aliases SET status='verified' WHERE complex_id=$1", second)
+    await resolve_complex_ids(id_like=lid)
+    assert (await _get(lid))['complex_id'] is None
