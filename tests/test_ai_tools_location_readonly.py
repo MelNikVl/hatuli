@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 import pytest_asyncio
+from tests.admin_auth_helpers import admin_cookies
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -201,7 +202,7 @@ async def test_location_analysis_endpoint_stays_200_with_coords(scenario, monkey
     app = create_admin_app(db, "x", "1.0")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test",
-                                  cookies={"admin_auth": "1"}) as client:
+                                  cookies=await admin_cookies()) as client:
         resp = await client.get(f"/admin/api/ai/v1/complex/{cid}/location-analysis")
 
     assert resp.status_code == 200

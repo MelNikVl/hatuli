@@ -342,8 +342,7 @@ def _hype_db_conn():
 def make_extras_router(templates) -> APIRouter:
     router = APIRouter()
 
-    def is_authed(request: Request) -> bool:
-        return request.cookies.get("admin_auth") == "1"
+    from bot.core.admin_sessions import is_admin as is_authed, admin_username
 
     # Доступно во всех шаблонах: {{ is_admin(request) }} — для скрытия
     # админ-элементов на публичных страницах
@@ -354,6 +353,11 @@ def make_extras_router(templates) -> APIRouter:
     # нужна и в admin_web.py, для /listing/{id} — раньше была задублирована
     # тут как локальная), см. её докстринг.
     from bot.core.site_auth import get_user_tier
+
+    async def private_data_denied(request: Request):
+        if await get_user_tier(request) == "public":
+            return JSONResponse({"error": "restricted"}, status_code=403)
+        return None
     # Admin IA cleanup (2026-08-30, этап 1): удалён недостижимый дубль этого
     # роута — bot/admin_web.py::hype_analytics_page_old регистрирует тот же
     # путь НА app напрямую (redirect на /admin/analytics/heatmaps?tab=hype,
@@ -1146,6 +1150,9 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/api/geo-kepler.json")
     async def geo_kepler_map_file(request: Request, type: str = "sale",
                                    lat: float = None, lon: float = None, radius_km: float = None):
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         # Полноценный экспортированный kepler.gl map-файл (данные + config в
         # одном JSON) вместо голого geojson — публичный kepler.gl/demo умеет
         # грузить такой файл через mapUrl= и ПРИМЕНЯЕТ наш config: heatmap-слой
@@ -1265,6 +1272,9 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/admin/api/geo-rentals.geojson")
     async def geo_rentals_geojson(request: Request, lat: float = None, lon: float = None, radius_km: float = None):
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         # Аналог geo-sales.geojson, но по rental_listings — для переключателя
         # "Продажа"/"Аренда" в Kepler-панели попапа (Task 5).
         from bot.db.pg import fetch as pg_fetch
@@ -1299,6 +1309,8 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.post("/admin/api/parse-settings")
     async def parse_settings_api(request: Request):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch
         body = await request.json()
         for key, val in (("delay", body.get("delay")), ("batch", body.get("batch")),
@@ -1480,7 +1492,7 @@ def make_extras_router(templates) -> APIRouter:
     async def cabinet_page(request: Request):
         from bot.core.site_auth import get_user_by_session, list_favorites, list_favorite_complexes
         user = await get_user_by_session(_site_session_cookie(request))
-        favorites = await list_favorites(user["user_id"]) if user else []
+        favorites = await list_favorites(user["user_id"]) if user and await get_user_tier(request) != "public" else []
         favorite_complexes = await list_favorite_complexes(user["user_id"]) if user else []
         return templates.TemplateResponse("cabinet.html", {
             "request": request, "user": user, "favorites": favorites,
@@ -1494,7 +1506,7 @@ def make_extras_router(templates) -> APIRouter:
         раньше избранное было видно только внутри /cabinet одним списком."""
         from bot.core.site_auth import get_user_by_session, list_favorites, list_favorite_complexes
         user = await get_user_by_session(_site_session_cookie(request))
-        favorites = await list_favorites(user["user_id"]) if user else []
+        favorites = await list_favorites(user["user_id"]) if user and await get_user_tier(request) != "public" else []
         favorite_complexes = await list_favorite_complexes(user["user_id"]) if user else []
         return templates.TemplateResponse("favorites.html", {
             "request": request, "user": user, "favorites": favorites,
@@ -1571,14 +1583,17 @@ def make_extras_router(templates) -> APIRouter:
 
     @router.get("/api/auth/poll")
     async def api_auth_poll(request: Request, token: str):
-        from bot.core.site_auth import get_token_status, create_session
+        from bot.core.site_auth import get_token_status, consume_login_token
         status = await get_token_status(token)
         if not status:
             return JSONResponse({"status": "not_found"})
         if status["status"] == "verified":
-            session_id = await create_session(status["telegram_id"])
+            session_id = await consume_login_token(token)
+            if not session_id:
+                return JSONResponse({"status": "expired"})
             resp = JSONResponse({"status": "verified"})
-            resp.set_cookie("site_session", session_id, httponly=True, max_age=180 * 86400)
+            resp.set_cookie("site_session", session_id, httponly=True, max_age=180 * 86400,
+                            secure=request.url.scheme == "https", samesite="lax")
             return resp
         return JSONResponse({"status": status["status"]})
 
@@ -1611,6 +1626,9 @@ def make_extras_router(templates) -> APIRouter:
         user = await get_user_by_session(_site_session_cookie(request))
         if not user:
             return JSONResponse({"error": "auth"}, status_code=401)
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         favs = await list_favorites(user["user_id"])
         return JSONResponse({"favorites": favs})
 
@@ -1620,7 +1638,7 @@ def make_extras_router(templates) -> APIRouter:
         на карточках дашборда (публичный запрос, но без user'а всегда пусто)."""
         from bot.core.site_auth import get_user_by_session, is_favorite_ids
         user = await get_user_by_session(_site_session_cookie(request))
-        if not user:
+        if not user or await get_user_tier(request) == "public":
             return JSONResponse({"ids": []})
         listing_ids = [i for i in ids.split(",") if i]
         found = await is_favorite_ids(user["user_id"], listing_ids)
@@ -1632,6 +1650,9 @@ def make_extras_router(templates) -> APIRouter:
         user = await get_user_by_session(_site_session_cookie(request))
         if not user:
             return JSONResponse({"error": "auth"}, status_code=401)
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         await add_favorite(user["user_id"], listing_id)
         return JSONResponse({"ok": True})
 
@@ -2388,7 +2409,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.core.auth_users import ensure_seeded, list_users
         await ensure_seeded(os.getenv("ADMIN_PASSWORD", "123"))
         users = await list_users()
-        current_username = request.cookies.get("admin_user") or "admin"
+        current_username = admin_username(request)
 
         return templates.TemplateResponse("settings.html", {
             "request": request,
@@ -3307,7 +3328,7 @@ def make_extras_router(templates) -> APIRouter:
         body = await request.json()
         try:
             await save_label(listing_id, str(body.get("label") or ""),
-                             labeled_by=request.cookies.get("admin_user") or "admin",
+                             labeled_by=admin_username(request),
                              note=(body.get("note") or None))
         except LabelError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -3663,6 +3684,9 @@ def make_extras_router(templates) -> APIRouter:
         подтверждённых выбываний физически меньше, чем активных
         объявлений, сама природа показателя). Клиент бакетирует точки в
         гексы и красит по медиане days на гекс (см. drawLiquidityHeat)."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT a.lat, a.lon, ol.time_on_market AS days
@@ -3935,7 +3959,7 @@ def make_extras_router(templates) -> APIRouter:
         developer = cx["developer_name"]
         developer_logo = None
         if cx.get("developer_id"):
-            _dl = await fetchrow("SELECT logo FROM developers WHERE id = $1", cx["developer_id"])
+            _dl = await pg_fetchrow("SELECT logo FROM developers WHERE id = $1", cx["developer_id"])
             if _dl:
                 developer_logo = _dl["logo"]
         if not developer and cx["source_info"]:
@@ -3954,7 +3978,7 @@ def make_extras_router(templates) -> APIRouter:
         # только текстом (korter/homsters), не терял бы логотип, если он
         # уже есть в справочнике developers под тем же именем.
         if developer and not developer_logo:
-            _dl2 = await fetchrow(
+            _dl2 = await pg_fetchrow(
                 "SELECT logo FROM developers WHERE lower(trim(name)) = lower(trim($1))", developer)
             if _dl2:
                 developer_logo = _dl2["logo"]
@@ -3963,8 +3987,9 @@ def make_extras_router(templates) -> APIRouter:
             FROM apartment_listings
             WHERE lower(trim(complex_name)) = lower(trim($1))
               AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE
+              AND $2::boolean
             ORDER BY score_total DESC NULLS LAST LIMIT 8
-        """, cx["name"])
+        """, cx["name"], await get_user_tier(request) != "public")
         import json as _json_cs
 
         def _first_photo(v):
@@ -4166,8 +4191,9 @@ def make_extras_router(templates) -> APIRouter:
             FROM newbuild_units
             WHERE {_unit_match} AND status IN ('available','reserved')
               AND ($2::int[] = '{{}}' OR rooms = ANY($2::int[]))
+              AND (source NOT IN ('person','krisha','krisha.kz') OR $3::boolean)
             ORDER BY price ASC NULLS LAST LIMIT 30
-        """, complex_id, room_list)
+        """, complex_id, room_list, await get_user_tier(request) != "public")
 
         # Прайс-индекс застройщика — по ВСЕМ доступным/забронированным
         # юнитам ЖК (не только тем 30, что попали в dev_units выше под
@@ -4192,8 +4218,9 @@ def make_extras_router(templates) -> APIRouter:
             WHERE {_person_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE AND is_active IS NOT FALSE
               AND ($2::int[] = '{{}}' OR rooms = ANY($2::int[]))
+              AND $3::boolean
             ORDER BY score_total DESC NULLS LAST, first_seen DESC LIMIT 20
-        """, complex_id, room_list)
+        """, complex_id, room_list, await get_user_tier(request) != "public")
 
         # photos — jsonb, asyncpg отдаёт строкой (см. тот же паттерн в complex_detail)
         cx_photos = cx["photos"]
@@ -4261,6 +4288,10 @@ def make_extras_router(templates) -> APIRouter:
         """, unit_id)
         if not u:
             return JSONResponse({"error": "not_found"}, status_code=404)
+        if u.get("source") in ("person", "krisha", "krisha.kz"):
+            denied = await private_data_denied(request)
+            if denied is not None:
+                return denied
         cx_photos = u["complex_photos"]
         if isinstance(cx_photos, str):
             try:
@@ -4783,6 +4814,9 @@ def make_extras_router(templates) -> APIRouter:
         ссылался на него, получал 404 → heatCache.sale оставался пустым
         массивом), из-за чего гексы тепловой карты продажи не рисовались
         нигде на карте, хотя сами объявления/ЖК были видны."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT lat, lon, price, rooms, area, yield_pct
@@ -4806,6 +4840,9 @@ def make_extras_router(templates) -> APIRouter:
         Окно — 30 дней (согласовано с archived-rental-points), раньше было
         180 — тепловая карта должна отражать последний месяц рынка, а не
         полгода истории."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT id, lat, lon, price, rooms, area, yield_pct
@@ -4830,6 +4867,9 @@ def make_extras_router(templates) -> APIRouter:
         Последняя цена аренды перед уходом в архив за последний месяц —
         гексагоны без активных объявлений аренды всё ещё показывают, что
         там недавно сдавалось."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.db.pg import fetch as pg_fetch
         rows = await pg_fetch("""
             SELECT id, lat, lon, price, rooms
@@ -5407,9 +5447,10 @@ def make_extras_router(templates) -> APIRouter:
             WHERE {_listing_id_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE
               AND is_active IS NOT FALSE
+              AND $2::boolean
             ORDER BY score_total DESC NULLS LAST, first_seen DESC
             LIMIT 5
-        """, complex_id)
+        """, complex_id, await get_user_tier(request) != "public")
         house_listings = []
         for _hl in _house_listing_rows:
             _hld = dict(_hl)
@@ -5757,9 +5798,10 @@ def make_extras_router(templates) -> APIRouter:
             FROM newbuild_units
             WHERE {_unit_id_match} AND status IN ('available','reserved')
               AND ($2::int = -1 OR rooms = $2)
+              AND (source NOT IN ('person','krisha','krisha.kz') OR $3::boolean)
             ORDER BY rooms, price ASC NULLS LAST
             {"" if nb_all else "LIMIT 5"}
-        """, complex_id, nb_rooms)
+        """, complex_id, nb_rooms, await get_user_tier(request) != "public")
         newbuild_rooms_available = await fetch(f"""
             SELECT DISTINCT rooms FROM newbuild_units
             WHERE {_unit_id_match} AND status IN ('available','reserved') AND rooms IS NOT NULL
@@ -5784,7 +5826,7 @@ def make_extras_router(templates) -> APIRouter:
         is_newbuild_page = bool(cx.get("is_newbuild")) or bool(newbuild_rooms_available)
         people_offers: list[dict] = []
         people_offers_total = 0
-        if is_newbuild_page:
+        if is_newbuild_page and await get_user_tier(request) != "public":
             from bot.core.newbuild_person_offers import (
                 classify_person_offer, build_developer_price_index,
                 developer_price_for_listing, price_delta_pct,
@@ -6645,6 +6687,9 @@ def make_extras_router(templates) -> APIRouter:
         Публичный (как и сама карта) — ничего чувствительного тут нет.
         Сборка вынесена в bot/core/listing_detail.build_price_history()
         (Фаза B, п.5, "роут не знает SQL")."""
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
         from bot.core.listing_detail import build_price_history
         return JSONResponse(await build_price_history(listing_id))
 

@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 import pytest_asyncio
+from tests.admin_auth_helpers import admin_cookies
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -167,7 +168,7 @@ async def test_market_pages_render_when_authed(db):
     app = create_admin_app(BotDB("/tmp/__test_mkt_admin.db"), admin_password="x", bot_version="test")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test",
-                            cookies={"admin_auth": "1"}) as client:
+                            cookies=await admin_cookies()) as client:
         for path in ("/admin/analytics/market-overview", "/admin/analytics/market-absorption"):
             r = await client.get(path)
             assert r.status_code == 200

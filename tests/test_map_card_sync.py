@@ -1,5 +1,5 @@
 """tests/test_map_card_sync.py — regression-тест синхронизации «маркер
-карты -> карточка в правой панели» на главной странице (задача 2026-08-21,
+карты -> карточка в правой панели» на странице /map (задача 2026-08-21,
 Часть 1). Реальный браузер (Playwright) против реально запущенного FastAPI
 (uvicorn), тестируем НАСТОЯЩИЕ функции dashboard.html (focusSideCard,
 openSidePanel, renderSidePanelIds, selectCard) — не переписанную копию.
@@ -83,7 +83,7 @@ async def page(live_server):
                 )
             # Тайлы OSM/фоновые запросы не определяют готовность DOM-панели.
             # CDN-скрипты остаются настоящими; проверяем их и живую карту.
-            await pg.goto(live_server + "/", wait_until="domcontentloaded", timeout=25000)
+            await pg.goto(live_server + "/map", wait_until="domcontentloaded", timeout=25000)
             await pg.wait_for_function("""() =>
                 typeof L !== 'undefined' && typeof L.markerClusterGroup === 'function' &&
                 L.Draw && typeof L.Draw.Polygon === 'function' && map._loaded &&
