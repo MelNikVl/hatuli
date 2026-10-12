@@ -67,7 +67,7 @@ async def queue_client(tmp_path):
     from fastapi.templating import Jinja2Templates
     from jinja2 import ChoiceLoader, DictLoader
     from bot.db.pg import init_pool, close_pool, execute, fetchval
-    from bot.core.admin_sessions import AdminSessionMiddleware
+    from bot.core.admin_sessions import AdminSessionMiddleware, is_admin
     from bot.core.auth_users import hash_password
 
     dsn = os.getenv('DATABASE_URL')
@@ -86,6 +86,7 @@ async def queue_client(tmp_path):
     app.state.analysis_form_secret = secret
     app.add_middleware(AdminSessionMiddleware)
     templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / 'bot' / 'templates'))
+    templates.env.globals['is_admin'] = is_admin
     # Exercise backend independently of the concurrently authored public page;
     # the private queue uses its real template and verified auth middleware.
     templates.env.loader = ChoiceLoader([DictLoader({'request_analysis.html': '''

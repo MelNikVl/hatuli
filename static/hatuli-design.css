@@ -181,6 +181,50 @@ body.hatuli-site :is(.atabs,.htabs) a,
 body.hatuli-site :is(.atabs,.htabs) a:hover,
 body.hatuli-site :is(.atabs,.htabs) a.active { color: var(--text); padding: 11px 13px; }
 body.hatuli-site :is(.atabs,.htabs) a.active { color: var(--accent); border-color: var(--accent); background: var(--surface2); }
+body.hatuli-site .ap-tabs { background: var(--surface2); color: var(--accent); }
+/* Dense admin screens use the same palette without imposing a dashboard grid. */
+body.hatuli-site :is(.ap-card,.prs-card,.settings-block,.set-card,.eid-card,.eid-tile,.score-block,.total-bar,.pmr-card,.pmr-summary,.pmr-details) {
+  border-color: var(--border); border-radius: 16px;
+}
+body.hatuli-site .settings-grid { grid-template-columns: repeat(auto-fill,minmax(min(320px,100%),1fr)); }
+body.hatuli-site .scoring-grid { grid-template-columns: repeat(auto-fill,minmax(min(340px,100%),1fr)); }
+body.hatuli-site .prs-card { flex-basis: 340px; min-width: 0; max-width: min(480px,100%); }
+body.hatuli-site .prs-head { flex-wrap: wrap; }
+body.hatuli-site :is(.set-label,.prs-toggle) { flex-wrap: wrap; gap: 8px; }
+body.hatuli-site .set-value { color: var(--accent); }
+body.hatuli-site .set-card input[type="range"] { accent-color: var(--accent); }
+body.hatuli-site :is(.prs-btn,.btn-big,.save-btn) { min-height: 40px; border-radius: 10px; }
+body.hatuli-site :is(.prs-btn.on,.btn-stop) { background: var(--red-fill); color: #fff; }
+body.hatuli-site :is(.prs-btn.off,.btn-start,.save-btn,.toast) { background: var(--green-fill); color: #fff; }
+body.hatuli-site .btn-save { background: var(--accent-fill); color: #fff; }
+body.hatuli-site .btn-money-on { background: #926312; color: #fff; }
+body.hatuli-site .btn-money-off { background: #52655b; color: #fff; }
+body.hatuli-site :is(.status-line,.eid-tile .lbl,.eid-tile .sub,.eid-table th,.eid-modal-comment .meta,.eid-ac-item .addr,.score-row .cond,.score-desc,.bar-pts,.sec,.ov-detail,.ov-na) { color: var(--muted); }
+body.hatuli-site .score-block-header { background: var(--surface2) !important; color: var(--heading); }
+body.hatuli-site .score-block-header .max { background: var(--accent-fill) !important; color: #fff; }
+body.hatuli-site .bar-track { background: var(--surface2); }
+body.hatuli-site .note-box { background: var(--surface2); color: var(--text); border-color: var(--blue); }
+body.hatuli-site .note-box.warn { background: color-mix(in srgb,var(--yellow) 10%,var(--surface)); border-color: var(--yellow); }
+body.hatuli-site :is(.modal-overlay,.eid-modal-overlay,.pmr-lightbox) { z-index: 6000; }
+body.hatuli-site .modal-overlay { padding: 20px; }
+body.hatuli-site .modal-overlay > .modal { width: min(500px,100%); max-height: calc(100dvh - 40px); }
+body.hatuli-site .hatuli-table-scroll {
+  width: 100%; max-width: 100%; overflow-x: auto !important;
+  border-radius: 16px; scrollbar-width: thin;
+}
+body.hatuli-site .hatuli-table-scroll:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+body.hatuli-site .hatuli-table-scroll > table { margin-bottom: 0; }
+body.hatuli-site .hatuli-table-scroll :is(th,td) { border-bottom-color: var(--border); }
+body.hatuli-site .hatuli-table-scroll th { background: var(--surface2); color: var(--muted); }
+body.hatuli-site .hatuli-table-scroll + form { margin-top: 16px; }
+body.hatuli-site .hatuli-admin-users { margin-bottom: 16px; }
+body.hatuli-site .hatuli-admin-users table { min-width: 600px; }
+body.hatuli-site .hatuli-settings-tabs { top: calc(var(--hdr-h,80px) + var(--atabs-h,46px)); }
+body.hatuli-site .hatuli-settings-tabs:first-child { top: var(--hdr-h,80px); }
+body.hatuli-site .hatuli-news-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(min(320px,100%),1fr)); gap: 14px; }
+body.hatuli-site .hatuli-complex-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
+body.hatuli-site .hatuli-catalog-tabs { flex-wrap: wrap; }
+body.hatuli-site #bnk-grid { grid-template-columns: repeat(auto-fill,minmax(min(330px,100%),1fr)) !important; }
 body.hatuli-site :is(.tbl-wrap,.aud-wrap) { scrollbar-width: thin; }
 body.hatuli-site :is(.tbl-wrap,.aud-wrap) :is(th,td) { border-bottom-color: var(--border); }
 body.hatuli-site :is(.tbl-wrap,.aud-wrap) th { background: var(--surface2); color: var(--muted); padding-block: 13px; }
@@ -251,6 +295,13 @@ body.hatuli-site .hp-field :is(input,textarea)[aria-invalid="true"] { border-col
   body.hatuli-site .eqh-row { grid-template-columns: minmax(0,1fr); }
   body.hatuli-site .eqh-col { height: auto; max-height: 620px; }
   body.hatuli-site .main > form { max-width: 100%; flex-wrap: wrap; }
+  /* One scrollable row keeps admin navigation from covering the whole phone. */
+  body.hatuli-site :is(.atabs,.htabs) { flex-wrap: nowrap; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+  body.hatuli-site :is(.atabs,.htabs) > :is(a,.atabs-group-label) { flex: 0 0 auto; }
+  body.hatuli-site :is(.ai-block,.col-flex > .col) { min-width: 0; flex-basis: 100%; }
+  body.hatuli-site .hatuli-complex-grid { grid-template-columns: minmax(0,1fr); }
+  body.hatuli-site .modal-overlay .form-row-inline { grid-template-columns: minmax(0,1fr); }
+  body.hatuli-site .settings-block { padding: 18px; }
 }
 @media (max-width: 480px) {
   body.hatuli-site .pub-row1 { padding-inline: 14px; gap: 8px; }

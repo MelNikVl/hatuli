@@ -153,7 +153,7 @@ tr:last-child td{border-bottom:none}
      единственный порядок, отдельный селект сортировки убрали). -->
 {% set is_admin_page = is_admin(request) %}
 {% if complexes %}
-<div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+<div class="hatuli-table-scroll" tabindex="0" role="region" aria-label="Жилые комплексы" style="border:1px solid var(--border);border-radius:10px;">
 <table>
   <tr>
     <th>ЖК</th><th>Застройщик</th><th>Район</th><th>Год</th>
