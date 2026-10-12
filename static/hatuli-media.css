@@ -15,7 +15,8 @@ body.hatuli-site .hatuli-card-media > img {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  /* The sidebar must show the whole photograph, including portrait shots. */
+  object-fit: contain;
 }
 body.hatuli-site .hatuli-card-media--contain > img { object-fit: contain; }
 body.hatuli-site .hatuli-card-media--empty {

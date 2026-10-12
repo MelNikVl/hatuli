@@ -813,7 +813,8 @@ function observeSideCards() {
         loadListingExtras(id);
         checkFavoriteState(id);
         const photos = ptPhotos[id];
-        if (photos) photos.forEach(url => { const im = new Image(); im.src = proxyImg(url); });
+        // ЖК previews load extra frames only after a failure, not the whole gallery.
+        if (photos && !id.startsWith('nb-cx-')) photos.forEach(url => { const im = new Image(); im.src = proxyImg(url); });
       });
     }, {root: document.getElementById('side-panel-body'), rootMargin: '300px 0px'});
   }
@@ -1200,14 +1201,27 @@ function carImgError(cardId) {
   const img = document.getElementById('car-' + cardId);
   if (!img) return;
   const photos = ptPhotos[cardId] || [];
-  const cur = carIdx[cardId] || 0;
-  const next = cur + 1;
-  if (next < photos.length) {
-    carIdx[cardId] = next;
-    img.src = proxyImg(photos[next]);
+  const source = img.getAttribute('src');
+  const sourceIdx = photos.findIndex(photo => proxyImg(photo) === source);
+  const cur = sourceIdx >= 0 ? sourceIdx : (carIdx[cardId] || 0);
+  carIdx[cardId] = cur;
+  const failed = new Set(JSON.parse(img.dataset.failedPhotos || '[]'));
+  failed.add(source);
+  img.dataset.failedPhotos = JSON.stringify(Array.from(failed));
+  let step = 1;
+  while (step < photos.length && failed.has(proxyImg(photos[(cur + step) % photos.length]))) step++;
+  if (step < photos.length) {
+    carNav(cardId, step);
   } else {
-    img.parentNode.style.display = 'none';
-    img.parentNode.innerHTML = '<div style="width:100%;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:var(--bg);color:#999;font-size:13px;">пока нет фото</div>';
+    const frame = img.closest('.hatuli-card-media') || img.parentNode;
+    img.onerror = null;
+    img.remove();
+    frame.classList.add('hatuli-card-media--empty');
+    const placeholder = document.createElement('span');
+    placeholder.textContent = 'пока нет фото';
+    frame.prepend(placeholder);
+    // Keep the frame and its badges; navigation has no usable photos left.
+    frame.querySelectorAll('button[onclick*="carNav("], [id^="car-dots-"]').forEach(el => el.remove());
   }
 }
 // preferCanvas: тепловые карты — это тысячи гекс-полигонов (особенно шум:
@@ -1911,8 +1925,10 @@ let selectedNewbuildComplex = null;  // id выбранного ЖК (null = р�
 // Карточка ЖК для панели в режиме «все ЖК» (до выбора конкретного).
 function newbuildComplexCardHtml(pt) {
   const photos = (pt.photos || []).filter(Boolean);
+  const cardId = 'nb-cx-' + pt.id;
+  if (photos.length) { ptPhotos[cardId] = photos; carIdx[cardId] = 0; }
   const img = photos.length
-    ? `<img src="${proxyImg(photos[0])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border:none;" onerror="carImgError('nb-cx-${pt.id}')">`
+    ? `<img id="car-${cardId}" src="${proxyImg(photos[0])}" alt="Фото ЖК" onerror="carImgError('${cardId}')">`
     : `<div style="width:100%;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:var(--bg);color:#999;font-size:13px;">пока нет фото</div>`;
   const devHtml = pt.logo
     ? `<img src="${pt.logo}" style="width:18px;height:18px;border-radius:4px;object-fit:contain;background:#fff;vertical-align:-4px;margin-right:5px;padding:1px;">${escapeHtml(pt.developer || '')}`
@@ -2032,7 +2048,7 @@ function buildNewbuildUnitCardHtml(d, u) {
     ptPhotos[cardId] = photos; carIdx[cardId] = 0;
     return `
 <div class="hatuli-card-media hatuli-card-media--contain">
-  <img id="car-${cardId}" src="${proxyImg(photos[0])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f7f7f7;display:block;border:none;" onerror="carImgError('${cardId}')">
+  <img id="car-${cardId}" src="${proxyImg(photos[0])}" alt="Фото или планировка объявления" onerror="carImgError('${cardId}')">
   ${photos.length > 1 ? `
   <button onclick="carNav('${cardId}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
   <button onclick="carNav('${cardId}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">›</button>
@@ -2168,7 +2184,7 @@ function buildRentalCardHtml(pt) {
   // большой попап (не лайтбокс), стрелки только листают (stopPropagation).
   const carHtml = photos.length ? `
 <div class="hatuli-card-media">
-  <img id="car-${pt.id}" src="${proxyImg(photos[0])}" style="width:100%;height:100%;object-fit:cover;display:block;">
+  <img id="car-${pt.id}" src="${proxyImg(photos[0])}" alt="Фото объявления" onerror="carImgError('${pt.id}')">
   ${favStarHtml}
   ${photos.length > 1 ? `
   <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
@@ -2318,7 +2334,7 @@ function toggleScoreExplain(uid, ev) {
 // Фотокарусель в попапах
 const ptPhotos = {}, carIdx = {};
 function carNav(id, dir, ev) {
-  ev.stopPropagation();
+  if (ev) ev.stopPropagation();
   const ph = ptPhotos[id]; if (!ph || !ph.length) return;
   carIdx[id] = (carIdx[id] + dir + ph.length) % ph.length;
   const img = document.getElementById('car-' + id);
@@ -2803,7 +2819,7 @@ function renderSaleBatch(d, opts) {
       // сами по себе клик не пробрасывают дальше (stopPropagation внутри carNav).
       const carHtml = pt.photos && pt.photos.length ? `
 <div class="hatuli-card-media">
-  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border:none;" onerror="carImgError('${pt.id}')">
+  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" alt="Фото объявления" onerror="carImgError('${pt.id}')">
   ${favStarHtml}
   ${pt.photos.length > 1 ? `
   <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
