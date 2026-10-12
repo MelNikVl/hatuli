@@ -127,6 +127,7 @@ body.hatuli-site .main > .page-title {
   line-height: 1.3; letter-spacing: -.8px; font-weight: 750; margin-bottom: 24px;
 }
 body.hatuli-site .page-title small { display: inline-block; color: var(--muted); letter-spacing: 0; }
+body.hatuli-site .page-title :is(a,span)[style*="color:#eab308"] { color: var(--accent) !important; }
 body.hatuli-site :is(.card,.cab-card,.dev-card,.chart-block,.tbl-wrap,.aud-wrap,.side-card) {
   border-color: var(--border); border-radius: 16px; box-shadow: var(--shadow);
 }
