@@ -339,14 +339,18 @@ async function toggleFavComplex() {
     {% set photos = ((cx.photos or ([cx.photo_url] if cx.photo_url else [])) | unique | list) %}
     <div id="cx-photos-view">
       {% if photos %}
-      <div style="display:flex;gap:6px;height:420px;">
-        <img id="cx-main-photo" src="{{ photos[0] }}" loading="lazy" onclick="cxOpenLightbox(0)"
-             style="flex:3;min-width:0;height:100%;object-fit:cover;border-radius:8px;cursor:zoom-in;">
+      <div class="hatuli-photo-gallery{% if photos|length <= 1 %} hatuli-photo-gallery--single{% endif %}">
+        <div class="hatuli-photo-main" style="border-radius:8px;">
+          <img id="cx-main-photo" src="{{ photos[0] }}" loading="lazy" onclick="cxOpenLightbox(0)"
+               alt="Фото ЖК {{ cx.name or '' }}" style="cursor:zoom-in;">
+        </div>
         {% if photos|length > 1 %}
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;flex:2;min-width:0;height:100%;overflow-y:auto;">
+        <div class="hatuli-photo-thumbs" style="--photo-thumb-rows:{{ ((photos[1:9]|length + 1) // 2) }};">
           {% for ph in photos[1:9] %}
-          <img src="{{ ph }}" loading="lazy" onclick="cxSetMain({{ loop.index }})"
-               style="width:100%;height:100%;min-height:95px;object-fit:cover;border-radius:6px;cursor:pointer;">
+          <div class="hatuli-photo-tile" style="border-radius:6px;">
+            <img src="{{ ph }}" loading="lazy" onclick="cxSetMain({{ loop.index }})"
+                 alt="Фото ЖК {{ loop.index + 1 }}" style="cursor:pointer;">
+          </div>
           {% endfor %}
         </div>
         {% endif %}
@@ -373,19 +377,19 @@ async function toggleFavComplex() {
       if (!box) {
         box = document.createElement('div');
         box.id = 'cx-lightbox';
-        box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;';
+        box.className = 'hatuli-lightbox';
         box.onclick = (e) => { if (e.target === box) cxCloseLightbox(); };
         document.body.appendChild(box);
       }
-      const thumbs = CX_PHOTOS.map((p, i) => `<img src="${p}" onclick="cxLbIdx=${i};cxRenderLightbox();" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === cxLbIdx ? '1' : '.5'};border:2px solid ${i === cxLbIdx ? '#fff' : 'transparent'};">`).join('');
+      const thumbs = CX_PHOTOS.map((p, i) => `<img src="${p}" onclick="cxLbIdx=${i};cxRenderLightbox();" alt="Фото ${i + 1}" style="border-radius:5px;cursor:pointer;opacity:${i === cxLbIdx ? '1' : '.5'};border:2px solid ${i === cxLbIdx ? '#fff' : 'transparent'};">`).join('');
       box.innerHTML = `
-        <div style="position:relative;width:92vw;height:78vh;display:flex;align-items:center;justify-content:center;">
-          <img src="${CX_PHOTOS[cxLbIdx]}" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;">
+        <div class="hatuli-lightbox-stage">
+          <img src="${CX_PHOTOS[cxLbIdx]}" alt="Фото ЖК ${cxLbIdx + 1}" style="border-radius:8px;">
           ${CX_PHOTOS.length > 1 ? `
           <button onclick="cxLbIdx=(cxLbIdx-1+${CX_PHOTOS.length})%${CX_PHOTOS.length};cxRenderLightbox();" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">‹</button>
           <button onclick="cxLbIdx=(cxLbIdx+1)%${CX_PHOTOS.length};cxRenderLightbox();" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">›</button>` : ''}
         </div>
-        <div style="display:flex;gap:6px;margin-top:14px;max-width:92vw;overflow-x:auto;padding:4px;">${thumbs}</div>
+        <div class="hatuli-lightbox-thumbs">${thumbs}</div>
         <button onclick="cxCloseLightbox()" style="position:absolute;top:16px;right:20px;background:#fff;border:none;border-radius:50%;color:#000;width:38px;height:38px;font-size:24px;cursor:pointer;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.5);">×</button>
       `;
     }

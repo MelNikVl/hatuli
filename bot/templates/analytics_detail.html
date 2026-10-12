@@ -33,7 +33,7 @@
 .tile[open] summary::before { content: '▾ '; }
 .tile.full-width { grid-column: 1 / -1; }
 
-#photo-lb { position: fixed; inset: 0; background: rgba(0,0,0,.92); z-index: 9999; display: none; align-items: center; justify-content: center; flex-direction: column; padding: 20px; }
+#photo-lb { display: none; }
 #photo-lb.open { display: flex; }
 
 /* Равная высота 3 колонок (фото/инфо/карта), средняя — со скроллом */
@@ -88,8 +88,8 @@
 <div class="eqh-row">
   <div class="card eqh-col" style="padding:10px;display:flex;flex-direction:column;min-width:0;">
     {% if photos %}
-    <div style="position:relative;border-radius:10px;overflow:hidden;">
-      <img id="main-photo" src="{{ photos[0] }}" style="width:100%;aspect-ratio:4/3;object-fit:cover;display:block;cursor:zoom-in;" onclick="openPhotoLb(_pIdx)">
+    <div class="hatuli-detail-photo" style="border-radius:10px;">
+      <img id="main-photo" src="{{ photos[0] }}" alt="Фото объявления" style="cursor:zoom-in;" onclick="openPhotoLb(_pIdx)">
       {% if photos|length > 1 %}
       <button onclick="photoNav(-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">‹</button>
       <button onclick="photoNav(1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:34px;height:34px;font-size:19px;cursor:pointer;">›</button>
@@ -452,13 +452,13 @@
 
 </div>
 
-<div id="photo-lb" onclick="if(event.target.id==='photo-lb')closePhotoLb()">
-  <div style="position:relative;width:92vw;height:78vh;display:flex;align-items:center;justify-content:center;">
-    <img id="lb-img" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;">
+<div id="photo-lb" class="hatuli-lightbox" onclick="if(event.target.id==='photo-lb')closePhotoLb()">
+  <div class="hatuli-lightbox-stage">
+    <img id="lb-img" alt="Фото объявления" style="border-radius:8px;">
     <button onclick="photoNav(-1)" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">‹</button>
     <button onclick="photoNav(1)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">›</button>
   </div>
-  <div id="lb-thumbs" style="display:flex;gap:6px;margin-top:14px;max-width:92vw;overflow-x:auto;padding:4px;"></div>
+  <div id="lb-thumbs" class="hatuli-lightbox-thumbs"></div>
   <div id="lb-counter" style="color:#ccc;font-size:13px;margin-top:6px;"></div>
   <button onclick="closePhotoLb()" style="position:absolute;top:16px;right:20px;background:#fff;border:none;border-radius:50%;color:#000;width:38px;height:38px;font-size:24px;cursor:pointer;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.5);">×</button>
 </div>
@@ -483,7 +483,7 @@ function renderLb() {
   document.getElementById('lb-img').src = _photos[_pIdx];
   document.getElementById('lb-counter').textContent = (_pIdx + 1) + ' / ' + _photos.length;
   document.getElementById('lb-thumbs').innerHTML = _photos.map((p, i) =>
-    `<img src="${p}" onclick="setPhoto(${i})" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === _pIdx ? '1' : '.5'};border:2px solid ${i === _pIdx ? '#fff' : 'transparent'};">`
+    `<img src="${p}" onclick="setPhoto(${i})" alt="Фото ${i + 1}" style="border-radius:5px;cursor:pointer;opacity:${i === _pIdx ? '1' : '.5'};border:2px solid ${i === _pIdx ? '#fff' : 'transparent'};">`
   ).join('');
 }
 function openPhotoLb(i) {
