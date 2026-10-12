@@ -1,1 +1,80 @@
-*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,sans-serif;color:#18362f}#map{position:fixed;inset:0}header,#cards{position:fixed;left:12px;right:12px;z-index:1000;max-width:540px;margin:auto;background:#fffffff5;border-radius:20px;box-shadow:0 5px 24px #15352d18}header{top:max(12px,env(safe-area-inset-top));padding:15px}.brand{font-weight:800;color:#176447}h1{font-size:23px;margin:9px 0 4px}p{font-size:12px;line-height:1.4;margin:3px 0;color:#587169}button,a{font:inherit;cursor:pointer}#fit{float:right;border:0;background:#edf4ef;color:#176447;border-radius:10px;padding:6px 9px;font-size:12px}#cards{bottom:max(12px,env(safe-area-inset-bottom));max-height:30vh;overflow:auto;padding:8px}.card{display:grid;grid-template-columns:1fr auto;gap:4px;border-bottom:1px solid #e4eee5;padding:8px}.card:last-child{border:0}.card button{border:0;background:transparent;text-align:left;color:#18362f;padding:4px}.card strong,.card span{display:block}.card span{font-size:12px;color:#587169;margin-top:4px}.card a{align-self:center;padding:10px;color:#176447;font-size:12px}.pin{border-radius:50%;background:#176447;color:white;border:3px solid white;box-shadow:0 2px 8px #0005;text-align:center;font-weight:800;font-size:15px;line-height:30px}.pin.base{background:#326aa0}.leaflet-control-attribution{font-size:8px!important}.leaflet-bottom{bottom:calc(30vh + 20px)}.leaflet-popup-content{font-family:system-ui;font-size:14px;line-height:1.6}.leaflet-popup-content a{color:#176447}.card.selected{background:#eaf4ec;border-radius:12px} @media(min-width:700px){header{left:12px;right:auto;width:350px}#cards{right:12px;left:auto;width:350px;max-height:45vh}}
+* { box-sizing: border-box; }
+body.buyer-nearby {
+  margin: 0;
+  background: var(--bg, #f8f8f3);
+  color: var(--text, #293e38);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+.buyer-nearby #map { position: fixed; inset: 0; }
+.buyer-nearby :is(header, #cards) {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  z-index: 1000;
+  max-width: 540px;
+  margin: auto;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #dce5dd);
+  border-radius: 18px;
+  box-shadow: 0 5px 24px #183c3512;
+}
+.buyer-nearby header { top: max(12px, env(safe-area-inset-top)); padding: 16px; }
+.buyer-nearby .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.buyer-nearby .brand a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  color: var(--accent, #1e6353);
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -.5px;
+  text-decoration: none;
+}
+.buyer-nearby .brand svg { width: 28px; height: 28px; }
+.buyer-nearby h1 { color: #183c35; font-size: 23px; line-height: 1.2; letter-spacing: -.6px; margin: 8px 0 6px; }
+.buyer-nearby p { font-size: 13px; line-height: 1.45; margin: 4px 0; color: var(--muted, #65766f); }
+.buyer-nearby :is(button, a) { font: inherit; cursor: pointer; }
+.buyer-nearby :is(button, a):focus-visible { outline: 3px solid #1e6353; outline-offset: 2px; }
+.buyer-nearby #fit {
+  min-height: 44px;
+  border: 1px solid var(--border, #dce5dd);
+  background: var(--surface2, #f0f4ef);
+  color: var(--accent, #1e6353);
+  border-radius: 12px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.buyer-nearby #fit:hover { background: #e7eee7; }
+.buyer-nearby #cards {
+  bottom: max(12px, env(safe-area-inset-bottom));
+  max-height: 30vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 8px;
+}
+.buyer-nearby .card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px; border-bottom: 1px solid var(--border, #dce5dd); padding: 8px; }
+.buyer-nearby .card:last-child { border: 0; }
+.buyer-nearby .card button { min-height: 44px; min-width: 0; border: 0; border-radius: 8px; background: transparent; text-align: left; color: var(--text, #293e38); padding: 4px; overflow-wrap: anywhere; }
+.buyer-nearby .card strong { color: #183c35; }
+.buyer-nearby .card :is(strong, span) { display: block; }
+.buyer-nearby .card span { font-size: 12px; line-height: 1.45; color: var(--muted, #65766f); margin-top: 4px; }
+.buyer-nearby .card a { display: inline-flex; align-items: center; align-self: center; min-height: 44px; padding: 10px; border-radius: 8px; color: var(--accent, #1e6353); font-size: 12px; text-underline-offset: 3px; }
+.buyer-nearby .card.selected { background: var(--surface2, #f0f4ef); border-radius: 12px; }
+.buyer-nearby .pin { border-radius: 50%; background: var(--accent, #1e6353); color: #fff; border: 3px solid #fff; box-shadow: 0 2px 8px #183c3540; text-align: center; font-weight: 800; font-size: 15px; line-height: 30px; }
+.buyer-nearby .pin.base { background: #326aa0; }
+.buyer-nearby .leaflet-control-attribution { font-size: 10px !important; }
+.buyer-nearby .leaflet-bottom { bottom: calc(30vh + 20px); }
+.buyer-nearby .leaflet-popup-content { font-family: inherit; color: var(--text, #293e38); font-size: 14px; line-height: 1.6; }
+.buyer-nearby .leaflet-popup-content a { display: inline-flex; align-items: center; min-height: 44px; color: var(--accent, #1e6353); }
+.buyer-nearby .leaflet-popup-content-wrapper { border-radius: 12px; }
+@media (min-width: 700px) {
+  .buyer-nearby header { left: 12px; right: auto; width: 350px; }
+  .buyer-nearby #cards { right: 12px; left: auto; width: 350px; max-height: 45vh; }
+}
+@media (max-width: 360px) {
+  .buyer-nearby header { left: 8px; right: 8px; padding: 12px; }
+  .buyer-nearby #cards { left: 8px; right: 8px; }
+}

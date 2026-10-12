@@ -1,1 +1,25 @@
-<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Варианты рядом · Hatuli</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><link rel="stylesheet" href="/static/buyer-nearby.css?v=1"><script src="https://telegram.org/js/telegram-web-app.js"></script><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script></head><body><div id="map" aria-label="Карта квартир"></div><header><div class="brand">Hatuli <button id="fit">Все на карте</button></div><h1>Варианты рядом</h1><p>Синяя метка — исходная квартира, зелёные — варианты.</p><p id="status" role="status">Загружаем объявления…</p></header><section id="cards" aria-label="Квартиры"></section><script src="/static/buyer-nearby.js?v=1"></script></body></html>
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Варианты рядом · Hatuli</title>
+  <link rel="icon" type="image/svg+xml" href="/static/branding/hatuli.svg">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/buyer-nearby.css?v=20261012">
+  <link rel="stylesheet" href="/static/hatuli-design.css?v=20261012">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+</head>
+<body class="hatuli-miniapp buyer-nearby">
+  <div id="map" aria-label="Карта квартир"></div>
+  <header>
+    <div class="brand"><a href="/" aria-label="Hatuli — главная"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M4 15 16 5l12 10v12H7V15" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="m12 19 3 3 7-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Hatuli</a><button id="fit">Все на карте</button></div>
+    <h1>Варианты рядом</h1>
+    <p>Синяя метка — исходная квартира, зелёные — варианты.</p>
+    <p id="status" role="status">Загружаем объявления…</p>
+  </header>
+  <section id="cards" aria-label="Квартиры"></section>
+  <script src="/static/buyer-nearby.js?v=1"></script>
+</body>
+</html>

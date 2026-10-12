@@ -1,1 +1,95 @@
-:root{font-family:system-ui,-apple-system,sans-serif;color:#18362f;background:#eef3ed}*{box-sizing:border-box}body{margin:0}#map{position:fixed;inset:0}header,footer{position:fixed;z-index:1000;left:12px;right:12px;background:#fffffff5;border:1px solid #fff;border-radius:22px;box-shadow:0 5px 24px #15352d18;padding:16px;max-width:540px;margin:auto}header{top:max(12px,env(safe-area-inset-top))}footer{bottom:max(12px,env(safe-area-inset-bottom))}.brand{font-weight:800;color:#127457;font-size:16px}.brand span{float:right;font-size:12px;color:#6a8078;font-weight:500}h1{font-size:23px;letter-spacing:-.6px;margin:10px 0 5px}p{font-size:12px;line-height:1.4;margin:0 0 12px;color:#587169}form{display:flex;border:1px solid #dce6df;border-radius:12px;overflow:hidden;background:white}input,select,button{font:inherit;min-height:42px;border:0;background:transparent}input{min-width:0;flex:1;font-size:14px;outline:none}select{max-width:85px;font-size:13px}button{cursor:pointer;padding:8px 12px;color:#166047;font-size:13px}button:disabled{opacity:.4;cursor:default}button:focus-visible{outline:3px solid #75beac}#results{max-height:160px;overflow:auto}#results button{display:block;width:100%;text-align:left;border-bottom:1px solid #e5ece6}.meta{display:flex;justify-content:space-between;align-items:center;gap:8px}.meta strong{font-size:14px}.meta span{font-size:10px;color:#688178}#status{margin:7px 0;min-height:17px}.tools{display:flex;justify-content:space-between;margin-bottom:8px}.tools button{background:#f0f5f1;border-radius:10px;min-height:36px}#save{width:100%;background:#176447;color:white;border-radius:12px;font-size:15px;font-weight:650;min-height:48px}.leaflet-control-zoom{display:none}.leaflet-control-attribution{font-size:8px!important}.leaflet-bottom{bottom:220px} @media(min-width:700px){header{right:auto;width:350px;margin:0}footer{left:auto;width:350px;margin:0}} 
+* { box-sizing: border-box; }
+body.buyer-map {
+  margin: 0;
+  background: var(--bg, #f8f8f3);
+  color: var(--text, #293e38);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  color-scheme: light;
+}
+.buyer-map #map { position: fixed; inset: 0; }
+.buyer-map :is(header, footer) {
+  position: fixed;
+  z-index: 1000;
+  left: 12px;
+  right: 12px;
+  max-width: 540px;
+  margin: auto;
+  padding: 16px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #dce5dd);
+  border-radius: 18px;
+  box-shadow: 0 5px 24px #183c3512;
+}
+.buyer-map header { top: max(12px, env(safe-area-inset-top)); }
+.buyer-map footer { bottom: max(12px, env(safe-area-inset-bottom)); }
+.buyer-map .brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.buyer-map .brand a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  color: var(--accent, #1e6353);
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -.5px;
+  text-decoration: none;
+}
+.buyer-map .brand svg { width: 28px; height: 28px; }
+.buyer-map .brand span { font-size: 12px; color: var(--muted, #65766f); }
+.buyer-map h1 { color: #183c35; font-size: 23px; letter-spacing: -.6px; line-height: 1.2; margin: 8px 0 6px; }
+.buyer-map p { font-size: 13px; line-height: 1.45; margin: 0 0 12px; color: var(--muted, #65766f); }
+.buyer-map form {
+  display: flex;
+  border: 1px solid var(--border, #dce5dd);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+.buyer-map :is(input, select, button) {
+  font: inherit;
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text, #293e38);
+}
+.buyer-map input { min-width: 0; flex: 1; padding: 8px; font-size: 16px; }
+.buyer-map input::placeholder { color: var(--muted, #65766f); opacity: 1; }
+.buyer-map select { max-width: 85px; padding: 8px 4px; font-size: 14px; }
+.buyer-map button { cursor: pointer; padding: 8px 12px; color: var(--accent, #1e6353); font-size: 13px; font-weight: 600; }
+.buyer-map button:disabled { opacity: .45; cursor: default; }
+.buyer-map :is(a, input, select, button):focus-visible { outline: 3px solid #1e6353; outline-offset: 2px; }
+.buyer-map #results { max-height: 160px; overflow: auto; }
+.buyer-map #results button { display: block; width: 100%; text-align: left; border-bottom: 1px solid var(--border, #dce5dd); border-radius: 0; }
+.buyer-map #results button:hover { background: var(--surface2, #f0f4ef); }
+.buyer-map .meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.buyer-map .meta strong { font-size: 14px; color: #183c35; }
+.buyer-map .meta span { font-size: 11px; color: var(--muted, #65766f); }
+.buyer-map #status { margin: 8px 0; min-height: 19px; }
+.buyer-map .tools { display: flex; justify-content: space-between; gap: 6px; margin-bottom: 8px; }
+.buyer-map .tools button { background: var(--surface2, #f0f4ef); border-radius: 12px; flex: 1; padding: 8px 5px; }
+.buyer-map #save {
+  width: 100%;
+  background: var(--accent, #1e6353);
+  color: #fff;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 650;
+  min-height: 48px;
+}
+.buyer-map #save:hover:enabled { background: #184f43; }
+.buyer-map .leaflet-control-zoom { display: none; }
+.buyer-map .leaflet-control-attribution { font-size: 10px !important; }
+.buyer-map .leaflet-bottom { bottom: 220px; }
+@media (min-width: 700px) {
+  .buyer-map header { right: auto; width: 350px; margin: 0; }
+  .buyer-map footer { left: auto; width: 350px; margin: 0; }
+}
+@media (max-width: 360px) {
+  .buyer-map :is(header, footer) { left: 8px; right: 8px; padding: 12px; }
+  .buyer-map .meta span { font-size: 10px; }
+}
