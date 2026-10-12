@@ -33,6 +33,7 @@ from bot.db import settings as app_settings
 from bot.db.pg import fetch
 from bot.core.complex_metrics import IDENTITY_CTES
 from bot.core.complex_membership import listing_complex_column_match_sql, rental_complex_match_sql, unit_complex_match_sql
+from bot.core.web_pages import not_found_page
 
 logger = logging.getLogger(__name__)
 
@@ -599,7 +600,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.db.pg import fetch, fetchrow
         bank = await fetchrow("SELECT * FROM banks WHERE slug = $1", slug)
         if not bank:
-            return HTMLResponse("Банк не найден", status_code=404)
+            return not_found_page(templates, request, 'Банк не найден', '/banks', 'К банкам')
         programs = await fetch("SELECT * FROM mortgage_programs WHERE bank_id = $1 ORDER BY id", bank["id"])
         return templates.TemplateResponse("bank_detail.html", {"request": request, "bank": bank, "programs": programs})
 
@@ -625,7 +626,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.db.pg import fetchrow
         n = await fetchrow("SELECT * FROM news WHERE id = $1", nid)
         if not n:
-            return HTMLResponse("Новость не найдена", status_code=404)
+            return not_found_page(templates, request, 'Новость не найдена', '/news', 'К новостям')
         return templates.TemplateResponse("news_detail.html", {"request": request, "n": dict(n)})
 
     # Admin IA cleanup (2026-08-30, этап 1): удалён недостижимый дубль этого
@@ -5302,7 +5303,7 @@ def make_extras_router(templates) -> APIRouter:
             WHERE c.id = $1
         """, complex_id)
         if not cx:
-            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'ЖК не найден', '/complexes', 'К каталогу ЖК')
         if cx.get("canonical_id") is not None:
             prefix = "/admin" if request.url.path.startswith("/admin/") else ""
             target = f"{prefix}/complex/{cx['canonical_id']}"
@@ -5310,9 +5311,9 @@ def make_extras_router(templates) -> APIRouter:
                 target += f"?{request.url.query}"
             return RedirectResponse(url=target, status_code=302)
         if cx.get("canonical_reason") == "junk_unmatched":
-            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'ЖК не найден', '/complexes', 'К каталогу ЖК')
         if cx.get("is_garbage") is True:
-            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'ЖК не найден', '/complexes', 'К каталогу ЖК')
         if cx.get("is_street") is True:
             # Задача "ЖК улицы вообще удалить" (2026-08-12): страница больше
             # не рендерится — раньше показывала баннер "Это улица, а не ЖК"
@@ -5320,7 +5321,7 @@ def make_extras_router(templates) -> APIRouter:
             # удаляется (аудит-трейл, см. bot/core/complex_audit.py —
             # чтобы повторный аудит не переоткрывал уже разобранные случаи),
             # просто страница для неё больше недоступна, как у is_garbage.
-            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'ЖК не найден', '/complexes', 'К каталогу ЖК')
         cx = dict(cx)
         # photos — JSONB, asyncpg отдаёт как строку; без парсинга шаблон
         # итерировался бы по символам строки, а не по элементам массива
@@ -6558,7 +6559,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.db.pg import fetch, fetchrow
         dev = await fetchrow("SELECT * FROM developers WHERE id = $1", dev_id)
         if not dev:
-            return HTMLResponse("<h2>Застройщик не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'Застройщик не найден', '/developers', 'К застройщикам')
         _developer_listing_match = listing_complex_column_match_sql('c.id', 'al', include_children=True)
         complexes = await fetch(f"""
             SELECT c.id, c.name, c.district, c.year_built, c.housing_class,

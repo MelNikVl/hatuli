@@ -1677,12 +1677,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     async def _analytics_detail_inner(request: Request, listing_id: str):
         from bot.db.pg import fetchrow as pg_fetchrow, fetch as pg_fetch
         from bot.core.bargain import get_comparables, analyze_bargain
+        from bot.core.web_pages import not_found_page
 
         row = await pg_fetchrow(
             "SELECT * FROM apartment_listings WHERE id = $1", listing_id
         )
         if not row:
-            return HTMLResponse("<h2>Not found</h2>", status_code=404)
+            return not_found_page(templates, request, 'Объявление не найдено')
 
         listing = dict(row)
 
