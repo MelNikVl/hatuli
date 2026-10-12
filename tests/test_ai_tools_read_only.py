@@ -21,11 +21,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
 import pytest_asyncio
 from dotenv import load_dotenv
+from tests.db_test_guard import init_test_pool
 
 load_dotenv()
-
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
-
 
 def test_router_registers_get_only():
     from bot.ai_tools.router import make_ai_tools_router
@@ -39,8 +37,8 @@ def test_router_registers_get_only():
 
 @pytest_asyncio.fixture
 async def db():
-    from bot.db.pg import init_pool, close_pool
-    await init_pool(DATABASE_URL)
+    from bot.db.pg import close_pool
+    await init_test_pool()
     yield
     await close_pool()
 
