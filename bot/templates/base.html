@@ -3,18 +3,9 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Hatuli — Admin</title>
+  <title>{% block title %}{% if request.url.path.startswith("/admin") %}Панель управления{% elif "complex" in request.url.path %}Жилые комплексы{% elif "developer" in request.url.path %}Застройщики{% elif request.url.path == "/cabinet" %}Личный кабинет{% else %}Недвижимость Астаны{% endif %} — Hatuli{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="/static/branding/hatuli.svg"/>
-  <script>
-  // Применяем сохранённую тему ДО отрисовки — иначе была бы вспышка тёмной
-  // темы на белом фоне при каждой загрузке страницы в светлом режиме.
-  // По умолчанию (ничего не сохранено) — светлая тема, тёмная только если
-  // пользователь явно её выбрал переключателем.
-  (function() {
-    const saved = localStorage.getItem('hatuli-theme');
-    if (saved !== 'dark') document.documentElement.setAttribute('data-theme', 'light');
-  })();
-  </script>
+  {% include "_hatuli_theme.html" %}
   <style>
   html { font-size: 16px; } body { font-size: 16.5px; }
     /* На широких/высокоплотных мониторах (2К+) вся вёрстка — почти сплошь
@@ -246,8 +237,11 @@
     :root:not([data-theme="light"]) .htabs a.active { color: #e8eaf6; }
     .ap-tabs { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 6px; margin-left:6px; border-radius:10px; background:rgba(88,101,242,.14); color:var(--accent2); font-size:11.5px; font-weight:700; vertical-align:1px; }
   </style>
+  <link rel="stylesheet" href="/static/hatuli-design.css?v=20261012">
+  <script src="/static/hatuli-ui.js?v=20261012" defer></script>
+  {% block head %}{% endblock %}
 </head>
-<body>
+<body class="hatuli-site">
 
 {% set admin = is_admin(request) %}
 {% set panel_family = ('analytics' in request.url.path or 'parser' in request.url.path
@@ -261,31 +255,10 @@
     or request.url.path == '/admin-panel') %}
 {% set embed = request.query_params.get('embed') %}
 {% if not embed %}
-<header class="pub-header">
-  <div class="pub-row1{% if not panel_family %} narrow{% endif %}">
-    <a href="/" class="pub-logo" style="text-transform:none;"><span style="color:#0E93A6;">Hatuli</span></a>
-    <nav class="pub-nav">
-      <a href="/example">Пример разбора</a>
-      <a href="/map" class="{% if 'complex' in request.url.path %}active{% endif %}">ЖК и карта</a>
-      <a href="/how-it-works">Как считаем</a>
-      {% if admin %}
-      <a href="/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path or 'investments' in request.url.path %}active{% endif %}">Аналитика</a>
-      {% endif %}
-      {% if admin %}
-      <a href="/admin-panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Админка</a>
-      {% endif %}
-    </nav>
-    <div class="pub-row1-right">
-      <button class="pub-theme-btn" id="sidebar-theme-toggle" onclick="toggleSidebarTheme()" type="button" title="Переключить тему">🌓</button>
-      {% if site_user or admin %}<a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;color:var(--text);background:rgba(37,99,235,.1);border-radius:8px;width:32px;height:32px;"><span style="font-size:18px;line-height:1;">♡</span></a>{% endif %}
-      {% if admin %}<a href="/admin/logout" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Выйти</a>
-      {% else %}<a href="/cabinet" style="font-size:13px;font-weight:600;color:var(--text);text-decoration:none;">Войти</a>{% endif %}
-    </div>
-  </div>
-</header>
+{% include "_hatuli_header.html" %}
 {% endif %}
 
-<main class="main{% if not panel_family %} narrow{% endif %}">
+<main id="main-content" class="main{% if not panel_family %} narrow{% endif %}">
 {% block content %}{% endblock %}
 </main>
 <script>

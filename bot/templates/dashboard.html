@@ -322,11 +322,8 @@ html, body { overflow: hidden !important; }
 #side-panel-head.has-count { display:flex; }
 #side-panel-body { flex:1; overflow-y:auto; overflow-x:hidden; padding:14px 16px 24px; display:grid; grid-template-columns:1fr; gap:14px; align-content:start; }
 .side-card { background:var(--bg); border:1px solid var(--border); border-radius:11px; overflow:clip; min-width:0; transition:box-shadow .2s ease; }
-/* Карточки объявлений на главной (светлая тема): текст чёрный, ссылки
-   подчёркнуты (задача 2026-08-13). В тёмной теме не трогаем — чёрный текст
-   на тёмном фоне нечитаем. !important перебивает инлайновые цвета карточек. */
-:root[data-theme="light"] #side-panel-body .side-card,
-:root[data-theme="light"] #side-panel-body .side-card * { color:#000 !important; }
+/* Inherit readable text without erasing status badges or white photo controls. */
+:root[data-theme="light"] #side-panel-body .side-card { color:var(--text); }
 :root[data-theme="light"] #side-panel-body .side-card a { text-decoration:underline; }
 .side-card-flash { animation: sideCardFlash 0.6s ease-in-out 5; border-color:#2563eb !important; }
 /* Персистентное selected-состояние карточки (задача 2026-08-21: "клик по

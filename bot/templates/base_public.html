@@ -25,13 +25,7 @@
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"WebSite","name":"Hatuli","url":"https://hatuli.ai-groundtruth.com","description":"Карта квартир Астаны: продажа, аренда, тепловые карты, рейтинг жилых комплексов."}
   </script>
-  <script>
-  (function() {
-    // По умолчанию — светлая тема (см. base.html, тот же дефолт).
-    const saved = localStorage.getItem('hatuli-theme');
-    if (saved !== 'dark') document.documentElement.setAttribute('data-theme', 'light');
-  })();
-  </script>
+  {% include "_hatuli_theme.html" %}
   <style>
   html { font-size: 16px; } body { font-size: 16.5px; }
     @media (min-width: 2200px) { html { zoom: 1.15; } }
@@ -140,8 +134,11 @@
     }
     select:focus, input:focus { outline: 1px solid var(--accent); }
   </style>
+  <link rel="stylesheet" href="/static/hatuli-design.css?v=20261012">
+  <script src="/static/hatuli-ui.js?v=20261012" defer></script>
+  {% block head %}{% endblock %}
 </head>
-<body>
+<body class="hatuli-site">
 
 {% set admin = is_admin(request) %}
 {% set panel_family = ('analytics' in request.url.path or 'parser' in request.url.path
@@ -150,32 +147,9 @@
     or 'issues' in request.url.path or 'entity-ids' in request.url.path
     or request.url.path == '/admin/site-users' or request.url.path == '/admin/panel'
     or request.url.path == '/admin-panel') %}
-<header class="pub-header">
-  <div class="pub-row1">
-    <a href="/" class="pub-logo" style="text-transform:none;"><span style="color:#0E93A6;">Hatuli</span></a>
-    <nav class="pub-nav">
-      <a href="/example">Пример разбора</a>
-      <a href="/map" class="{% if request.url.path in ('/map', '/admin') or 'complex' in request.url.path %}active{% endif %}">ЖК и карта</a>
-      <a href="/how-it-works">Как считаем</a>
-      {% if admin %}
-      <a href="/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path or 'investments' in request.url.path %}active{% endif %}">Аналитика</a>
-      <a href="/admin-panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Админка</a>
-      {% endif %}
-    </nav>
-    <div class="pub-row1-right">
-      <button class="pub-theme-btn" id="pub-theme-toggle" onclick="togglePubTheme()" type="button" title="Переключить тему">🌓</button>
-      {% if site_user or admin %}<a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;justify-content:center;background:rgba(37,99,235,.1);border-radius:8px;width:32px;height:32px;"><span style="font-size:18px;line-height:1;">♡</span></a>{% endif %}
-      {% if site_user %}
-      <a href="/cabinet" class="pub-user-chip">{{ site_user.full_name or ('@' + (site_user.username or site_user.user_id|string)) }}</a>
-      {% if admin %}<a href="/admin/logout" class="pub-fav-icon" title="Выйти" style="font-size:13px;font-weight:600;">Выйти</a>{% endif %}
-      {% else %}
-      <a href="/cabinet" class="pub-login-btn">Войти</a>
-      {% endif %}
-    </div>
-  </div>
-</header>
+{% include "_hatuli_header.html" %}
 
-<main class="pub-main">
+<main id="main-content" class="pub-main">
 {% block content %}{% endblock %}
 </main>
 <script>

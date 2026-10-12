@@ -917,7 +917,7 @@ function cxlBuildMapLayers(map, d) {
      тот же список в двух видах на одной странице незачем. -->
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;">
   <b style="font-size:13.5px;">📋 Объявления в этом доме <span style="font-weight:400;color:#888;">({{ house_listings|length }})</span></b>
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px;">
+  <div class="hatuli-kpi-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px;">
     {% for l in house_listings %}
     <a href="/listing/{{ l.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
       {% if l.photo %}<img src="{{ l.photo }}" loading="lazy" style="width:100%;height:120px;object-fit:cover;display:block;">{% else %}<div style="width:100%;height:120px;background:var(--bg);"></div>{% endif %}
@@ -1006,7 +1006,7 @@ function cxlBuildMapLayers(map, d) {
     </div>
   </div>
   {% if newbuild_units_list %}
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
+  <div class="hatuli-kpi-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
     {% for u in newbuild_units_list %}
     <a href="/listing/nb-{{ u.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
       {% if u.layout_photo_url %}<img src="{{ u.layout_photo_url }}" loading="lazy" style="width:100%;height:120px;object-fit:contain;background:#f7f7f7;display:block;">{% else %}<div style="width:100%;height:120px;background:var(--bg);"></div>{% endif %}
@@ -1053,7 +1053,7 @@ function cxlBuildMapLayers(map, d) {
     <b style="font-size:13.5px;">🧑‍🤝‍🧑 Предложения людей (Крыша) <span style="font-weight:400;color:#888;">({{ people_offers_total }})</span></b>
     <span style="font-size:11px;color:#888;" title="Индивидуальные объявления людей на Крыше по этому ЖК/дому — не официальное предложение застройщика (то — блок «Варианты квартир в доме» выше)">не путать с официальным предложением застройщика ↑</span>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
+  <div class="hatuli-kpi-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
     {% for l in people_offers %}
     <a href="/listing/{{ l.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;position:relative;">
       {% if l.tag %}
