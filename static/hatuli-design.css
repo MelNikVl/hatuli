@@ -242,7 +242,7 @@ body.hatuli-site .hp-field :is(input,textarea)[aria-invalid="true"] { border-col
   body.hatuli-site .cab-card { padding: 22px; }
   body.hatuli-site .filterbar-inner { margin: 0; gap: 6px; }
   body.hatuli-site .filterbar { padding: 8px 16px; }
-  body.hatuli-site .hatuli-map-tools { max-width: calc(100vw - 68px); }
+  body.hatuli-site .hatuli-map-tools { width: calc(100vw - 68px); max-width: calc(100vw - 68px); }
   body.hatuli-site .hatuli-map-tools-row { flex-wrap: wrap; gap: 6px !important; }
   body.hatuli-site :is(.rooms-dd-btn,.more-filters-btn) { min-height: 44px; font-size: 12px; padding-inline: 10px; }
   body.hatuli-site .rooms-dd-panel { max-width: calc(100vw - 32px); }
