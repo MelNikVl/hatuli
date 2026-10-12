@@ -25,6 +25,7 @@
     function setOpen(open) {
       header.classList.toggle('is-open', open);
       menu.setAttribute('aria-expanded', String(open));
+      menu.setAttribute('aria-label', open ? 'Закрыть меню' : 'Открыть меню');
     }
     menu.addEventListener('click', function () { setOpen(!header.classList.contains('is-open')); });
     header.addEventListener('keydown', function (event) {

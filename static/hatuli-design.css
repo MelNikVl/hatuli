@@ -17,6 +17,9 @@
   --logo-color: #183c35;
   --heading: #183c35;
   --focus: #74982c;
+  --accent-fill: #1e6353;
+  --green-fill: #237448;
+  --red-fill: #b33932;
   --shadow: 0 12px 36px -24px rgba(24,60,53,.24);
   --hp-bg: var(--bg);
   --hp-paper: var(--surface);
@@ -62,7 +65,7 @@ body.hatuli-site :is(a,button,input,select,textarea,summary):focus-visible {
   outline-offset: 3px;
 }
 body.hatuli-site :is(input,textarea,select) { accent-color: var(--accent); }
-body.hatuli-site a { text-underline-offset: 3px; }
+body.hatuli-site a { color: var(--accent); text-underline-offset: 3px; }
 .hatuli-skip {
   position: fixed; top: -100px; left: 16px; z-index: 10000;
   background: var(--surface); color: var(--accent); padding: 12px 18px;
@@ -86,7 +89,7 @@ body.hatuli-site .pub-logo {
   line-height: 1.2; flex-shrink: 0;
 }
 .hatuli-brand-mark { width: 29px; height: 29px; flex-shrink: 0; }
-body.hatuli-site .pub-nav { display: flex; align-items: center; gap: 6px; }
+body.hatuli-site .pub-nav { display: flex; align-items: center; gap: 6px; flex: 1 1 0%; min-width: 0; flex-wrap: wrap; }
 body.hatuli-site .pub-nav a,
 body.hatuli-site .pub-nav a:hover,
 body.hatuli-site .pub-nav a.active {
@@ -128,6 +131,11 @@ body.hatuli-site :is(.card,.cab-card,.dev-card,.chart-block,.tbl-wrap,.aud-wrap,
   border-color: var(--border); border-radius: 16px; box-shadow: var(--shadow);
 }
 body.hatuli-site :is(.card,.cab-card,.dev-card,.side-card) { background: var(--surface); }
+body.hatuli-site .card.g { border-top-color: var(--green); }
+body.hatuli-site .card.b { border-top-color: var(--blue); }
+body.hatuli-site .card.r { border-top-color: var(--red); }
+body.hatuli-site .card.y { border-top-color: var(--yellow); }
+body.hatuli-site .card.p { border-top-color: var(--accent); }
 body.hatuli-site .dev-card:hover { border-color: var(--accent); }
 body.hatuli-site .dev-card .dev-card-photo { height: 200px; }
 body.hatuli-site .dev-card .dev-card-body { padding: 18px 20px; gap: 8px; }
@@ -142,6 +150,9 @@ body.hatuli-site :is(.btn,.mkt-presentation-btn) {
 body.hatuli-site .btn-sm { min-height: 32px; padding: 6px 11px; }
 body.hatuli-site .btn-primary { background: #1e6353; color: #fff; }
 body.hatuli-site .btn-primary:hover { background: #154d40; }
+body.hatuli-site .btn-success { background: var(--green-fill); color: #fff; }
+body.hatuli-site .btn-danger { background: var(--red-fill); color: #fff; }
+body.hatuli-site .hcb-span-btn.active { background: var(--accent-fill); color: #fff; }
 body.hatuli-site .btn-ghost { background: var(--surface); color: var(--text); }
 body.hatuli-site :is(.main,.pub-main) :is(input:not([type]),input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="url"],select,textarea) {
   border: 1px solid var(--border); border-radius: 9px;
@@ -153,6 +164,13 @@ body.hatuli-site :is(input,select,textarea):disabled { opacity: .65; cursor: not
 body.hatuli-site :is(.main,.pub-main) button[style*="background:#2563eb"],
 body.hatuli-site :is(.main,.pub-main) button[style*="background: #2563eb"],
 body.hatuli-site :is(.main,.pub-main) button[style*="background:#1a1a2e"] { background: #1e6353 !important; color: #fff !important; }
+/* Text accents brighten in dark mode; solid actions retain white-text contrast. */
+body.hatuli-site :is(button,a)[style*="background:var(--accent"],
+body.hatuli-site :is(button,a)[style*="background: var(--accent"] { background: var(--accent-fill) !important; color: #fff !important; }
+body.hatuli-site :is(button,a)[style*="background:var(--green"],
+body.hatuli-site :is(button,a)[style*="background: var(--green"] { background: var(--green-fill) !important; color: #fff !important; }
+body.hatuli-site :is(button,a)[style*="background:var(--red"],
+body.hatuli-site :is(button,a)[style*="background: var(--red"] { background: var(--red-fill) !important; color: #fff !important; }
 body.hatuli-site :is(.main,.pub-main) a[style*="color:#2563eb"] { color: var(--accent) !important; }
 /* Legacy muted labels were too pale on white. Keep status/heatmap colors intact. */
 body.hatuli-site :is(.main,.pub-main) [style*="color:#888"],
@@ -174,7 +192,11 @@ body.hatuli-site .tag-normal { background: color-mix(in srgb,var(--yellow) 12%,v
 body.hatuli-site .tag-cold { background: color-mix(in srgb,var(--green) 12%,var(--surface)); color: var(--green); }
 /* Full-height maps retain their negative-margin geometry and JS height observers. */
 body.hatuli-site .filterbar { background: var(--bg); }
+body.hatuli-site .hatuli-catalog-nav { margin-bottom: 18px; }
+body.hatuli-site .hatuli-catalog-nav a { display: inline-flex; align-items: center; min-height: 40px; text-decoration: none; font-weight: 600; }
 body.hatuli-site .filterbar-inner { flex-wrap: wrap; gap: 8px; margin-inline: auto; max-width: 1120px; }
+body.hatuli-site #f-newbuild-btn { min-height: 40px; border-radius: 10px !important; }
+body.hatuli-site #f-newbuild-btn[data-active="true"] { background: #1e6353 !important; border-color: #1e6353 !important; color: #fff !important; }
 body.hatuli-site :is(.rooms-dd-btn,.more-filters-btn) { min-height: 40px; border-radius: 10px; background: var(--surface); font-size: 13px; }
 body.hatuli-site .heat-dd-btn-tint { background: var(--surface2); border-color: var(--border); }
 body.hatuli-site .rooms-dd-panel { border-radius: 14px; box-shadow: 0 12px 36px rgba(24,60,53,.16); }
@@ -182,6 +204,8 @@ body.hatuli-site .rooms-dd-panel label { min-height: 36px; }
 body.hatuli-site .side-card-selected { outline-color: var(--accent); }
 body.hatuli-site #mobile-view-toggle { background: #1e6353 !important; color: #fff !important; min-height: 44px; border-radius: 12px !important; }
 body.hatuli-site :is(#btn-schools,#btn-draw,#btn-ruler) { min-height: 36px; border-radius: 9px !important; border-color: var(--border) !important; background: var(--surface) !important; color: var(--accent) !important; box-shadow: var(--shadow) !important; }
+body.hatuli-site :is(#btn-schools,#btn-draw)[aria-pressed="true"] { background: #1e6353 !important; color: #fff !important; }
+body.hatuli-site #btn-ruler[aria-pressed="true"] { background: #b33932 !important; color: #fff !important; border-color: #b33932 !important; }
 body.hatuli-site #nb-dev-panel { border-color: var(--border) !important; border-radius: 14px !important; }
 /* Public pages also honor the same theme. */
 body.hatuli-site :is(.hp-summary,.hp-method-card,.hp-form,.hp-chart-wrap,.hp-conclusions li,.hp-table-wrap) { background: var(--surface); }
@@ -193,6 +217,7 @@ body.hatuli-site .hp-bottom-cta { background: #183c35; }
 body.hatuli-site .hp-bottom-cta .hp-button { background: #e7ef94; border-color: #e7ef94; color: #183c35; }
 body.hatuli-site .hp-flip { background: var(--surface2); border-color: var(--border); }
 body.hatuli-site .hp-field :is(input,textarea) { background: var(--surface); border-color: var(--border); color: var(--text); }
+body.hatuli-site .hp-field :is(input,textarea)[aria-invalid="true"] { border-color: var(--red); border-width: 2px; }
 .hatuli-requests { max-width: 960px; }
 .hatuli-requests :is(p,form) { margin-block: 12px; }
 .hatuli-requests h1 { color: var(--heading); font-size: 30px; line-height: 1.3; margin: 22px 0 12px; }
@@ -216,6 +241,8 @@ body.hatuli-site .hp-field :is(input,textarea) { background: var(--surface); bor
   body.hatuli-site .cab-card { padding: 22px; }
   body.hatuli-site .filterbar-inner { margin: 0; gap: 6px; }
   body.hatuli-site .filterbar { padding: 8px 16px; }
+  body.hatuli-site .hatuli-map-tools { max-width: calc(100vw - 68px); }
+  body.hatuli-site .hatuli-map-tools-row { flex-wrap: wrap; gap: 6px !important; }
   body.hatuli-site :is(.rooms-dd-btn,.more-filters-btn) { min-height: 44px; font-size: 12px; padding-inline: 10px; }
   body.hatuli-site .rooms-dd-panel { max-width: calc(100vw - 32px); }
   body.hatuli-site #detail-modal-box { min-width: 0 !important; width: calc(100vw - 24px) !important; max-width: calc(100vw - 24px) !important; }
@@ -237,6 +264,10 @@ body.hatuli-site .hp-field :is(input,textarea) { background: var(--surface); bor
   body.hatuli-site .card { padding: 16px; }
   body.hatuli-site .card-value { font-size: 25px; }
   body.hatuli-site .hp-shell { width: calc(100% - 36px); }
+  body.hatuli-site #nb-dev-panel { max-height: min(260px,35vh) !important; }
+}
+@media (max-width: 360px) {
+  body.hatuli-site #nb-dev-panel { max-height: min(230px,30vh) !important; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

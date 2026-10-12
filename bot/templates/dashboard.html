@@ -1,9 +1,9 @@
 {% extends "base_public.html" %}
+{% block title %}{{ listing_meta.title if listing_meta else 'ЖК и карта Астаны — Hatuli' }}{% endblock %}
+{% block meta_description %}{{ listing_meta.description if listing_meta else 'Жилые комплексы и новостройки Астаны: карта, застройщики и характеристики домов.' }}{% endblock %}
+{% block og_title %}{{ listing_meta.title if listing_meta else 'ЖК и карта Астаны — Hatuli' }}{% endblock %}
+{% block og_description %}{{ listing_meta.description if listing_meta else 'Жилые комплексы и новостройки Астаны: карта, застройщики и характеристики домов.' }}{% endblock %}
 {% if listing_meta %}
-{% block title %}{{ listing_meta.title }}{% endblock %}
-{% block meta_description %}{{ listing_meta.description }}{% endblock %}
-{% block og_title %}{{ listing_meta.title }}{% endblock %}
-{% block og_description %}{{ listing_meta.description }}{% endblock %}
 {% if listing_meta.image %}{% block og_image %}<meta property="og:image" content="{{ listing_meta.image }}"/>{% endblock %}{% endif %}
 {% endif %}
 {% block content %}
@@ -121,7 +121,7 @@ html, body { overflow: hidden !important; }
 .filterbar #load-progress-pct { font-size:11px; color:#888; flex-shrink:0; min-width:2.5em; text-align:right; }
 .year-chip.active { background:#2563eb !important; color:#fff !important; border-color:#2563eb !important; }
 </style>
-<nav aria-label="Каталог и справочники" style="display:flex;gap:18px;flex-wrap:wrap;padding:0 0 10px;font-size:13px;">
+<nav class="hatuli-catalog-nav" aria-label="Каталог и справочники" style="display:flex;gap:18px;flex-wrap:wrap;padding:0 0 10px;font-size:13px;">
   <a href="/complexes">Каталог ЖК</a><a href="/developers">Застройщики</a>
 </nav>
 <div class="filterbar">
@@ -689,6 +689,7 @@ function getFilterType() {
 function updateNewbuildChip() {
   const btn = document.getElementById('f-newbuild-btn');
   if (!btn) return;
+  btn.dataset.active = String(forcedNewbuildType);
   btn.style.background = forcedNewbuildType ? '#84cc16' : 'var(--bg)';
   btn.style.color = forcedNewbuildType ? '#fff' : 'var(--text)';
   btn.style.borderColor = forcedNewbuildType ? '#84cc16' : 'var(--border)';
@@ -1243,7 +1244,7 @@ function resizeMapToViewport() {
   // карта (flex:1, height:100%), и правая панель (#side-panel, height:100%)
   // всегда ровно одной высоты, панель статична рядом с картой и со своим
   // скроллом (#side-panel-body overflow-y:auto), если объявлений много.
-  const h = Math.max(320, window.innerHeight - top) / zoomLevel;
+  const h = Math.max(140, window.innerHeight - top) / zoomLevel;
   wrap.style.height = h + 'px';
   mapEl.style.height = '100%';
   // #side-panel больше не position:fixed с отдельным top — это flex-сиблинг
@@ -1269,6 +1270,11 @@ window.addEventListener('load', () => setTimeout(resizeMapToViewport, 50));
 const filterbarEl = document.querySelector('.filterbar');
 if (window.ResizeObserver && filterbarEl) {
   new ResizeObserver(() => resizeMapToViewport()).observe(filterbarEl);
+}
+// The shared mobile menu changes the map's top without resizing the window.
+const mapHeaderEl = document.querySelector('.pub-header');
+if (window.ResizeObserver && mapHeaderEl) {
+  new ResizeObserver(() => resizeMapToViewport()).observe(mapHeaderEl);
 }
 
 const map = L.map('objects-map', {preferCanvas: true}).setView([51.128, 71.43], 13);
@@ -1427,12 +1433,12 @@ function loadViewportIncremental() {
 const MapButtons = L.Control.extend({
   options: {position: 'topleft'},
   onAdd: function() {
-    const box = L.DomUtil.create('div', '');
+    const box = L.DomUtil.create('div', 'hatuli-map-tools');
     // position:absolute вместо обычного стека Leaflet-контролов — так кнопки
     // встают СПРАВА от зум-контрола (+/-) на той же строке, а не под ним.
     box.style.cssText = 'position:absolute;top:0;left:44px;display:flex;flex-direction:column;gap:4px;';
     box.innerHTML = `
-      <div style="display:flex;gap:8px;white-space:nowrap;">
+      <div class="hatuli-map-tools-row" style="display:flex;gap:8px;white-space:nowrap;">
         <button id="btn-schools" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;display:inline-flex;align-items:center;padding:0 11px;border:1.5px solid #2563eb;border-radius:13px;background:#fff;color:#2563eb;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">Школы и садики</button>
         <button id="btn-draw" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;display:inline-flex;align-items:center;padding:0 11px;border:1.5px solid #2563eb;border-radius:13px;background:#fff;color:#2563eb;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">Нарисовать область</button>
         <button id="btn-draw-clear" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;align-items:center;padding:0 11px;border:none;border-radius:13px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕ Убрать все области</button>
@@ -1554,22 +1560,30 @@ function resizeHeatControlsBox() {
   if (!zoomCtl || !mapBtns || !hc) return;
   const zr = zoomCtl.getBoundingClientRect(), br = mapBtns.getBoundingClientRect();
   hc.style.width = Math.max(110, Math.round((br.right - zr.left) / 2)) + 'px';
-  // В режиме «Новостройки» панель застройщиков (#nb-dev-panel, top:60px)
-  // перекрывает настройки тепловой карты (top:80px) — настройки уходят «за»
-  // неё и не видны. Опускаем их ПОД панель (пользователь: «либо ниже, либо
-  // выше, но не за»).
   const dev = document.getElementById('nb-dev-panel');
   const mapEl = document.getElementById('objects-map');
+  if (!mapEl) return;
+  const mapTop = mapEl.getBoundingClientRect().top;
+  const toolbar = document.querySelector('.hatuli-map-tools');
+  const toolsBottom = toolbar ? toolbar.getBoundingClientRect().bottom - mapTop : 60;
+  // Wrapped tools and newly shown clear buttons determine overlay positions.
+  if (dev) dev.style.top = Math.max(60, Math.ceil(toolsBottom + 6)) + 'px';
+  let controlsTop = Math.max(80, toolsBottom + 6);
   if (dev && mapEl && dev.style.display !== 'none' && dev.offsetHeight > 0) {
     const devBottom = dev.getBoundingClientRect().bottom;
-    const mapTop = mapEl.getBoundingClientRect().top;
-    hc.style.top = Math.round(devBottom - mapTop + 6) + 'px';
-  } else {
-    hc.style.top = '80px';
+    controlsTop = Math.max(controlsTop, devBottom - mapTop + 6);
   }
+  hc.style.top = Math.ceil(controlsTop) + 'px';
 }
 setTimeout(resizeHeatControlsBox, 300);
 window.addEventListener('resize', resizeHeatControlsBox);
+if (window.ResizeObserver) {
+  const controlsObserver = new ResizeObserver(resizeHeatControlsBox);
+  ['.hatuli-map-tools', '#nb-dev-panel'].forEach(selector => {
+    const control = document.querySelector(selector);
+    if (control) controlsObserver.observe(control);
+  });
+}
 function setHeatOpacity(v) {
   const op = (parseFloat(v) || 40) / 100;
   heatLayer.eachLayer(l => { if (l.setStyle) l.setStyle({fillOpacity: op}); });
@@ -1608,6 +1622,7 @@ function clearRuler() {
 }
 document.getElementById('btn-ruler').addEventListener('click', function() {
   rulerOn = !rulerOn;
+  this.setAttribute('aria-pressed', String(rulerOn));
   this.style.background = rulerOn ? '#ef4444' : '#fff';
   this.style.color = rulerOn ? '#fff' : '#2563eb';
   this.style.borderColor = rulerOn ? '#ef4444' : '#2563eb';
@@ -1668,6 +1683,7 @@ function removeDrawnPolygon(id) {
 function armFreehandDraw() {
   if (drawnPolygons.length >= MAX_DRAWN_AREAS) return;
   freehandDrawArmed = true;
+  document.getElementById('btn-draw').setAttribute('aria-pressed', 'true');
   map.getContainer().style.cursor = 'crosshair';
 }
 function onFreehandMouseDown(e) {
@@ -1684,6 +1700,7 @@ function onFreehandMouseMove(e) {
   freehandPolyline.setLatLngs(freehandLatLngs);
 }
 function onFreehandMouseUp() {
+  document.getElementById('btn-draw').setAttribute('aria-pressed', 'false');
   map.off('mousemove', onFreehandMouseMove);
   map.dragging.enable();
   map.getContainer().style.cursor = '';
@@ -5341,6 +5358,7 @@ const poiLayer = L.layerGroup();
 let poiLoaded = false, poiOn = false;
 document.getElementById('btn-schools').addEventListener('click', function() {
   poiOn = !poiOn;
+  this.setAttribute('aria-pressed', String(poiOn));
   this.style.background = poiOn ? '#2563eb' : '#fff';
   this.style.color = poiOn ? '#fff' : '#2563eb';
   if (poiOn) {
