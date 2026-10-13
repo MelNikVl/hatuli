@@ -1,5 +1,5 @@
 {% extends "buyer_public_base.html" %}
-{% block title %}Лучшие квартиры Астаны{% if snapshot and not snapshot.is_stale %} на сегодня{% endif %} — Hatuli{% endblock %}
+{% block title %}Лучшие квартиры Астаны{% if snapshot and snapshot.is_today and not snapshot.is_stale and snapshot['items'] %} на сегодня{% endif %} — Hatuli{% endblock %}
 {% block description %}Ежедневная подборка до 30 интересных квартир в продаже в Астане. Цены, фотографии и короткое объяснение, почему стоит присмотреться к каждому варианту.{% endblock %}
 {% block head %}
 <link rel="stylesheet" href="/static/hatuli-picks.css?v=20261014">
@@ -19,7 +19,7 @@
       <div class="picks-edition-top"><span>Выбор Hatuli</span><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M5 15 16 6l11 9v12H8V15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="m13 19 3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
       <p class="picks-edition-count">{{ snapshot['items']|length if snapshot else '—' }}<span>квартир в подборке</span></p>
       <div class="picks-edition-bottom">
-        {% if snapshot %}<p><strong>{{ snapshot.date_label }}</strong><span>Дата подборки</span></p><p><strong>{{ snapshot.total_candidates|fmt_num }}</strong><span>объявлений сравнили</span></p>
+        {% if snapshot %}<p><strong>{{ snapshot.date_label }}</strong><span>Дата подборки</span></p><p><strong>{{ snapshot.total_candidates|fmt_num }}</strong><span>подходящих вариантов</span></p>
         {% else %}<p><strong>Готовим первый выпуск</strong><span>Здесь появятся квартиры и причины выбора</span></p>{% endif %}
       </div>
     </aside>
