@@ -155,7 +155,8 @@ def observation(row: dict, *, captured_at: datetime, group_id: str) -> dict | No
     if not group_id:
         return None
     reactivated = utc_timestamp(row.get("latest_reactivated_at"))
-    if row.get("latest_reactivated_at") is not None and (reactivated is None or reactivated > now):
+    if row.get("latest_reactivated_at") is not None and (
+            reactivated is None or reactivated > now or observed < reactivated):
         return None
     result = {
         "schema_version": SCHEMA_VERSION, "record_type": "price_observation",

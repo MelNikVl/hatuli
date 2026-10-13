@@ -75,10 +75,20 @@ def test_primary_location_is_coarse_project_anchor_and_unknown_origin_abstains()
 
 def test_invalid_location_is_unknown_and_reactivation_time_is_not_backfilled():
     reactivated = NOW-timedelta(hours=4)
-    row = observation(quote(lat=0, latest_reactivated_at=reactivated), captured_at=NOW, group_id="g")
+    row = observation(quote(lat=0, latest_reactivated_at=reactivated,
+                            source_observed_at=NOW-timedelta(hours=2)), captured_at=NOW, group_id="g")
     assert row["hex_id"] is None
     assert row["latest_reactivated_at"] == reactivated.isoformat()
     assert observation(quote(latest_reactivated_at=NOW+timedelta(seconds=1)), captured_at=NOW, group_id="g") is None
+
+
+def test_price_quote_from_before_reactivation_is_rejected_even_if_recent():
+    assert observation(quote(source_observed_at=NOW-timedelta(hours=2),
+                             latest_reactivated_at=NOW-timedelta(hours=1)),
+                       captured_at=NOW, group_id="g") is None
+    assert observation(quote(source_observed_at=NOW-timedelta(minutes=30),
+                             latest_reactivated_at=NOW-timedelta(hours=1)),
+                       captured_at=NOW, group_id="g") is not None
 
 
 def test_repeated_database_copy_is_not_an_independent_price_observation(tmp_path):
