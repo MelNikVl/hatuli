@@ -272,6 +272,7 @@ os.makedirs(_PHOTO_CACHE_DIR, exist_ok=True)
 # в открытый прокси для произвольных URL (SSRF).
 _PHOTO_ALLOWED_HOSTS = (
     "kcdn.online", "krisha.kz",          # Крыша (фото объявлений)
+    "astps-photos-kr.kcdn.kz",            # Current Krisha photo CDN, observed in browser
     "homeportal.kz",                     # api.homeportal.kz — фото ЖК (реестр КЖК)
     "bazis.kz",                          # admin.sales.bazis.kz / admin.shablon.bazis.kz / bazis-online.kz
     "orda-invest.kz",                    # new.orda-invest.kz — фото новостроек ORDA
