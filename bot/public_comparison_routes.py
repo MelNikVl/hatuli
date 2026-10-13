@@ -22,7 +22,7 @@ def _public_offer(offer: dict) -> dict:
     wait = 0 if not primary or offer.get("build_status") == "commissioned" else 12
     identifier = offer["id"]
     params = {"unit": identifier.removeprefix("newbuild:")} if primary else {"listing": identifier}
-    title = f"{offer['rooms']}-комнатная · {offer['area']:g} м²"
+    title = f"{offer['rooms']}-комнатная · {offer['area']:g} м²".replace(".", ",")
     cautions = list(offer.get("cautions", []))
     if primary and wait:
         cautions.append("Для неподтверждённой готовности выбран сценарий ожидания 12 месяцев. Уточните срок ключей и измените его в расчёте.")

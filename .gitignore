@@ -28,3 +28,4 @@ research/phase_c/data/
 /var/deposit-catalog.json
 /var/deposit-catalog.json.lock
 /var/.deposit-catalog.json.*.tmp
+/var/.deposit-catalog-*.json
