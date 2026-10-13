@@ -191,6 +191,28 @@ async def test_geo_exports_do_not_mix_old_or_archived_market_into_live_rentals(c
 
 
 @pytest.mark.asyncio
+async def test_rental_map_uses_fresh_live_rows_and_catalog_cover_without_gallery(client,monkeypatch):
+    cover='https://astps-photos-kr.kcdn.kz/webp/56/56e36366-f634-480b-be27-f81efd89f4b1/4-400x300.jpg'
+    async def fetch(query,*args):
+        if 'FROM rental_listings r' in query:
+            assert 'is_active IS TRUE' in query and 'dup_needs_review' in query
+            assert "interval '72 hours'" in query and "prop_type = 'apartment'" in query
+            assert 'r.photo_url' in query and 'archived_at >' not in query
+            return [{'id':'12345678','url':'https://krisha.kz/a/show/12345678','price':250000,
+                'rooms':2,'area':60,'floor':3,'floors_total':10,'address':'QA',
+                'complex_name':None,'complex_key':'','district':'Есиль','found_at':NOW,
+                'own_lat':51.1,'own_lon':71.4,'photos':None,'photo_url':cover,
+                'prev_price':None,'price_changed_at':None}]
+        return []
+    monkeypatch.setattr('bot.db.pg.fetch',fetch)
+    response=await client.get('/admin/api/map-points?type=rental',headers={'x-test-role':'admin'})
+    assert response.status_code==200
+    result=response.json()
+    assert result['points'][0]['photos']==[cover]
+    assert result['market_coverage']=='unknown' and result['limited_to']==1000
+
+
+@pytest.mark.asyncio
 async def test_archive_endpoints_still_deny_public_without_querying_database(client):
     for path in ('/admin/api/archived-history','/admin/api/archived-hex-points?type=rental'):
         response = await client.get(path)

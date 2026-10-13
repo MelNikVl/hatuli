@@ -170,10 +170,10 @@
     <div class="row"><span class="key">📌 Зона</span><span class="val" style="color:{{ '#ef4444' if listing.zone_bonus and listing.zone_bonus < 0 else '#16a34a' }};">{{ listing.zone_name }} ({{ '%+d'|format(listing.zone_bonus or 0) }} к скору)</span></div>
     {% endif %}
     <div class="row"><span class="key">🗺 Привязка к карте</span><span class="val">{% if listing.lat %}точные координаты{% else %}<span style="color:#f59e0b;">нет координат</span>{% endif %}</span></div>
-    <div class="row"><span class="key">Аренда (оценка)</span><span class="val" style="color:#4ade80;">{{ "{:,.0f}".format(listing.est_rent or 0) }} ₸/мес</span></div>
-    <div class="row"><span class="key">Источник аренды</span><span class="val" style="font-size:11px;color:#888;">{{ listing.rent_source or '—' }}</span></div>
-    <div class="row"><span class="key">Yield</span><span class="val" style="color:#4ade80;font-size:17px;font-weight:800;">{{ (listing.yield_pct or 0) | round(1) }}%</span></div>
-    <div class="row"><span class="key">Окупаемость</span><span class="val">{{ (listing.payback_years | round(1)) if listing.payback_years else '—' }} лет</span></div>
+    {% if rental_estimate %}
+    <div class="row"><span class="key">Похожие квартиры предлагают в аренду</span><span class="val">{{ rental_estimate.monthly_low|fmt_num }}–{{ rental_estimate.monthly_high|fmt_num }} ₸/мес</span></div>
+    <p style="font-size:12px;color:var(--muted);">Тот же подтверждённый ЖК · {{ rental_estimate.date_label }}. Это цены объявлений, фактический доход и сдача не подтверждены.</p>
+    {% else %}<p style="font-size:12px;color:var(--muted);">Для оценки аренды недостаточно свежих подтверждённых аналогов этой квартиры.</p>{% endif %}
 
     {% if bargain.comparables_cnt > 0 %}
     <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">

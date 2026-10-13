@@ -141,8 +141,10 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
                 log.info("--- Full rental pass complete ---")
                 state.completed_types.clear()
             if state.index_refreshes % 3 == 0:
-                await budget.run("sheets", lambda _: operations.sync_sheets(), cap=10)
-                if budget.stages["sheets"]["status"] == "ok":
+                synced = await budget.run("sheets", lambda _: operations.sync_sheets(), cap=10)
+                if synced is False and budget.stages["sheets"]["status"] == "ok":
+                    budget.stages["sheets"]["status"] = "error"
+                if synced is True and budget.stages["sheets"]["status"] == "ok":
                     await operations.set_setting("SHEETS_RENTAL_SYNCED_AT",
                         datetime.now(timezone.utc).isoformat())
 
@@ -254,7 +256,9 @@ async def main() -> None:
     operations = RentalOperations(collect_rental_page, rebuild_rental_index,
         sync_rental_to_sheets, deduplicate_rental_listings, backfill_rental_details,
         check_archived_rentals, bind_by_address, bind_rental_geo, settings.set)
-    state = RentalServiceState()
+    # Rebuild the legacy index on the first healthy list step after startup.
+    # Old aggregates must not remain eligible until the fifteenth new page.
+    state = RentalServiceState(pages_since_index=RENTAL_INDEX_REFRESH_PAGES)
     paths = list(RENTAL_PATHS.items())
     path_idx = 0
     while True:

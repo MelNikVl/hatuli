@@ -13,11 +13,28 @@ CREDS_PATH = "/home/nik/krisha_bot/google_creds.json"
 
 RENTAL_HEADERS = [
     "ID", "Тип", "Комнат", "Район", "ЖК", "Площадь м²",
-    "Цена ₸/мес", "₸/м²", "Этаж", "Этажей", "Адрес", "URL", "Найдено",
+    "Цена из объявления ₸", "Единица ставки", "Этаж", "Этажей", "Адрес", "URL", "Замечено в списке",
 ]
 
 
-async def sync_rental_to_sheets():
+def rental_sheet_rows(rows):
+    data = [RENTAL_HEADERS]
+    for r in rows:
+        observed = r.get('last_seen')
+        data.append([r['id'], r.get('prop_type') or '',
+            r['rooms'] if r.get('rooms') is not None else '',
+            r.get('district') or '', r.get('complex_name') or '',
+            r['area'] if r.get('area') is not None else '',
+            r['price'] if r.get('price') is not None else '',
+            'месяц (категория квартир)' if r.get('prop_type') == 'apartment' else 'не определена',
+            r['floor'] if r.get('floor') is not None else '',
+            r['floors_total'] if r.get('floors_total') is not None else '',
+            r.get('address') or '', r.get('url') or '',
+            observed.strftime('%Y-%m-%d %H:%M') if observed else ''])
+    return data
+
+
+async def sync_rental_to_sheets() -> bool:
     logger.info("sync_rental_to_sheets: STARTED")
     """Загружает rental_listings из PostgreSQL в вкладку 'Аренда'."""
     try:
@@ -25,38 +42,17 @@ async def sync_rental_to_sheets():
         rows = await fetch(
             """
             SELECT id, prop_type, rooms, district, complex_name, area,
-                   price, floor, floors_total, address, url, found_at
+                   price, floor, floors_total, address, url, last_seen
             FROM rental_listings
-            WHERE found_at > NOW() - INTERVAL '30 days'
-            ORDER BY found_at DESC
-            LIMIT 2000
+            WHERE city='astana' AND prop_type IN ('apartment','parking','commercial')
+              AND is_active IS TRUE AND archived_at IS NULL
+              AND NOT coalesce(is_duplicate,false) AND NOT coalesce(dup_needs_review,false)
+              AND nullif(btrim(duplicate_of),'') IS NULL
+              AND last_seen BETWEEN now()-interval '72 hours' AND now()
+            ORDER BY last_seen DESC, id
             """
         )
-        if not rows:
-            logger.info("rental_to_sheets: no data")
-            return
-
-        data = [RENTAL_HEADERS]
-        for r in rows:
-            area = r["area"] or 0
-            price = r["price"] or 0
-            price_per_sqm = int(price / area) if area > 0 else ""
-            found_at = r["found_at"].strftime("%Y-%m-%d %H:%M") if r["found_at"] else ""
-            data.append([
-                r["id"],
-                r["prop_type"] or "",
-                r["rooms"] or "",
-                r["district"] or "",
-                r["complex_name"] or "",
-                area or "",
-                price,
-                price_per_sqm,
-                r["floor"] or "",
-                r["floors_total"] or "",
-                r["address"] or "",
-                f"https://krisha.kz/a/show/{r['id']}",
-                found_at,
-            ])
+        data = rental_sheet_rows([dict(row) for row in rows])
 
         def _upload(d):
             gc = gspread.service_account(filename=CREDS_PATH)
@@ -66,12 +62,15 @@ async def sync_rental_to_sheets():
             except gspread.exceptions.WorksheetNotFound:
                 ws = sh.add_worksheet("Аренда", rows=2500, cols=15)
             ws.clear()
+            ws.resize(rows=max(ws.row_count,len(d)), cols=max(ws.col_count,len(RENTAL_HEADERS)))
             ws.update(range_name="A1", values=d)
             ws.format("1:1", {"textFormat": {"bold": True}})
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _upload, data)
         logger.info("rental_to_sheets: uploaded %d rows", len(rows))
+        return True
 
     except Exception:
         logger.exception("sync_rental_to_sheets failed")
+        return False

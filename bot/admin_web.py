@@ -804,6 +804,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             WHERE city = 'astana' AND prop_type = 'apartment' AND rooms IN (1, 2)
               AND district IS NULL AND complex_name IS NULL AND sample_count >= 5
               AND updated_at BETWEEN now() - interval '72 hours' AND now()
+              AND EXISTS (SELECT 1 FROM app_settings WHERE key='RENTAL_INDEX_POLICY_VERSION' AND value='2')
             ORDER BY rooms, sample_count DESC
         """)
         rental_summary = {}
@@ -1588,7 +1589,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             }
 
         sale_last = await pg_fv("SELECT MAX(first_seen) FROM apartment_listings")
-        rental_last = await pg_fv("SELECT MAX(found_at) FROM rental_listings")
+        rental_last = await pg_fv("SELECT MAX(last_seen) FROM rental_listings WHERE city='astana' AND prop_type='apartment'")
         korter_last = await pg_fv("SELECT MAX(updated_at) FROM complexes WHERE source_info->'korter' IS NOT NULL")
         homsters_last = await pg_fv("SELECT MAX(updated_at) FROM complexes WHERE source_info->'homsters' IS NOT NULL")
         homeportal_last = None
@@ -1743,6 +1744,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         district_norm = _m_district.group(1).capitalize() if _m_district else None
 
         from bot.core.rental_data_quality import rental_live_sql
+        from bot.core.comparison_rental_estimate import rental_estimate_for_listing
+        rental_estimate = await rental_estimate_for_listing(dict(listing))
         rental_scope = rental_live_sql()
         rental_comps = await pg_fetch(f"""
             SELECT complex_name, district, rooms, price, area
@@ -1872,6 +1875,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "comps": [dict(r) for r in comps],
                 "bargain": bargain,
                 "rental_comps": [dict(r) for r in rental_comps],
+                "rental_estimate": rental_estimate,
                 "reasons_list": reasons_list,
                 "negotiation_points": negotiation_points,
                 "seller_questions": seller_questions,
@@ -1936,7 +1940,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             rental_with_complex = await pg_fetchval(
                 "SELECT COUNT(*) FROM rental_listings WHERE complex_name IS NOT NULL AND complex_name != ''") or 0
             last_rental = await pg_fetchval(
-                "SELECT MAX(found_at) FROM rental_listings")
+                "SELECT MAX(last_seen) FROM rental_listings WHERE city='astana' AND prop_type='apartment'")
             last_rental_str = last_rental.strftime("%d.%m %H:%M") if last_rental else None
 
             # Статус: ок если последняя запись < 2 часов назад

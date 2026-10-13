@@ -216,6 +216,8 @@ async def build_listing_detail(listing_id: str, tier: str, *, similar_limit: int
         layers=layers, ai_analysis=ai_analysis,
         complex_housing_class=complex_housing_class,
     )
+    from bot.core.comparison_rental_estimate import rental_estimate_for_listing
+    rental_estimate = await rental_estimate_for_listing(l)
 
     return {
         "id": l["id"], "url": l.get("url") or "",
@@ -273,20 +275,20 @@ async def build_listing_detail(listing_id: str, tier: str, *, similar_limit: int
         # То же, что показывает страница /admin/analytics/{id} — доходность
         # и разбивка скора по компонентам, теперь дублируется и в модалке
         # на карте, чтобы не заставлять переходить на отдельную страницу.
-        "est_rent": l.get("est_rent"),
-        "yield_pct": l.get("yield_pct"),
-        # net_yield_pct — доходность с поправкой на вакантность/налог/
-        # расходы на покупку (см. Notion "Расчет доходности"), gross
-        # выше остаётся для обратной совместимости со старым скорингом.
-        "net_yield_pct": l.get("net_yield_pct"),
-        "payback_years": l.get("payback_years"),
+        "rental_estimate": rental_estimate,
+        # Stored legacy values may be city/district fallbacks without current
+        # property evidence. They must not become an individual rent or yield.
+        "est_rent": None,
+        "yield_pct": None,
+        "net_yield_pct": None,
+        "payback_years": None,
         # ── Бейджи "недооценено"/"высокая доходность" — те же пороги
         # (топ-10%), что и в /admin/api/map-points, см. комментарий там.
         "underpriced_pct": (round((l["hex_deal_index"] - 1) * 100)
                              if l.get("hex_deal_index") and (l.get("deal_confidence") or 0) >= 50
                              and (l["hex_deal_index"] - 1) * 100 >= 28.8 else None),
-        "high_yield": bool(l.get("yield_pct") and l["yield_pct"] >= 13.9),
-        "rent_source": l.get("rent_source") or "",
+        "high_yield": False,
+        "rent_source": "заявленные ставки похожих квартир в том же ЖК" if rental_estimate else "недостаточно свежих подтверждённых аналогов",
         "zone_name": l.get("zone_name") or "",
         "zone_bonus": l.get("zone_bonus"),
         "score_breakdown": {

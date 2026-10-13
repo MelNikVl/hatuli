@@ -4527,7 +4527,7 @@ def make_extras_router(templates) -> APIRouter:
             rows = await pg_fetch(f"""
                 SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.district, r.found_at,
                        r.lat AS own_lat, r.lon AS own_lon, r.area, r.floor, r.floors_total,
-                       r.address, r.photos, complex_name_key(r.complex_name) AS complex_key,
+                       r.address, r.photos, r.photo_url, complex_name_key(r.complex_name) AS complex_key,
                        ph.old_price AS prev_price, ph.changed_at AS price_changed_at
                 FROM rental_listings r
                 LEFT JOIN LATERAL (
@@ -4539,11 +4539,7 @@ def make_extras_router(templates) -> APIRouter:
                     WHERE h.listing_id = r.id
                 ) ph ON TRUE
                 WHERE {' AND '.join(conds)}
-                  AND (
-                    (r.is_active IS NOT FALSE AND r.last_seen > now() - interval '30 days')
-                    OR (r.is_active = FALSE AND r.archived_at > now() - interval '30 days')
-                  )
-                  AND COALESCE(r.is_duplicate, FALSE) = FALSE
+                  AND {rental_live_sql('r')}
                 ORDER BY r.found_at DESC LIMIT 1000
             """, *params)
             # Каскад привязки: ЖК -> центроид района -> без привязки.
@@ -4557,13 +4553,17 @@ def make_extras_router(templates) -> APIRouter:
             import random as _rnd
             import json as _json_rental
 
-            def _rental_photos(v):
+            def _rental_photos(v, cover):
                 if isinstance(v, str):
                     try:
                         v = _json_rental.loads(v)
                     except ValueError:
                         v = []
-                return (v or [])[:5]
+                from bot.core.rental_parser import _rental_card_photo_url
+                urls = list(v) if isinstance(v, list) else []
+                if not urls and cover:
+                    urls = [cover]
+                return [safe for raw in urls[:5] if (safe := _rental_card_photo_url(raw))]
 
             for r in rows:
                 d = dict(r)
@@ -4593,10 +4593,12 @@ def make_extras_router(templates) -> APIRouter:
                     "area": float(d["area"]) if d.get("area") else None,
                     "floor": d.get("floor"), "floors_total": d.get("floors_total"),
                     "address": d.get("address") or "",
-                    "photos": _rental_photos(d.get("photos")),
+                    "photos": _rental_photos(d.get("photos"), d.get("photo_url")),
                 })
             return JSONResponse({"points": pts, "mode": "rental",
-                                 "count": len(pts), "no_geo": no_geo})
+                                 "count": len(pts), "no_geo": no_geo,
+                                 "scope": "Астана · активные квартиры месячной аренды, замеченные за 72 часа",
+                                 "limited_to": 1000, "market_coverage": "unknown"})
 
         # Статистика по всей базе не зависит от offset/limit батча — считаем
         # только на первом запросе страницы, чтобы не дублировать тяжёлые COUNT(*)
@@ -4804,7 +4806,7 @@ def make_extras_router(templates) -> APIRouter:
             "underpriced_pct": (round((r["hex_deal_index"] - 1) * 100)
                                  if r["hex_deal_index"] and (r["deal_confidence"] or 0) >= 50
                                  and (r["hex_deal_index"] - 1) * 100 >= 28.8 else None),
-            "high_yield": bool(r["yield_pct"] and r["yield_pct"] >= 13.9),
+            "high_yield": False,
         } for idx, r in enumerate(rows)]
         resp = {"points": pts, "count": len(pts), "offset": offset, "limit": limit,
                 "has_more": (len(pts) == limit) and not cheapest_only}

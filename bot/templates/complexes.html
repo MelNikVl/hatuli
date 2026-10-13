@@ -167,7 +167,7 @@ tr:last-child td{border-bottom:none}
     <td>{{ c.year_built or '—' }}</td>
     <td>{{ c.listings_count or 0 }}</td>
     <td>{% if c.avg_score %}{{ c.avg_score|round|int }}{% else %}—{% endif %}</td>
-    <td>{% if c.avg_yield %}{{ c.avg_yield|round(1) }}%{% else %}—{% endif %}</td>
+    <td><span title="Старая городская оценка не подтверждает доходность квартир этого ЖК">—</span></td>
     {% if is_admin_page %}<td><button class="edit-btn" onclick='openEdit({{ c | tojson }})'>✏️</button></td>{% endif %}
   </tr>
   {% endfor %}

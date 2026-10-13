@@ -77,7 +77,7 @@ def _extract_int(text: str) -> int | None:
 
 
 def _extract_rooms(title: str) -> int | None:
-    m = re.search(r"(\d)-комн", title.lower())
+    m = re.search(r"(?<!\d)(\d{1,2})\s*-?\s*комн", title.lower())
     if m:
         return int(m.group(1))
     if "студия" in title.lower():
@@ -86,11 +86,11 @@ def _extract_rooms(title: str) -> int | None:
 
 
 def _extract_area(text: str) -> float | None:
-    m = re.search(r"(\d+[\.,]?\d*)\s*м²", text)
+    m = re.search(r"(?<![\d/])(\d{1,3}(?:[ \u00a0]\d{3})*(?:[.,]\d+)?|\d+(?:[.,]\d+)?)\s*м(?:²|2)", text)
     if not m:
         return None
     try:
-        return float(m.group(1).replace(",", "."))
+        return float(re.sub(r"[\s\u00a0]", "", m.group(1)).replace(",", "."))
     except ValueError:
         return None
 
@@ -197,7 +197,7 @@ def _parse_card(card, prop_type: str) -> RentalListing | None:
                     break
 
         descr_el = card.select_one(".a-card__descr")
-        floor_text = descr_el.get_text(strip=True) if descr_el else ""
+        floor_text = title + " " + (descr_el.get_text(" ", strip=True) if descr_el else "")
         floor, floors_total = None, None
         fm = re.search(r"(\d+)\s*/\s*(\d+)\s*эт", floor_text)
         if fm:
@@ -708,6 +708,11 @@ async def rebuild_rental_index() -> None:
                          sample_count, price_per_sqm, updated_at)
                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
                     """, records)
+            await connection.execute("""
+                INSERT INTO app_settings (key,value,updated_at)
+                VALUES ('RENTAL_INDEX_POLICY_VERSION','2',now())
+                ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()
+            """)
     logger.info("rental_index rebuilt: %d groups", len(records))
 
 
@@ -754,6 +759,7 @@ async def lookup_rental_estimate(
               AND prop_type = $5
               AND updated_at BETWEEN NOW() - INTERVAL '72 hours' AND NOW()
               AND sample_count >= 5
+              AND EXISTS (SELECT 1 FROM app_settings WHERE key='RENTAL_INDEX_POLICY_VERSION' AND value='2')
             LIMIT 1
             """,
             c, d, jk, r, prop_type,

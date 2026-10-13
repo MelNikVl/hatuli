@@ -410,7 +410,8 @@ async def test_index_counts_unknown_complex_once_and_replaces_obsolete_groups(mo
     assert "'72 hours'" in sql and "is_active IS TRUE" in sql
     assert "is_duplicate" in sql and "dup_needs_review" in sql
     assert "prop_type = 'apartment'" in sql
-    connection.execute.assert_awaited_once_with("DELETE FROM rental_index")
+    assert connection.execute.await_args_list[0].args == ("DELETE FROM rental_index",)
+    assert "RENTAL_INDEX_POLICY_VERSION" in connection.execute.await_args_list[-1].args[0]
     records = connection.executemany.await_args.args[1]
     assert len(records) == 2
     assert all(record[2] is None and record[9] == 5 for record in records)
@@ -445,7 +446,8 @@ async def test_index_removes_stale_groups_when_current_sample_insufficient(monke
                                  transaction=lambda: Context(None))
     monkeypatch.setattr(pg, "get_pool", lambda: SimpleNamespace(acquire=lambda: Context(connection)))
     await rentals.rebuild_rental_index()
-    connection.execute.assert_awaited_once_with("DELETE FROM rental_index")
+    assert connection.execute.await_args_list[0].args == ("DELETE FROM rental_index",)
+    assert "RENTAL_INDEX_POLICY_VERSION" in connection.execute.await_args_list[-1].args[0]
     connection.executemany.assert_not_awaited()
 
 

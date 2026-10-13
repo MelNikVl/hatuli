@@ -29,6 +29,17 @@ def operations(collect=None):
     )
 
 
+@pytest.mark.asyncio
+async def test_failed_sheet_upload_cannot_refresh_success_timestamp(monkeypatch):
+    monkeypatch.setattr(service, 'record_rental_cycle', AsyncMock())
+    state = service.RentalServiceState(pages_since_index=14,index_refreshes=2)
+    ops = operations()
+    ops.sync_sheets.return_value = False
+    cycle = await service.run_one_cycle(None,'/arenda/kvartiry/astana/','apartment',state,ops,RentalCyclePlan())
+    assert cycle['stages']['sheets']['status']=='error'
+    assert all(call.args[0]!='SHEETS_RENTAL_SYNCED_AT' for call in ops.set_setting.await_args_list)
+
+
 def test_maintenance_limits_preserve_disabled_settings_and_reject_unbounded_values():
     default = RentalCyclePlan.from_settings(lambda key, default: default)
     assert default.backfill_batch == 2 and default.archive_batch == 3

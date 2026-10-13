@@ -1,12 +1,15 @@
 """Conservative rent asking-price evidence for an individual public offer.
 
-This module never reads a database or uses the legacy rental index, recorded
-yield, or AI descriptions. The offline publisher supplies raw, fresh monthly
-rental listings bound to one unambiguous canonical complex. The result is an
+The pure estimator and offline publisher use raw, fresh monthly rentals bound
+to one unambiguous canonical complex. A bounded request-time helper uses the
+same qualified source rows for an explicitly bound listing. Neither path uses
+the legacy rental index, recorded yield, or AI descriptions. The result is an
 asking-price range, not an achieved rent, a yield or a promise of occupancy.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -19,6 +22,7 @@ RENTAL_AREA_BAND = .15
 MAX_RELATIVE_IQR = .50
 _LOCAL_TIMEZONE = timezone(timedelta(hours=5))
 _NONMONTHLY = re.compile(r"посуточ|сутк|почас|за\s+(?:\d+\s*)?час|за\s+ночь|(?:в|на)\s+день|тәулік|сағат|per\s+(?:day|night|hour)", re.I)
+log = logging.getLogger(__name__)
 
 # rental_parser's apartment source is /arenda/kvartiry/astana/, the monthly
 # category. The schema has no explicit rental-period column yet. The literal
@@ -71,6 +75,20 @@ WHERE r.city='astana' AND r.prop_type='apartment' AND r.is_active IS TRUE
   AND canonical.canonical_reason IS DISTINCT FROM 'junk_unmatched'
 ORDER BY r.last_seen DESC,r.id
 """
+
+# An explicit sale FK can refer to an alias; resolve that FK to one eligible
+# physical canonical project in SQL. No fallback to a sale's textual name.
+SINGLE_OFFER_RENTAL_SQL = RENTAL_COMPARISON_SQL.replace(
+    "ORDER BY r.last_seen DESC,r.id", """
+  AND nk.cid = (
+      SELECT coalesce(bound.canonical_id,bound.id) FROM complexes bound
+      WHERE bound.id=$2 AND NOT coalesce(bound.is_garbage,false)
+        AND NOT coalesce(bound.is_street,false) AND NOT coalesce(bound.is_umbrella,false)
+        AND bound.canonical_reason IS DISTINCT FROM 'junk_unmatched'
+  )
+  AND r.rooms=$3 AND r.area BETWEEN $4::double precision*0.85 AND $4::double precision*1.15
+ORDER BY r.last_seen DESC,r.id LIMIT 200
+""")
 
 
 def _utc(value: Any) -> datetime | None:
@@ -215,3 +233,47 @@ def validate_rental_estimate(value: Any, now: datetime | None = None) -> dict | 
     if (None in (observed, oldest, newest) or not now-MAX_RENTAL_AGE <= oldest <= newest <= observed <= now):
         return None
     return _projection(middle, low, high, count, observed, oldest, newest)
+
+
+async def rental_estimate_for_listing(listing: dict, *, now: datetime | None = None) -> dict | None:
+    """A fresh asking-rent range for an explicitly bound active sale listing.
+
+    Fail closed on unknown binding, insufficient evidence or database errors.
+    The result is not an achieved rent, an investment yield or a bank verdict.
+    """
+    if not isinstance(listing, dict):
+        return None
+    now = _utc(now or datetime.now(timezone.utc))
+    if now is None:
+        return None
+    if (listing.get("is_active") is not True or listing.get("archived_at") is not None
+            or listing.get("is_duplicate") is True or listing.get("dup_needs_review") is True
+            or listing.get("duplicate_of") or listing.get("complex_resolution") in ("geo", "unbound")
+            or listing.get("city") not in (None, "astana", "Астана", "астана")):
+        return None
+    rooms = _integer(listing.get("rooms"), 1, 6)
+    area = _number(listing.get("area"), 20, 300)
+    cid = _integer(listing.get("complex_id"), 1, 2_147_483_647)
+    if listing.get("complex_resolution") == "house" and listing.get("house_attribution") == "geo":
+        return None
+    if cid is None and listing.get("house_attribution") in ("address", "token"):
+        cid = _integer(listing.get("resolved_house_id"), 1, 2_147_483_647)
+    if cid is None or rooms is None or area is None:
+        return None
+    offer = {"market_type": listing.get("market_type") or "secondary",
+             "build_status": listing.get("build_status"), "rooms": rooms, "area": area}
+    if offer["market_type"] == "primary" and offer["build_status"] != "commissioned":
+        return None
+    try:
+        from bot.db.pg import fetch
+        rows = await asyncio.wait_for(fetch(SINGLE_OFFER_RENTAL_SQL, now, cid, rooms, area), timeout=5)
+        if not rows:
+            return None
+        rows = [dict(row) for row in rows]
+        canonical = _integer(rows[0].get("complex_id"), 1, 2_147_483_647)
+        if canonical is None:
+            return None
+        return estimate_rental_offer({**offer, "complex_id": canonical}, rows, now)
+    except Exception as exc:
+        log.warning("Qualified rental range unavailable (%s)", type(exc).__name__)
+        return None

@@ -4970,13 +4970,14 @@ function openDetailModal(id, ev, scrollToScore) {
     // То же, что на странице /admin/analytics/{id} — доходность (аренда/yield/
     // окупаемость) и разбивка Смарт рейтинга по компонентам — теперь и в
     // модалке на карте, оформлено полосками как на самой странице аналитики.
-    const yieldHtml = (d.yield_pct || d.est_rent) ? `
+    const rentalRange = d.rental_estimate;
+    const hasRentalRange = rentalRange && rentalRange.basis === 'same_complex' && rentalRange.asking_prices === true
+      && Number.isFinite(rentalRange.monthly_low) && Number.isFinite(rentalRange.monthly_high)
+      && rentalRange.monthly_low >= 50000 && rentalRange.monthly_high >= rentalRange.monthly_low
+      && rentalRange.monthly_high <= 2000000 && rentalRange.sample_count >= 5;
+    const yieldHtml = hasRentalRange ? `
 <div style="margin:14px 22px 0;padding:12px 14px;background:var(--bg);border-radius:10px;display:flex;gap:22px;flex-wrap:wrap;">
-  <div><div style="font-size:11px;color:var(--text);">Аренда (оценка)</div><div style="font-weight:800;font-size:15px;color:#16a34a;">${d.est_rent ? Math.round(d.est_rent).toLocaleString('ru') + ' ₸/мес' : '—'}</div></div>
-  <div><div style="font-size:11px;color:var(--text);">Yield, gross <a href="/admin/info#general" target="_blank" title="Что такое Yield и как считается — открыть объяснение" style="display:inline-block;width:14px;height:14px;line-height:14px;border-radius:50%;background:var(--border);color:var(--text);font-size:10px;text-align:center;text-decoration:none;font-weight:700;vertical-align:2px;">?</a></div><div style="font-weight:800;font-size:15px;color:#16a34a;">${(d.yield_pct || 0).toFixed(1)}%</div></div>
-  <div><div style="font-size:11px;color:var(--text);">Yield, net</div><div style="font-weight:800;font-size:15px;color:#0d9488;" title="Аренда с поправкой на простой между жильцами (~5%), налог+мелкий ремонт (~10%) и расходы на покупку (~2%)">${d.net_yield_pct != null ? d.net_yield_pct.toFixed(1) + '%' : '—'}</div></div>
-  <div><div style="font-size:11px;color:var(--text);">Окупаемость</div><div style="font-weight:800;font-size:15px;">${d.payback_years ? d.payback_years.toFixed(1) : '—'} лет</div></div>
-  ${d.zone_name ? `<div><div style="font-size:11px;color:var(--text);">Зона</div><div style="font-weight:800;font-size:15px;color:${(d.zone_bonus||0) < 0 ? '#ef4444' : '#16a34a'};">${escapeHtml(d.zone_name)} (${d.zone_bonus > 0 ? '+' : ''}${d.zone_bonus || 0})</div></div>` : ''}
+  <div><div style="font-size:12px;color:var(--muted);">Похожие квартиры в этом ЖК предлагают в аренду</div><div style="font-weight:800;font-size:17px;color:var(--green);">${Math.round(rentalRange.monthly_low).toLocaleString('ru')}–${Math.round(rentalRange.monthly_high).toLocaleString('ru')} ₸/мес</div><div style="font-size:12px;color:var(--muted);margin-top:5px;">${escapeHtml(rentalRange.date_label || '')} · Это ставки объявлений; фактическая сдача и доходность не подтверждены.</div></div>
 </div>` : '';
 
     // Полукруглый спидометр Deal Score: 5 цветных секторов (красный..зелёный)
