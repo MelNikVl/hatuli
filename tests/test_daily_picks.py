@@ -167,6 +167,17 @@ def test_duplicate_or_broken_history_is_not_a_reason_to_select_market_price():
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
 
 
+@pytest.mark.parametrize("finish", ["finished", "renovated", "designer", "needs_repair"])
+def test_repair_category_alone_cannot_qualify_a_market_priced_pick(finish):
+    sample = [{**item, "finish_level": finish} for item in rows()]
+    sample[0].update(price=30_000_000, ceiling_height=None)
+    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
+    sample[0]["price"] = 24_000_000
+    item = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
+    assert any("ниже похожих" in reason for reason in item["reasons"])
+    assert not any("ремонт" in reason.lower() or "отделк" in reason.lower() for reason in item["reasons"])
+
+
 def test_legacy_snapshot_remains_visible_but_unsupported_reasons_are_removed():
     data = confirmed(dp.build_daily_picks(rows(), NOW))
     for item in data["items"]:

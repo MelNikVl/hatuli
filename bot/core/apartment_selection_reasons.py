@@ -15,7 +15,6 @@ from bot.core.price_history_integrity import inspect_price_history
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
 FACT_FIELDS = ("ceiling_height", "kitchen_area", "finish_level", "is_owner")
 FINISH_LEVELS = {"rough", "prefinish", "finished", "renovated", "furnished", "designer", "needs_repair"}
-READY_FINISH = {"finished", "renovated", "furnished", "designer"}
 
 
 def _number(value):
@@ -136,7 +135,7 @@ def strong_selection_reason(offer: dict, now=None) -> bool:
     facts = validate_selection_facts(offer.get("selection_facts"), offer.get("area"))
     return bool((facts["ceiling_height"] is not None and facts["ceiling_height"] >= 2.9)
                 or (facts["kitchen_area"] is not None and facts["kitchen_area"] >= 12)
-                or facts["finish_level"] in READY_FINISH or _recent_price_cut(offer, now))
+                or facts["finish_level"] == "furnished" or _recent_price_cut(offer, now))
 
 
 def apartment_selection_reasons(offer: dict, now=None) -> list[str]:
@@ -168,14 +167,9 @@ def apartment_selection_reasons(offer: dict, now=None) -> list[str]:
         reasons.append(f"Кухня {_label(facts['kitchen_area'])} м² — размер указан в объявлении.")
     if facts["ceiling_height"] is not None and facts["ceiling_height"] >= 2.9:
         reasons.append(f"Высокие потолки {_label(facts['ceiling_height'], 2)} м — по данным объявления.")
-    if facts["finish_level"] in READY_FINISH:
-        # These labels come from source text, not a visual quality inspection.
-        # Explain the recorded feature's practical benefit without inventing
-        # workmanship quality, a move-in date or renovation savings.
-        reasons.append({
-            "finished": "В объявлении указана чистовая отделка — основные отделочные работы уже выполнены.",
-            "renovated": "Квартира с ремонтом, по данным объявления — не нужно начинать с черновой отделки.",
-            "furnished": "В объявлении указана мебель — часть обустройства уже есть.",
-            "designer": "В объявлении указан дизайнерский ремонт — интерьер уже оформлен.",
-        }[facts["finish_level"]])
+    # Repair categories are seller text, not evidence of workmanship quality.
+    # A poor or unassessed repair must not become an advantage or justify
+    # selection. Keep independently recorded furniture as a separate fact.
+    if facts["finish_level"] == "furnished":
+        reasons.append("В объявлении указана мебель — часть обустройства уже есть.")
     return reasons[:4]

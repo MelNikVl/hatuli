@@ -41,7 +41,7 @@ def test_above_market_copy_is_honest_and_owner_or_middle_floor_is_not_strong():
 @pytest.mark.parametrize("facts,expected", [
     ({"ceiling_height": 2.9}, "Высокие потолки 2,9 м"),
     ({"kitchen_area": 12}, "Кухня 12 м²"),
-    ({"finish_level": "renovated"}, "Квартира с ремонтом"),
+    ({"finish_level": "furnished"}, "В объявлении указана мебель"),
 ])
 def test_known_physical_fact_justifies_market_priced_selection(facts, expected):
     data = offer(selection_facts=facts)
@@ -93,20 +93,21 @@ def test_history_cut_uses_90_day_window_and_expires():
     assert not strong_selection_reason(data, NOW+timedelta(days=51))
 
 
-@pytest.mark.parametrize("finish,benefit", [
-    ("finished", "основные отделочные работы уже выполнены"),
-    ("renovated", "не нужно начинать с черновой отделки"),
-    ("furnished", "часть обустройства уже есть"),
-    ("designer", "интерьер уже оформлен"),
-])
-def test_finish_benefits_keep_source_attribution_without_inventing_quality_or_savings(finish, benefit):
-    reasons = apartment_selection_reasons(offer(selection_facts={"finish_level": finish}), NOW)
+def test_furniture_is_an_independent_fact_not_a_repair_quality_claim():
+    reasons = apartment_selection_reasons(offer(selection_facts={"finish_level": "furnished"}), NOW)
     reason = reasons[-1]
-    assert benefit in reason and "объявлен" in reason
+    assert "часть обустройства уже есть" in reason and "объявлен" in reason
     assert all(word not in reason.lower() for word in (
         "проверьте", "качествен", "хороший", "сэконом", "заехать", "сроч", "хотят продать",
     ))
     assert "₸" not in reason
+
+
+@pytest.mark.parametrize("finish", ["rough", "prefinish", "needs_repair", "finished", "renovated", "designer", None])
+def test_poor_or_unassessed_repair_is_neither_a_positive_nor_admission_evidence(finish):
+    data = offer(selection_facts={"finish_level": finish})
+    assert apartment_selection_reasons(data, NOW) == apartment_selection_reasons(offer(), NOW)
+    assert not strong_selection_reason(data, NOW)
 
 
 def test_unknown_finish_does_not_invent_repair_benefit_from_unverified_description_or_photo():
@@ -136,7 +137,7 @@ def test_bounded_projection_and_customer_copy_do_not_copy_raw_text_or_confidenti
     data = offer(selection_facts=safe)
     original = copy.deepcopy(data)
     reasons = apartment_selection_reasons(data, NOW)
-    assert len(reasons) == 4 and all(len(reason) <= 200 for reason in reasons)
+    assert len(reasons) == 3 and all(len(reason) <= 200 for reason in reasons)
     assert "PRIVATE" not in json.dumps(safe)+json.dumps(reasons)
     assert not any("коммун" in reason or "удобная локация" in reason or "качество ЖК" in reason for reason in reasons)
     assert data == original
