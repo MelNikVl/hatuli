@@ -246,7 +246,25 @@ def test_source_street_house_address_is_public_but_contacts_and_flat_are_not(add
     snapshot = confirmed(dp.build_daily_picks(sample, NOW))
     assert first(snapshot)["address"] == expected
     assert first(dp.validate_snapshot(snapshot))["address"] == expected
-    assert "точный номер" in first(snapshot)["address_note"] if expected else "не указан" in first(snapshot)["address_note"]
+    assert first(snapshot)["address_note"] == "Адрес из объявления." if expected else "не указан" in first(snapshot)["address_note"]
+
+
+@pytest.mark.parametrize("address,note", [
+    ("Есильский р-н, Ұлы дала 12", "Адрес из объявления."),
+    ("Есильский р-н, Ұлы дала", "Номер дома не указан в объявлении."),
+    ("Есильский р-н, 38 улица", "Номер дома не указан в объявлении."),
+    ("Есильский р-н, 38 улица 12", "Адрес из объявления."),
+    ("Есильский р-н, Толе би 25, 25А, 14, 14/1", "В объявлении указано несколько домов; точный дом нужно уточнить."),
+    ("Есильский р-н, Толе би25,25А,14,14/1", "В объявлении указано несколько домов; точный дом нужно уточнить."),
+    ("Есильский р-н, Керей, Жанибек хандар 2, 2/1", "В объявлении указано несколько домов; точный дом нужно уточнить."),
+    ("Есильский р-н, Керей, Жанибек хандар2,2/1", "В объявлении указано несколько домов; точный дом нужно уточнить."),
+    ("Есильский р-н, Керей, Жанибек хандар 2/1", "Адрес из объявления."),
+    ("Есильский р-н, 12", "Адрес неполный; точный дом нужно уточнить."),
+])
+def test_address_note_distinguishes_a_single_house_missing_house_and_house_list(address, note):
+    safe_address, safe_note = dp.sanitized_listing_address(address, 30_000_000, NOW)
+    assert safe_address == address
+    assert safe_note == note
 
 
 def test_legacy_address_can_be_absent_and_untrusted_note_is_recomputed():

@@ -175,7 +175,23 @@ def sanitized_listing_address(value, price: int, now: datetime) -> tuple[str | N
                             for match in re.finditer(r"\+?\d[\d\s()\-]+\d", address))
                         or re.search(r"https?://|www\.|@|телефон|whatsapp|ватсап", address, re.I)):
             address = None
-    return address, details["address_note"] if address else "Точный адрес не указан в источнике."
+    if not address:
+        return None, "Точный адрес не указан в источнике."
+    # A number in a street name ("38 улица") is not a house. Recognize only
+    # an actual trailing house token/list and keep the source prefix verbatim.
+    house = r"\d+(?:\s*[/\-]\s*\d+)?[a-zа-яәғқңөұүһі]?"
+    houses = re.search(rf"(?P<houses>{house}(?:\s*[,;]\s*{house})+)\s*$", address, re.I)
+    if houses:
+        return address, "В объявлении указано несколько домов; точный дом нужно уточнить."
+    single_house = re.search(rf"(?P<house>{house})\s*$", address, re.I)
+    if single_house:
+        prefix = address[:single_house.start()].rstrip(" ,;№#")
+        if (re.search(r"[a-zа-яәғқңөұүһі]", prefix, re.I)
+                and (not re.search(r"(?:р-н|район|Астана|Astana|улица|көше|көшесі)\s*$", prefix, re.I)
+                     or re.search(r"\d+\s*(?:улица|көше|көшесі)\s*$", prefix, re.I))):
+            return address, "Адрес из объявления."
+        return address, "Адрес неполный; точный дом нужно уточнить."
+    return address, "Номер дома не указан в объявлении."
 
 
 def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int = MAX_PICKS, excluded_ids: set[str] | None = None) -> dict:
