@@ -160,19 +160,22 @@ def apartment_selection_reasons(offer: dict, now=None) -> list[str]:
                 reasons.append(f"Цена за м² на {_label(abs(discount))}% выше похожих предложений {place}.")
             else:
                 reasons.append(f"Цена за м² на уровне похожих предложений {place}.")
-    cut = _recent_price_cut(offer, now)
-    if cut:
-        if cut["count"] >= 2:
-            word = "раза" if cut["count"] % 10 in (2, 3, 4) and cut["count"] % 100 not in (12, 13, 14) else "раз"
-            reasons.append(f"За {cut['days']} дней цену снижали {cut['count']} {word} в разные даты: итог −{_money(cut['amount'])} ({_label(cut['pct'])}%). Последнее снижение — {cut['date']}.")
-        else:
-            reasons.append(f"Снижение цены за {cut['days']} дней — {_money(cut['amount'])} ({_label(cut['pct'])}%). Последнее снижение — {cut['date']}.")
+    # Price observations belong in the card's history chart. Keep actual cuts
+    # as admission/ranking evidence in strong_selection_reason, without
+    # repeating the chart as a long buyer-facing paragraph.
     facts = validate_selection_facts(offer.get("selection_facts"), offer.get("area"))
     if facts["kitchen_area"] is not None and facts["kitchen_area"] >= 12:
         reasons.append(f"Кухня {_label(facts['kitchen_area'])} м² — размер указан в объявлении.")
     if facts["ceiling_height"] is not None and facts["ceiling_height"] >= 2.9:
         reasons.append(f"Высокие потолки {_label(facts['ceiling_height'], 2)} м — по данным объявления.")
     if facts["finish_level"] in READY_FINISH:
-        finish = {"finished": "Готовая отделка", "renovated": "Квартира с ремонтом", "furnished": "Квартира с мебелью", "designer": "Дизайнерский ремонт"}[facts["finish_level"]]
-        reasons.append(f"{finish} по данным объявления; состояние проверьте на просмотре.")
+        # These labels come from source text, not a visual quality inspection.
+        # Explain the recorded feature's practical benefit without inventing
+        # workmanship quality, a move-in date or renovation savings.
+        reasons.append({
+            "finished": "В объявлении указана чистовая отделка — основные отделочные работы уже выполнены.",
+            "renovated": "Квартира с ремонтом, по данным объявления — не нужно начинать с черновой отделки.",
+            "furnished": "В объявлении указана мебель — часть обустройства уже есть.",
+            "designer": "В объявлении указан дизайнерский ремонт — интерьер уже оформлен.",
+        }[facts["finish_level"]])
     return reasons[:4]

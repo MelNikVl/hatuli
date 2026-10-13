@@ -58,7 +58,9 @@ async def test_compare_why_shows_price_cash_gap_ceiling_kitchen_and_distinct_cut
     assert response.status_code == 200
     assert "Почему в подборке" in response.text
     assert "14,7% ниже" in response.text and "5,5 млн" in response.text
-    assert "цену снижали 2 раза" in response.text
+    assert "цену снижали 2 раза" not in response.text
+    assert response.text.count('data-price-history-chart') == 1  # selected offer has the recorded history
+    assert "2 000 000 ₸" in response.text and "Все изменения по датам" in response.text
     assert "Высокие потолки 3 м" in response.text and "Кухня 15 м²" in response.text
     assert "6 аналогов:" not in response.text
     assert "19,50%" in response.text and "3 мес." in response.text and "продлении ставка может измениться" in response.text
@@ -93,7 +95,8 @@ def test_daily_enrichment_keeps_verified_publication_and_uses_current_recorded_f
     assert actual["rank"] == item["rank"] and actual["source_checked_at"] == item["source_checked_at"]
     assert any("потолки" in reason for reason in actual["reasons"])
     assert any("Кухня" in reason for reason in actual["reasons"])
-    assert any("2 раза" in reason for reason in actual["reasons"])
+    assert not any("2 раза" in reason for reason in actual["reasons"])
+    assert actual["price_history"]["changes_count"] == 2
     assert not any("аналогов:" in reason or "±15" in reason for reason in actual["reasons"])
 
 

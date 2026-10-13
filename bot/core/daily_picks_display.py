@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from bot.core.daily_picks import LOCAL_TIMEZONE, snapshot_status
+from bot.core.daily_picks import LOCAL_TIMEZONE, MAX_ASKING_PRICE, sanitized_listing_address, snapshot_status
 from bot.core.price_forecast_runtime import forecast_for_offer
 from bot.core.market_comparison import load_market_snapshot
 from bot.core.comparison_offer_details import details_for_selected_offer, source_characteristics_changed
@@ -45,6 +45,9 @@ def prepare_daily_picks(snapshot: dict | None, now: datetime | None = None) -> d
     details.update({row["id"]: row for row in market.get("listing_details", [])})
     items = []
     for item in snapshot["items"]:
+        latest_price = details.get(item["id"], {}).get("current_price", item["price"])
+        if item["price"] > MAX_ASKING_PRICE or latest_price > MAX_ASKING_PRICE:
+            continue
         enriched = {**item}
         if item["id"] in details:
             enriched.update(details_for_selected_offer(details[item["id"]], item["price"], item["area"], item["rooms"]))
@@ -54,11 +57,19 @@ def prepare_daily_picks(snapshot: dict | None, now: datetime | None = None) -> d
             if source_characteristics_changed(details[item["id"]], item):
                 enriched["price_comparison"] = None
                 enriched["cautions"] = [*enriched.get("cautions", []), "Характеристики объявления изменились после проверки; уточните квартиру в источнике."]
+        # An older market edition may lack an address that the selected public
+        # edition already has. Neither the catalog name nor a guessed map point
+        # can supply a missing street or house number.
+        address, address_note = sanitized_listing_address(enriched.get("address"), item["price"], now)
+        if address is None:
+            address, address_note = sanitized_listing_address(item.get("address"), item["price"], now)
+        enriched["address"], enriched["address_note"] = address, address_note
         enriched["rental_estimate"] = validate_rental_estimate(enriched.get("rental_estimate"), now)
         enriched["reasons"] = apartment_selection_reasons(enriched, now)
         enriched.update(observed_at_label=_time_label(item["observed_at"]),
                         price_forecast=forecast_for_offer(item["id"], item["price"], now=now, active=not status["is_stale"]),
                         source_checked_at_label=_time_label(item["source_checked_at"]))
+        enriched["rank"] = len(items) + 1
         items.append(enriched)
     return {
         **snapshot,

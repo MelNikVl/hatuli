@@ -1,0 +1,23 @@
+{% macro render_price_history(history) %}
+{% set history = history or {} %}
+{% set events = history.events or [] %}
+{% set chart = price_history_chart(history) %}
+<section class="hatuli-price-history" aria-label="История цены предложения" data-history-status="{{ history.status or 'unavailable' }}">
+  {% if chart %}
+  <div class="hatuli-price-history-heading"><h4>Как менялась цена</h4>{% if chart.net_change is not none %}<p class="hatuli-price-history-change" data-direction="{% if chart.net_change < 0 %}down{% elif chart.net_change > 0 %}up{% else %}same{% endif %}">{% if chart.net_change > 0 %}+{% elif chart.net_change < 0 %}−{% endif %}{{ chart.net_change|abs|fmt_num }} ₸{% if chart.net_change != 0 %}<span>{% if chart.net_pct > 0 %}+{% elif chart.net_pct < 0 %}−{% endif %}{{ chart.net_pct|abs|fmt_num(1)|replace(',0', '') }}%</span>{% endif %}</p>{% endif %}</div>
+  <svg class="hatuli-price-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-label="{{ chart.summary }}" data-price-history-chart>
+    <title>{{ chart.summary }}</title>
+    {% for tick in chart.axis %}<line class="hatuli-price-chart-grid" x1="64" x2="344" y1="{{ tick.y }}" y2="{{ tick.y }}"/><text class="hatuli-price-chart-label" x="54" y="{{ tick.y + 4 }}" text-anchor="end">{{ tick.label }}</text>{% endfor %}
+    {% for line in chart.connectors %}<line class="hatuli-price-chart-connector" x1="{{ line.x1 }}" x2="{{ line.x2 }}" y1="{{ line.y }}" y2="{{ line.y }}"/>{% endfor %}
+    {% for line in chart.changes %}<line class="hatuli-price-chart-event" data-direction="{{ line.direction }}" x1="{{ line.x }}" x2="{{ line.x }}" y1="{{ line.y1 }}" y2="{{ line.y2 }}"><title>{{ line.date_label }}: {{ line.old_price|fmt_num }} → {{ line.new_price|fmt_num }} ₸</title></line>{% endfor %}
+    {% for point in chart.points %}<circle class="hatuli-price-chart-point" data-kind="{{ point.kind }}" data-direction="{{ point.direction }}" cx="{{ point.x }}" cy="{{ point.y }}" r="3.6"><title>{% if point.kind == 'before' %}До изменения{% else %}После изменения{% endif %} {{ point.date_label }}: {{ point.price|fmt_num }} ₸</title></circle>{% endfor %}
+    {% for tick in chart.date_ticks %}<text class="hatuli-price-chart-label" x="{{ tick.x }}" y="165" text-anchor="{{ tick.anchor }}">{{ tick.label }}</text>{% endfor %}
+  </svg>
+  <p class="hatuli-price-history-caption">Цена предложения · даты фиксации изменений</p>
+  <details class="hatuli-price-history-details"><summary>Все изменения по датам <span>{{ events|length }}</span></summary><div class="hatuli-price-history-table-wrap"><table><caption>Зафиксированные изменения цены предложения</caption><thead><tr><th scope="col">Дата</th><th scope="col">Было, ₸</th><th scope="col">Стало, ₸</th></tr></thead><tbody>{% for event in events|reverse %}<tr><th scope="row"><time datetime="{{ event.at }}">{{ event.date_label or event.at }}</time></th><td>{% if event.old_price is not none and event.old_price is defined %}{{ event.old_price|fmt_num }}{% else %}Не сохранено{% endif %}</td><td>{{ event.new_price|fmt_num }}</td></tr>{% endfor %}</tbody></table></div><p class="hatuli-price-history-note">Вертикальная линия — изменение в дату его фиксации. Пунктир соединяет совпадающие цены между записями; промежуточные наблюдения не сохранены. Цена до первой записи не продлевается назад.</p></details>
+  {% elif events %}<p class="hatuli-price-history-empty">Не удалось построить график сохранённой истории.</p>
+  {% elif history.status == 'no_changes_recorded' %}<p class="hatuli-price-history-empty">Изменения цены пока не зафиксированы.</p>
+  {% else %}<p class="hatuli-price-history-empty">История изменений цены пока не загружена.</p>{% endif %}
+  {% if history.status == 'incomplete' %}<p class="hatuli-price-history-warning">{{ history.warning or 'В истории есть пропуски. Отдельные изменения сохранены; итоговое изменение не рассчитываем.' }}</p>{% elif history.warning %}<p class="hatuli-price-history-note">{{ history.warning }}</p>{% endif %}
+</section>
+{% endmacro %}

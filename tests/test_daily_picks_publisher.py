@@ -77,6 +77,12 @@ async def test_reader_enforces_read_only_session_and_transaction_and_closes(monk
     assert connection.closed and not connection.in_transaction
 
 
+def test_publisher_selects_original_address_but_keeps_comparable_population():
+    assert "a.address" in publisher.CANDIDATES_SQL
+    assert "100000000" not in publisher.CANDIDATES_SQL.replace("_", "")
+    assert all(field not in publisher.CANDIDATES_SQL for field in ("a.phone", "a.description", "a.seller_name"))
+
+
 @pytest.mark.asyncio
 async def test_query_failure_exits_transaction_and_closes_connection(monkeypatch):
     connection = FakeConnection(failure=RuntimeError("simulated database failure"))

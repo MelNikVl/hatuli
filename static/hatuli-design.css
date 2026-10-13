@@ -237,8 +237,16 @@ body.hatuli-site .tag-normal { background: color-mix(in srgb,var(--yellow) 12%,v
 body.hatuli-site .tag-cold { background: color-mix(in srgb,var(--green) 12%,var(--surface)); color: var(--green); }
 /* Full-height maps retain their negative-margin geometry and JS height observers. */
 body.hatuli-site .filterbar { background: var(--bg); }
-body.hatuli-site .hatuli-catalog-nav { margin-bottom: 18px; }
-body.hatuli-site .hatuli-catalog-nav a { display: inline-flex; align-items: center; min-height: 40px; text-decoration: none; font-weight: 600; }
+body.hatuli-site .hatuli-catalog-nav {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  max-width: 1120px; margin: 0 auto 10px; padding: 0; font-size: 13px;
+}
+body.hatuli-site .hatuli-catalog-nav a {
+  display: inline-flex; align-items: center; gap: 10px; min-height: 40px;
+  padding: 8px 13px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text); text-decoration: none; font-weight: 600;
+}
+body.hatuli-site .hatuli-catalog-nav a:hover { background: var(--surface2); color: var(--accent); }
 body.hatuli-site .filterbar-inner { flex-wrap: wrap; gap: 8px; margin-inline: auto; max-width: 1120px; }
 body.hatuli-site #f-newbuild-btn { min-height: 40px; border-radius: 10px !important; }
 body.hatuli-site #f-newbuild-btn[data-active="true"] { background: #1e6353 !important; border-color: #1e6353 !important; color: #fff !important; }
@@ -285,7 +293,7 @@ body.hatuli-site .hp-field :is(input,textarea)[aria-invalid="true"] { border-col
   body.hatuli-site .dev-card { flex: 1 1 100%; min-width: 0; max-width: 100%; }
   body.hatuli-site .cab-card { padding: 22px; }
   body.hatuli-site .filterbar-inner { margin: 0; gap: 6px; }
-  body.hatuli-site .filterbar { padding: 8px 16px; }
+  body.hatuli-site .filterbar { padding: 8px 18px; }
   body.hatuli-site .hatuli-map-tools { width: calc(100vw - 68px); max-width: calc(100vw - 68px); }
   body.hatuli-site .hatuli-map-tools-row { flex-wrap: wrap; gap: 6px !important; }
   body.hatuli-site :is(.rooms-dd-btn,.more-filters-btn) { min-height: 44px; font-size: 12px; padding-inline: 10px; }

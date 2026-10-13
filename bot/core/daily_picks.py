@@ -27,6 +27,7 @@ from bot.core.comparison_offer_details import build_offer_details, price_history
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
 SCHEMA_VERSION = 2
 MAX_PICKS = 30
+MAX_ASKING_PRICE = 100_000_000
 MAX_SOURCE_AGE = timedelta(hours=72)
 MIN_COMPARABLES = 5
 AREA_BAND = .15
@@ -40,7 +41,7 @@ _DISTRICTS = {
     "Есильский р-н": "Есильский район", "Нура р-н": "Нура", "Алматы р-н": "Алматы",
     "Сарайшык р-н": "Сарайшык", "Сарыарка р-н": "Сарыарка", "р-н Байконур": "Байконур",
 }
-_ITEM_FIELDS = ("id", "rank", "source_url", "title", "rooms", "area", "floor", "floors_total", "complex_name", "district", "price", "currency", "price_per_m2", "photo_urls", "reasons", "cautions", "observed_at", "source_checked_at", "source_status", "price_comparison", "selection_facts", "price_history")
+_ITEM_FIELDS = ("id", "rank", "source_url", "title", "rooms", "area", "floor", "floors_total", "complex_name", "district", "address", "address_note", "price", "currency", "price_per_m2", "photo_urls", "reasons", "cautions", "observed_at", "source_checked_at", "source_status", "price_comparison", "selection_facts", "price_history")
 _COMPARISON_FIELDS = ("discount_pct", "reference_price_per_m2", "scope", "comparable_count")
 _COMPARISON_SCOPES = {"в том же доме", "в том же ЖК", "в радиусе 800 м по приблизительным координатам"}
 _NEARBY_SCOPE = "в радиусе 800 м по приблизительным координатам"
@@ -49,7 +50,7 @@ _SNAPSHOT_FIELDS = ("schema_version", "selection_date", "timezone", "generated_a
 METHODOLOGY = {
     "title": "Свежая цена и понятные основания",
     "summary": "Сравниваем цену за м² минимум с пятью объявлениями: столько же комнат, площадь ±15%. Сначала ищем аналоги в том же ЖК или доме; если их мало — в радиусе 800 м по приблизительным координатам. Расстояние по прямой. Если отделка известна у обоих объектов, она должна совпадать. Сначала — цена ниже медианы. Для цены на уровне рынка нужны известные преимущества: высокие потолки, большая кухня, готовая отделка или недавнее снижение цены с непрерывной историей.",
-    "exclusions": ["Только вторичная продажа; наличие каждого выбранного объявления и его цену проверяем на странице источника перед публикацией.", "Аналоги — объявления, наблюдавшиеся за последние 72 часа. Убираем известные дубли, подтверждённый архив, неполные характеристики, будущий год постройки, большой разброс цен аналогов и скидки более 30%.", "Публикуем до 30 вариантов с распознанными фотографиями интерьера. Цена на уровне медианы или выше неё до 5% допустима только с дополнительным известным преимуществом; среднего этажа недостаточно."],
+    "exclusions": ["Только вторичная продажа до 100 млн ₸ включительно; наличие каждого выбранного объявления и его цену проверяем на странице источника перед публикацией.", "Аналоги — объявления, наблюдавшиеся за последние 72 часа. Убираем известные дубли, подтверждённый архив, неполные характеристики, будущий год постройки, большой разброс цен аналогов и скидки более 30%.", "Публикуем до 30 вариантов с распознанными фотографиями интерьера. Цена на уровне медианы или выше неё до 5% допустима только с дополнительным известным преимуществом; среднего этажа недостаточно."],
     "caveat": "Это цены объявлений, а не состоявшихся сделок. Сравнение использует недавние наблюдения аналогов; не каждый аналог проверяется повторно на источнике. Ремонт и условия продажи могут отличаться. После публикации объявление может измениться: наличие, итоговую цену, документы и долги уточните у продавца до задатка.",
 }
 
@@ -162,8 +163,23 @@ def _eligible(row: dict, now: datetime) -> bool:
     return _group(row) is not None or _nearby(row, row)
 
 
+def sanitized_listing_address(value, price: int, now: datetime) -> tuple[str | None, str]:
+    """Keep the source street/house, without a flat number or contact tail."""
+    details = build_offer_details({"address": value, "price": price}, "secondary", now=now)
+    address = details["address"]
+    if address:
+        # The shared source sanitizer removes pasted ad text after a dash or
+        # newline. A flat identifier is private even when it precedes that tail.
+        address = re.split(r"(?:\s*,?\s+|,\s*)(?:кв(?:артира)?\.?|apartment|apt\.?|flat)\s*[№#:]?\s*\d+", address, maxsplit=1, flags=re.I)[0].rstrip(" ,;") or None
+        if address and (any(sum(char.isdigit() for char in match[0]) >= 10
+                            for match in re.finditer(r"\+?\d[\d\s()\-]+\d", address))
+                        or re.search(r"https?://|www\.|@|телефон|whatsapp|ватсап", address, re.I)):
+            address = None
+    return address, details["address_note"] if address else "Точный адрес не указан в источнике."
+
+
 def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int = MAX_PICKS, excluded_ids: set[str] | None = None) -> dict:
-    """Pure selection and public allowlist; never copies raw titles/addresses.
+    """Pure selection and public allowlist; source addresses are sanitized.
 
     Input approved_photo_urls must come only from cached fingerprints with
     fetch_status=ok and photo_type=interior, intersected with current photos.
@@ -183,7 +199,9 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
         groups[_group(row)].append(row)
     ranked = []
     for row in unique.values():
-        if str(row["id"]) in (excluded_ids or set()):
+        # This is a buyer's budget, not a comparable-price truncation. Keep
+        # valid expensive peers above in the median's reference population.
+        if _number(row["price"]) > MAX_ASKING_PRICE or str(row["id"]) in (excluded_ids or set()):
             continue
         floor, floors = _number(row.get("floor")), _number(row.get("floors_total"))
         if floor is None or floors is None or not floor.is_integer() or not floors.is_integer() or not 1 <= floor <= floors <= 60:
@@ -214,6 +232,7 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
         facts = selection_facts(row)
         try:
             history = build_offer_details({"price": price, "area": area, "price_events": _list(row.get("price_events"))}, "secondary", now=now)["price_history"]
+            address, address_note = sanitized_listing_address(row.get("address"), price, now)
         except (ValueError, TypeError, KeyError):
             continue
         evidence = {"price": price, "area": round(area, 1), "price_comparison": comparison,
@@ -243,6 +262,7 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
             "id": str(row["id"]), "rank": 0, "source_url": f"https://krisha.kz/a/show/{row['id']}",
             "title": f"{row['rooms']}-комнатная квартира · {round(area, 1):g} м²", "rooms": row["rooms"], "area": round(area, 1),
             "floor": int(floor), "floors_total": int(floors), "complex_name": complex_name, "district": district,
+            "address": address, "address_note": address_note,
             "price": price, "currency": "KZT", "price_per_m2": round(price / area), "photo_urls": photos,
             "reasons": reasons, "cautions": cautions, "observed_at": _utc(row["last_seen"]).isoformat(),
             "price_comparison": comparison, "selection_facts": facts, "price_history": history,
@@ -268,8 +288,8 @@ def validate_snapshot(snapshot: dict) -> dict:
     if snapshot.get("selection_date") != generated.astimezone(LOCAL_TIMEZONE).date().isoformat() or _utc(snapshot["source_observed_at"]) > generated:
         raise ValueError("Invalid snapshot date")
     items = snapshot.get("items")
-    if not isinstance(items, list) or not 1 <= len(items) <= MAX_PICKS:
-        raise ValueError("Nonempty snapshot of at most 30 items required")
+    if not isinstance(items, list) or not 0 <= len(items) <= MAX_PICKS:
+        raise ValueError("Snapshot of at most 30 items required")
     seen = set()
     safe_items = []
     for rank, item in enumerate(items, 1):
@@ -283,6 +303,10 @@ def validate_snapshot(snapshot: dict) -> dict:
             value = _number(item.get(field))
             if value is None or value <= 0:
                 raise ValueError("Invalid public numeric field")
+        # Old verified editions can contain luxury listings. Remove those
+        # cards independently, retaining the other cards and original receipts.
+        if _number(item["price"]) > MAX_ASKING_PRICE:
+            continue
         if not generated - MAX_SOURCE_AGE <= _utc(item["observed_at"]) <= generated:
             raise ValueError("Stale source within snapshot")
         if item.get("source_status") != "active" or not generated - timedelta(hours=2) <= _utc(item["source_checked_at"]) <= generated:
@@ -319,6 +343,8 @@ def validate_snapshot(snapshot: dict) -> dict:
         if public_area <= .05 or not asking_price / (public_area + .05) - .5 <= actual_m2 <= asking_price / (public_area - .05) + .5:
             raise ValueError("Asking price per square meter contradicts the listing")
         safe_item = {key: item.get(key) for key in _ITEM_FIELDS}
+        safe_item["rank"] = len(safe_items) + 1
+        safe_item["address"], safe_item["address_note"] = sanitized_listing_address(item.get("address"), int(asking_price), generated)
         safe_item["price_comparison"] = {key: comparison.get(key) for key in _COMPARISON_FIELDS}
         safe_item["selection_facts"] = validate_selection_facts(item.get("selection_facts"), public_area)
         raw_history = item.get("price_history")
@@ -367,6 +393,8 @@ def load_daily_picks(path: Path | None = None) -> dict | None:
 def publish_snapshot(snapshot: dict, path: Path | None = None) -> None:
     """Atomic, same-filesystem publish. Failed writes retain the last good file."""
     safe = validate_snapshot(snapshot)
+    if not safe["items"]:
+        raise ValueError("An empty edition cannot replace a verified snapshot")
     path = path or snapshot_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None

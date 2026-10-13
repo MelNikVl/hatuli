@@ -53,20 +53,18 @@ def test_ordinary_measurements_or_unknown_finish_are_not_strong():
     assert not strong_selection_reason(offer(selection_facts={"ceiling_height": 2.7, "kitchen_area": 8, "finish_level": "rough"}), NOW)
 
 
-def test_repeated_declines_report_net_amount_dates_without_intent_claims():
+def test_repeated_declines_remain_strong_evidence_without_duplicating_history_chart():
     events = [event(27_000_000, 26_000_000, 20), event(26_000_000, 24_000_000, 5)]
     data = offer(price_history=price_history(events, 24_000_000, now=NOW))
-    reason = apartment_selection_reasons(data, NOW)[1]
-    assert "2 раза" in reason and "3 млн ₸" in reason and "11,1%" in reason and "08.10.2026" in reason
     assert strong_selection_reason(data, NOW)
-    assert "сроч" not in reason.lower() and "хотят продать" not in reason.lower()
+    assert apartment_selection_reasons(data, NOW) == apartment_selection_reasons(offer(), NOW)
 
 
 def test_distinct_changes_on_same_day_do_not_exaggerate_repeated_cuts():
     events = [event(27_000_000, 26_000_000), event(26_000_000, 24_000_000)]
     data = offer(price_history=price_history(events, 24_000_000, now=NOW))
-    reason = apartment_selection_reasons(data, NOW)[1]
-    assert "3 млн ₸" in reason and "2 раза" not in reason
+    assert strong_selection_reason(data, NOW)
+    assert apartment_selection_reasons(data, NOW) == apartment_selection_reasons(offer(), NOW)
 
 
 @pytest.mark.parametrize("events,price", [
@@ -90,8 +88,31 @@ def test_later_price_raise_prevents_declining_price_reason():
 
 def test_history_cut_uses_90_day_window_and_expires():
     data = offer(price_history=price_history([event(27_000_000, 24_000_000, 40)], 24_000_000, now=NOW))
-    assert "90 дней" in apartment_selection_reasons(data, NOW)[1]
+    assert strong_selection_reason(data, NOW)
+    assert apartment_selection_reasons(data, NOW) == apartment_selection_reasons(offer(), NOW)
     assert not strong_selection_reason(data, NOW+timedelta(days=51))
+
+
+@pytest.mark.parametrize("finish,benefit", [
+    ("finished", "основные отделочные работы уже выполнены"),
+    ("renovated", "не нужно начинать с черновой отделки"),
+    ("furnished", "часть обустройства уже есть"),
+    ("designer", "интерьер уже оформлен"),
+])
+def test_finish_benefits_keep_source_attribution_without_inventing_quality_or_savings(finish, benefit):
+    reasons = apartment_selection_reasons(offer(selection_facts={"finish_level": finish}), NOW)
+    reason = reasons[-1]
+    assert benefit in reason and "объявлен" in reason
+    assert all(word not in reason.lower() for word in (
+        "проверьте", "качествен", "хороший", "сэконом", "заехать", "сроч", "хотят продать",
+    ))
+    assert "₸" not in reason
+
+
+def test_unknown_finish_does_not_invent_repair_benefit_from_unverified_description_or_photo():
+    data = offer(description="Хороший дизайнерский ремонт", photo="https://example.com/repair.jpg")
+    assert apartment_selection_reasons(data, NOW) == apartment_selection_reasons(offer(), NOW)
+    assert not strong_selection_reason(data, NOW)
 
 
 def test_no_synthetic_primary_baseline_decline_claim():

@@ -1,0 +1,38 @@
+/* Recorded price changes, shared by public selection and comparison cards. */
+.hatuli-price-history { min-width: 0; margin-top: 16px; padding-top: 15px; border-top: 1px solid var(--border); }
+.hatuli-price-history-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; }
+.hatuli-price-history-heading h4 { margin: 0; color: var(--heading); font-size: 12px; line-height: 1.6; font-weight: 650; }
+.hatuli-price-history-change { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px; color: var(--text); font-size: 13px; line-height: 1.5; font-weight: 700; }
+.hatuli-price-history-change[data-direction="down"] { color: var(--accent); }
+.hatuli-price-history-change[data-direction="up"] { color: var(--yellow); }
+.hatuli-price-history-change span { font-size: 10px; font-weight: 600; }
+.hatuli-price-chart { display: block; width: 100%; height: auto; overflow: visible; margin-top: 8px; color: var(--accent); }
+.hatuli-price-chart-grid { stroke: var(--border); stroke-width: 1; }
+.hatuli-price-chart-label { fill: var(--muted); font-family: inherit; font-size: 10px; font-weight: 500; }
+.hatuli-price-chart-connector { stroke: var(--accent); stroke-width: 1.8; stroke-dasharray: 4 4; opacity: .65; }
+.hatuli-price-chart-event { stroke: var(--accent); stroke-width: 2.6; stroke-linecap: round; }
+.hatuli-price-chart-event[data-direction="up"] { stroke: var(--yellow); }
+.hatuli-price-chart-point { fill: var(--accent); stroke: var(--surface); stroke-width: 1.5; }
+.hatuli-price-chart-point[data-kind="before"] { fill: var(--surface); stroke: var(--accent); stroke-width: 1.7; }
+.hatuli-price-chart-point[data-direction="up"][data-kind="after"] { fill: var(--yellow); }
+.hatuli-price-chart-point[data-direction="up"][data-kind="before"] { stroke: var(--yellow); }
+.hatuli-price-history-caption,.hatuli-price-history-note,.hatuli-price-history-empty { color: var(--muted); font-size: 10px; line-height: 1.65; }
+.hatuli-price-history-note { margin-top: 7px !important; }
+.hatuli-price-history-warning { padding: 9px 10px; border-left: 2px solid var(--yellow); border-radius: 5px; background: var(--surface2); color: var(--text); font-size: 11px; line-height: 1.65; margin-top: 9px !important; }
+.hatuli-price-history .hatuli-price-history-details { border-top: 0; margin-top: 7px; padding-top: 0; }
+.hatuli-price-history-details summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--accent); font-size: 11px; font-weight: 600; line-height: 1.8; padding: 3px 0; }
+.hatuli-price-history-details summary span { color: var(--muted); font-weight: 500; }
+.hatuli-price-history-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+.hatuli-price-history-table-wrap { width: 100%; overflow-x: auto; padding-top: 8px; }
+.hatuli-price-history-details table { width: 100%; border-collapse: collapse; color: var(--text); font-size: 10px; text-align: left; line-height: 1.6; }
+.hatuli-price-history-details caption { text-align: left; color: var(--muted); padding-bottom: 5px; }
+.hatuli-price-history-details th,.hatuli-price-history-details td { padding: 7px 6px; border-top: 1px solid var(--border); vertical-align: top; }
+.hatuli-price-history-details thead th { color: var(--muted); font-weight: 500; }
+.hatuli-price-history-details tbody th { font-weight: 500; }
+.hatuli-price-history-details td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 700px) {
+  .hatuli-price-history-heading h4 { font-size: 13px; }
+  .hatuli-price-history-caption,.hatuli-price-history-note,.hatuli-price-history-empty { font-size: 11px; }
+  .hatuli-price-history-details summary { font-size: 12px; }
+  .hatuli-price-history-details table { font-size: 11px; }
+}

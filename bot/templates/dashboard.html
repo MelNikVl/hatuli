@@ -124,10 +124,11 @@ html, body { overflow: hidden !important; }
 .filterbar #load-progress-pct { font-size:11px; color:#888; flex-shrink:0; min-width:2.5em; text-align:right; }
 .year-chip.active { background:#2563eb !important; color:#fff !important; border-color:#2563eb !important; }
 </style>
-<nav class="hatuli-catalog-nav" aria-label="Каталог и справочники" style="display:flex;gap:18px;flex-wrap:wrap;padding:0 0 10px;font-size:13px;">
-  <a href="/complexes">Каталог ЖК</a><a href="/developers">Застройщики</a>
-</nav>
 <div class="filterbar">
+<nav class="hatuli-catalog-nav" aria-label="Каталог и справочники">
+  <a href="/complexes">Каталог ЖК <span aria-hidden="true">↗</span></a>
+  <a href="/developers">Застройщики <span aria-hidden="true">↗</span></a>
+</nav>
 <div class="filterbar-inner">
   <!-- "Новостройки" физически убраны из этого select (см. задачу) — теперь
        только отдельная кнопка в главном меню (base_public.html,

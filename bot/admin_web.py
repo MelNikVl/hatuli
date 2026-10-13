@@ -22,6 +22,7 @@ from bot.core.admin_sessions import (
 from bot.core.public_buyer_example import load_public_example
 from bot.core.daily_picks import load_daily_picks
 from bot.core.daily_picks_display import prepare_daily_picks
+from bot.core.price_history_chart import price_history_chart
 from bot.public_comparison_routes import register_public_comparison_routes
 from bot.site_auth_routes import register_site_auth_routes
 
@@ -73,6 +74,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     templates.env.filters["fmt_num"] = _fmt_num
     templates.env.filters["fmt_tenge"] = _fmt_tenge
+    templates.env.globals["price_history_chart"] = price_history_chart
 
     def is_authed(request: Request) -> bool:
         return is_admin(request)

@@ -120,3 +120,30 @@ async def test_previous_day_before_schedule_never_claims_today_in_html_title(mon
     assert "на сегодня" not in response.text
     assert "13 октября 2026" in response.text
     assert "предыдущая подборка" in response.text
+
+
+@pytest.mark.asyncio
+async def test_daily_cards_show_source_address_and_native_graph_for_any_price_change(monkeypatch):
+    from bot.core.comparison_offer_details import build_offer_details
+    now = datetime.now(timezone.utc)
+    edition = snapshot(now)
+    selected = edition["items"][0]
+    detail = {"id": selected["id"], "area": selected["area"], "rooms": selected["rooms"],
+              "current_price": selected["price"]}
+    detail.update(build_offer_details({"price": selected["price"], "address": "улица Сыганак, 12/1",
+        "price_events": [{"old_price": 33_000_000, "new_price": 35_000_000, "changed_at": now-timedelta(days=3)},
+                         {"old_price": 35_000_000, "new_price": 34_000_000, "changed_at": now-timedelta(days=1)}]},
+        "secondary", now=now))
+    monkeypatch.setattr("bot.admin_web.load_daily_picks", lambda: edition)
+    monkeypatch.setattr("bot.core.daily_picks_display.load_market_snapshot", lambda: {"offers": [], "listing_details": [detail]})
+    app = create_admin_app(NoPrivateDB(), "test-form-secret", "test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/best-apartments")
+    assert response.status_code == 200
+    assert "улица Сыганак, 12/1" in response.text
+    assert "Точный адрес не указан в источнике" in response.text
+    assert 'data-price-history-chart' in response.text
+    assert 'data-direction="up"' in response.text and 'data-direction="down"' in response.text
+    assert "Все изменения по датам" in response.text
+    assert "до 100 млн ₸" in response.text
+    assert "33 000 000" in response.text and "35 000 000" in response.text and "34 000 000" in response.text

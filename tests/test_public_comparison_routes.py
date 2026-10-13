@@ -333,9 +333,10 @@ async def test_source_address_and_all_price_events_visible_in_cards_and_selected
     assert '<script>ADDRESS-XSS</script>' not in response.text
     assert '&lt;script&gt;ADDRESS-XSS&lt;/script&gt;' in response.text
     assert 'data-history-status="consistent"' in response.text
-    assert 'Ещё изменений: 1' in response.text
+    assert 'Все изменения по датам' in response.text
+    assert response.text.count('data-price-history-chart') == 2
     assert '35 000 000' in response.text and '34 000 000' in response.text and '32 000 000' in response.text
-    assert response.text.count('Снизилась на') == 4  # two events in card and selected offer
+    assert response.text.count('class="hatuli-price-chart-event"') == 4  # two events in card and selected offer
     assert 'PRIVATE' not in response.text
 
 
@@ -363,7 +364,9 @@ async def test_developer_single_recorded_change_never_invents_previous_price(app
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/compare?unit=1")
     assert response.status_code == 200
-    assert 'Цена после изменения:' in response.text and 'Предыдущая цена не сохранена' in response.text
+    assert 'data-price-history-chart' in response.text and 'Не сохранено' in response.text
+    assert 'Цена до первого зафиксированного изменения не сохранена.' in response.text
+    assert 'class="hatuli-price-chart-event"' not in response.text
     assert 'Корпус C' in response.text and 'Секция 1' in response.text
     assert 'Адрес проекта из каталога' in response.text
 
@@ -382,4 +385,5 @@ async def test_incomplete_history_warning_keeps_individual_events(app, monkeypat
     assert response.status_code == 200
     assert 'data-history-status="incomplete"' in response.text
     assert 'есть пропуски' in response.text
-    assert response.text.count('Снизилась на') == 4
+    assert response.text.count('class="hatuli-price-chart-event"') == 4
+    assert 'class="hatuli-price-chart-connector"' not in response.text

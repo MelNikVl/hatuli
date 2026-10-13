@@ -1,8 +1,10 @@
 {% extends "buyer_public_base.html" %}
+{% from '_price_history_chart.html' import render_price_history %}
 {% block title %}Первичка, вторичка или вклад — сравнение в Астане · Hatuli{% endblock %}
 {% block description %}Сравните новостройки и вторичные квартиры рядом, расширьте поиск до города и посчитайте покупку против банковского вклада на ваших цифрах.{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="/static/hatuli-comparison.css?v=20261013.4">
+<link rel="stylesheet" href="/static/hatuli-comparison.css?v=20261013.5">
+<link rel="stylesheet" href="/static/hatuli-price-history.css?v=20261013">
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261013">
 <script src="/static/hatuli-comparison.js?v=20261013.4" defer></script>
 {% endblock %}
@@ -40,26 +42,8 @@
 </section>
 {% endif %}
 {% endmacro %}
-{% macro price_event(event) %}
-<div class="mc-price-event" data-direction="{{ event.direction if event.direction in ['down', 'up'] else 'unknown' }}">
-  <p class="mc-price-event-date">{% if event.at %}<time datetime="{{ event.at }}">{{ event.date_label or event.at }}</time>{% else %}Дата изменения не сохранена{% endif %}</p>
-  <p class="mc-price-event-values">{% if event.old_price is defined and event.old_price is not none %}<span>{{ money(event.old_price) }}</span><span aria-hidden="true">→</span><strong>{{ money(event.new_price) }}</strong>{% else %}<span>Цена после изменения:</span><strong>{{ money(event.new_price) }}</strong>{% endif %}</p>
-  {% if event.delta is defined and event.delta is not none %}<p class="mc-price-event-delta">{% if event.delta > 0 %}Подорожала на {{ money(event.delta) }}{% elif event.delta < 0 %}Снизилась на {{ money(-event.delta) }}{% else %}Цена не изменилась{% endif %}{% if event.delta_pct is defined and event.delta_pct is not none and event.delta != 0 %} · {{ pct(event.delta_pct|abs) }}{% endif %}</p>{% elif event.old_price is not defined or event.old_price is none %}<p class="mc-price-event-note">Предыдущая цена не сохранена; размер изменения неизвестен.</p>{% endif %}
-</div>
-{% endmacro %}
 {% macro offer_price_history(offer) %}
-{% set history = offer.price_history or {} %}
-{% set events = history.events or [] %}
-<div class="mc-price-history" data-history-status="{{ history.status or 'unavailable' }}">
-  {% if events %}
-  <p class="mc-price-history-heading">Последнее изменение цены</p>
-  {{ price_event(events[-1]) }}
-  {% if events|length > 1 %}<details class="mc-price-history-more"><summary>Ещё изменений: {{ events|length - 1 }}</summary><div class="mc-price-history-list">{% for event in events[:-1]|reverse %}{{ price_event(event) }}{% endfor %}</div></details>{% endif %}
-  {% elif history.status == 'no_changes_recorded' %}<p class="mc-price-history-empty">Изменения цены пока не зафиксированы.</p>
-  {% else %}<p class="mc-price-history-empty">История изменений цены пока не загружена.</p>{% endif %}
-  {% if history.status == 'incomplete' %}<p class="mc-price-history-warning">{{ history.warning or 'В истории есть пропуски. Отдельные изменения сохранены; итоговое изменение не рассчитываем.' }}</p>{% elif history.warning %}<p class="mc-price-history-note">{{ history.warning }}</p>{% endif %}
-  {% if events %}<p class="mc-price-history-note">Изменения цены предложения, а не цены сделки.</p>{% endif %}
-</div>
+{{ render_price_history(offer.price_history) }}
 {% endmacro %}
 {% macro scenario_bank(result) %}
 <div class="mc-balance-row" data-kind="bank">

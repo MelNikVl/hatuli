@@ -138,7 +138,8 @@ def test_floor_caution_survives_price_cut_reason():
     sample = rows()
     sample[0].update(floor=12, price_events=[{"old_price": 27_000_000, "new_price": 24_000_000, "changed_at": NOW-timedelta(days=5)}])
     item = first(dp.build_daily_picks(sample, NOW))
-    assert any("Снижение цены" in reason and "3 млн" in reason for reason in item["reasons"])
+    assert item["price_history"]["net_change"] == -3_000_000
+    assert item["price_history"]["events"][0]["direction"] == "down"
     assert "Последний этаж" in item["cautions"][0]
 
 
@@ -154,7 +155,8 @@ def test_recorded_recent_price_reduction_qualifies_market_price_without_other_st
         price_events=[{"old_price": 32_000_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=7)}])
     item = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
     assert "на уровне" in item["reasons"][0]
-    assert any("2 млн" in reason for reason in item["reasons"])
+    assert item["price_history"]["net_change"] == -2_000_000
+    assert item["price_history"]["changes_count"] == 1
 
 
 def test_duplicate_or_broken_history_is_not_a_reason_to_select_market_price():
@@ -186,8 +188,74 @@ def test_personal_or_confidential_fields_not_projected():
     sample[0].update(title="Seller 87071234567", address="Street 15 apartment 24", seller_name="Private Name", phone="87071234567", description="Private document", investigation_notes="secret", complex_name="RAW PHONE 87071234567", district="Street 123 apt 12")
     item = first(dp.build_daily_picks(sample, NOW))
     encoded = json.dumps(item)
-    assert all(word not in encoded for word in ("87071234567", "Street", "Private", "secret", "RAW"))
+    assert all(word not in encoded for word in ("87071234567", "apartment 24", "Private", "secret", "RAW"))
+    assert item["address"] == "Street 15"
     assert item["district"] == "Астана" and item["complex_name"] == "Тестовый ЖК"
+
+
+def test_budget_is_inclusive_and_does_not_remove_more_expensive_comparables():
+    sample = [row(0, price=100_000_000, area=100)] + [row(i, price=110_000_000, area=100) for i in range(1, 8)]
+    snapshot = dp.build_daily_picks(sample, NOW)
+    assert [item["id"] for item in snapshot["items"]] == ["1016000000"]
+    assert first(snapshot)["price_comparison"]["comparable_count"] == 7
+    assert first(snapshot)["price_comparison"]["reference_price_per_m2"] == 1_100_000
+    sample[0]["price"] = 100_000_001
+    assert dp.build_daily_picks(sample, NOW)["items"] == []
+
+
+def test_legacy_luxury_cards_are_removed_without_discarding_verified_edition():
+    snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
+    snapshot["items"][1]["price"] = 120_000_000
+    original = copy.deepcopy(snapshot)
+    safe = dp.validate_snapshot(snapshot)
+    assert len(safe["items"]) == len(snapshot["items"]) - 1
+    assert [item["rank"] for item in safe["items"]] == list(range(1, len(safe["items"]) + 1))
+    assert snapshot["items"][1]["id"] not in [item["id"] for item in safe["items"]]
+    assert safe["generated_at"] == snapshot["generated_at"]
+    assert safe["source_observed_at"] == snapshot["source_observed_at"]
+    assert all(item["source_checked_at"] == snapshot["generated_at"] for item in safe["items"])
+    assert snapshot == original
+    assert dp.validate_snapshot(safe) == safe
+
+
+def test_all_luxury_legacy_cards_are_hidden_but_empty_edition_cannot_overwrite(tmp_path):
+    snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
+    path = tmp_path / "daily.json"
+    dp.publish_snapshot(snapshot, path)
+    original = path.read_bytes()
+    for item in snapshot["items"]:
+        item["price"] = 120_000_000
+    safe = dp.validate_snapshot(snapshot)
+    assert safe["items"] == [] and dp.validate_snapshot(safe) == safe
+    with pytest.raises(ValueError, match="empty edition"):
+        dp.publish_snapshot(safe, path)
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("address,expected", [
+    ("ул. Кунаева 12 — Продам, звоните +7 707 1234567", "ул. Кунаева 12"),
+    ("  пр. Туран 34, кв. 18  ", "пр. Туран 34"),
+    ("ул. Туран 34 apartment 18", "ул. Туран 34"),
+    ("ул. Туран 34, телефон +7 (707) 123-45-67", None),
+    ("ул. Туран 34, seller@example.com", None),
+    (None, None),
+])
+def test_source_street_house_address_is_public_but_contacts_and_flat_are_not(address, expected):
+    sample = rows()
+    sample[0]["address"] = address
+    snapshot = confirmed(dp.build_daily_picks(sample, NOW))
+    assert first(snapshot)["address"] == expected
+    assert first(dp.validate_snapshot(snapshot))["address"] == expected
+    assert "точный номер" in first(snapshot)["address_note"] if expected else "не указан" in first(snapshot)["address_note"]
+
+
+def test_legacy_address_can_be_absent_and_untrusted_note_is_recomputed():
+    snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
+    snapshot["items"][0].pop("address")
+    snapshot["items"][0]["address_note"] = "Private contact +7 707 1234567"
+    safe = dp.validate_snapshot(snapshot)
+    assert first(safe)["address"] is None
+    assert first(safe)["address_note"] == "Точный адрес не указан в источнике."
 
 
 @pytest.mark.parametrize("url", ["http://krisha-photos.kcdn.online/1.jpg", "https://krisha-photos.kcdn.online.evil.test/a.jpg", "https://evil@krisha-photos.kcdn.online/a.jpg", PHOTO+"?token=private", PHOTO+"#x", PHOTO.replace("https://", "https://") .replace(".online/", ".online:444/"), "https://krisha-photos.kcdn.online/docs/passport.jpg"])

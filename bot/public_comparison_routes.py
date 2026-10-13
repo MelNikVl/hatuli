@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 from fastapi import Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from bot.core.daily_picks import load_daily_picks, snapshot_status
+from bot.core.daily_picks import load_daily_picks, sanitized_listing_address, snapshot_status
 from bot.core.deposit_comparison import compare_investment, load_deposit_catalog, public_deposit_catalog
 from bot.core.market_comparison import (
     LOCAL_TIMEZONE, SCOPE_RADII, compare_market, hex_distance,
@@ -133,6 +133,12 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
             enriched.update(details_for_selected_offer(detail, item["price"], item["area"], item["rooms"]))
             if detail.get("current_price", item["price"]) != item["price"] or source_characteristics_changed(detail, item):
                 enriched["price_comparison"] = None
+        # An older market edition may have no usable address. Preserve the
+        # selected edition's street/house after sanitizing both sources.
+        address, address_note = sanitized_listing_address(enriched.get("address"), item["price"], datetime.now(timezone.utc))
+        if address is None:
+            address, address_note = sanitized_listing_address(item.get("address"), item["price"], datetime.now(timezone.utc))
+        enriched["address"], enriched["address_note"] = address, address_note
         secondary.append(_public_offer(enriched))
     selected = next((offer for offer in secondary if offer["id"] == listing), None) if listing else None
     primary = public_primary_offer(market, unit) if unit else None

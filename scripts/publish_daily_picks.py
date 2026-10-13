@@ -27,8 +27,9 @@ from bot.core.daily_picks import (
     publish_snapshot, safe_photo_url, snapshot_path,
 )
 
-# Restricted input fields. No address, seller contacts, documents, descriptions,
-# administrative notes, or application credentials are selected.
+# Restricted input fields. The source address is sanitized to street/house by
+# the public projection. Seller contacts, documents, descriptions,
+# administrative notes and application credentials are never selected.
 CANDIDATES_SQL = """
 WITH photos AS (
     SELECT f.listing_id, jsonb_agg(f.photo_url ORDER BY f.id) AS approved_photo_urls
@@ -46,7 +47,7 @@ WITH photos AS (
     WHERE changed_at <= $1
     GROUP BY listing_id
 )
-SELECT a.id, a.url, a.price, a.area, a.rooms, a.floor, a.floors_total, a.district,
+SELECT a.id, a.url, a.price, a.area, a.rooms, a.floor, a.floors_total, a.district, a.address,
        a.year_built, a.is_owner, a.is_active, a.is_duplicate, a.dup_needs_review,
        a.market_type, a.last_seen, a.resolved_house_id, a.house_attribution,
        a.complex_id, a.complex_resolution, a.lat, a.lon, a.finish_level,
