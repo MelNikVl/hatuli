@@ -4496,9 +4496,14 @@ def make_extras_router(templates) -> APIRouter:
             # тепловые карты, топ-10 по комнатности и новостройки — всё это
             # про продажу; у аренды нет своего "топ-10 по скору", в таблице
             # нет score-колонки вовсе).
-            return JSONResponse({"points": [], "mode": "rental", "count": 0, "no_geo": 0})
+            return JSONResponse({"points": [], "mode": "rental", "count": 0, "no_geo": 0,
+                "batch_rows": 0, "total_matching": 0, "offset": max(0, offset),
+                "limit": max(1, min(limit, 1000)), "next_offset": None, "has_more": False,
+                "geo_scope": "city", "market_coverage": "unknown"}, headers={"Cache-Control": "no-store"})
 
         if type == "rental":
+            limit = max(1, min(limit, 1000))
+            offset = max(0, offset)
             # У аренды нет своих координат — привязываем к центроиду ЖК
             # (по объявлениям продажи того же ЖК). Позиция приблизительная.
             conds, params, i = ["1=1"], [], 1
@@ -4514,6 +4519,12 @@ def make_extras_router(templates) -> APIRouter:
                 conds.append(f"r.area <= ${i}"); params.append(area_max); i += 1
             if price_max > 0:
                 conds.append(f"r.price <= ${i}"); params.append(int(price_max)); i += 1
+            rental_where = f"{' AND '.join(conds)} AND {rental_live_sql('r')}"
+            total_rows = await pg_fetch(f"""
+                SELECT COUNT(*) AS total_matching FROM rental_listings AS r
+                WHERE {rental_where}
+            """, *params)
+            total_matching = (total_rows[0].get("total_matching") if total_rows else None)
             # Раньше центроид ЖК считался LATERAL-подзапросом по apartment_listings
             # НА КАЖДУЮ строку аренды (до 1000 корреляционных сканов самой большой
             # таблицы) — это и было причиной долгой загрузки. Вместо этого считаем
@@ -4538,10 +4549,12 @@ def make_extras_router(templates) -> APIRouter:
                     FROM rental_price_history h
                     WHERE h.listing_id = r.id
                 ) ph ON TRUE
-                WHERE {' AND '.join(conds)}
-                  AND {rental_live_sql('r')}
-                ORDER BY r.found_at DESC LIMIT 1000
-            """, *params)
+                WHERE {rental_where}
+                ORDER BY r.found_at DESC, r.id DESC LIMIT ${i} OFFSET ${i+1}
+            """, *params, limit + 1, offset)
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            batch_rows = len(rows)
             # Каскад привязки: ЖК -> центроид района -> без привязки.
             district_geo = {r2["district"]: (float(r2["lat"]), float(r2["lon"]))
                             for r2 in await pg_fetch("""
@@ -4568,7 +4581,7 @@ def make_extras_router(templates) -> APIRouter:
             for r in rows:
                 d = dict(r)
                 cx_geo = complex_geo.get(d["complex_key"])
-                if d.get("own_lat") is not None:
+                if d.get("own_lat") is not None and d.get("own_lon") is not None:
                     # свои координаты с детальной страницы — самая точная привязка
                     lat, lon, binding, jit = float(d["own_lat"]), float(d["own_lon"]), "точно", 0.0
                 elif cx_geo is not None:
@@ -4598,7 +4611,11 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse({"points": pts, "mode": "rental",
                                  "count": len(pts), "no_geo": no_geo,
                                  "scope": "Астана · активные квартиры месячной аренды, замеченные за 72 часа",
-                                 "limited_to": 1000, "market_coverage": "unknown"})
+                                 "limited_to": limit, "limit": limit, "offset": offset,
+                                 "batch_rows": batch_rows, "total_matching": total_matching,
+                                 "has_more": has_more, "next_offset": offset + batch_rows if has_more else None,
+                                 "geo_scope": "city", "market_coverage": "unknown"},
+                                headers={"Cache-Control": "no-store"})
 
         # Статистика по всей базе не зависит от offset/limit батча — считаем
         # только на первом запросе страницы, чтобы не дублировать тяжёлые COUNT(*)

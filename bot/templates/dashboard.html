@@ -662,6 +662,52 @@ function cachedFetchJson(url, signal) {
     return data;
   });
 }
+// Rental pages contain both mappable and unbound rows. Advance by raw rows,
+// never by the number of pins, so an entirely unbound page cannot hide a tail.
+async function loadAllRentalPoints(baseParams, options) {
+  options = options || {};
+  const params = new URLSearchParams(baseParams || {});
+  params.set('type', 'rental');
+  // Rental coordinates may be approximate; this endpoint covers the city.
+  ['min_lat', 'max_lat', 'min_lon', 'max_lon', 'offset', 'limit'].forEach(k => params.delete(k));
+  const batch = 300;
+  const all = [], seen = new Set();
+  const progress = {raw_loaded:0, no_geo:0, total_matching:null, market_coverage:'unknown', geo_scope:'city'};
+  let offset = 0;
+  const checkCurrent = () => {
+    if ((options.signal && options.signal.aborted) || (options.isCurrent && !options.isCurrent())) {
+      const error = new Error('Rental load superseded'); error.name = 'AbortError'; throw error;
+    }
+  };
+  for (let pages = 0; pages < 1000; pages++) {
+    checkCurrent();
+    const pageParams = new URLSearchParams(params);
+    pageParams.set('offset', offset); pageParams.set('limit', batch);
+    const data = await cachedFetchJson('/admin/api/map-points?' + pageParams.toString(), options.signal);
+    checkCurrent();
+    if (!data || !Array.isArray(data.points) || data.error || !Number.isInteger(data.batch_rows)
+        || data.batch_rows < 0 || data.batch_rows > batch) throw new Error('Invalid rental page');
+    const fresh = [];
+    data.points.forEach(pt => {
+      if (!pt || pt.id == null) return;
+      const id = String(pt.id);
+      if (seen.has(id)) return;
+      seen.add(id); all.push(pt); fresh.push(pt);
+    });
+    progress.raw_loaded += data.batch_rows;
+    progress.no_geo += Number.isInteger(data.no_geo) && data.no_geo >= 0 ? data.no_geo : 0;
+    if (progress.total_matching == null && Number.isInteger(data.total_matching) && data.total_matching >= 0) {
+      progress.total_matching = data.total_matching;
+    }
+    if (options.onBatch) options.onBatch({...data, points:fresh}, {...progress});
+    if (!data.has_more) return {...progress, points:all, mode:'rental'};
+    if (!Number.isInteger(data.next_offset) || data.next_offset <= offset || data.batch_rows === 0) {
+      throw new Error('Rental pagination did not advance');
+    }
+    offset = data.next_offset;
+  }
+  throw new Error('Rental pagination limit reached');
+}
 // Один AbortController на "поколение" батчей карты (см. applyFiltersSeq) —
 // при смене фильтра/новой области панорамирования старый реально обрывается,
 // а не просто игнорируется после ответа (см. комментарий у cachedFetchJson).
@@ -2144,11 +2190,12 @@ function fmtPriceShort(v) {
 // developers), поэтому пока значок текстовый (SD) — если появится файл
 // логотипа, можно заменить badgeHtml на <img>.
 const SVOY_DOM_DEV_IDS = new Set([56, 72]);
-function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
-  const priceTxt = fmtPriceShort(pt.price);
-  const roomsTxt = pt.rooms ? pt.rooms + 'к' : '?';
+function buildPricePinHtml(pt, pinBg, isTop, sellerTxt, rental) {
+  const rentalPriceKnown = !rental || (Number.isFinite(pt.price) && pt.price > 0);
+  const priceTxt = rental && !rentalPriceKnown ? 'Цена не указана' : fmtPriceShort(pt.price);
+  const roomsTxt = rental && pt.rooms === 0 ? 'Студия' : (pt.rooms ? pt.rooms + 'к' : '?');
   let trendHtml = '';
-  if (pt.prev_price && pt.prev_price !== pt.price) {
+  if (rentalPriceKnown && pt.prev_price && pt.prev_price !== pt.price) {
     const down = pt.price < pt.prev_price;
     const color = down ? '#16a34a' : '#ef4444';
     trendHtml = `<span class="price-trend-arrow" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:4px;font-size:11px;color:${color};background:#fff;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">${down ? '▼' : '▲'}</span>`;
@@ -2180,10 +2227,13 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
 // карточки продажи: у аренды нет фото-модалки/торга/ипотеки/скора — только
 // то, что реально есть в rental_listings.
 function buildRentalCardHtml(pt) {
-  const priceTxt = pt.price ? Math.round(pt.price / 1000).toLocaleString('ru') + ' тыс ₸/мес' : '—';
+  const priceKnown = Number.isFinite(pt.price) && pt.price > 0;
+  const priceTxt = priceKnown ? Math.round(pt.price / 1000).toLocaleString('ru') + ' тыс ₸/мес' : 'Цена не указана';
   const photos = pt.photos || [];
   if (photos.length) { ptPhotos[pt.id] = photos; carIdx[pt.id] = 0; }
-  const favStarHtml = `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" data-active="0" style="position:absolute;top:8px;left:8px;font-size:28px;line-height:1;cursor:pointer;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 3px rgba(0,0,0,.6);z-index:2;">♡</span>`;
+  // The existing favorites table references sales; a rental ID must not be
+  // stored there and resolve to an unrelated sale with the same source ID.
+  const favStarHtml = '';
   // Тот же carNav/точки-пагинация, что у продажи — клик по фото открывает
   // большой попап (не лайтбокс), стрелки только листают (stopPropagation).
   const carHtml = photos.length ? `
@@ -2202,25 +2252,26 @@ function buildRentalCardHtml(pt) {
   // карты (задача 2026-08-21) — единый визуальный язык вместо прежнего
   // текстового "▲ 12 тыс".
   let priceTrend = '';
-  if (pt.prev_price && pt.prev_price !== pt.price) {
+  if (priceKnown && pt.prev_price && pt.prev_price !== pt.price) {
     const down = pt.price < pt.prev_price;
     const deltaAbs = Math.abs(pt.price - pt.prev_price);
     const deltaTxt = Math.round(deltaAbs / 1000) + ' тыс ₸';
     priceTrend = `<span title="Цена ${down ? 'снизилась' : 'выросла'} на ${deltaTxt}" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;border-radius:50%;color:${down ? '#16a34a' : '#ef4444'};background:${down ? '#dcfce7' : '#fee2e2'};font-size:12px;font-weight:900;line-height:1;">${down ? '↓' : '↑'}</span>`;
   }
-  const ownerPillHtml = `<span style="${pillStyle}margin:0;background:${pt.is_owner ? '#dcfce7' : '#e5e7eb'};color:${pt.is_owner ? '#166534' : '#374151'};">${pt.is_owner ? 'собственник' : 'риелтор'}</span>`;
+  const ownerLabel = pt.is_owner === true ? 'собственник' : pt.is_owner === false ? 'риелтор' : 'Кто сдаёт — не указано';
+  const ownerPillHtml = `<span style="${pillStyle}margin:0;background:${pt.is_owner === true ? '#dcfce7' : '#e5e7eb'};color:${pt.is_owner === true ? '#166534' : '#374151'};">${ownerLabel}</span>`;
   const cxLine = pt.complex
     ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
     : '';
   // Упрощённая карточка (см. B2 в задаче) — только фото/цена/пилюли/ЖК,
   // без банков/описания/кнопок отдельной строкой; вся карточка кликабельна.
   return `
-<div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
+<div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openRentalDetailModal('${pt.id}', event)">
   ${carHtml ? `<div style="border-radius:11px 11px 0 0;overflow:hidden;">${carHtml}</div>` : `<div style="position:relative;">${favStarHtml}</div>`}
   <div style="padding:10px 10px 0;">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
       <div style="font-size:21px;font-weight:800;">${priceTxt}</div>${priceTrend}
-      <span style="${pillStyle}margin:0;">${pt.rooms || '?'}-комн</span>
+      <span style="${pillStyle}margin:0;">${pt.rooms === 0 ? 'Студия' : (pt.rooms || '?') + '-комн'}</span>
       ${pt.area ? `<span style="${pillStyle}margin:0;">${Math.round(pt.area)} м²</span>` : ''}
       ${pt.floor ? `<span style="${pillStyle}margin:0;">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : ''}
       ${ownerPillHtml}
@@ -2581,9 +2632,23 @@ function applyFilters() {
 
   if (type === 'rental') {
   const rentalSeq = applyFiltersSeq;  // уже увеличен в начале applyFilters()
+  const rentalSignal = newMapFetchSignal();
+  const rentalCurrent = () => rentalSeq === applyFiltersSeq && getFilterType() === 'rental';
+  const resultEl = document.getElementById('result-count');
+  let rentalProgress = {raw_loaded:0, total_matching:null, no_geo:0};
+  let rentalStarted = false;
+  const rentalCountText = progress => `Загружено ${progress.raw_loaded}`
+    + (progress.total_matching != null ? ` из ${progress.total_matching}` : '')
+    + ' свежих объявлений в базе'
+    + (progress.no_geo ? ` · ${progress.no_geo} без координат` : '')
+    + (drawnPolygons.length ? ' · на карте выбранная область' : '');
+  resultEl.textContent = 'Загружаем аренду…'; resultEl.classList.add('loading');
   map.removeLayer(liteCluster); liteCluster.clearLayers();
-  cachedFetchJson('/admin/api/map-points?' + p.toString(), newMapFetchSignal()).then(d => {
-      if (rentalSeq !== applyFiltersSeq) return;  // фильтры сменились ещё раз, пока запрос летел
+  loadAllRentalPoints(p, {signal:rentalSignal, isCurrent:rentalCurrent, onBatch:(d, progress) => {
+      if (!rentalCurrent()) return;
+      rentalProgress = progress;
+      if (!rentalStarted) {
+      rentalStarted = true;
       map.removeLayer(pointsLayer);
       map.removeLayer(topLayer);
       map.removeLayer(liteCluster);
@@ -2593,10 +2658,13 @@ function applyFilters() {
       if (!map.hasLayer(saleCluster)) saleCluster.addTo(map);
       saleCluster.clearLayers();
       Object.keys(MINI_PIN_MARKERS).forEach(k => delete MINI_PIN_MARKERS[k]);
-      lastPoints = d.points || [];
-      if (drawnPolygons.length) lastPoints = lastPoints.filter(pt => pointInAnyDrawnPolygon(pt.lat, pt.lon));
-      lastPoints.forEach(pt => {
-        const pinHtml = buildPricePinHtml(pt, '#0077FF', false, '');
+      lastPoints = [];
+      }
+      const batchPoints = (d.points || []).filter(pt => !drawnPolygons.length || pointInAnyDrawnPolygon(pt.lat, pt.lon));
+      batchPoints.forEach(pt => {
+        if (MINI_PIN_MARKERS[pt.id]) return;
+        lastPoints.push(pt);
+        const pinHtml = buildPricePinHtml(pt, '#0077FF', false, '', true);
         const m = L.marker([pt.lat, pt.lon], {
           icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
           pinMeta: {pt, pinBg: '#0077FF', isTop: false},
@@ -2607,10 +2675,17 @@ function applyFilters() {
         // отдельно жила на старом Leaflet-попапе прямо над пином).
         m.on('click', () => { selectPin(pt.id); openSidePanel([pt.id]); });
       });
-      document.getElementById('result-count').classList.remove('loading');
-      document.getElementById('result-count').textContent = (d.no_geo ? `ещё ${d.no_geo} совсем без привязки` : '') + (drawnPolygons.length ? ' · в области' : '');
+      resultEl.textContent = rentalCountText(progress) + (d.has_more ? ' · подгружаем…' : '');
       if (hexOn) drawHexGrid();
       refreshSidePanelList();
+  }}).then(progress => {
+    if (!rentalCurrent()) return;
+    resultEl.classList.remove('loading');
+    resultEl.textContent = rentalCountText(progress);
+  }).catch(error => {
+    if (!rentalCurrent() || error.name === 'AbortError') return;
+    resultEl.classList.remove('loading');
+    resultEl.textContent = 'Не удалось загрузить всю аренду. ' + rentalCountText(rentalProgress);
   });
     return;
   }
@@ -4365,7 +4440,7 @@ async function loadHeatData(mode) {
     heatCache.saleArchived = archived.points || [];
   } else if (mode === 'rental') {
     const [d, archived] = await Promise.all([
-      cachedFetchJson('/admin/api/map-points?type=rental'),
+      loadAllRentalPoints(),
       fetch('/admin/api/archived-rental-points').then(r => r.json()),
     ]);
     heatCache.rental = d.points || [];
@@ -4404,7 +4479,7 @@ async function loadHeatData(mode) {
     // что уже используются как фолбэк для тепловых карт цены).
     const [s, r, sa, ra] = await Promise.all([
       fetch('/admin/api/heat-points').then(r => r.json()),
-      cachedFetchJson('/admin/api/map-points?type=rental'),
+      loadAllRentalPoints(),
       fetch('/admin/api/archived-sale-points').then(r => r.json()),
       fetch('/admin/api/archived-rental-points').then(r => r.json()),
     ]);
@@ -4878,6 +4953,84 @@ function renderNewbuildDetail(unitId, content) {
     mountModalPriceForecast(content, d.price_forecast);
   }).catch(() => {
     content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Ошибка загрузки</div>';
+  });
+}
+
+// Rentals use their own endpoint and dialog: an equal sale ID is a different
+// record and cannot supply photos, status, history or a sales forecast here.
+let rentalDetailSeq = 0, rentalDetailAbort = null, rentalDetailPreviousFocus = null;
+function closeRentalDetailModal() {
+  rentalDetailSeq++;
+  if (rentalDetailAbort) rentalDetailAbort.abort();
+  const root = document.getElementById('rental-detail-overlay');
+  if (root) root.style.display = 'none';
+  if (rentalDetailPreviousFocus && rentalDetailPreviousFocus.focus) rentalDetailPreviousFocus.focus();
+}
+function ensureRentalDetailRoot() {
+  let root = document.getElementById('rental-detail-overlay');
+  if (root) return root;
+  root = document.createElement('div');
+  root.id = 'rental-detail-overlay';
+  root.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:10000;display:none;align-items:center;justify-content:center;padding:12px;';
+  root.innerHTML = `<section role="dialog" aria-modal="true" aria-labelledby="rental-detail-title" style="position:relative;width:min(100%,900px);max-height:calc(100vh - 24px);overflow-y:auto;background:var(--surface);color:var(--text);border-radius:14px;padding:22px;">
+    <button type="button" id="rental-detail-close" onclick="closeRentalDetailModal()" aria-label="Закрыть объявление аренды" style="position:absolute;right:12px;top:12px;border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:8px;padding:5px 12px;font-size:20px;">×</button>
+    <div id="rental-detail-content"></div></section>`;
+  root.onclick = event => { if (event.target === root) closeRentalDetailModal(); };
+  root.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.stopPropagation(); closeRentalDetailModal(); }
+    if (event.key !== 'Tab') return;
+    const focusable = [...root.querySelectorAll('button,a[href]')];
+    const first = focusable[0], last = focusable[focusable.length-1];
+    if (event.shiftKey && document.activeElement === first) {event.preventDefault(); last.focus();}
+    else if (!event.shiftKey && document.activeElement === last) {event.preventDefault(); first.focus();}
+  });
+  document.body.appendChild(root);
+  return root;
+}
+function renderRentalDetailHtml(data) {
+  const id = String(data.id || '');
+  if (!/^\d{5,20}$/.test(id)) return '<p>Не удалось прочитать объявление аренды.</p>';
+  const money = value => Number.isFinite(value) && value > 0 ? Math.round(value).toLocaleString('ru') + ' ₸' : 'Цена не указана';
+  const date = value => {
+    const parsed = new Date(value || '');
+    return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString('ru', {timeZone:'Asia/Almaty'}) : 'дата не указана';
+  };
+  const photos = Array.isArray(data.photos) ? data.photos : [];
+  const history = Array.isArray(data.price_history) ? data.price_history : [];
+  const room = data.rooms === 0 ? 'Студия' : (data.rooms != null ? data.rooms + '-комнатная' : 'Комнаты не указаны');
+  const historyHtml = history.map(item => `<li style="margin:8px 0;">${escapeHtml(date(item.changed_at))}: ${money(item.old_price)} → ${money(item.new_price)}</li>`).join('');
+  return `<div style="padding-right:36px;"><p style="color:var(--muted);font-size:13px;">Аренда${data.monthly_category ? ' · категория помесячной аренды' : ''}</p><h2 id="rental-detail-title" style="font-size:clamp(20px,4vw,28px);margin:6px 0 14px;line-height:1.3;">${escapeHtml(data.title || 'Объявление об аренде')}</h2></div>
+    <p style="font-size:26px;font-weight:800;margin:10px 0;">${money(data.price)}${Number.isFinite(data.price) && data.price > 0 && data.monthly_category ? '/мес' : ''}</p>
+    <p>${escapeHtml(room)}${data.area ? ' · ' + data.area + ' м²' : ''}${data.floor ? ' · этаж ' + data.floor + (data.floors_total ? '/' + data.floors_total : '') : ''}</p>
+    <p style="margin-top:10px;">Адрес из объявления: ${escapeHtml(data.address || 'не указан')}</p>
+    ${data.complex ? `<p>ЖК из объявления: ${escapeHtml(data.complex)}</p>` : ''}
+    <p style="margin:12px 0;color:var(--muted);">${escapeHtml(data.status_label || 'Актуальность требует проверки')} · ${escapeHtml(date(data.last_seen))}</p>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">${escapeHtml(data.archive_note || 'Снятие объявления не подтверждает сдачу квартиры.')}</p>
+    ${photos.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:8px;">${photos.map((photo,index) => `<img src="${escapeHtml(proxyImg(photo))}" alt="Фото аренды ${index+1}" loading="lazy" style="display:block;width:100%;aspect-ratio:4/3;object-fit:contain;background:var(--surface2);border-radius:8px;">`).join('')}</div>` : '<p style="color:var(--muted);">Фотографии ещё не сохранены.</p>'}
+    <h3 style="margin:20px 0 8px;font-size:17px;">История заявленной цены</h3>
+    ${data.history_available === false ? '<p>Историю цены сейчас не удалось загрузить.</p>' : history.length ? `<ul style="padding-left:20px;">${historyHtml}</ul>${data.history_truncated ? '<p>Показаны последние 100 записей.</p>' : ''}` : '<p>В нашей базе изменений цены пока нет.</p>'}
+    <p style="font-size:12px;color:var(--muted);margin-top:8px;">Это записи наблюдений; история может быть неполной. Фактическая ставка и сдача квартиры не подтверждены.</p>
+    <a href="https://krisha.kz/a/show/${id}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 16px;margin-top:18px;background:var(--accent);color:#fff;border-radius:9px;text-decoration:none;">Открыть объявление на Krisha</a>`;
+}
+function openRentalDetailModal(id, event) {
+  if (event) event.stopPropagation();
+  id = String(id);
+  if (!/^\d{5,20}$/.test(id)) return;
+  const seq = ++rentalDetailSeq;
+  if (rentalDetailAbort) rentalDetailAbort.abort();
+  rentalDetailAbort = new AbortController();
+  rentalDetailPreviousFocus = document.activeElement;
+  const root = ensureRentalDetailRoot();
+  root.style.display = 'flex';
+  const content = document.getElementById('rental-detail-content');
+  content.innerHTML = '<h2 id="rental-detail-title">Аренда</h2><p>Загрузка…</p>';
+  document.getElementById('rental-detail-close').focus();
+  fetch('/admin/api/rental/' + encodeURIComponent(id), {signal:rentalDetailAbort.signal}).then(response => response.json()).then(data => {
+    if (seq !== rentalDetailSeq) return;
+    content.innerHTML = data.error ? `<h2 id="rental-detail-title">Аренда</h2><p>${escapeHtml(data.message || 'Объявление аренды не найдено в нашей базе.')}</p>` : renderRentalDetailHtml(data);
+  }).catch(error => {
+    if (seq !== rentalDetailSeq || error.name === 'AbortError') return;
+    content.innerHTML = '<h2 id="rental-detail-title">Аренда</h2><p>Не удалось загрузить объявление. Попробуйте ещё раз.</p>';
   });
 }
 
