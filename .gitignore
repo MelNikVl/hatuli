@@ -21,3 +21,4 @@ research/phase_c/data/
 /var/daily-picks.json
 /var/daily-picks.json.lock
 /var/.daily-picks.json.*.tmp
+/var/daily-picks-*.json
