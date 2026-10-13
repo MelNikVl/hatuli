@@ -50,8 +50,12 @@ def _public_offer(offer: dict) -> dict:
 
 def _primary_selection_offer(offer, market):
     """Compare developer units within their own project, rooms and area band."""
+    complex_id = offer.get("complex_id")
+    if not isinstance(complex_id, int) or isinstance(complex_id, bool) or complex_id <= 0:
+        # Missing project IDs cannot group unrelated, unidentified buildings.
+        return _public_offer({**offer, "price_comparison": None})
     peers = [row["price_per_m2"] for row in market.get("offers", [])
-             if row["market_type"] == "primary" and row["complex_id"] == offer["complex_id"]
+             if row["market_type"] == "primary" and row.get("complex_id") == complex_id
              and row["id"] != offer["id"] and row["rooms"] == offer["rooms"]
              and offer["area"] * .85 <= row["area"] <= offer["area"] * 1.15]
     generated = market.get("generated_at")
