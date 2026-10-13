@@ -63,7 +63,7 @@
           <p class="picks-floor">{% if item.floor %}{{ item.floor }}{% if item.floors_total %} из {{ item.floors_total }}{% endif %} этаж{% else %}Этаж уточняйте у продавца{% endif %}</p>
           <div class="picks-reasons"><h4>Почему в подборке</h4><ul>{% for reason in item.reasons %}<li><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3 8 3 3 7-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>{{ reason }}</span></li>{% endfor %}</ul></div>
           {% if item.cautions %}<p class="picks-caution"><strong>Перед просмотром:</strong> {{ item.cautions|join(' ') }}</p>{% endif %}
-          <div class="picks-card-bottom"><p class="picks-observed">Данные объявления: {{ item.observed_at_label }}<span>Источник: Krisha.kz</span></p><a class="picks-button picks-card-button" href="{{ item.source_url }}" target="_blank" rel="noopener noreferrer nofollow">Посмотреть квартиру <span aria-hidden="true">↗</span></a></div>
+          <div class="picks-card-bottom"><p class="picks-observed">Проверено на Krisha: {{ item.source_checked_at_label }}<span>Данные сравнения: {{ item.observed_at_label }}</span></p><a class="picks-button picks-card-button" href="{{ item.source_url }}" target="_blank" rel="noopener noreferrer nofollow">Посмотреть квартиру <span aria-hidden="true">↗</span></a></div>
         </div>
       </article>
       {% endfor %}

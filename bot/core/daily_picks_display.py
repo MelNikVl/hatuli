@@ -33,7 +33,7 @@ def prepare_daily_picks(snapshot: dict | None, now: datetime | None = None) -> d
     elif not is_today:
         message = "Следующий выпуск — сегодня в 08:00 по времени Астаны. Пока доступна предыдущая подборка."
     else:
-        message = "Обновляем каждый день в 08:00 по времени Астаны. Дата наблюдения указана в каждой карточке."
+        message = "Новый выпуск — каждый день после 08:00 по времени Астаны. В каждой карточке указано время проверки объявления."
     return {
         **snapshot,
         "date_label": _day_label(selection_date),
@@ -41,5 +41,6 @@ def prepare_daily_picks(snapshot: dict | None, now: datetime | None = None) -> d
         "as_of_label": _time_label(snapshot["source_observed_at"]),
         "is_stale": status["is_stale"], "is_today": is_today,
         "status_message": message,
-        "items": [{**item, "observed_at_label": _time_label(item["observed_at"])} for item in snapshot["items"]],
+        "items": [{**item, "observed_at_label": _time_label(item["observed_at"]),
+                   "source_checked_at_label": _time_label(item["source_checked_at"])} for item in snapshot["items"]],
     }
