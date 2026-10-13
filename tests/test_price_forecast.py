@@ -437,3 +437,28 @@ def test_same_complex_is_preferred_when_enough_independent_historical_homes_exis
     other = [{**query, "group_id": str(i + 100), "complex_id": 2, "y": .2} for i in range(200)]
     prediction, count = pf.predict_change(pf.fit_neighbours(own + other), query)
     assert count == 25 and prediction < 0
+
+
+def test_source_freshness_is_exactly_48_hours_from_actual_capture_time():
+    raw = point(10)
+    capture = datetime.fromisoformat(raw["captured_at"])
+    raw["source_observed_at"] = (capture - timedelta(hours=47)).isoformat()
+    assert pf.checked_point(raw, NOW) is not None
+    raw["source_observed_at"] = (capture - timedelta(hours=49)).isoformat()
+    assert pf.checked_point(raw, NOW) is None
+
+
+def test_an_earlier_capture_cannot_be_assigned_a_later_forecast_anchor():
+    raw = point(10)
+    raw["date"] = (START + timedelta(days=11)).isoformat()
+    assert pf.checked_point(raw, NOW) is None
+
+
+def test_repeated_old_source_timestamp_is_not_a_continuously_observed_target():
+    raw = record(count=29)
+    prepared, _ = pf.prepare_records([raw], NOW)
+    row = pf.build_examples(prepared, 7)[0]
+    anchor_index = (row["anchor"] - START).days
+    raw["points"][anchor_index + 1]["source_observed_at"] = raw["points"][anchor_index]["source_observed_at"]
+    prepared, _ = pf.prepare_records([raw], NOW)
+    assert row["anchor"] not in [r["anchor"] for r in pf.build_examples(prepared, 7)]

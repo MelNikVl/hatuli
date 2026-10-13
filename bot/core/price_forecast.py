@@ -122,8 +122,8 @@ def checked_point(point: dict, as_of: datetime) -> dict | None:
     end = datetime.combine(day + timedelta(days=1), datetime.min.time(), timezone.utc)
     if (point.get("source_status") != "active" or point.get("source_price_confirmed") is not True
             or not price or not 5_000_000 <= price <= 600_000_000
-            or not end - MAX_SOURCE_LAG <= observed < end or observed > captured or captured > as_of
-            or captured >= end):
+            or not captured - MAX_SOURCE_LAG <= observed <= captured or captured > as_of
+            or not end - timedelta(days=1) <= captured < end):
         return None
     # captured_at, not a retrospectively copied first_seen, limits features.
     return {"date": day, "price": price, "source_observed_at": observed, "captured_at": captured}
@@ -231,6 +231,7 @@ def build_examples(records: list[dict], horizon_days: int) -> list[dict]:
                             key=lambda p: p["date"])
             if any((b["date"] - a["date"]).days > 2
                    or b["source_observed_at"] - a["source_observed_at"] > MAX_SOURCE_LAG
+                   or b["source_observed_at"] <= a["source_observed_at"]
                    for a, b in zip(window, window[1:])):
                 continue  # gaps/possible withdrawal are censored, not unchanged
             output.append({**row, "target_date": future["date"], "target_available_at": future["captured_at"],
