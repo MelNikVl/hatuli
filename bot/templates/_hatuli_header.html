@@ -5,6 +5,7 @@
   <div class="pub-row1">
     <a href="/" class="pub-logo" aria-label="Hatuli — главная"><svg class="hatuli-brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M4 15 16 5l12 10v12H7V15" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="m12 19 3 3 7-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Hatuli</a>
     <nav class="pub-nav" id="hatuli-main-nav" aria-label="Основная навигация">
+      {% if header_admin %}<a href="/admin-panel" class="admin-panel-link" {% if header_path.startswith('/admin') and header_path not in ('/admin', '/admin/login', '/admin/logout') %}aria-current="page"{% endif %}>Админка</a>{% endif %}
       <a href="/best-apartments" {% if header_path == '/best-apartments' %}aria-current="page"{% endif %}>Лучшие варианты</a>
       <a href="/compare" {% if header_path == '/compare' %}aria-current="page"{% endif %}>Сравнение</a>
       <a href="/example" {% if header_path == '/example' %}aria-current="page"{% endif %}>Пример разбора</a>
@@ -12,7 +13,6 @@
       <a href="/how-it-works" {% if header_path == '/how-it-works' %}aria-current="page"{% endif %}>Как считаем</a>
       {% if header_admin %}
       <a href="/info" {% if header_path == '/info' %}aria-current="page"{% endif %}>Аналитика</a>
-      <a href="/admin-panel" class="admin-panel-link" {% if header_path.startswith('/admin') and header_path != '/admin' %}aria-current="page"{% endif %}>Админка</a>
       {% endif %}
     </nav>
     <div class="pub-row1-right">

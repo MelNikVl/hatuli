@@ -26,7 +26,7 @@ load_dotenv()
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -65,21 +65,35 @@ async def _check_subscribed(bot: Bot, telegram_id: int) -> bool:
 
 @dp.message(CommandStart())
 async def cmd_start(message: Message, bot: Bot) -> None:
-    from bot.core.site_auth import get_token_status
+    from bot.core.site_auth import (
+        get_token_status, verify_login_and_create_return_token, mark_login_not_subscribed,
+    )
+    from bot.core.site_login_link import site_origin, telegram_return_url
     from bot.db.pg import execute
+
+    if message.chat.type != "private" or message.from_user is None:
+        await message.answer("Для входа открой личный диалог с ботом по ссылке с сайта Hatuli.")
+        return
 
     parts = (message.text or "").split(maxsplit=1)
     token = parts[1].strip() if len(parts) > 1 else ""
     if not token:
         await message.answer(
             "Привет! Это бот входа в личный кабинет Hatuli.\n"
-            "Открой сайт и нажми «Войти через Telegram» — оттуда придёт ссылка сюда."
+            "Открой сайт и нажми «Войти через Telegram» — оттуда придёт ссылка сюда.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Открыть Hatuli", url=site_origin() + "/cabinet"),
+            ]]),
         )
         return
 
     status = await get_token_status(token)
-    if not status or status.get("status") == "expired":
-        await message.answer("Ссылка для входа устарела — вернись на сайт и попробуй снова.")
+    if (not status or status.get("status") not in ("pending", "not_subscribed")
+            or status.get("telegram_id") not in (None, message.from_user.id)):
+        await message.answer("Ссылка для входа устарела — открой сайт и попробуй снова.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Войти ещё раз", url=site_origin() + "/cabinet"),
+            ]]))
         return
 
     telegram_id = message.from_user.id
@@ -97,9 +111,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 
     if subscribed is False:
         # Точно НЕ подписан (Telegram подтвердил статус left/kicked) — блокируем.
-        await execute(
-            "UPDATE login_tokens SET status = 'not_subscribed', telegram_id = $2 WHERE token = $1",
-            token, telegram_id)
+        await mark_login_not_subscribed(token, telegram_id)
         await message.answer(
             f"Чтобы пользоваться личным кабинетом, сначала подпишись на {HATULI_CHANNEL} — "
             "и снова нажми на ссылку входа с сайта."
@@ -110,10 +122,20 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     # реальных пользователей из-за нашей же незавершённой настройки бота
     # хуже, чем временно пропустить проверку.
 
-    await execute(
-        "UPDATE login_tokens SET status = 'verified', telegram_id = $2, verified_at = now() WHERE token = $1",
-        token, telegram_id)
-    await message.answer("Готово! Возвращайся на сайт — вход выполнен автоматически. ✅")
+    return_token = await verify_login_and_create_return_token(token, telegram_id)
+    if not return_token:
+        await message.answer("Ссылка для входа устарела или доступ закрыт — открой сайт и попробуй снова.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Войти ещё раз", url=site_origin() + "/cabinet"),
+            ]]))
+        return
+    await message.answer(
+        "Готово! ✅ Нажми «Открыть Hatuli» — сайт откроется с выполненным входом.\n"
+        "Ссылка действует 10 минут и используется один раз.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Открыть Hatuli", url=telegram_return_url(return_token)),
+        ]]),
+    )
 
 
 async def _ensure_watch_state_table() -> None:

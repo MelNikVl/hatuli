@@ -23,6 +23,7 @@ from bot.core.public_buyer_example import load_public_example
 from bot.core.daily_picks import load_daily_picks
 from bot.core.daily_picks_display import prepare_daily_picks
 from bot.public_comparison_routes import register_public_comparison_routes
+from bot.site_auth_routes import register_site_auth_routes
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _LOG_FILE = "web.log"
@@ -41,6 +42,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=_TEMPLATES_DIR)
     register_public_comparison_routes(app, templates)
+    register_site_auth_routes(app, templates)
 
     def _fmt_num(value, digits: int = 0) -> str:
         """1234567 -> '1 234 567' / 12.3 -> '12,3' — форматирование больших

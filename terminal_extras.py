@@ -1576,28 +1576,29 @@ def make_extras_router(templates) -> APIRouter:
     @router.post("/api/auth/start")
     async def api_auth_start(request: Request):
         from bot.core.site_auth import create_login_token
+        from bot.site_auth_routes import AUTH_HEADERS
         token = await create_login_token()
         bot_username = os.getenv("SITE_BOT_USERNAME", "nik_us_bot")
         return JSONResponse({
             "token": token,
             "deep_link": f"https://t.me/{bot_username}?start={token}",
-        })
+        }, headers=AUTH_HEADERS)
 
     @router.get("/api/auth/poll")
     async def api_auth_poll(request: Request, token: str):
-        from bot.core.site_auth import get_token_status, consume_login_token
+        from bot.core.site_auth import get_token_status, consume_login_token, set_site_session_cookie
+        from bot.site_auth_routes import AUTH_HEADERS
         status = await get_token_status(token)
         if not status:
-            return JSONResponse({"status": "not_found"})
+            return JSONResponse({"status": "not_found"}, headers=AUTH_HEADERS)
         if status["status"] == "verified":
             session_id = await consume_login_token(token)
             if not session_id:
-                return JSONResponse({"status": "expired"})
-            resp = JSONResponse({"status": "verified"})
-            resp.set_cookie("site_session", session_id, httponly=True, max_age=180 * 86400,
-                            secure=request.url.scheme == "https", samesite="lax")
+                return JSONResponse({"status": "expired"}, headers=AUTH_HEADERS)
+            resp = JSONResponse({"status": "verified"}, headers=AUTH_HEADERS)
+            set_site_session_cookie(resp, request, session_id)
             return resp
-        return JSONResponse({"status": status["status"]})
+        return JSONResponse({"status": status["status"]}, headers=AUTH_HEADERS)
 
     @router.post("/api/auth/logout")
     async def api_auth_logout(request: Request):

@@ -8,8 +8,9 @@
   3. Бот (service_site_bot.py) проверяет подписку на HATULI_CHANNEL через
      get_chat_member, апсертит users по telegram_id, помечает token verified
      (или not_subscribed, если подписки нет).
-  4. Сайт: GET /api/auth/poll?token=... — как только token verified, создаёт
-     site_sessions и ставит cookie.
+  4. Исходная вкладка получает cookie через /api/auth/poll. Бот также выдаёт
+     отдельный одноразовый token для перехода /auth/telegram#token=...:
+     POST /api/auth/complete обменивает его на cookie в открывшемся браузере.
 
 Отдельно от admin_users (это операторы админки, другая система авторизации).
 """
@@ -57,6 +58,48 @@ async def create_login_token() -> str:
     await execute(
         "INSERT INTO login_tokens (token, status) VALUES ($1, 'pending')", token)
     return token
+
+
+async def verify_login_and_create_return_token(token: str, user_id: int) -> str | None:
+    """Claim the original login and issue an independent bot return link.
+
+    The polling tab may consume the original immediately. Both browser flows
+    therefore have their own one-use credential. Never rebind a claimed token
+    to another Telegram identity or authenticate blocked/expired users.
+    """
+    if not token or len(token) > 100:
+        return None
+    return_token = secrets.token_urlsafe(24)
+    row = await fetchrow("""
+        WITH verified AS (
+            UPDATE login_tokens t SET status='verified', telegram_id=$2, verified_at=now()
+            FROM users u WHERE t.token=$1 AND u.user_id=$2
+              AND t.status IN ('pending','not_subscribed')
+              AND (t.telegram_id IS NULL OR t.telegram_id=$2)
+              AND t.consumed_at IS NULL
+              AND t.created_at > now() - $4::int * interval '1 minute'
+              AND COALESCE(u.is_blocked,0)=0
+            RETURNING t.telegram_id
+        )
+        INSERT INTO login_tokens(token,status,telegram_id,verified_at)
+        SELECT $3,'verified',telegram_id,now() FROM verified RETURNING token
+    """, token, user_id, return_token, TOKEN_TTL_MIN)
+    return row["token"] if row else None
+
+
+async def mark_login_not_subscribed(token: str, user_id: int) -> None:
+    """Record a failed membership check without changing a token's owner."""
+    await execute("""
+        UPDATE login_tokens SET status='not_subscribed', telegram_id=$2
+        WHERE token=$1 AND status IN ('pending','not_subscribed')
+          AND (telegram_id IS NULL OR telegram_id=$2) AND consumed_at IS NULL
+          AND created_at > now() - $3::int * interval '1 minute'
+    """, token, user_id, TOKEN_TTL_MIN)
+
+
+def set_site_session_cookie(response, request: Request, session_id: str) -> None:
+    response.set_cookie("site_session", session_id, httponly=True, max_age=180 * 86400,
+                        secure=request.url.scheme == "https", samesite="lax", path="/")
 
 
 async def get_token_status(token: str) -> dict | None:
