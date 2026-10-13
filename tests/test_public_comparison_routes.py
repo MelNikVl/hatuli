@@ -142,6 +142,8 @@ async def test_selected_source_defaults_primary_wait_but_does_not_infer_keys_fro
     assert Forms(primary.text).inputs["price"]["value"] == "30000000"
     assert Forms(secondary.text).inputs["price"]["value"] == "32000000"
     assert "неподтверждённой готовности" in primary.text
+    assert 'href="/listing/nb-1"' in primary.text
+    assert any(getattr(route, "path", None) == "/listing/{listing_id}" for route in app.routes)
 
 
 @pytest.mark.asyncio
@@ -281,3 +283,31 @@ def test_malformed_snapshot_price_per_metre_fails_closed(tmp_path, invalid):
     path = tmp_path / "market.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     assert load_market_snapshot(path)["offers"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identifier", ["newbuild:0", "newbuild:2147483648"])
+async def test_developer_selector_validates_id_range_after_parsing(app, identifier):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/compare", params={"listing": identifier})
+    assert response.status_code == 422
+    assert response.json()["error"] == "Неверный номер квартиры"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identifier", ["not-a-listing", "newbuild:0", "newbuild:2147483648"])
+async def test_invalid_nonempty_form_identifier_never_falls_back_to_another_offer(app, identifier):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/compare/calculate", data={"price": "40000000", "listing": identifier})
+    assert response.status_code == 422
+    assert response.json()["error"] == "Неверный номер квартиры"
+
+
+@pytest.mark.asyncio
+async def test_unknown_complex_has_honest_public_not_found_response(app):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/compare?complex=999999")
+    assert response.status_code == 404
+    assert "Для этого ЖК пока нет свежих данных сравнения" in response.text
+    assert 'href="/compare"' in response.text
+    assert "PRIVATE" not in response.text
