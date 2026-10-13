@@ -1,5 +1,13 @@
 # Entity resolution / data spine — план архитектуры
 
+> Актуализация 13.10.2026: текст ниже содержит историю решений августа.
+> Действующая модель ЖК — canonical redirects, проверенные aliases/адреса,
+> manual overrides и журнал переходов; развёртывание 08.10 подтверждено в
+> [live-аудите](complex_identity_live_audit_2026_10_08.md).
+> Следующий этап и текущие измерения описаны в
+> [плане идентичности ЖК](complex_identity_followup_2026_10_08.md#актуализация-13102026-небольшая-очередь-проверки-и-безопасное-решение).
+> Старые команды физического merge не являются рекомендуемым способом очистки.
+
 Статус: **фаза 1 (ЖК) реализована** — см. миграцию
 [043_entity_resolution.sql](../migrations/043_entity_resolution.sql),
 [bot/core/entity_resolution.py](../bot/core/entity_resolution.py),
