@@ -30,7 +30,7 @@
 .picks-status { display: flex; gap: 7px 16px; flex-wrap: wrap; background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 15px 19px; font-size: 13px; color: var(--muted); margin-bottom: 32px !important; }
 .picks-status-stale { border-color: color-mix(in srgb,var(--yellow) 40%,var(--border)); background: color-mix(in srgb,var(--yellow) 6%,var(--surface)); }
 .picks-status strong { color: var(--text); }
-.picks-selection { scroll-margin-top: calc(var(--hdr-h,80px) + 20px); }
+.picks-selection { scroll-margin-top: 20px; }
 .picks-section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
 .picks-section-heading h2 { font-size: 29px; line-height: 1.25; letter-spacing: -.8px; font-weight: 720; margin-top: 9px; }
 .picks-section-heading h2 span { display: block; font-size: 14px; font-weight: 500; letter-spacing: 0; color: var(--muted); margin-top: 6px; }
@@ -80,7 +80,7 @@
 .picks-empty h2,.picks-filter-empty h3 { margin-top: 12px; font-size: 25px; letter-spacing: -.5px; }
 .picks-empty p:not(.picks-eyebrow),.picks-filter-empty p { color: var(--muted); font-size: 15px; max-width: 580px; margin: 12px auto 22px; }
 .picks-filter-empty { margin-top: 8px; }
-.picks-method { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-top: 64px; padding-top: 45px; border-top: 1px solid var(--border); scroll-margin-top: calc(var(--hdr-h,80px) + 20px); }
+.picks-method { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; margin-top: 64px; padding-top: 45px; border-top: 1px solid var(--border); scroll-margin-top: 20px; }
 .picks-method h2 { font-size: 28px; line-height: 1.2; font-weight: 700; letter-spacing: -.7px; margin-top: 12px; }
 .picks-method-intro > p:last-child { color: var(--muted); font-size: 14px; line-height: 1.65; margin-top: 16px; max-width: 480px; }
 .picks-method details { border-bottom: 1px solid var(--border); }
