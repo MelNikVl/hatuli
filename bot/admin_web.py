@@ -305,7 +305,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                         "message": "Это частное объявление. Войдите и запросите расширенный доступ; он выдаётся вручную.",
                     })
                 price_txt = f"{r['price']/1e6:.1f} млн ₸" if r.get("price") else ""
-                title_bits = [f"{r.get('rooms') or '?'}-комн", f"{r.get('area') or '?'} м²", r["complex_name"]]
+                area_txt = f"{float(r['area']):.1f}".rstrip("0").rstrip(".").replace(".", ",") if r.get("area") else "?"
+                title_bits = [f"{r.get('rooms') or '?'}-комн", f"{area_txt} м²", r["complex_name"]]
                 listing_meta = {
                     "title": f"{price_txt} · {' · '.join(title_bits)} · Новостройка — Hatuli".strip(" ·"),
                     "description": f"{' · '.join(title_bits)} — цена {price_txt or 'по запросу'} на Hatuli.",
@@ -341,7 +342,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 except ValueError:
                     photos = []
             price_txt = f"{r['price']/1e6:.1f} млн ₸" if r.get("price") else ""
-            title_bits = [f"{r.get('rooms') or '?'}-комн", f"{r.get('area') or '?'} м²"]
+            area_txt = f"{float(r['area']):.1f}".rstrip("0").rstrip(".").replace(".", ",") if r.get("area") else "?"
+            title_bits = [f"{r.get('rooms') or '?'}-комн", f"{area_txt} м²"]
             if r.get("complex_name"):
                 title_bits.append(r["complex_name"])
             listing_meta = {

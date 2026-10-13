@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261014">
 <script src="/static/hatuli-forecast.js?v=20261014"></script>
 <link rel="stylesheet" href="/static/hatuli-journey.css?v=20261013">
-<script src="/static/hatuli-journey.js?v=20261013"></script>
+<script src="/static/hatuli-journey.js?v=20261013-2"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
@@ -2798,7 +2798,7 @@ function renderSaleBatch(d, opts) {
       else { pendingClusterAdds.push(m); }
       MINI_PIN_MARKERS[pt.id] = m;
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
-      const areaTxt = pt.area ? Math.round(pt.area) : '?';
+      const areaTxt = fmtArea(pt.area);
       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
       // Стрелка тренда цены (задача 2026-08-21: "зелёная стрелочка вниз
       // если снизилась, красная вверх если поднялась", минималистично) —
@@ -2922,6 +2922,9 @@ function mkStats(items) {
 // Мини-график истории цены (SVG) — подгружается при открытии попапа.
 // Значения точек — только по наведению (нативный <title> тултип браузера),
 // в обычном виде линия без подписей (см. п.4 ТЗ).
+function fmtArea(v) {
+  return v && Number.isFinite(Number(v)) ? new Intl.NumberFormat('ru-RU', {maximumFractionDigits:1}).format(Number(v)) : '?';
+}
 function fmtMln(v) {
   const r = Math.round(v / 1e6 * 10) / 10;
   return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)) + ' М';
@@ -4853,7 +4856,7 @@ function renderNewbuildDetail(unitId, content) {
     ${d.price_per_m2 ? `<div style="font-size:13px;color:var(--text);margin-top:2px;">${Math.round(d.price_per_m2/1000)} тыс ₸/м²</div>` : ''}
     <div style="margin-top:10px;">
       <span style="${pillStyle}">${d.rooms || '?'}-комн</span>
-      ${d.area ? `<span style="${pillStyle}">${Math.round(d.area)} м²</span>` : ''}
+      ${d.area ? `<span style="${pillStyle}">${fmtArea(d.area)} м²</span>` : ''}
       ${d.floor ? `<span style="${pillStyle}">${d.floor}/${d.floors_total || '?'} эт.</span>` : ''}
       ${d.building ? `<span style="${pillStyle}">корпус ${escapeHtml(d.building)}</span>` : ''}
       ${d.section ? `<span style="${pillStyle}">подъезд ${escapeHtml(d.section)}</span>` : ''}
@@ -5114,12 +5117,12 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
     const modalPillsHtml = `
     <span style="${modalPillStyle}">${d.rooms || '?'}-комн</span>
     ${modalPriceM2Txt ? `<span style="${modalPillStyle}">${modalPriceM2Txt}</span>` : ''}
-    ${d.area ? `<span style="${modalPillStyle}">${Math.round(d.area)} м²</span>` : ''}
+    ${d.area ? `<span style="${modalPillStyle}">${fmtArea(d.area)} м²</span>` : ''}
     ${modalAgeTxt ? `<span style="${modalPillStyle}">на рынке: ${modalAgeTxt}</span>` : ''}
     ${d.floor ? `<span style="${modalPillStyle}">${d.floor}/${d.floors_total || '?'} эт.</span>` : ''}
     <span style="${modalPillStyle}">${d.is_owner ? 'собственник' : 'риелтор'}</span>
     ${d.ceiling_height ? `<span style="${modalPillStyle}">потолок ${d.ceiling_height} м</span>` : ''}
-    ${d.kitchen_area ? `<span style="${modalPillStyle}">кухня ${d.kitchen_area} м²</span>` : ''}
+    ${d.kitchen_area ? `<span style="${modalPillStyle}">кухня ${fmtArea(d.kitchen_area)} м²</span>` : ''}
     ${d.finish_type ? `<span style="${modalPillStyle}">${escapeHtml(d.finish_type)}</span>` : ''}
     ${d.floorplan_url ? `<a href="${d.floorplan_url}" target="_blank" onclick="event.stopPropagation()" style="${modalPillStyle}text-decoration:none;">📐 План</a>` : ''}
     ${d.views_count ? `<span style="${modalPillStyle}background:#bfdbfe;">👁 ${d.views_count.toLocaleString('ru')}</span>` : ''}`;
