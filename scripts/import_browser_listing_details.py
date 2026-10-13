@@ -130,11 +130,18 @@ def validate_record(record, now):
     for field in ("price", "rooms", "area"):
         numeric(before.get(field))
         numeric(record.get("source_" + field))
+    # PostgreSQL BIGINT/INTEGER bindings require actual ints, even when a
+    # JSON value such as 25000000.0 compares equal to the integer seed.
+    before = {**before, "price": integer_or_none(before["price"], 1, 9_000_000_000_000_000),
+              "rooms": integer_or_none(before["rooms"], 1, 30)}
+    source_price = integer_or_none(record["source_price"], 1, 9_000_000_000_000_000)
+    source_rooms = integer_or_none(record["source_rooms"], 1, 30)
     if record["source_price"] != before["price"]:
         return {"status": "source_price_mismatch", "id": lid}
     if record["source_rooms"] != before["rooms"] or abs(record["source_area"] - before["area"]) > .001:
         return {"status": "source_traits_mismatch", "id": lid}
-    result = {**record, "listing_id": lid, "photos": trusted_photos(record.get("photos", []))}
+    result = {**record, "listing_id": lid, "before": before, "source_price": source_price,
+              "source_rooms": source_rooms, "photos": trusted_photos(record.get("photos", []))}
     result["floor"] = integer_or_none(record.get("floor"), 1, 150)
     result["floors_total"] = integer_or_none(record.get("floors_total"), 1, 150)
     result["year_built"] = integer_or_none(record.get("year_built"), 1800, now.year + 5)
@@ -155,7 +162,7 @@ def plan_row(record: dict, current: dict | None, now: datetime) -> dict:
         if (current.get("url") != record["url"] or current.get("is_active") is not True or current.get("archived_at") is not None
                 or current.get("is_duplicate") or current.get("dup_needs_review")):
             return {"id": lid, "status": "current_state_changed"}
-        seed = record["before"]
+        seed = observed["before"]
         if any(current.get(k) != seed.get(k) for k in ("price", "rooms", "area")) or timestamp(current.get("last_seen")) != timestamp(seed.get("last_seen")):
             return {"id": lid, "status": "optimistic_seed_changed"}
         old_photos = photos_value(current.get("photos"))
@@ -168,6 +175,10 @@ def plan_row(record: dict, current: dict | None, now: datetime) -> dict:
         for field in FIELDS[1:]:
             if current.get(field) is None and observed.get(field) is not None:
                 updates[field] = observed[field]
+        if any(field in updates for field in ("floor", "floors_total")) and any(
+                current.get(field) is not None and observed.get(field) is not None
+                and current[field] != observed[field] for field in ("floor", "floors_total")):
+            return {"id": lid, "status": "floor_conflict"}
         final_floor = updates.get("floor", current.get("floor"))
         final_total = updates.get("floors_total", current.get("floors_total"))
         if final_floor and final_total and final_floor > final_total:
@@ -232,8 +243,11 @@ async def run(args):
     output_path = Path(args.output).resolve()
     if output_path == input_path or (args.source_checks_output and Path(args.source_checks_output).resolve() in (input_path, output_path)):
         raise ValueError("input, receipt and source-checks files must be distinct")
+    if args.apply and output_path.exists():
+        raise ValueError("Use a new receipt path for each apply operation")
     now = datetime.now(timezone.utc)
-    connection = await asyncpg.connect(dsn, server_settings={"default_transaction_read_only": "off" if args.apply else "on",
+    connection = await asyncpg.connect(dsn, command_timeout=60, server_settings={"default_transaction_read_only": "off" if args.apply else "on",
+        "lock_timeout": "30000", "statement_timeout": "60000",
         "application_name": "hatuli-browser-details-apply" if args.apply else "hatuli-browser-details-readonly"})
     report = {"schema_version": 1, "created_at": now.isoformat(), "mode": "apply" if args.apply else "dry_run", "rows": []}
     source_records = None
@@ -275,7 +289,7 @@ async def run(args):
                     raise ValueError("duplicate listing IDs in manifest")
                 for record in source_records:
                     current = await connection.fetchrow(ROW_SQL + (" FOR UPDATE" if args.apply else ""), str(record.get("listing_id", "")))
-                    entry = plan_row(record, dict(current) if current else None, now)
+                    entry = plan_row(record, dict(current) if current else None, datetime.now(timezone.utc))
                     if entry["status"] == "planned" and args.apply:
                         await update_fields(connection, entry)
                         entry["status"] = "applied"

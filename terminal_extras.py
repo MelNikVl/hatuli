@@ -2128,20 +2128,52 @@ def make_extras_router(templates) -> APIRouter:
         await reject_candidate(candidate_id, rejected_by="admin")
         return JSONResponse({"ok": True})
 
-    # Дубли-кандидаты (задача гейта 2, п.5 — review-UX для
-    # complex_duplicate_candidates, чтобы 137 пар не были "полдня грайнда"
-    # руками через psql). approve реально мерджит (bot.core.entity_
-    # resolution.merge_complex_pair — та же реализация, что massовый
-    # merge_translit_dups.py, не вторая копия логики).
+    # Reviewed redirects preserve source identities and require a fresh preview.
+    @router.get("/admin/api/entity-ids/duplicates/{candidate_id}/preview")
+    async def entity_ids_dup_preview(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.complex_identity_review import preview_duplicate_candidate, ComplexIdentityReviewError
+        try:
+            result = await preview_duplicate_candidate(candidate_id)
+        except ComplexIdentityReviewError as exc:
+            return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=404 if exc.code == "not_found" else 409)
+        return JSONResponse(jsonable_encoder(result), headers={"Cache-Control": "no-store"})
+
     @router.post("/admin/api/entity-ids/duplicates/{candidate_id}/approve")
     async def entity_ids_dup_approve(request: Request, candidate_id: int):
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
-        from bot.core.entity_resolution import approve_duplicate_candidate
-        r = await approve_duplicate_candidate(candidate_id, approved_by="admin")
-        if r is None:
-            return JSONResponse({"error": "not_found"}, status_code=404)
-        return JSONResponse({"ok": True, **r})
+        if len(await request.body()) > 12000:
+            return JSONResponse({"error": "request_too_large"}, status_code=413)
+        if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+            return JSONResponse({"error": "json_required"}, status_code=415)
+        from bot.core.complex_identity_review import apply_duplicate_candidate, ComplexIdentityReviewError
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("Неверный запрос")
+            result = await apply_duplicate_candidate(candidate_id, expected_fingerprint=body.get("fingerprint", ""),
+                review_note=body.get("review_note", ""), source_urls=body.get("source_urls", []), reviewed_by=admin_username(request) or "admin")
+        except ComplexIdentityReviewError as exc:
+            code = 404 if exc.code == "not_found" else 422 if exc.code == "evidence_required" else 409
+            return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=code)
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "invalid_request"}, status_code=422)
+        return JSONResponse(jsonable_encoder({"ok": True, **result}), headers={"Cache-Control": "no-store"})
+
+    @router.post("/admin/api/entity-ids/duplicate-reviews/{review_id}/rollback")
+    async def entity_ids_dup_rollback(request: Request, review_id: str):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+            return JSONResponse({"error": "json_required"}, status_code=415)
+        from bot.core.complex_identity_review import rollback_duplicate_review, ComplexIdentityReviewError
+        try:
+            result = await rollback_duplicate_review(review_id, reviewed_by=admin_username(request) or "admin")
+        except ComplexIdentityReviewError as exc:
+            return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=404 if exc.code == "not_found" else 409)
+        return JSONResponse(jsonable_encoder({"ok": True, **result}), headers={"Cache-Control": "no-store"})
 
     @router.post("/admin/api/entity-ids/duplicates/{candidate_id}/reject")
     async def entity_ids_dup_reject(request: Request, candidate_id: int):
@@ -2155,20 +2187,8 @@ def make_extras_router(templates) -> APIRouter:
     async def entity_ids_dup_bulk_approve(request: Request):
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
-        from bot.core.entity_resolution import approve_duplicate_candidate
-        body = await request.json()
-        ids = body.get("ids") or []
-        results, errors = [], []
-        for cid in ids:
-            try:
-                r = await approve_duplicate_candidate(int(cid), approved_by="admin")
-                if r is not None:
-                    results.append({"id": cid, **r})
-                else:
-                    errors.append({"id": cid, "error": "not_found"})
-            except Exception as e:
-                errors.append({"id": cid, "error": str(e)[:200]})
-        return JSONResponse({"ok": True, "merged": len(results), "errors": errors})
+        return JSONResponse({"error": "individual_review_required",
+            "message": "Каждой паре нужны свежий просмотр изменений и подтверждённые источники."}, status_code=409)
 
     # Фаза 2 (юниты) — review-действия для unit_duplicate_candidates
     # (задача 2026-08-13). approve/reject/skip — bot.core.entity_
@@ -6683,6 +6703,21 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse(jsonable_encoder(payload))
 
     # ── История цены объявления ───────────────────────────────────────────
+
+    @router.get("/admin/api/buyer-journey/{listing_id}")
+    async def api_buyer_journey(request: Request, listing_id: str):
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
+        import re as _journey_re
+        if not _journey_re.fullmatch(r"\d{5,20}", listing_id):
+            return JSONResponse({"error": "invalid_listing_id"}, status_code=422)
+        from bot.core.buyer_journey import build_buyer_journey
+        try:
+            payload = await asyncio.wait_for(build_buyer_journey(listing_id), timeout=30)
+        except asyncio.TimeoutError:
+            return JSONResponse({"found": False, "message": "Разбор не успел загрузиться. Попробуйте ещё раз."}, status_code=503)
+        return JSONResponse(jsonable_encoder(payload), headers={"Cache-Control": "no-store"})
 
     @router.get("/admin/api/price-history/{listing_id}")
     async def api_price_history(request: Request, listing_id: str):

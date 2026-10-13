@@ -48,6 +48,32 @@ def row(id="123456", rooms=2, area=50, **changes):
     return value
 
 
+@pytest.mark.parametrize("change", [
+    {"checked_at": "2026-10-13T04:00:00+00:00"},
+    {"checked_at": "2026-10-13T08:00:00+00:00"},
+    {"source_listing_id": "654321"},
+    {"source_price": float("nan")},
+    {"url": "https://evil.example/a/show/123456"},
+])
+def test_source_comparison_rejects_old_future_wrong_and_nonfinite_observations(tmp_path, change):
+    item = {"listing_id": "123456", "source_listing_id": "123456",
+            "url": "https://krisha.kz/a/show/123456", "checked_at": NOW.isoformat(),
+            "source_active": True, "source_price": 29_000_000, **change}
+    path = tmp_path / "sources.json"
+    path.write_text(json.dumps({"schema_version": 1, "records": [item]}), encoding="utf-8")
+    assert buyer_journey.observed_source("123456", 30_000_000, now=NOW, path=path) is None
+
+
+def test_confirmed_source_price_difference_does_not_replace_cached_price(tmp_path):
+    item = {"listing_id": "123456", "source_listing_id": "123456",
+            "url": "https://krisha.kz/a/show/123456", "checked_at": NOW.isoformat(),
+            "source_active": True, "source_price": 29_000_000}
+    path = tmp_path / "sources.json"
+    path.write_text(json.dumps({"schema_version": 1, "records": [item]}), encoding="utf-8")
+    result = buyer_journey.observed_source("123456", 30_000_000, now=NOW, path=path)
+    assert result["price"] == 29_000_000 and result["stored_price"] == 30_000_000 and not result["price_matches"]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cookies", [{}, {"admin_auth": "1"}, {"admin_session": "A" * 43},
                                         {"site_session": "forged-subscriber"}])

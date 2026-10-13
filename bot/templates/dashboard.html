@@ -12,6 +12,8 @@
 <script src="/static/yield-heat.js?v=20261008"></script>
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261014">
 <script src="/static/hatuli-forecast.js?v=20261014"></script>
+<link rel="stylesheet" href="/static/hatuli-journey.css?v=20261013">
+<script src="/static/hatuli-journey.js?v=20261013"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
@@ -2978,7 +2980,7 @@ function loadPriceHistory(id) {
   if (!el || el.dataset.loaded) return;
   el.dataset.loaded = '1';
   fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
-    // <=1 точка значит реальных изменений цены не было (только стартовая) — блок вообще не показываем
+    if (d.history_warning) { el.textContent = d.history_warning; return; }
     if (!d.points || d.points.length <= 1) { el.innerHTML = ''; return; }
     const w = Math.max(220, el.clientWidth || 220);  // почти вся ширина карточки, а не фикс. 220px
     el.innerHTML = sparklineSVG(d.points, w, 58);
@@ -5221,14 +5223,15 @@ ${photoHtml}
   <div style="font-size:34px;font-weight:800;">${priceM} <span style="font-size:21px;">млн ₸</span></div>
   <div style="margin-top:8px;">${modalPillsHtml}${aiPlusesHtml}</div>
   ${d.seller_name ? `<div style="font-size:13px;color:var(--text);margin-top:4px;">${escapeHtml(d.seller_name)}</div>` : ''}
-  <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
-  ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
+  <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${escapeHtml(d.address || d.district || 'адрес не определён')}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
+  ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${escapeHtml(d.complex_name)}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
 </div>
 ${modalPriceForecastPlaceholder('secondary')}
 ${dealBadgesHtml}
 ${kzkBadgeHtml}
 ${bargainHtml}
 ${priceHistoryHtml}
+<section class="hatuli-journey" id="modal-buyer-journey"><h3>История квартиры и альтернативы</h3><p>Загружаем разбор…</p></section>
 ${domScenarioHtml}
 ${riskAnalysisHtml}
 ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
@@ -5272,6 +5275,7 @@ ${krishaSourceFooterHtml}
 </div>`;
 
     mountModalPriceForecast(content, d.price_forecast);
+    if (window.HatuliBuyerJourney) window.HatuliBuyerJourney.load(content.querySelector('#modal-buyer-journey'), id);
 
     if (modalPhotos.length) {
       ptPhotos[id] = modalPhotos; carIdx[id] = 0;
@@ -5299,10 +5303,16 @@ ${krishaSourceFooterHtml}
       const wrap = document.getElementById('modal-price-history-wrap');
       const el = document.getElementById('modal-price-history');
       if (!el || !wrap) return;
-      // <=1 точка = цена не менялась — блок не показываем вообще
-      if (!dh.points || dh.points.length <= 1) return;
       wrap.style.display = '';
-      const phw = Math.max(320, (el.parentElement.clientWidth || 420) - 4);
+      if (dh.history_warning || dh.integrity_status === 'incomplete') {
+        el.textContent = dh.history_warning || 'В истории есть пропуски. Итоговое изменение цены пока не подтверждено.';
+        return;
+      }
+      if (!dh.points || dh.points.length <= 1) {
+        el.textContent = 'Изменений цены пока не зафиксировано. Это не подтверждает неизменность цены с момента появления квартиры.';
+        return;
+      }
+      const phw = Math.max(180, (el.parentElement.clientWidth || 420) - 4);
       el.innerHTML = sparklineSVG(dh.points, phw, 160) + '<div style="font-size:12px;color:#aaa;margin-top:2px;">наведи на точку — точная дата</div>';
     }).catch(() => {});
   }).catch(() => {

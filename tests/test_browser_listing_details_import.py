@@ -39,6 +39,13 @@ def test_existing_fields_are_preserved_even_when_source_differs():
     assert plan_row(record, current, NOW)["status"] == "no_missing_fields"
 
 
+def test_missing_total_does_not_mix_an_existing_floor_with_a_different_source_floor():
+    record, current = sample()
+    current["floor"] = record["before"]["floor"] = 3
+    assert record["floor"] == 5
+    assert plan_row(record, current, NOW)["status"] == "floor_conflict"
+
+
 @pytest.mark.parametrize("changed", [{"price": 24900000}, {"area": 39}, {"rooms": 2},
                                     {"last_seen": (NOW - timedelta(hours=4)).isoformat()}, {"floor": 3}, {"photos": ["new"]}])
 def test_collector_updates_block_stale_manifest(changed):
@@ -71,6 +78,22 @@ def test_price_conflict_is_reported_without_partial_fills():
     result = plan_row(record, current, NOW)
     assert result["status"] == "source_price_mismatch"
     assert "after" not in result
+
+
+def test_integral_json_float_seeds_are_normalized_for_asyncpg_integer_columns():
+    record, current = sample()
+    record["before"]["price"] = float(record["before"]["price"])
+    record["before"]["rooms"] = 1.0
+    result = plan_row(record, current, NOW)
+    assert result["status"] == "planned"
+    assert type(result["seed"]["price"]) is int
+    assert type(result["seed"]["rooms"]) is int
+
+
+def test_fractional_room_or_price_seeds_rejected():
+    record, current = sample()
+    record["before"]["rooms"] = record["source_rooms"] = 1.5
+    assert plan_row(record, current, NOW)["status"] == "invalid_manifest_record"
 
 
 def test_source_observation_remains_separate_from_cached_source_timestamp_and_price():

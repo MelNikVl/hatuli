@@ -1,0 +1,9 @@
+.hatuli-journey{margin:18px 22px 0;border:1px solid var(--border,#dbe3da);border-radius:14px;padding:18px;background:var(--surface,#fff);color:var(--text,#243d33)}
+.hatuli-journey h3{font-size:17px;margin:0 0 9px}.hatuli-journey p{font-size:13px;line-height:1.6;margin:6px 0;color:var(--muted,#68736c)}
+.hatuli-journey .hj-alternatives{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
+.hatuli-journey .hj-alternative{min-width:0;padding:13px;border-radius:11px;background:var(--bg,#f5f7f1);border:1px solid var(--border,#dbe3da)}
+.hatuli-journey .hj-alternative h4{font-size:14px;margin:7px 0}.hatuli-journey .hj-price{font-size:18px;font-weight:750;color:var(--text,#243d33)}
+.hatuli-journey ul{padding-left:16px;font-size:12px;line-height:1.65;margin:6px 0}.hatuli-journey a{color:var(--accent,#245e4c);font-weight:650;font-size:13px}
+.hatuli-journey .hj-note{padding:10px 12px;background:var(--bg,#f5f7f1);border-radius:8px}.hatuli-journey .hj-differences{margin:12px 0;padding:12px;border:1px solid #dcc499;border-radius:10px}
+.hatuli-journey .hj-alternatives-title{margin-top:21px}.hatuli-journey .hj-label{font-size:11px;line-height:1.5;color:var(--muted,#68736c)}
+@media(max-width:600px){.hatuli-journey{margin:14px 14px 0;padding:14px}.hatuli-journey .hj-alternatives{grid-template-columns:1fr}}

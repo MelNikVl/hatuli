@@ -33,3 +33,6 @@ research/phase_c/data/
 /var/price-forecast-model.json
 /var/price-forecasts.json
 /var/.price-forecast*.tmp
+/var/browser-source-checks.json
+/var/browser-listing-*.json
+/var/complex-identity-review-*.json
