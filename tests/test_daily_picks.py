@@ -187,6 +187,13 @@ def test_load_strips_extra_fields_and_fails_closed(tmp_path):
     assert dp.load_daily_picks(path) is None
 
 
+@pytest.mark.parametrize("bad", [[], None, ["not a snapshot"]])
+def test_load_json_wrong_shape_fails_closed(tmp_path, bad):
+    path = tmp_path / "daily.json"
+    path.write_text(json.dumps(bad), encoding="utf-8")
+    assert dp.load_daily_picks(path) is None
+
+
 def test_local_selection_date_uses_almaty_not_utc():
     now = datetime(2026,10,12,20,tzinfo=timezone.utc)
     sample = [row(i, last_seen=now-timedelta(hours=1)) for i in range(8)]

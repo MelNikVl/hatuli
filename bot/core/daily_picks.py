@@ -241,7 +241,7 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
 
 def validate_snapshot(snapshot: dict) -> dict:
     """Fail closed and re-project fields before use by a public page."""
-    if snapshot.get("schema_version") != SCHEMA_VERSION or snapshot.get("timezone") != "Asia/Almaty":
+    if not isinstance(snapshot, dict) or snapshot.get("schema_version") != SCHEMA_VERSION or snapshot.get("timezone") != "Asia/Almaty":
         raise ValueError("Invalid snapshot version or timezone")
     generated = _utc(snapshot["generated_at"])
     if snapshot.get("selection_date") != generated.astimezone(LOCAL_TIMEZONE).date().isoformat() or _utc(snapshot["source_observed_at"]) > generated:
@@ -252,6 +252,8 @@ def validate_snapshot(snapshot: dict) -> dict:
     seen = set()
     safe_items = []
     for rank, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            raise ValueError("Invalid public listing shape")
         lid = item.get("id")
         if not isinstance(lid, str) or not _ID.fullmatch(lid) or lid in seen or item.get("rank") != rank or item.get("source_url") != f"https://krisha.kz/a/show/{lid}" or item.get("currency") != "KZT":
             raise ValueError("Invalid public listing")
@@ -267,14 +269,18 @@ def validate_snapshot(snapshot: dict) -> dict:
             raise ValueError("Invalid public photo")
         if not isinstance(item.get("reasons"), list) or not 2 <= len(item["reasons"]) <= 3 or any(not isinstance(reason, str) or len(reason) > 200 for reason in item["reasons"]):
             raise ValueError("Invalid public reasons")
+        if not isinstance(item.get("cautions"), list) or len(item["cautions"]) > 4 or any(not isinstance(caution, str) or len(caution) > 200 for caution in item["cautions"]):
+            raise ValueError("Invalid public cautions")
         comparison = item["price_comparison"]
-        if _number(comparison.get("comparable_count")) is None or comparison["comparable_count"] < MIN_COMPARABLES or not -5 <= comparison["discount_pct"] <= 30:
+        if not isinstance(comparison, dict) or _number(comparison.get("comparable_count")) is None or comparison["comparable_count"] < MIN_COMPARABLES or not -5 <= comparison["discount_pct"] <= 30:
             raise ValueError("Invalid comparison")
         safe_item = {key: item.get(key) for key in _ITEM_FIELDS}
         safe_item["price_comparison"] = {key: comparison.get(key) for key in _COMPARISON_FIELDS}
         safe_items.append(safe_item)
     safe = {key: snapshot.get(key) for key in _SNAPSHOT_FIELDS}
     safe["items"] = safe_items
+    if not isinstance(snapshot.get("methodology"), dict):
+        raise ValueError("Invalid methodology shape")
     safe["methodology"] = {key: snapshot["methodology"][key] for key in METHODOLOGY}
     return safe
 
