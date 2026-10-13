@@ -1,7 +1,7 @@
 {# Public projection only. The backend owns all predictions and quality gates. #}
 {% macro pf_money(value) -%}{{ value|fmt_num }} ₸{%- endmacro %}
 {% macro pf_date(value) -%}{% if value %}{{ (value|string)[8:10] ~ '.' ~ (value|string)[5:7] ~ '.' ~ (value|string)[:4] }}{% endif %}{%- endmacro %}
-{% macro pf_unavailable(status) -%}{% if status == 'insufficient_history' %}Пока недостаточно истории{% elif status == 'insufficient_analogs' %}Пока недостаточно похожих квартир{% elif status == 'quality_gate_failed' %}Точность пока недостаточна{% elif status == 'stale_model' %}Ждём свежий расчёт{% else %}Прогноз пока недоступен{% endif %}{%- endmacro %}
+{% macro pf_unavailable(status) -%}{% if status == 'insufficient_history' %}Пока недостаточно истории{% elif status == 'missing_source_history' %}Не хватает подтверждённой истории{% elif status == 'missing_attribute_history' %}Не хватает истории характеристик{% elif status == 'insufficient_groups' %}Пока недостаточно независимых квартир{% elif status == 'insufficient_listing_history' %}Пока мало истории этой квартиры{% elif status == 'insufficient_analogs' %}Пока недостаточно похожих квартир{% elif status == 'quality_gate_failed' %}Точность пока недостаточна{% elif status == 'stale_model' %}Ждём свежий расчёт{% else %}Прогноз пока недоступен{% endif %}{%- endmacro %}
 {% set pf = price_forecast or {} %}
 {% set market = pf.market_now %}
 {% set forecasts = pf.forecasts or [] %}

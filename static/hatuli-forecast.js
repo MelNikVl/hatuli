@@ -5,6 +5,10 @@
   var percentFormat = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 });
   var unavailable = {
     insufficient_history: 'Пока недостаточно истории',
+    missing_source_history: 'Не хватает подтверждённой истории',
+    missing_attribute_history: 'Не хватает истории характеристик',
+    insufficient_groups: 'Пока недостаточно независимых квартир',
+    insufficient_listing_history: 'Пока мало истории этой квартиры',
     insufficient_analogs: 'Пока недостаточно похожих квартир',
     quality_gate_failed: 'Точность пока недостаточна',
     stale_model: 'Ждём свежий расчёт',

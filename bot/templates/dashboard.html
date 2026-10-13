@@ -10,6 +10,8 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/yield-heat.js?v=20261008"></script>
+<link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261014">
+<script src="/static/hatuli-forecast.js?v=20261014"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
@@ -4780,6 +4782,33 @@ async function loadModalPriceHeat(kind) {
 // теперь та же Zillow-галерея (большое фото + миниатюры, modalPhotoNav/
 // modalGoTo), источник фото — [планировка юнита, …фото ЖК], плюс описание
 // ЖК (complexes.description) и застройщик + кнопка "Связаться".
+function modalPriceForecastPlaceholder(kind) {
+  const modalClass = kind === 'secondary' ? ' hatuli-forecast--modal' : '';
+  return `<div data-modal-price-forecast="${kind}">
+<section class="hatuli-forecast${modalClass}" aria-label="Оценка цены и прогноз" data-forecast-status="unavailable">
+  <div class="pf-heading"><h4>Что будет с ценой?</h4></div>
+  <p class="pf-unavailable">Прогноз пока недоступен</p>
+  <p class="pf-reason">Для этой квартиры пока нет подтверждённого расчёта. Нужны похожие варианты в истории и проверка точности на следующих периодах.</p>
+  <p class="pf-footnote">Цены предложений. Это не цена сделки и не прогноз доходности за год.</p>
+</section></div>`;
+}
+
+function mountModalPriceForecast(content, payload) {
+  const target = content.querySelector('[data-modal-price-forecast]');
+  if (!target || !window.HatuliPriceForecast) return;
+  const fallback = {forecasts: [7, 14, 30, 90, 365].map(horizon => ({
+    status: 'unavailable', horizon_days: horizon,
+    reason: 'Для этой квартиры пока нет подтверждённого расчёта.'
+  }))};
+  try {
+    window.HatuliPriceForecast.mount(target, payload || fallback, {
+      modal: target.dataset.modalPriceForecast === 'secondary'
+    });
+  } catch (_) {
+    // An unavailable forecast must never prevent opening the apartment itself.
+  }
+}
+
 function renderNewbuildDetail(unitId, content) {
   fetch('/admin/api/newbuild-unit/' + encodeURIComponent(unitId)).then(r => r.json()).then(d => {
     if (d.error) { content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Не найдено</div>'; return; }
@@ -4827,6 +4856,7 @@ function renderNewbuildDetail(unitId, content) {
       ${d.building ? `<span style="${pillStyle}">корпус ${escapeHtml(d.building)}</span>` : ''}
       ${d.section ? `<span style="${pillStyle}">подъезд ${escapeHtml(d.section)}</span>` : ''}
     </div>
+    <div style="margin-top:16px;">${modalPriceForecastPlaceholder('primary')}</div>
     <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
       <div style="font-weight:800;font-size:17px;"><a href="/complex/${d.complex_id}" style="color:inherit;text-decoration:none;">🏢 ЖК ${escapeHtml(d.complex_name || '')}</a></div>
       <div style="font-size:13px;color:var(--text);margin-top:4px;">
@@ -4840,6 +4870,7 @@ function renderNewbuildDetail(unitId, content) {
     <div style="margin-top:16px;max-width:280px;">${contactDevBtnHtml({sales_phone: d.sales_phone}, d.id)}</div>
   </div>
 </div>`;
+    mountModalPriceForecast(content, d.price_forecast);
   }).catch(() => {
     content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Ошибка загрузки</div>';
   });
@@ -5165,12 +5196,12 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
       (pct >= 50 ? ` — ${more}, чем у ${Math.round(pct)}% объявлений` : ` — ${less}, чем у ${Math.round(100 - pct)}% объявлений`);
     const liquidityHtml = lq && (lq.p_exit14 != null || lq.p_cut30 != null) ? `
 <div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
-  <div style="font-size:14px;font-weight:700;margin-bottom:8px;">📈 Прогноз ликвидности <span style="font-weight:400;font-size:12px;color:var(--text2,#888);">бета</span></div>
+  <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Активность объявления <span style="font-weight:400;font-size:12px;color:var(--text2,#888);">вероятностная модель · бета</span></div>
   ${lq.p_exit14 != null ? `<div style="font-size:13.5px;">Уйдёт с Крыши в ближайшие 14 дней: <b>${lqPct(lq.p_exit14)}</b>${lqCmp(lq.exit14_pct, 'выше', 'ниже')}</div>
   ${(lq.reasons.exit14 || []).length ? `<ul style="margin:4px 0 0 18px;padding:0;font-size:12.5px;">${lqReasons(lq.reasons.exit14)}</ul>` : ''}` : ''}
   ${lq.p_cut30 != null ? `<div style="font-size:13.5px;margin-top:8px;">Снизят цену в ближайшие 30 дней: <b>${lqPct(lq.p_cut30)}</b>${lqCmp(lq.cut30_pct, 'выше', 'ниже')}</div>
   ${(lq.reasons.cut30 || []).length ? `<ul style="margin:4px 0 0 18px;padding:0;font-size:12.5px;">${lqReasons(lq.reasons.cut30)}</ul>` : ''}` : ''}
-  <div style="margin-top:8px;font-size:11.5px;color:var(--text2,#888);">Уход с Крыши ≠ продажа: около трети уходов — перевыставления. Модель — ориентир, а не гарантия (точность AUC ≈ 0,6). ↑/↓ — что сильнее всего повышает/снижает вероятность. Прогноз от ${lq.as_of}.</div>
+  <div style="margin-top:8px;font-size:11.5px;color:var(--text2,#888);">Исчезновение объявления не подтверждает продажу: квартира может быть перевыставлена. Здесь показана вероятность события, а не будущая цена квартиры. ↑/↓ — что сильнее всего повышает/снижает вероятность. Расчёт от ${escapeHtml(lq.as_of || 'дата не указана')}.</div>
 </div>` : '';
 
     const sp = d.seller_profile;
@@ -5193,6 +5224,7 @@ ${photoHtml}
   <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
   ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
 </div>
+${modalPriceForecastPlaceholder('secondary')}
 ${dealBadgesHtml}
 ${kzkBadgeHtml}
 ${bargainHtml}
@@ -5238,6 +5270,8 @@ ${krishaSourceFooterHtml}
   <button type="button" onclick="toggleShareMenu(event, '${id}')" style="display:inline-flex;align-items:center;gap:6px;padding:11px 20px;border-radius:8px;background:var(--bg);border:1px solid var(--border);color:var(--text);font-weight:700;font-size:16px;cursor:pointer;">📤 Поделиться</button>
   <div id="share-menu" style="display:none;position:absolute;bottom:calc(100% + 6px);left:22px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.25);padding:6px;z-index:20;min-width:220px;"></div>
 </div>`;
+
+    mountModalPriceForecast(content, d.price_forecast);
 
     if (modalPhotos.length) {
       ptPhotos[id] = modalPhotos; carIdx[id] = 0;

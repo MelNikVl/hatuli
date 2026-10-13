@@ -1,6 +1,11 @@
 """Forecast presentation must distinguish current evidence from future prices."""
 from copy import deepcopy
+from datetime import datetime, timezone
+import re
+import shutil
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -53,7 +58,7 @@ def test_current_market_and_validated_future_have_distinct_labels_and_dates(rend
     assert "не прогноз доходности за год" in html
 
 
-@pytest.mark.parametrize("status", ["quality_gate_failed", "insufficient_history", "insufficient_analogs", "stale_model"])
+@pytest.mark.parametrize("status", ["quality_gate_failed", "insufficient_history", "insufficient_analogs", "stale_model", "missing_source_history", "missing_attribute_history", "insufficient_groups", "insufficient_listing_history"])
 def test_abstention_hides_precomputed_prediction_even_if_numbers_remain(render, status):
     data = payload()
     data["forecasts"][0]["status"] = status
@@ -92,3 +97,35 @@ def test_empty_projection_is_an_explicit_unknown_not_a_zero_forecast(render):
     assert "Прогноз пока недоступен" in html
     assert "Для прогноза нужны похожие квартиры" in html
     assert 'class="pf-amount"' not in html
+
+
+def test_actual_model_contract_without_verified_history_is_visible_and_never_shows_zero_prices(render):
+    from bot.core.price_forecast import forecast_listing
+    data = forecast_listing({}, None, now=datetime(2026, 10, 13, 6, tzinfo=timezone.utc))
+    html = render(data)
+    assert "Не хватает подтверждённой истории" in html
+    assert "Исторические снимки не подтверждают актуальность цены" in html
+    assert "7 дней" in html and "14 дней" in html and "30 дней" in html
+    assert "90 дней" in html and "365 дней" in html
+    assert 'class="pf-amount"' not in html
+    assert "0 ₸" not in html
+
+
+def test_full_dashboard_javascript_compiles_after_forecast_integration(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is unavailable for a JavaScript syntax check")
+    environment = Environment(
+        loader=FileSystemLoader(Path(__file__).parents[1] / "bot" / "templates"),
+        autoescape=select_autoescape(["html"]),
+    )
+    html = environment.get_template("dashboard.html").render(
+        request=SimpleNamespace(url=SimpleNamespace(path="/map")),
+        is_admin=lambda request: False, site_tier="public", listing_id=None,
+    )
+    scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", html, re.S)
+    javascript = "\n".join(script for script in scripts if not script.lstrip().startswith('{"@context"'))
+    source = tmp_path / "dashboard.js"
+    source.write_text(javascript, encoding="utf-8")
+    result = subprocess.run([node, "--check", str(source)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
