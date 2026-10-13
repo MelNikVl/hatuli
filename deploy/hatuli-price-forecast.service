@@ -1,0 +1,21 @@
+[Unit]
+Description=Hatuli verified asking price history and forecast validation
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python scripts/collect_price_forecast_observations.py
+ExecStart=/home/nik/krisha_bot/venv/bin/python scripts/publish_price_forecasts.py
+TimeoutStartSec=30min
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/nik/krisha_bot/var
+MemoryMax=2G
+CPUQuota=150%
+Nice=10
+

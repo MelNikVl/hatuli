@@ -8,13 +8,14 @@ from urllib.parse import urlencode
 from fastapi import Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from bot.core.daily_picks import load_daily_picks
+from bot.core.daily_picks import load_daily_picks, snapshot_status
 from bot.core.deposit_comparison import compare_investment, load_deposit_catalog, public_deposit_catalog
 from bot.core.market_comparison import (
     LOCAL_TIMEZONE, SCOPE_RADII, compare_market, hex_distance,
     load_market_snapshot, public_primary_offer, valid_hex,
 )
 from bot.core.web_pages import not_found_page
+from bot.core.price_forecast_runtime import forecast_for_offer
 
 
 def _public_offer(offer: dict) -> dict:
@@ -106,6 +107,10 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
         choices.insert(0, selected)
     if not selected and not listing and not unit and not manual:
         selected = choices[0] if choices else None
+    if selected:
+        active = (not comparison.get("stale", True) if selected["market_type"] == "primary"
+                  else bool(picks and not snapshot_status(picks)["is_stale"]))
+        selected = {**selected, "price_forecast": forecast_for_offer(selected["id"], selected["price"], active=active)}
     form = {"price": selected["price"] if selected else 40_000_000, "repair_cost": 0,
             "buy_cost": 0, "monthly_rent": 0, "annual_owner_cost": 0, "vacancy_months": 0,
             "annual_growth_pct": 0, "wait_months": selected["wait_months"] if selected else 0,

@@ -207,6 +207,8 @@ async def build_listing_detail(listing_id: str, tier: str, *, similar_limit: int
     # Прогноз ликвидности (Фаза D вердикт-стратегии, задача 2026-10-02) —
     # отдельный блок вердикта, score_total не трогает (freeze §6).
     liquidity = await fetch_liquidity_forecast(listing_id)
+    from bot.core.price_forecast_runtime import forecast_for_offer
+    price_forecast = forecast_for_offer(l["id"], l.get("price"), active=l.get("is_active") is True)
 
     from bot.core.listing_risks import compute_listing_risks_safe
     risk_analysis = await compute_listing_risks_safe(
@@ -267,6 +269,7 @@ async def build_listing_detail(listing_id: str, tier: str, *, similar_limit: int
         ),
         "risk_analysis": risk_analysis,
         "liquidity": liquidity,
+        "price_forecast": price_forecast,
         # То же, что показывает страница /admin/analytics/{id} — доходность
         # и разбивка скора по компонентам, теперь дублируется и в модалке
         # на карте, чтобы не заставлять переходить на отдельную страницу.

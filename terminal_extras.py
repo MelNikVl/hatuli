@@ -4276,6 +4276,7 @@ def make_extras_router(templates) -> APIRouter:
         /admin/api/listing/{id} у вторички, см. openDetailModal в
         dashboard.html: ветка по префиксу id 'nb-')."""
         from bot.db.pg import fetchrow as pg_fetchrow
+        from bot.core.price_forecast_runtime import forecast_for_offer
         import json as _json_nbu
         u = await pg_fetchrow("""
             SELECT u.*, c.name AS complex_name, c.district, c.address,
@@ -4305,6 +4306,7 @@ def make_extras_router(templates) -> APIRouter:
             "floor": u["floor"], "floors_total": u["floors_total"],
             "building": u["building"], "section": u["section"],
             "price": u["price"],
+            "price_forecast": forecast_for_offer(f"newbuild:{u['id']}", u["price"], active=u.get("status") == "available"),
             "price_per_m2": float(u["price_per_m2"]) if u["price_per_m2"] is not None else None,
             "photo": u["layout_photo_url"], "status": u["status"],
             "complex_id": u["complex_id"], "complex_name": u["complex_name"],

@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from bot.core.daily_picks import LOCAL_TIMEZONE, snapshot_status
+from bot.core.price_forecast_runtime import forecast_for_offer
 
 _MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря")
 
@@ -42,5 +43,6 @@ def prepare_daily_picks(snapshot: dict | None, now: datetime | None = None) -> d
         "is_stale": status["is_stale"], "is_today": is_today,
         "status_message": message,
         "items": [{**item, "observed_at_label": _time_label(item["observed_at"]),
+                   "price_forecast": forecast_for_offer(item["id"], item["price"], now=now, active=not status["is_stale"]),
                    "source_checked_at_label": _time_label(item["source_checked_at"])} for item in snapshot["items"]],
     }
