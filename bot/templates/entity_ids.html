@@ -308,7 +308,8 @@ async function eidResolve(id, action) {
   <form method="dialog"><button style="float:right;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;" aria-label="Закрыть проверку">×</button></form>
   <h2 style="margin:0 35px 14px 0;font-size:22px;">Проверка пары ЖК</h2>
   <div id="eid-review-preview" style="font-size:14px;line-height:1.65;"></div>
-  <form id="eid-review-form" style="display:grid;gap:12px;margin-top:18px;">
+  <style>#eid-review-form[hidden]{display:none!important}</style>
+  <form id="eid-review-form" hidden style="display:grid;gap:12px;margin-top:18px;">
     <label>Чем подтверждается один физический ЖК<textarea id="eid-review-note" required minlength="20" maxlength="2000" rows="3" style="display:block;width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:9px;background:var(--bg);color:var(--text);"></textarea></label>
     <label>Проверенные ссылки на источники — по одной в строке<textarea id="eid-review-sources" required rows="3" style="display:block;width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:9px;background:var(--bg);color:var(--text);"></textarea></label>
     <p style="font-size:12px;color:var(--muted);margin:0;">Сравните адреса, корпуса и очереди. Наличие ссылки в справочнике само по себе не подтверждает совпадение.</p>
@@ -328,7 +329,7 @@ async function eidDupPreview(id){
     if(!response.ok)throw new Error(data.message||data.error||'Не удалось загрузить пару');
     eidReviewedPair=data;area.replaceChildren();
     for(const complex of data.complexes||[]){const p=eidReviewText('p',`#${complex.id} · ${complex.name}`);area.append(p);}
-    area.append(eidReviewText('strong',`Основная карточка: #${data.canon_id}. Старая ссылка #${data.dup_id} будет перенаправлена.`));
+    area.append(eidReviewText('strong',`При подтверждении основной станет карточка #${data.canon_id}, а ссылка #${data.dup_id} будет перенаправлена.`));
     area.append(eidReviewText('p',`Изменятся связи объявлений: ${data.listing_changes?.rebound||0}. Изменения метода привязки: ${data.listing_changes?.method_only||0}.`));
     area.append(eidReviewText('p','Имена объявлений, ID, ссылки источников, квартиры застройщиков, история и избранное сохраняются.'));
     if(data.blockers?.length){const list=document.createElement('ul');for(const blocker of data.blockers)list.append(eidReviewText('li',blocker));area.append(eidReviewText('strong','Объединение сейчас заблокировано'),list);}
