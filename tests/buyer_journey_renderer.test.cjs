@@ -41,3 +41,12 @@ assert(nodes.some(n => String(n.textContent).includes('Сначала нужно
 const detached = new Node('section'); detached.isConnected = false;
 window.HatuliBuyerJourney.render(detached, payload);
 assert.equal(detached.children.length, 0);
+const historic = new Node('section');
+window.HatuliBuyerJourney.render(historic, {found:true, source_check:{
+  is_fresh:false, price_matches:false, checked_at:'2026-10-12T06:15:00+00:00',
+  active:null, historical_active:false, price:29000000, stored_price:30000000},
+  publications:{message:'История пока не подтверждена'}, alternatives:[]});
+const historicNodes = flatten(historic);
+assert(historicNodes.some(n => String(n.textContent).includes('прошлой проверки')));
+assert(historicNodes.some(n => String(n.textContent).includes('2026-10-12 06:15')));
+assert(!historicNodes.some(n => String(n.textContent).includes('объявление было снято')));

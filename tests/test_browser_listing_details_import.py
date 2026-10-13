@@ -4,7 +4,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from scripts.import_browser_listing_details import plan_row, source_projection, update_fields, validate_record
+from scripts.import_browser_listing_details import (
+    MAX_SOURCE_CHECKS_BYTES, merge_source_checks, plan_row, publish_source_checks,
+    source_projection, update_fields, validate_record,
+)
 
 NOW = datetime(2026, 10, 13, 6, 10, tzinfo=timezone.utc)
 PHOTO = "https://astps-photos-kr.kcdn.kz/webp/aa/bb/photo-750x470.webp"
@@ -105,6 +108,98 @@ def test_source_observation_remains_separate_from_cached_source_timestamp_and_pr
     assert "last_seen" not in value["records"][0]
     assert "before" not in value["records"][0]
     assert "photos" not in value["records"][0]
+
+
+def checked_record(lid="123456789", at=NOW, price=24_500_000):
+    return {"listing_id": lid, "source_listing_id": lid,
+            "url": "https://krisha.kz/a/show/" + lid, "checked_at": at.isoformat(),
+            "source_active": True, "source_price": price, "source_rooms": 1, "source_area": 38.4}
+
+
+def cache(records):
+    return {"schema_version": 1, "generated_at": NOW.isoformat(), "records": records}
+
+
+def test_merge_preserves_other_listing_old_evidence_and_keeps_new_observation():
+    old = checked_record(at=NOW - timedelta(days=2))
+    new = checked_record("987654321", price=35_000_000)
+    result = merge_source_checks(cache([old]), cache([new]), NOW)
+    assert {r["listing_id"] for r in result["records"]} == {"123456789", "987654321"}
+    assert next(r for r in result["records"] if r["listing_id"] == old["listing_id"])["checked_at"] == old["checked_at"]
+
+
+def test_merge_uses_latest_timestamp_not_file_order_to_resolve_a_previous_mismatch():
+    old = checked_record(at=NOW - timedelta(hours=4))
+    matching = checked_record(at=NOW - timedelta(minutes=10), price=25_000_000)
+    result = merge_source_checks(cache([matching, old]), cache([old]), NOW)
+    assert len(result["records"]) == 1
+    assert result["records"][0]["source_price"] == 25_000_000
+    assert result["records"][0]["checked_at"] == matching["checked_at"]
+
+
+def test_conflicting_facts_at_same_timestamp_do_not_silently_erase_a_mismatch(tmp_path):
+    import json
+    path = tmp_path / "checks.json"
+    path.write_text(json.dumps(cache([checked_record()])), encoding="utf-8")
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="same timestamp"):
+        publish_source_checks(path, [checked_record(price=25_000_000)], NOW)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("change", [
+    {"source_price": float("nan")}, {"source_rooms": 1.5},
+    {"source_listing_id": "987654321"}, {"url": "https://evil.test/a/show/123456789"},
+    {"checked_at": (NOW + timedelta(minutes=1)).isoformat()},
+])
+def test_invalid_existing_cache_fails_closed_without_replacing_it(tmp_path, change):
+    import json
+    path = tmp_path / "checks.json"
+    existing = cache([{**checked_record(), **change}])
+    path.write_text(json.dumps(existing), encoding="utf-8")
+    before = path.read_bytes()
+    with pytest.raises((ValueError, KeyError, TypeError)):
+        publish_source_checks(path, [checked_record("987654321")], NOW)
+    assert path.read_bytes() == before
+    assert not path.with_name(path.name + ".lock").exists()
+
+
+@pytest.mark.parametrize("raw", [b"{invalid json", b'{"schema_version":2,"records":[]}',
+                                  b'{"schema_version":1,"records":null}', b"x" * (MAX_SOURCE_CHECKS_BYTES + 1)],
+                         ids=["malformed", "unsupported_schema", "missing_records", "oversized"])
+def test_malformed_or_oversized_existing_file_is_preserved(tmp_path, raw):
+    path = tmp_path / "checks.json"
+    path.write_bytes(raw)
+    with pytest.raises(ValueError):
+        publish_source_checks(path, [checked_record()], NOW)
+    assert path.read_bytes() == raw
+
+
+def test_atomic_publication_keeps_other_ids_and_new_matching_fact_resolves_mismatch(tmp_path):
+    import json
+    from bot.core.buyer_journey import observed_source
+
+    path = tmp_path / "checks.json"
+    publish_source_checks(path, [checked_record(), checked_record("987654321")], NOW)
+    later = NOW + timedelta(hours=3)
+    matching = checked_record(at=later, price=25_000_000)
+    publish_source_checks(path, [matching], later)
+    records = json.loads(path.read_text(encoding="utf-8"))["records"]
+    assert len(records) == 2
+    assert observed_source("123456789", 25_000_000, now=later, path=path)["price_matches"]
+    assert observed_source("123456789", 25_000_000, now=later + timedelta(hours=3), path=path) is None
+    assert observed_source("987654321", 26_000_000, now=later + timedelta(hours=3), path=path)["is_fresh"] is False
+
+
+def test_concurrent_publication_lock_does_not_replace_or_remove_another_writers_lock(tmp_path):
+    path = tmp_path / "checks.json"
+    path.write_text("existing", encoding="utf-8")
+    lock = path.with_name(path.name + ".lock")
+    lock.write_text("held by another writer", encoding="utf-8")
+    with pytest.raises(ValueError, match="locked"):
+        publish_source_checks(path, [checked_record()], NOW)
+    assert path.read_text(encoding="utf-8") == "existing"
+    assert lock.read_text(encoding="utf-8") == "held by another writer"
 
 
 @pytest.mark.asyncio

@@ -24,6 +24,8 @@ from urllib.parse import urlsplit
 
 FIELDS = ("photos", "floor", "floors_total", "year_built")
 MAX_AGE = timedelta(hours=2)
+MAX_SOURCE_CHECKS_BYTES = 2_000_000
+MAX_SOURCE_CHECKS_RECORDS = 5_000
 PHOTO_HOSTS = frozenset({"astps-photos-kr.kcdn.kz"})
 ROW_SQL = """SELECT id,url,price,rooms,area,is_active,is_duplicate,dup_needs_review,
     archived_at,last_seen,photos,floor,floors_total,year_built
@@ -191,23 +193,92 @@ def plan_row(record: dict, current: dict | None, now: datetime) -> dict:
         return {"id": lid, "status": "invalid_manifest_record"}
 
 
+def checked_source_record(record, now, *, require_fresh=False):
+    """A bounded source fact, independent of a cache seed or listing update."""
+    if not isinstance(record, dict):
+        raise ValueError("source record is not an object")
+    lid = str(record["listing_id"])
+    if (not re.fullmatch(r"[0-9]{5,20}", lid) or source_id(record["url"]) != lid
+            or str(record["source_listing_id"]) != lid or not isinstance(record.get("source_active"), bool)):
+        raise ValueError("source record has invalid identity or availability")
+    checked = timestamp(record["checked_at"])
+    if checked > now or (require_fresh and now - checked > MAX_AGE):
+        raise ValueError("source observation is expired or in the future")
+    price = integer_or_none(record["source_price"], 1, 9_000_000_000_000_000)
+    rooms = integer_or_none(record["source_rooms"], 1, 30)
+    area = numeric(record["source_area"])
+    if price is None or rooms is None:
+        raise ValueError("source price and rooms are required")
+    return {"listing_id": lid, "url": f"https://krisha.kz/a/show/{lid}", "source_listing_id": lid,
+            "checked_at": checked.isoformat(), "source_active": record["source_active"],
+            "source_price": price, "source_rooms": rooms, "source_area": area}
+
+
 def source_projection(records, now):
     output = []
     for record in records:
         try:
-            # Source observation can remain valid even when its price differs
-            # from the cached seed. It never alters cache price/last_seen.
-            lid = str(record["listing_id"])
-            if source_id(record["url"]) != lid or str(record["source_listing_id"]) != lid or record.get("source_active") is not True:
-                continue
-            if not timedelta(minutes=-2) <= now - timestamp(record["checked_at"]) <= MAX_AGE:
-                continue
-            for field in ("price", "rooms", "area"):
-                numeric(record["source_" + field])
-            output.append({key: record[key] for key in ("listing_id", "url", "source_listing_id", "checked_at", "source_active", "source_price", "source_rooms", "source_area")})
+            output.append(checked_source_record(record, now, require_fresh=True))
         except (ValueError, TypeError, KeyError, OverflowError):
             continue
     return {"schema_version": 1, "generated_at": now.isoformat(), "records": output}
+
+
+def merge_source_checks(existing, incoming, now):
+    """Keep the newest valid fact for every ID, including old unresolved facts.
+
+    Existing corruption stops publication instead of silently deleting evidence.
+    A later matching observation supersedes an earlier mismatch for that ID.
+    """
+    latest = {}
+    for payload in (existing, incoming):
+        if (not isinstance(payload, dict) or payload.get("schema_version") != 1
+                or not isinstance(payload.get("records"), list)
+                or len(payload["records"]) > MAX_SOURCE_CHECKS_RECORDS):
+            raise ValueError("source-checks cache has invalid schema or record count")
+        for record in payload["records"]:
+            fact = checked_source_record(record, now)
+            lid, at = fact["listing_id"], timestamp(fact["checked_at"])
+            if lid in latest and at == timestamp(latest[lid]["checked_at"]) and fact != latest[lid]:
+                raise ValueError("source-checks facts conflict at the same timestamp; existing evidence retained")
+            if lid not in latest or at >= timestamp(latest[lid]["checked_at"]):
+                latest[lid] = fact
+    if len(latest) > MAX_SOURCE_CHECKS_RECORDS:
+        raise ValueError("source-checks cache capacity exceeded; existing evidence retained")
+    result = {"schema_version": 1, "generated_at": now.isoformat(),
+              "records": [latest[lid] for lid in sorted(latest)]}
+    if len(encode(result).encode("utf-8")) > MAX_SOURCE_CHECKS_BYTES:
+        raise ValueError("source-checks cache is too large; existing evidence retained")
+    return result
+
+
+def publish_source_checks(path, records, now):
+    """Exclusive read/merge/atomic-write, with no changes to PostgreSQL."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
+    try:
+        lock = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as error:
+        raise ValueError("source-checks publication is locked; existing evidence retained") from error
+    try:
+        if path.exists():
+            with path.open("rb") as handle:
+                raw = handle.read(MAX_SOURCE_CHECKS_BYTES + 1)
+            if len(raw) > MAX_SOURCE_CHECKS_BYTES:
+                raise ValueError("source-checks cache is too large; existing evidence retained")
+            try:
+                existing = json.loads(raw)
+            except (ValueError, UnicodeDecodeError, RecursionError) as error:
+                raise ValueError("source-checks cache is malformed; existing evidence retained") from error
+        else:
+            existing = {"schema_version": 1, "records": []}
+        merged = merge_source_checks(existing, source_projection(records, now), now)
+        atomic_json(path, merged)
+        return len(merged["records"])
+    finally:
+        os.close(lock)
+        lock_path.unlink()
 
 
 async def update_fields(connection, entry, *, rollback=False):
@@ -301,7 +372,15 @@ async def run(args):
             report["transaction_status"] = "committed"
             atomic_json(Path(args.output), report)
             if source_records is not None and args.source_checks_output:
-                atomic_json(Path(args.source_checks_output), source_projection(source_records, now))
+                try:
+                    report["source_checks_records"] = publish_source_checks(args.source_checks_output, source_records, now)
+                    report["source_checks_status"] = "published"
+                except (OSError, ValueError, TypeError, KeyError, OverflowError) as error:
+                    report["source_checks_status"] = "not_published"
+                    report["source_checks_error"] = str(error)
+                    atomic_json(Path(args.output), report)
+                    raise
+                atomic_json(Path(args.output), report)
         print(encode({"mode": report["mode"], "transaction_status": report["transaction_status"], "summary": report["summary"]}))
     finally:
         await connection.close()

@@ -1,5 +1,5 @@
 """The real web route is private; its projection distinguishes facts and unknowns."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -49,19 +49,63 @@ def row(id="123456", rooms=2, area=50, **changes):
 
 
 @pytest.mark.parametrize("change", [
-    {"checked_at": "2026-10-13T04:00:00+00:00"},
     {"checked_at": "2026-10-13T08:00:00+00:00"},
     {"source_listing_id": "654321"},
     {"source_price": float("nan")},
     {"url": "https://evil.example/a/show/123456"},
 ])
-def test_source_comparison_rejects_old_future_wrong_and_nonfinite_observations(tmp_path, change):
+def test_source_comparison_rejects_future_wrong_and_nonfinite_observations(tmp_path, change):
     item = {"listing_id": "123456", "source_listing_id": "123456",
             "url": "https://krisha.kz/a/show/123456", "checked_at": NOW.isoformat(),
             "source_active": True, "source_price": 29_000_000, **change}
     path = tmp_path / "sources.json"
     path.write_text(json.dumps({"schema_version": 1, "records": [item]}), encoding="utf-8")
     assert buyer_journey.observed_source("123456", 30_000_000, now=NOW, path=path) is None
+
+
+def source_record(at=NOW, price=29_000_000, **changes):
+    return {"listing_id": "123456", "source_listing_id": "123456",
+            "url": "https://krisha.kz/a/show/123456", "checked_at": at.isoformat(),
+            "source_active": True, "source_price": price, **changes}
+
+
+def source_file(tmp_path, records):
+    path = tmp_path / "sources.json"
+    path.write_text(json.dumps({"schema_version": 1, "records": records}), encoding="utf-8")
+    return path
+
+
+def test_stale_unresolved_price_mismatch_keeps_dated_evidence_without_current_availability(tmp_path):
+    old = NOW - timedelta(hours=3)
+    path = source_file(tmp_path, [source_record(old, source_active=False)])
+    result = buyer_journey.observed_source("123456", 30_000_000, now=NOW, path=path)
+    assert result["status"] == "historical_unresolved" and result["is_fresh"] is False
+    assert result["checked_at"] == old.isoformat() and not result["price_matches"]
+    assert result["active"] is None and result["historical_active"] is False
+
+
+def test_stale_matching_observation_does_not_pretend_current_source_confirmation(tmp_path):
+    path = source_file(tmp_path, [source_record(NOW - timedelta(hours=3), price=30_000_000)])
+    assert buyer_journey.observed_source("123456", 30_000_000, now=NOW, path=path) is None
+
+
+@pytest.mark.parametrize("records", [
+    [source_record(NOW - timedelta(hours=4)), source_record(NOW - timedelta(hours=3), price=30_000_000)],
+    [source_record(NOW - timedelta(hours=3), price=30_000_000), source_record(NOW - timedelta(hours=4))],
+])
+def test_newer_matching_observation_resolves_old_mismatch_even_when_file_is_unsorted(tmp_path, records):
+    path = source_file(tmp_path, records)
+    assert buyer_journey.observed_source("123456", 30_000_000, now=NOW, path=path) is None
+
+
+def test_newest_valid_mismatch_wins_over_older_match_and_future_invalid_record(tmp_path):
+    new = NOW - timedelta(minutes=20)
+    path = source_file(tmp_path, [source_record(new, price=28_000_000),
+        source_record(NOW - timedelta(hours=1), price=30_000_000),
+        source_record(NOW + timedelta(hours=1), price=30_000_000)])
+    result = buyer_journey.observed_source("123456", 30_000_000, now=NOW, path=path)
+    assert result["price"] == 28_000_000 and result["checked_at"] == new.isoformat()
+    assert result["is_fresh"] and result["active"] is True
 
 
 def test_confirmed_source_price_difference_does_not_replace_cached_price(tmp_path):
@@ -205,6 +249,25 @@ async def test_web_projection_caps_alternatives_and_does_not_copy_private_fields
     assert len(result["alternatives"]) == 3
     assert "PRIVATE-" not in json.dumps(result, ensure_ascii=False)
     assert result["publications"]["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_confirmed_price_mismatch_is_first_warning_so_three_item_display_cannot_hide_it(monkeypatch):
+    base = row(lat=51.1, lon=71.4)
+    source = {"checked_at": NOW.isoformat(), "price": 29_000_000,
+              "stored_price": 30_000_000, "price_matches": False, "is_fresh": False,
+              "active": None, "historical_active": True}
+    monkeypatch.setattr(buyer_journey, "observed_source", lambda *a, **kw: source)
+    monkeypatch.setattr(buyer_journey, "analyze_for_buyer", AsyncMock(return_value={
+        "found": True, "listing": base, "better_nearby": [{"listing": row("123457"),
+            "warnings": ["Неизвестен год", "Неизвестна отделка", "Неизвестен этаж", "Дополнительное замечание"]}]}))
+    monkeypatch.setattr(buyer_journey.pg, "fetch", AsyncMock(return_value=[base]))
+    result = await buyer_journey.build_buyer_journey("123456")
+    warnings = result["alternatives"][0]["warnings"]
+    assert "29 000 000" in warnings[0] and "30 000 000" in warnings[0]
+    assert "13.10.2026 07:00 UTC" in warnings[0]
+    assert "Текущую цену и доступность нужно проверить заново" in warnings[0]
+    assert warnings[1] == "Неизвестен год"
 
 
 @pytest.mark.asyncio

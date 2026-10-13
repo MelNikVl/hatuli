@@ -21,12 +21,16 @@ def _source_checks(path: str, modified: int, size: int):
             return []
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return data["records"] if isinstance(data, dict) and data.get("schema_version") == 1 and isinstance(data.get("records"), list) else []
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
         return []
 
 
 def observed_source(identifier, current_price, *, now=None, path=None):
-    """Actual browser confirmation expires; it never rewrites scanner timestamps."""
+    """Fresh confirmation expires; a known unresolved price mismatch does not.
+
+    The newest valid observation wins by its timestamp, irrespective of file
+    order. Historic availability is never reported as current availability.
+    """
     source = Path(path or SOURCE_CHECKS_PATH)
     now = now or datetime.now(timezone.utc)
     try:
@@ -34,23 +38,35 @@ def observed_source(identifier, current_price, *, now=None, path=None):
         records = _source_checks(str(source), stat.st_mtime_ns, stat.st_size)
     except OSError:
         return None
-    for item in reversed(records):
+    latest = None
+    for item in records:
         if not isinstance(item, dict) or item.get("listing_id") != str(identifier):
             continue
         try:
             checked = datetime.fromisoformat(item["checked_at"].replace("Z", "+00:00"))
             price = item["source_price"]
-            if (checked.tzinfo is None or not checked <= now <= checked + timedelta(hours=2)
+            if (checked.tzinfo is None or checked > now
                     or item.get("source_listing_id") != str(identifier)
                     or item.get("url") != f"https://krisha.kz/a/show/{identifier}"
+                    or not isinstance(item.get("source_active"), bool)
                     or not isinstance(price, (int, float)) or isinstance(price, bool) or not math.isfinite(price) or price <= 0):
                 continue
         except (KeyError, TypeError, ValueError, AttributeError):
             continue
-        return {"checked_at": checked.isoformat(), "price": price,
-                "active": item.get("source_active") is True, "price_matches": price == current_price,
-                "stored_price": current_price}
-    return None
+        if latest is None or checked >= latest[0]:
+            latest = (checked, item, price)
+    if latest is None:
+        return None
+    checked, item, price = latest
+    fresh = now <= checked + timedelta(hours=2)
+    matches = price == current_price
+    if not fresh and matches:
+        return None
+    return {"checked_at": checked.astimezone(timezone.utc).isoformat(), "price": price,
+            "active": item["source_active"] if fresh else None,
+            "historical_active": item["source_active"], "is_fresh": fresh,
+            "status": "fresh" if fresh else "historical_unresolved",
+            "price_matches": matches, "stored_price": current_price}
 
 
 def publication_summary(rows: list[dict], identity_status: str | None) -> dict:
@@ -105,7 +121,10 @@ async def build_buyer_journey(identifier: str) -> dict:
         if alternative_source and not alternative_source["price_matches"]:
             source_price = f"{alternative_source['price']:,.0f}".replace(",", " ")
             stored_price = f"{item['price']:,.0f}".replace(",", " ")
-            warnings.append(f"При проверке на Krisha цена {source_price} ₸, в Hatuli {stored_price} ₸. Уточните актуальную цену.")
+            checked_label = datetime.fromisoformat(alternative_source["checked_at"]).strftime("%d.%m.%Y %H:%M UTC")
+            prefix = "При последней проверке" if alternative_source["is_fresh"] else "Сохранено неразрешённое расхождение"
+            warnings.insert(0, f"{prefix} ({checked_label}): на Krisha {source_price} ₸, в Hatuli {stored_price} ₸. "
+                               "Текущую цену и доступность нужно проверить заново.")
         alternatives.append({"id": str(item["id"]), "url": item.get("url"),
             "rooms": item.get("rooms"), "area": item.get("area"), "price": item.get("price"),
             "distance_m": candidate.get("distance_m"), "advantages": candidate.get("advantages", []),

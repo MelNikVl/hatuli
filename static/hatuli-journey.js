@@ -9,7 +9,7 @@
     if(!container?.isConnected)return;
     container.replaceChildren(text('h3','История квартиры'));
     if(!data?.found){container.append(text('p',data?.message||'Разбор временно недоступен. Основная карточка и источник доступны.'));return;}
-    if(data.source_check&&!data.source_check.price_matches){container.append(text('p',`Цена на Krisha при проверке: ${money(data.source_check.price)}. В Hatuli сохранено ${money(data.source_check.stored_price)}. Разбор использует сохранённую цену — подтвердите актуальную перед решением.`,'hj-differences'));}
+    if(data.source_check&&!data.source_check.price_matches){const checked=String(data.source_check.checked_at||'').replace('T',' ').slice(0,16)+' UTC';const prefix=data.source_check.is_fresh===false?'Расхождение цены из прошлой проверки':'При последней проверке цены отличались';container.append(text('p',`${prefix} (${checked}): на Krisha ${money(data.source_check.price)}, в Hatuli ${money(data.source_check.stored_price)}. Разбор использует сохранённую цену. Текущую цену и доступность нужно проверить заново.`,'hj-differences'));}
     if(data.source_check?.active===false){container.append(text('p','При последней проверке объявление было снято. Наличие нужно уточнить.','hj-differences'));}
     const publications=data.publications||{};
     container.append(text('p',publications.message||'История повторных публикаций пока не подтверждена.','hj-note'));
