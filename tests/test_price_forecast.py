@@ -333,6 +333,14 @@ def test_future_collection_is_not_read_into_a_past_asof_training_set(tmp_path):
     assert len(records[0]["points"]) == 1
 
 
+def test_reader_loads_real_collector_day_partitions(tmp_path):
+    partition = tmp_path / "2026-08-15"
+    partition.mkdir()
+    write_observations(partition / "090500-capture.jsonl", [observation("1001", 1)])
+    records = pf.load_observation_history(tmp_path, as_of=NOW)
+    assert len(records) == 1 and len(records[0]["points"]) == 1
+
+
 def test_same_rooms_area_primary_and_secondary_are_not_merged_as_analogs():
     query = {"group_id": "self", "rooms": 2, "area": 60, "price": 30_000_000,
              "market_type": "secondary", "x": [0.0] * len(pf.FEATURES)}

@@ -506,7 +506,7 @@ def load_observation_history(directory: Path, *, as_of: datetime | None = None) 
         if a != b:
             # Deterministic root independent of input file order.
             parent[max(a, b)] = min(a, b)
-    for path in sorted(Path(directory).glob("*.jsonl")):
+    for path in sorted(Path(directory).rglob("*.jsonl")):
         with path.open(encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
