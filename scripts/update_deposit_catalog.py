@@ -23,9 +23,38 @@ from bs4 import BeautifulSoup
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bot.core.deposit_comparison import CATALOG_PATH, SCHEMA_VERSION, public_deposit_catalog, load_deposit_catalog
-from bot.core.deposit_sources import PRODUCT_SOURCES, INDEX_SOURCES, DOCUMENT_SOURCES, parse_source
+from bot.core.deposit_sources import PRODUCT_SOURCES, INDEX_SOURCES, DOCUMENT_SOURCES, HOME_PLUS, parse_source
 
 MAX_BODY = 2_000_000
+
+
+def validate_home_plus_documents(html: str) -> None:
+    """Reject changed linked documents even when the old PDF URL still works."""
+    soup = BeautifulSoup(html, "html.parser")
+    script = soup.find("script", id="__NUXT_DATA__")
+    try:
+        values = json.loads(script.get_text()) if script else None
+    except (ValueError, TypeError):
+        values = None
+    if not isinstance(values, list):
+        raise ValueError("Не подтверждены ссылки документов Home+")
+
+    def resolve(value):
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(values):
+            return values[value]
+        return value
+
+    names = ("Договор банковского обслуживания", "Типовые тарифы", "Уведомление КФГД")
+    found = {name: set() for name in names}
+    for value in values:
+        if not isinstance(value, dict) or not {"name", "url", "extension"} <= value.keys():
+            continue
+        name, path = resolve(value["name"]), resolve(value["url"])
+        if isinstance(name, str) and name in found and isinstance(path, str):
+            found[name].add(urljoin("https://home.kz/strapi/", path.lstrip("/")))
+    expected = {url for url, product in DOCUMENT_SOURCES.items() if product == HOME_PLUS}
+    if any(len(urls) != 1 for urls in found.values()) or set().union(*found.values()) != expected:
+        raise ValueError("Изменились ссылки документов Home+; нужна проверка")
 
 
 def discover_programs(url: str, html: str) -> list[str]:
@@ -89,6 +118,8 @@ def build_catalog(previous: dict, fetched: dict, now: datetime, accept_terms: bo
         try:
             if response.get("error"):
                 raise ValueError(response["error"])
+            if url == HOME_PLUS:
+                validate_home_plus_documents(response.get("text", ""))
             parsed = parse_source(url, response.get("text", ""), now)
             if not parsed:
                 raise ValueError("Нет подтверждённых программ")

@@ -1,0 +1,125 @@
+{
+  "reviewed_at": "2026-10-13T18:08:36.249757+05:00",
+  "freedom": {
+    "source_url": "https://bankffin.kz/ru/deposits/physical/moneybox",
+    "checked_at": "2026-10-13T12:59:50.166067+00:00",
+    "reviewed_fields": [
+      "exact12and13month rates",
+      "nominal and GESV",
+      "monthly/daily capitalization",
+      "minimum500KZT",
+      "maximum10pct bankcapital",
+      "top-up and partial withdrawal",
+      "actualterm earlyreturn",
+      "short holding withdrawalfee up to2pct",
+      "other KZTdeposit guarantee10mln"
+    ],
+    "annual_rates_changed": false
+  },
+  "home": {
+    "source_url": "https://home.kz/deposits/depozit-sberegatelnyj-plus",
+    "checked_at": "2026-10-13T13:02:58.846007+00:00",
+    "source_hash": "78f4274b4071a88418a703d571316399676c86a04d24dfebe527fec6f5dc626b",
+    "terms_hash": "7f73c8bf372d2effcd5a7f2f15aafd60191550dfa001a4c63043c44c7907d37b",
+    "documents": {
+      "contract": {
+        "url": "https://home.kz/strapi/uploads/Dogovor_bankovskogo_obsluzhivaniya_fizicheskih_licz_v_AO_Home_Credit_Bank_versiya_3_ot_19_03_2020_goda_1ad3c0218d.pdf",
+        "pages_reviewed": [
+          86,
+          87,
+          88,
+          89,
+          90
+        ],
+        "sha256": "81004522b59abdb4048c77eefa08c6dc9a87535c4d4e7a847c6f32cc4cd87986"
+      },
+      "fees": {
+        "url": "https://home.kz/strapi/uploads/Svod_Tipovyh_Tarifov_96_versiya_s_kazahskim_yazykom_1_251359ff81.pdf",
+        "effective_date": "2026-10-05",
+        "pages_reviewed": [
+          39,
+          40,
+          41,
+          64
+        ],
+        "sha256": "f00a1b519eb615e9e051e2c66d5b257cb6873f79eb0785c349975b27d608c807"
+      },
+      "guarantee": {
+        "url": "https://home.kz/strapi/uploads/Uvedomlenie_KFGD_d45821d81d.pdf",
+        "pages_reviewed": [
+          3
+        ],
+        "sha256": "5b1cb97a81ab1d58447d16238f67f6e219641a844d717c8fa0746c5ee67b0d3d"
+      }
+    },
+    "verified_fields": {
+      "currency": "KZT",
+      "term_months": 12,
+      "nominal_pct": 13.98,
+      "effective_pct": 15,
+      "rate_type": "fixed",
+      "capitalization": "daily",
+      "min_amount": 1000,
+      "max_amount": null,
+      "can_top_up": true,
+      "top_up_limit": null,
+      "can_withdraw": false,
+      "early_termination": "No reward; funds after30 calendar days. General contract specifies not earlier than30days.",
+      "deposit_type": "savings",
+      "guarantee_limit": 20000000,
+      "guarantee_scope": "Per bank; includes accrued reward; aggregate cap acrossdeposittypes20mlnKZT"
+    },
+    "excluded_column": {
+      "label": "для VIP клиентов 6 месяцев",
+      "term_months": 6,
+      "nominal_pct": 17.9,
+      "effective_pct": 19.6,
+      "reason": "VIP status required; not ordinaryretail12monthoffer"
+    },
+    "review_decision": "Restore ordinaryHome+3/6/12 onlyaftertargetedreview publication; do notaddVIPproduct."
+  },
+  "documents": [
+    {
+      "url": "https://bankffin.kz/docs/moneybox_condition_ru.pdf",
+      "product": "https://bankffin.kz/ru/deposits/physical/moneybox",
+      "sha256": "a3bda0356c8ebcd5fd706e7c1e3d7e3cbd1d2d976c170c736cffae89bde466a0",
+      "checked_at": "2026-10-13T12:59:50.166067+00:00"
+    },
+    {
+      "url": "https://home.kz/strapi/uploads/Dogovor_bankovskogo_obsluzhivaniya_fizicheskih_licz_v_AO_Home_Credit_Bank_versiya_3_ot_19_03_2020_goda_1ad3c0218d.pdf",
+      "product": "https://home.kz/deposits/depozit-sberegatelnyj-plus",
+      "sha256": "81004522b59abdb4048c77eefa08c6dc9a87535c4d4e7a847c6f32cc4cd87986",
+      "checked_at": "2026-10-13T13:02:58.846007+00:00",
+      "pages_reviewed": [
+        86,
+        87,
+        88,
+        89,
+        90
+      ]
+    },
+    {
+      "url": "https://home.kz/strapi/uploads/Svod_Tipovyh_Tarifov_96_versiya_s_kazahskim_yazykom_1_251359ff81.pdf",
+      "product": "https://home.kz/deposits/depozit-sberegatelnyj-plus",
+      "sha256": "f00a1b519eb615e9e051e2c66d5b257cb6873f79eb0785c349975b27d608c807",
+      "checked_at": "2026-10-13T13:02:58.846007+00:00",
+      "pages_reviewed": [
+        39,
+        40,
+        41,
+        64
+      ]
+    },
+    {
+      "url": "https://home.kz/strapi/uploads/Uvedomlenie_KFGD_d45821d81d.pdf",
+      "product": "https://home.kz/deposits/depozit-sberegatelnyj-plus",
+      "sha256": "5b1cb97a81ab1d58447d16238f67f6e219641a844d717c8fa0746c5ee67b0d3d",
+      "checked_at": "2026-10-13T13:02:58.846007+00:00",
+      "pages_reviewed": [
+        3
+      ]
+    }
+  ],
+  "decision": "Restore only reviewed ordinary products; exclude Home+ VIP; keep full-catalog checked_at and all other products untouched",
+  "validation": "122 mocked tests passed; no DB initialization or migration; no bank operation; focused source reads only; routine timer not rerun"
+}

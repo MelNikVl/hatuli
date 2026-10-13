@@ -27,7 +27,10 @@ INDEX_SOURCES = ("https://bankffin.kz/ru/deposits/physical",
                  "https://home.kz/deposits")
 DOCUMENT_SOURCES = {"https://bankffin.kz/docs/moneybox_condition_ru.pdf": FREEDOM,
                     "https://bankffin.kz/docs/capital_condition_ru.pdf": FREEDOM_CAPITAL,
-                    "https://bankffin.kz/docs/strategy_condition_ru.pdf": FREEDOM_STRATEGY}
+                    "https://bankffin.kz/docs/strategy_condition_ru.pdf": FREEDOM_STRATEGY,
+                    "https://home.kz/strapi/uploads/Dogovor_bankovskogo_obsluzhivaniya_fizicheskih_licz_v_AO_Home_Credit_Bank_versiya_3_ot_19_03_2020_goda_1ad3c0218d.pdf": HOME_PLUS,
+                    "https://home.kz/strapi/uploads/Svod_Tipovyh_Tarifov_96_versiya_s_kazahskim_yazykom_1_251359ff81.pdf": HOME_PLUS,
+                    "https://home.kz/strapi/uploads/Uvedomlenie_KFGD_d45821d81d.pdf": HOME_PLUS}
 
 
 def _text(value: str) -> str:
@@ -205,8 +208,11 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
         rows = _rows(tables[0])
         if _row(rows, "Валюта")[1] != "KZT" or _row(rows, "Минимальная сумма")[1] != "500 ₸":
             raise ValueError("Условия Копилки изменились")
-        nominal_pairs = re.findall(r"(\d+(?:[.,]\d+)?)%\s*(\d+)\s*мес\.", _row(rows, "Номинальная ставка")[1])
-        effective_pairs = re.findall(r"(\d+(?:[.,]\d+)?)%\s*(\d+)\s*мес\.", _row(rows, "Годовая эффективная")[1])
+        pair_pattern = r"(\d+(?:[.,]\d+)?)%\s*(\d+)\s*мес\."
+        rate_cells = [_row(rows, prefix)[1] for prefix in ("Номинальная ставка", "Годовая эффективная")]
+        if any(re.sub(pair_pattern, "", cell).strip() for cell in rate_cells):
+            raise ValueError("Неоднозначные ставки Копилки")
+        nominal_pairs, effective_pairs = [re.findall(pair_pattern, cell) for cell in rate_cells]
         if len(nominal_pairs) != len(effective_pairs) or not nominal_pairs:
             raise ValueError("Неоднозначные ставки Копилки")
         offered = []
@@ -261,15 +267,27 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
         rows = _rows(table)
         savings = url != HOME_SIMPLE
         term_cells = _row(rows, "Срок депозита")[1:]
-        term_matches = [re.fullmatch(r"(\d+)\s+месяц(?:а|ев)?", cell) for cell in term_cells]
-        if not all(term_matches):
+        # Home+ explicitly separates its six-month VIP product. Keep the
+        # original column positions when excluding it: its higher rate is
+        # unavailable to an ordinary retail customer and is not a 12m offer.
+        public_columns, term_months = [], []
+        vip_columns = 0
+        for index, cell in enumerate(term_cells):
+            match = re.fullmatch(r"(\d+)\s+месяц(?:а|ев)?", cell)
+            if match:
+                public_columns.append(index)
+                term_months.append(int(match[1]))
+            elif url == HOME_PLUS and re.fullmatch(r"для VIP клиентов 6 месяцев", cell):
+                vip_columns += 1
+            else:
+                raise ValueError("Неоднозначные сроки Home Credit")
+        if vip_columns > 1:
             raise ValueError("Неоднозначные сроки Home Credit")
-        term_months = [int(match[1]) for match in term_matches]
         if len(set(term_months)) != len(term_months) or 12 not in term_months:
             raise ValueError("Неоднозначные сроки Home Credit")
         nominal_row = _row(rows, "Номинальная ставка")[1:]
         effective_row = _row(rows, "Годовая эффективная")[1:]
-        if len(nominal_row) < len(term_months) or len(effective_row) < len(term_months):
+        if len(nominal_row) != len(term_cells) or len(effective_row) != len(term_cells):
             raise ValueError("Сроки и ставки Home Credit не согласованы")
         minimum = 100_000 if url == HOME_SAVINGS else 1_000
         if _row(rows, "Минимальная сумма")[1] != f"{minimum:,}".replace(",", " ") + " ₸":
@@ -294,11 +312,11 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
                     raise ValueError("Неоднозначный максимум Home Credit")
                 max_cells.extend([_text(cell.get_text(" ", strip=True))] * int(span))
             if len(max_cells) == 1:
-                max_cells *= len(term_months)
-            if len(max_cells) < len(term_months):
+                max_cells *= len(term_cells)
+            if len(max_cells) != len(term_cells):
                 raise ValueError("Не подтверждены максимумы Home Credit по срокам")
         offered = []
-        for index, term in enumerate(term_months):
+        for index, term in zip(public_columns, term_months):
             maximum = None
             if max_cells is not None and max_cells[index] != "без ограничений":
                 amount = re.fullmatch(r"([\d ]+)\s*₸", max_cells[index])
