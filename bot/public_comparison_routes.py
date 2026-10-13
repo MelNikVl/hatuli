@@ -72,6 +72,18 @@ def _primary_selection_offer(offer, market):
 
 def _deposit_changes(catalog: dict) -> list[dict]:
     programs = {offer.get("id"): offer for offer in catalog.get("offers", []) if isinstance(offer, dict)}
+    sources = {source.get("url"): source for source in catalog.get("sources", []) if isinstance(source, dict)}
+
+    def reviewed_after(record, event):
+        if (record.get("status") != "verified" or record.get("pending_terms_hash")
+                or record.get("pending_source_hash") or record.get("review_required")):
+            return False
+        try:
+            checked = datetime.fromisoformat(record["checked_at"].replace("Z", "+00:00"))
+            changed = datetime.fromisoformat(event["at"].replace("Z", "+00:00"))
+            return checked.tzinfo is not None and changed.tzinfo is not None and checked >= changed
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return False
     labels = {"conditions_changed": "Изменились условия: программа требует повторной проверки.",
               "document_changed": "Изменён официальный документ условий банка.",
               "programs_changed": "В каталоге банка изменился список программ."}
@@ -89,6 +101,10 @@ def _deposit_changes(catalog: dict) -> list[dict]:
             label = f"ГЭСВ: {before:g}% → {after:g}%".replace(".", ",")
         elif kind in labels:
             label = labels[kind]
+            if kind == "conditions_changed" and reviewed_after(offer, event):
+                label = "Изменение условий проверено после этого события."
+            elif kind == "document_changed" and reviewed_after(sources.get(event.get("url"), {}), event):
+                label = "Изменение документа проверено после этого события."
         else:
             continue
         try:

@@ -121,5 +121,5 @@
     }
   ],
   "decision": "Restore only reviewed ordinary products; exclude Home+ VIP; keep full-catalog checked_at and all other products untouched",
-  "validation": "122 mocked tests passed; no DB initialization or migration; no bank operation; focused source reads only; routine timer not rerun"
+  "validation": "173 isolated mocked checks passed, including public comparison routes and review history. Actual public 10mln KZT calculation: annual Freedom end11687000 KZT; 3month19.5percent not rolled into guaranteed annual return. No DB initialization or migration; no bank operation; focused source reads only; routine timer not rerun."
 }
