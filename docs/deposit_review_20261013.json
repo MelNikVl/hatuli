@@ -121,5 +121,44 @@
     }
   ],
   "decision": "Restore only reviewed ordinary products; exclude Home+ VIP; keep full-catalog checked_at and all other products untouched",
-  "validation": "173 isolated mocked checks passed, including public comparison routes and review history. Actual public 10mln KZT calculation: annual Freedom end11687000 KZT; 3month19.5percent not rolled into guaranteed annual return. No DB initialization or migration; no bank operation; focused source reads only; routine timer not rerun."
+  "validation": "173 isolated mocked checks passed, including public comparison routes and review history. Actual public 10mln KZT calculation: annual Freedom end11687000 KZT; 3month19.5percent not rolled into guaranteed annual return. No DB initialization or migration; no bank operation; focused source reads only; routine timer not rerun.",
+  "home_simple_followup": {
+    "checked_at": "2026-10-13T15:25:59.408572+00:00",
+    "documents": {
+      "contract": {
+        "url": "https://home.kz/strapi/uploads/Dogovor_bankovskogo_obsluzhivaniya_fizicheskih_licz_v_AO_Home_Credit_Bank_versiya_3_ot_19_03_2020_goda_1ad3c0218d.pdf",
+        "sha256": "81004522b59abdb4048c77eefa08c6dc9a87535c4d4e7a847c6f32cc4cd87986"
+      },
+      "fees": {
+        "url": "https://home.kz/strapi/uploads/Svod_Tipovyh_Tarifov_96_versiya_s_kazahskim_yazykom_1_251359ff81.pdf",
+        "sha256": "f00a1b519eb615e9e051e2c66d5b257cb6873f79eb0785c349975b27d608c807"
+      },
+      "guarantee": {
+        "url": "https://home.kz/strapi/uploads/Uvedomlenie_KFGD_d45821d81d.pdf",
+        "sha256": "5b1cb97a81ab1d58447d16238f67f6e219641a844d717c8fa0746c5ee67b0d3d"
+      }
+    },
+    "source_url": "https://home.kz/deposits/depozity-v-tenge",
+    "source_hash": "3eb34af5cb148096c58439a4b77870aa4fd5beebd2636ff71a8daecdcaecfc6e",
+    "terms_hash": "9265a4bc6caac0c29fa64a68c38336dde74ec87f26cafb4106ed0b017b5c8e2a",
+    "verified_fields": {
+      "currency": "KZT",
+      "term_months": 12,
+      "nominal_pct": 13.98,
+      "effective_pct": 15,
+      "rate_type": "fixed",
+      "capitalization": "daily",
+      "min_amount": 1000,
+      "minimum_remaining_for_partial_withdrawal": 1000,
+      "max_amount": null,
+      "can_top_up": true,
+      "can_withdraw": true,
+      "early_termination": "Full principal and accrued reward within24hours tocard/currentaccount; reward preserved withappwithdrawal",
+      "deposit_type": "other",
+      "guarantee_limit": 10000000,
+      "guarantee_scope": "OtherKZTdeposits perbank; includesaccruedreward; combineddeposittypesmax20mlnKZT"
+    },
+    "review_decision": "Technicalcurrencycolspanrepair; ordinaryKZT12m15%GESVeligible,13m16.3%excludedfromexact12mcalculation,foreigncurrenciesexcluded.",
+    "trigger": "Planned20:10UTC+5run rejectedcurrency/termgrid; explicitcolspan expansion restoresonlyverifiedKZTterms. No annualratechange;13monthrate excludedfromannualcalculation."
+  }
 }

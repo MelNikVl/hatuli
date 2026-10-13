@@ -267,12 +267,43 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
         rows = _rows(table)
         savings = url != HOME_SIMPLE
         term_cells = _row(rows, "Срок депозита")[1:]
+        simple_columns = None
+        if url == HOME_SIMPLE:
+            def expanded_simple_row(prefix):
+                matching = [row for row in table.find_all("tr")
+                            if row.find(["td", "th"]) is not None
+                            and _text(row.find(["td", "th"]).get_text(" ", strip=True)).lower().startswith(prefix.lower())]
+                if len(matching) != 1:
+                    raise ValueError(f"Неоднозначная строка условий: {prefix}")
+                values = []
+                for cell in matching[0].find_all(["td", "th"], recursive=False)[1:]:
+                    span = str(cell.get("colspan", "1"))
+                    if (not span.isdigit() or not 1 <= int(span) <= 6
+                            or str(cell.get("rowspan", "1")) != "1"):
+                        raise ValueError("Неоднозначные колонки Home Credit")
+                    values.extend([_text(cell.get_text(" ", strip=True))] * int(span))
+                if not 1 <= len(values) <= 6:
+                    raise ValueError("Неоднозначные колонки Home Credit")
+                return values
+
+            # One explicit 12m colspan covers KZT, USD and EUR. Pair currency,
+            # term and rates before selecting KZT; never truncate foreign rates.
+            currencies = expanded_simple_row("Валюта депозита")
+            term_cells = expanded_simple_row("Срок депозита")
+            if (len(currencies) != len(term_cells)
+                    or any(value not in ("теңге", "доллар", "евро") for value in currencies)):
+                raise ValueError("Валюта и сроки Home Credit не согласованы")
+            simple_columns = [index for index, currency in enumerate(currencies) if currency == "теңге"]
+            if not simple_columns:
+                raise ValueError("Валюта Home Credit не подтверждена")
         # Home+ explicitly separates its six-month VIP product. Keep the
         # original column positions when excluding it: its higher rate is
         # unavailable to an ordinary retail customer and is not a 12m offer.
         public_columns, term_months = [], []
         vip_columns = 0
         for index, cell in enumerate(term_cells):
+            if simple_columns is not None and index not in simple_columns:
+                continue
             match = re.fullmatch(r"(\d+)\s+месяц(?:а|ев)?", cell)
             if match:
                 public_columns.append(index)
@@ -287,12 +318,24 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
             raise ValueError("Неоднозначные сроки Home Credit")
         nominal_row = _row(rows, "Номинальная ставка")[1:]
         effective_row = _row(rows, "Годовая эффективная")[1:]
+        if url == HOME_SIMPLE:
+            nominal_row = expanded_simple_row("Номинальная ставка")
+            effective_row = expanded_simple_row("Годовая эффективная")
         if len(nominal_row) != len(term_cells) or len(effective_row) != len(term_cells):
             raise ValueError("Сроки и ставки Home Credit не согласованы")
         minimum = 100_000 if url == HOME_SAVINGS else 1_000
-        if _row(rows, "Минимальная сумма")[1] != f"{minimum:,}".replace(",", " ") + " ₸":
+        minimum_cells = _row(rows, "Минимальная сумма")[1:2]
+        capitalization_cells = _row(rows, "Капитализация")[1:2]
+        if url == HOME_SIMPLE:
+            minimum_cells = expanded_simple_row("Минимальная сумма")
+            capitalization_cells = expanded_simple_row("Капитализация")
+            if len(minimum_cells) != len(term_cells) or len(capitalization_cells) != len(term_cells):
+                raise ValueError("Сроки и условия Home Credit не согласованы")
+            minimum_cells = [minimum_cells[index] for index in public_columns]
+            capitalization_cells = [capitalization_cells[index] for index in public_columns]
+        if not minimum_cells or any(value != f"{minimum:,}".replace(",", " ") + " ₸" for value in minimum_cells):
             raise ValueError("Минимум Home Credit изменился")
-        if _row(rows, "Капитализация")[1] != "ежедневная":
+        if not capitalization_cells or any(value != "ежедневная" for value in capitalization_cells):
             raise ValueError("Капитализация Home Credit изменена")
         top_up, withdraw = url != HOME_SAVINGS, url == HOME_SIMPLE
         name = {HOME_SIMPLE: "Простой", HOME_SAVINGS: "Сберегательный Хоум", HOME_PLUS: "Сберегательный Хоум+"}[url]

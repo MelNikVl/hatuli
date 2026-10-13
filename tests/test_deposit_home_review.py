@@ -1,4 +1,4 @@
-"""Mock-only regression for Home+'s explicitly restricted VIP column."""
+"""Mock-only regressions for Home currency/term and restricted VIP columns."""
 from datetime import datetime, timezone
 
 import pytest
@@ -8,6 +8,17 @@ from bot.core.deposit_comparison import best_verified_deposit_benchmark, public_
 
 
 NOW = datetime(2026, 10, 13, 13, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("label", ["Минимальная сумма депозита", "Капитализация вознаграждения"])
+def test_missing_home_condition_value_is_not_a_verified_default(label):
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(home_plus_html(), "html.parser")
+    row = next(row for row in soup.find_all("tr") if row.find("td").get_text() == label)
+    for cell in row.find_all("td")[1:]:
+        cell.decompose()
+    with pytest.raises(ValueError):
+        source.parse_source(source.HOME_PLUS, str(soup), NOW)
 
 
 def home_plus_html(vip_index=3):
@@ -72,3 +83,57 @@ def test_source_hash_and_restricted_eligibility_remain_part_of_review_evidence()
     second = source.parse_source(source.HOME_PLUS, without_vip, NOW)
     assert first[0]["terms_hash"] != second[0]["terms_hash"]
     assert first[0]["source_hash"] != second[0]["source_hash"]
+
+
+def home_simple_html(order=None):
+    columns = [("теңге", "13 месяцев", "15,10%", "16,30%", "1 000 ₸"),
+               ("теңге", "12 месяцев", "13,98%", "15,00%", "1 000 ₸"),
+               ("доллар", "12 месяцев", "0,99%", "0,99%", "10 $"),
+               ("евро", "12 месяцев", "0,99%", "0,99%", "10 €")]
+    if order is not None:
+        columns = [columns[index] for index in order]
+    html = "<html><title>Депозит Простой</title><table>"
+    for title, index in [("Валюта депозита", 0), ("Номинальная ставка", 2),
+                         ("Годовая эффективная ставка вознаграждения", 3),
+                         ("Минимальная сумма депозита", 4)]:
+        html += "<tr><td>" + title + "</td>" + "".join("<td>" + column[index] + "</td>" for column in columns) + "</tr>"
+    if order is None:
+        html += '<tr><td>Срок депозита</td><td>13 месяцев</td><td colspan="3">12 месяцев</td></tr>'
+    else:
+        html += "<tr><td>Срок депозита</td>" + "".join("<td>" + column[1] + "</td>" for column in columns) + "</tr>"
+    for title, value in [("Максимальная сумма депозита", "без ограничений"),
+                         ("Капитализация вознаграждения", "ежедневная"),
+                         ("Частичные снятие суммы", "доступно"),
+                         ("Дополнительное пополнение", "доступно"),
+                         ("Досрочное изъятие денег", "сумма с вознаграждением поступит в течение 24 часов на карту или текущий счёт")]:
+        html += f'<tr><td>{title}</td><td colspan="4">{value}</td></tr>'
+    return html + "</table>" + " " * 500 + "</html>"
+
+
+@pytest.mark.parametrize("order", [None, [2, 0, 3, 1], [3, 1, 2, 0]])
+def test_home_simple_explicit_colspan_pairs_kzt_rates_without_foreign_currency_leakage(order):
+    offers = source.parse_source(source.HOME_SIMPLE, home_simple_html(order), NOW)
+    assert {item["term_months"]: (item["nominal_pct"], item["effective_pct"])
+            for item in offers} == {12: (13.98, 15), 13: (15.1, 16.3)}
+    assert {item["id"] for item in offers} == {"home-simple-12", "home-simple-13"}
+    assert all(item["currency"] == "KZT" and item["min_amount"] == 1000 for item in offers)
+    assert all(item["can_top_up"] and item["can_withdraw"] for item in offers)
+    assert all(item["max_amount"] is None and item["capitalization"] == "ежедневная" for item in offers)
+    assert all(item["deposit_type"] == "other" and item["guarantee_limit"] == 10_000_000 for item in offers)
+    assert public_deposit_catalog({"offers": offers}, NOW)["banks"][3]["effective_pct"] == 15
+
+
+@pytest.mark.parametrize("changed", [
+    home_simple_html().replace('colspan="3">12 месяцев', 'colspan="2">12 месяцев'),
+    home_simple_html().replace('colspan="3">12 месяцев', 'colspan="1000000">12 месяцев'),
+    home_simple_html().replace('colspan="3">12 месяцев', 'rowspan="2" colspan="3">12 месяцев'),
+    home_simple_html().replace("<td>евро</td>", "<td>валюта не указана</td>"),
+    home_simple_html().replace("<td>13 месяцев</td>", "<td>12 месяцев</td>"),
+    home_simple_html().replace("<td>15,10%</td>", ""),
+    home_simple_html().replace("<td>16,30%</td>", "<td>16,30%</td><td>17,00%</td>"),
+    home_simple_html().replace('colspan="4">ежедневная', 'colspan="3">ежедневная'),
+    home_simple_html().replace("<td>1 000 ₸</td><td>1 000 ₸</td>", "<td>1 000 ₸</td><td>10 $</td>"),
+])
+def test_home_simple_unknown_currency_and_inconsistent_grid_fail_closed(changed):
+    with pytest.raises(ValueError):
+        source.parse_source(source.HOME_SIMPLE, changed, NOW)
