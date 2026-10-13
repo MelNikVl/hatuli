@@ -6,10 +6,14 @@ set -euo pipefail
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd -- "$project_root"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/home/nik/.cache/ms-playwright}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$project_root/var/browser-picks/cache}"
 
 for argument in "$@"; do
   if [[ "$argument" == --open-browser ]]; then
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    export TMPDIR="$project_root/var/browser-picks/tmp"
+    mkdir -p -- "$TMPDIR"
+    chmod 700 -- "$TMPDIR"
     while IFS= read -r entry; do
       case "$entry" in
         DISPLAY=*|XAUTHORITY=*|WAYLAND_DISPLAY=*) export "$entry" ;;
