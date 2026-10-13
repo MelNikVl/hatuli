@@ -14,6 +14,168 @@
 
 ---
 
+## Изменения за 13 октября 2026
+
+Срез функциональных изменений: `3f6fc1b`, время проекта — Asia/Qyzylorda (UTC+5). Основная версия опубликована на [hatuli.ai-groundtruth.com](https://hatuli.ai-groundtruth.com). Полный журнал и недельный план синхронизируются со страницей [Plan в Notion](https://app.notion.com/p/3eee6b45c60a8012adefeac4c276eae0). Статусы ниже различают реализованное, проверенное и ещё не готовое.
+
+- **Лучшие варианты для всех.** Опубликована /best-apartments: до 30 проверенных квартир в продаже, короткие причины выбора и время проверки источника. В контрольном срезе — 30 карточек из 34 кандидатов. Если подтверждённых вариантов меньше, подборка будет короче.
+  Основание: 819e6ce, b683ea2, f254850; var/daily-picks.json.
+- **Первичка, вторичка и вклад.** Опубликована /compare: сравнение своего гексагона, соседних территорий и города, адреса из источников, полная сохранённая история цен и объяснения преимуществ. Годовой калькулятор учитывает ремонт, расходы, ожидание и аренду. Приблизительная точка ЖК не выдаётся за точный корпус; рост стоимости — сценарий пользователя.
+  Основание: 8875f17, 0a06abd, f254850.
+- **Банковский монитор.** Официальные условия выбранных программ Freedom, Forte, Bereke и Home Credit проверяются каждые 6 часов. Проверены и восстановлены обычный Home+ и Freedom «Копилка»; VIP-программа Home+ исключена из обычного сравнения. Для Home+ добавлены проверки договора, тарифов, гарантии и смены ссылок на PDF; история различает ожидающие и завершённые проверки.
+  Основание: 7e0f71b, b8f9a9b, ac27f11; docs/deposit_review_20261013.json.
+- **Проверка пути покупателя на 30 объявлениях.** Проверены 30 случайных свежих записей Hatuli с источником Krisha: все доступны на источнике и в полном пользовательском интерфейсе; 21 получила три альтернативы, 4 — одну или две, 5 — ни одной. Проверены 78 источников альтернатив. Это проверка существующих записей для full_access, а не гарантия работы 30 новых URL или полного анонимного доступа.
+  Основание: 0cee78b, 3672b66; artifacts/journey-30-qa/final-report.json.
+- **История цены и расхождения.** Исправлены неполные цепочки цены и сохранение конфликта с источником. При спорной цене скрываются неподтверждённые ценовые преимущества и преимущества рейтинга. Общий модуль объяснения противоречий нескольких объявлений и ЖК остаётся следующим этапом.
+  Основание: bbf2eef, c6cd646, 3672b66.
+- **Дубли ЖК.** Опубликованы 20 новых кандидатов на проверку, актуальный preview, объяснение ограничений, подтверждение с источником и защищённый откат. Старые небезопасные пути слияния отключены. 20 кандидатов не означают 20 объединённых дублей; неподтверждённых объединений сегодня не было.
+  Основание: 004a316, ab3326d, ac8ce76; docs/complex_identity_followup_2026_10_08.md.
+- **Прогнозирование.** Запущены неизменяемые наблюдения цены и характеристик источника, фоновые расчёты и публикация с проверкой качества. Карточки различают оценку рынка, прогноз цены предложения и цену сделки. В запуске 19:10 опубликовано 0 численных прогнозов: пока insufficient_history. Новые захваты начались 13 октября; фактических цен и дат сделки и ручных sold/withdrawn пока нет.
+  Основание: 945118b, c85bff8, a20f56c; docs/sale_forecast_readiness_20261013.md.
+- **Раздел «Продавцу».** Опубликована /improve-listing: текст или ссылка, до пяти приоритетных исправлений, фото-чеклист и безопасная основа описания. Форма работает без JavaScript. Сейчас используются правила; фото автоматически не анализируются, внешний ИИ не вызывается, юридическая чистота и коммунальные долги не проверяются.
+  Основание: 73d0704; docs/seller_listing_review.md.
+- **Telegram и администратор.** Бот выдаёт кнопку «Открыть Hatuli» с одноразовой ссылкой, которая завершает вход на сайте. Для подтверждённой административной сессии «Админка» стоит первой в меню. Ссылка действует 10 минут; доступ подписчика сам по себе не назначает администратора.
+  Основание: becf4ba; docs/site_telegram_login.md.
+- **Аренда.** Восстановлены адреса категорий, обход выдачи, приоритет списка, ограниченные бюджеты деталей и архиватора, реактивация, сохранение обложек и дневные метрики. Добавлены /admin/rental-health, полная загрузка карты и отдельная карточка аренды с правильной историей цены. До исправления — 5 сохранённых страниц за сутки и 0 новых квартир; контрольные 30 минут после — 14 глубинных и 14 первых страниц, 119 впервые найденных записей, включая 36 квартир.
+  Основание: 56a3383 → 3873218; docs/rental_coverage_audit_20261013.md.
+- **Стиль, фото и административные страницы.** Сегодня исправлены мобильные таблицы Entity IDs, совместимость с текущим CDN фото Krisha, вместимость графиков истории и отображение дробных площадей. Новые разделы используют общую тему. Основная унификация стиля и размеров фото боковой панели выполнена 12 октября; каждое возможное состояние каждой админской страницы отдельно не проверялось.
+  Основание: ffeff62, 1523c56, 7e836fa, 2f0774a; docs/site_style_2026_10_12.md.
+- **Испания.** Отдельные web и collector работают на сервере; контейнер web создан сегодня в 17:07, главная отвечает HTTP 200. Порт 8787: http://192.168.0.15:8787, через Tailscale http://100.111.114.36:8787. Основной Hatuli остаётся на 8082. Полный испанский пользовательский путь и качество сбора пока не подтверждены.
+  Основание: Readonly проверка отдельного Docker Compose-проекта.
+- **Продвижение.** Опубликованы собственные страницы с примером разбора и гайдом проверки квартиры, подготовлены карточки и тексты запуска. По сохранённым подтверждениям отправлены предложения двум редакциям; внешних публикаций не подтверждено. Социальные посты пока не опубликованы, платная реклама не запускалась, расход 0.
+  Основание: c334ed9, 4bc44cb; artifacts/promotion-20261013/receipts.json.
+
+### Что ещё нельзя обещать
+
+- **Полный рынок аренды:** контрольные 30 минут подтвердили стабильную работу, но новый полный круг тогда ещё не завершился. ETA по этому замеру: квартиры 23,33 ч, парковки 3,98 ч, коммерция 29,65 ч. Это прогноз времени, а не доказательство охвата. Дома, комнаты и посуточная аренда не входят в текущий сбор.
+- **Точную аренду каждой квартиры:** в срезе 17:46 строгий пул имел максимум два аналога на ЖК/комнатность вместо необходимых пяти. Старые сохранённые городские yield и инвестиционные рейтинги ещё требуют пересчёта.
+- **Реальную цену и срок продажи:** подтверждённых сделок и их фактических цен пока нет. Текущий алгоритм прогноза цены предложения требует минимум 45 календарных дней подтверждённой истории даже для короткого горизонта, достаточную независимую выборку и проверку качества. Количество старых строк не заменяет эту историю.
+- **Серверную ежедневную проверку лучших вариантов:** Ubuntu-путь подготовлен, но пользователь его отменил. Проверка остаётся в браузере этого компьютера; нужны включённые компьютер/Codex и доступ к Krisha. Серверный таймер подборки выключен.
+- **Юридическую проверку:** права собственности, долги по коммунальным платежам и нотариальные API пока не интегрированы. Снятие объявления не равно сделке.
+
+В плановом банковском запуске **20:10** продукт Home «Простой» временно исключался из-за объединённых HTML-ячеек срока для разных валют. Исправление `3f6fc1b` раскрывает `colspan` и сопоставляет валюту, срок и ставку до выбора KZT. После повторной проверки страницы и трёх документов продукт восстановлен: ровно 12 месяцев, 13,98% номинально / 15% ГЭСВ. Годовая ставка не изменилась; 13-месячная и валютные программы не подставляются в расчёт на год. Последний набор банковских и публичных регрессий — **187 тестов прошли**.
+
+Проверки выполнялись целевыми наборами: путь покупателя — 377 тестов; аренда — 400 изолированных и 29 в одноразовой PostgreSQL; банковские изменения — 173 изолированных проверки. Эти наборы частично пересекаются и не складываются в число проверок всего проекта. Отчёты: [аренда](docs/rental_coverage_audit_20261013.md), [цена сделки и готовность прогнозов](docs/sale_forecast_readiness_20261013.md), [ЖК](docs/complex_identity_followup_2026_10_08.md), [банки](docs/deposit_review_20261013.json), [продавцу](docs/seller_listing_review.md), [Telegram](docs/site_telegram_login.md), [стиль](docs/site_style_2026_10_12.md).
+
+### План на 14–20 октября 2026
+
+Это план следующей итерации, а не отметки выполненных задач. Главный результат недели: источник и дата каждого важного вывода, измеряемая актуальность и простой путь «ссылка → история → расхождения → до трёх альтернатив». При недостаточных данных приоритет имеет достоверность результата.
+
+| Дата | Приоритет и работа | Критерий результата |
+|---|---|---|
+| 14.10 | **P0 — Подтвердить восстановление сбора аренды** | Фактические круги, уникальные ID и счётчик источника; независимая проверка начала, середины и конца выдачи; свежесть и заполненность полей отдельно. |
+| 15.10 | **P0 — Очистить доходность и банковские сравнения** | Убрать старую городскую аренду из уверенных доходностей Deal Score, инвестиций и карт; диапазоны только при достаточных свежих аналогах, с расходами. Проверить общие документы и ограничения банков. |
+| 16.10 | **P1 — Проверить первые 10–20 кандидатов дублей ЖК** | По каждой паре — доказательства и решение: дубль, переименование, корпус/очередь, отдельный ЖК или неясность. Для подтверждённых переходов — before/after и проверенный откат. |
+| 17.10 | **P1 — Собрать первый общий модуль противоречий** | Для цены, площади, комнатности и идентичности ЖК: оба значения, источники, даты, краткое объяснение и влияние на рекомендацию. Переиспользовать уже имеющиеся проверки. |
+| 18.10 | **P1 — Повторить 30 путей и ускорить первый полезный ответ** | Тестировать существующие и несколько отсутствующих в базе URL, историю, расхождения и до трёх независимых альтернатив; закрепить проверку лучших вариантов. Измерить p95 карточки/ЖК, исправить главный тормоз и мобильные ошибки. |
+| 19.10 | **P1 — Проверить модели и подготовить факты сделок** | Временной holdout без утечки между перевыставлениями, baseline и калибровка exit14/cut30; проверяемый план добровольного ввода фактической цены, даты и подтверждения сделки. |
+| 20.10 | **P1 — Проверить Испанию и собрать итоговый релиз** | Проверить 10–20 испанских объектов и основной путь, адреса, источники и свежесть; подготовить привязку домена к 8787. Повторить мобильный путь, Telegram-вход и итоговые метрики, записать результаты в README и Notion. |
+
+**Зависимости и ограничения плана:**
+
+- **14.10:** Начать замер; коммерческий полный круг может завершиться 15 октября. Цель — до 48 часов на тип, без обещания 100% рынка.
+- **15.10:** Отсутствие данных приводит к «недостаточно данных», а не к выдуманной доходности. Сберегательная гарантия и срок 12 месяцев учитываются отдельно.
+- **16.10:** Нет квоты на объединения. Имена и похожая точка на карте сами по себе не доказывают один ЖК.
+- **17.10:** Начать с правил и проверяемых фактов. Не называть расхождение мошенничеством и не придумывать юридические выводы.
+- **18.10:** Цель для ответа по свежему кешу — p95 до 3 секунд после замера. Проверка источника имеет явный статус; CAPTCHA не обходится. Публиковать до 30 проверенных вариантов.
+- **19.10:** Не обещать численный прогноз цены/срока продажи за неделю. Новая схема проходит миграцию и изолированную проверку; нет автоматической записи частных договоров.
+- **20.10:** Сначала подтвердить пользу и данные. Юридические/нотариальные API, анализ фото ИИ и широкое платное продвижение — отдельные следующие этапы.
+
+Подробные направления долгосрочного развития остаются в [scoring_roadmap.md](docs/scoring_roadmap.md), [verdict_strategy.md](docs/verdict_strategy.md) и [плане идентичности ЖК](docs/complex_identity_followup_2026_10_08.md). Запуск численных прогнозов, широкого нового сбора или юридических интеграций не считается выполненным только потому, что написан код.
+
+<details>
+<summary>Все 77 коммитов функционального среза за 13 октября (UTC+5)</summary>
+
+Список фиксирует историю текущей ветки до 3f6fc1b; отдельное развёртывание Испании описано выше. Этот коммит документации в список не включён.
+
+```text
+3f6fc1b  20:30  fix(deposits): pair Home Simple terms with currency columns
+ac27f11  18:16  fix(deposits): show resolved condition checks in public history
+b8f9a9b  18:10  fix(deposits): verify ordinary Home offers and monitor reviewed documents
+3873218  17:54  fix(rentals): clarify observed status and record live coverage audit
+906774b  17:42  fix(rentals): load complete map batches and isolate rental details
+ead37f7  17:16  fix(rentals): accept observed server catalog photo variants
+2b9da65  17:09  fix(rentals): enforce fresh evidence across maps and rent estimates
+a08cdba  16:51  fix(rentals): match live catalog cards and cover photo host
+56a3383  16:48  fix(rentals): restore bounded collection and truthful coverage metrics
+73d0704  16:07  Add seller listing improvements and audit sale forecast readiness
+becf4ba  15:38  Add authenticated Telegram return links and prioritize admin menu
+f254850  14:56  Explain apartment selection with verified benefits and current deposit benchmarks
+0a06abd  14:13  Show source addresses and complete recorded price changes on comparison
+9b8710e  13:47  chore: keep server browser cookies and run evidence out of git
+54def3f  13:43  fix: inherit the server desktop bus for manual browser access
+1d7e893  13:42  Bound manual Chromium startup by session deadline
+d5c0334  13:33  fix: keep manual browser temporary files in its private directory
+b5522fc  13:26  feat: run daily source verification in the Ubuntu browser
+20cdbe9  13:22  Add guarded server browser daily picks publisher
+3672b66  12:54  Suppress price and score advantages when source prices conflict
+2f0774a  12:51  fix: refresh journey assets and preserve fractional apartment areas
+c2b1b2a  12:41  Verify source publication receipts after database commit and failure
+c6cd646  12:39  Retain unresolved source price mismatches across checks and expiry
+7e836fa  12:30  fix: keep price history graphs within the apartment card
+32f58c0  12:26  fix: hide approval form when complex review is blocked
+1523c56  12:10  fix: allow the current Krisha photo CDN in the image cache
+2c732c3  12:01  fix: format apartment areas without floating point tails
+0cee78b  11:57  feat: complete private buyer journey and reviewed complex identity workflow
+7066347  11:53  Test browser details import transaction and receipt safeguards
+ac8ce76  11:48  Guard complex review rollback against new related records
+ab3326d  11:40  Disable legacy complex merges and test protected reviewed redirects
+5a24d7c  11:39  Verify private buyer journey route and safe source rendering
+cde0fa8  11:19  Add guarded browser details cache import and rollback
+004a316  11:19  Add conservative complex identity review previews and reversible redirects
+bbf2eef  11:16  Guard incomplete asking-price histories and avoid backdated prices
+3971707  11:13  Add guarded read-only buyer journey audit
+a20f56c  10:51  fix(forecasts): report insufficient history for the valid first-day cohort
+a26de5d  10:48  fix(forecasts): enforce capture-day anchors and source observation continuity
+571a53a  10:47  fix: reject price observations from before reactivation
+6aabf95  10:46  feat(forecasts): match versioned neighbourhoods and censor listing gaps
+945118b  10:46  feat: publish validated per-offer asking price forecasts without request-time training
+efb61fe  10:45  test(forecasts): cover runtime guards and first-day publication
+c85bff8  10:44  feat: capture immutable source price observations for forecasts
+ac3d031  10:39  fix(forecasts): read immutable collector date partitions
+5acfa01  10:38  feat(forecasts): gate historical-neighbour asking-price models with source provenance
+eacf9d3  10:37  feat(ui): show honest price forecasts in both apartment modals
+1d193cb  10:28  audit: measure price forecast history with read-only queries
+9b78ca7  10:26  feat(ui): distinguish current price evidence from validated forecasts
+637dcdb  10:06  Localize comparison labels and ignore runtime temp files
+8896f20  10:01  test: reject invalid comparison IDs without silent fallback
+8875f17  10:00  Publish housing and deposit comparisons with server monitors
+4077d8f  09:55  Prevent unverified project centroids from implying precise hex comparisons
+e79e426  09:50  Add public market and deposit comparison interface
+a993b44  09:47  Reject nonnumeric catalog bounds and discover new Forte deposit cards
+ff539a0  09:46  test: verify public comparison privacy, fallback forms and cash flows
+7e0f71b  09:44  Compare apartments with verified annual retail deposits and monitor official terms
+ce902ac  09:39  Add read-only primary and secondary hex market comparison snapshots
+cb84d89  09:25  Use Russian plural forms for comparable apartments
+0c4657a  09:24  Align apartment selection anchors with shared header
+b619168  09:23  Validate evidence before rewriting public price reasons
+cc96e53  09:22  Keep source verification manifests out of Git
+eacbb06  09:18  Keep daily apartment reasons short and factual on mobile
+6a32d50  09:13  Show source verification time on public apartment picks
+9d817bc  09:12  Update public page fixtures for verified source snapshots
+b19de9b  09:07  Test source availability checks and archived-peer exclusion
+b683ea2  09:06  Require current source availability before publishing apartment picks
+f53280c  08:48  Test daily publisher read-only and failed-publication boundaries
+03ee615  08:47  Clarify approximate location basis in public price comparisons
+b1621a3  08:46  Expose daily apartment selection to all visitors
+cdffb09  08:45  Require a matching Krisha source link for every daily pick
+0f54f3e  08:45  Clarify daily selection freshness and eligible count
+27699a6  08:43  Reject malformed daily snapshots without exposing invalid cards
+819e6ce  08:42  Publish daily public apartment picks from fresh read-only comparisons
+ef3d245  08:35  Add public daily apartment selection design
+4bc44cb  08:19  Add Hatuli launch cards and publication copy
+c334ed9  08:16  Prepare public Hatuli guides and sharing previews
+ffeff62  07:50  Keep identity review tables within mobile admin pages
+```
+
+</details>
+
+### Правило ведения изменений
+
+После каждого содержательного изменения обновлять этот README и журнал проекта в Notion: дата UTC+5, что поменялось для пользователя, где опубликовано, как проверено, ограничения и следующий шаг. Указывать коммит/отчёт; сохранять прежние записи и исправлять устаревшие статусы. Пароли, токены, cookies и личные данные в журнал не переносить.
+
+---
+
 ## Что умеет
 
 ### Аналитика объявлений
@@ -434,7 +596,7 @@ AI_TEXT_ANALYSIS=0            # 1 = платный LLM-анализ текста
 
 ## Планы
 
-- Личный кабинет пользователя (избранное, уведомления, привязка Telegram)
+- Сохранённый поиск и восстановление фильтров в кабинете (избранное и Telegram-вход уже работают)
 - Расширенный рейтинг ЖК (отзывы, тайный покупатель)
 - Мониторинг ресурсов сервера в /admin/settings
 - Дальнейшее автозаполнение характеристик ЖК (этажность из homeportal в
