@@ -17,6 +17,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -24,7 +25,7 @@ from pathlib import Path
 from statistics import median
 
 SCHEMA_VERSION = 1
-METHOD_VERSION = "historical-neighbours-v1"
+METHOD_VERSION = "historical-neighbours-v2"
 HORIZONS = (7, 14, 30, 90, 365)
 INTERVAL_COVERAGE = .80
 MIN_TRAIN_GROUPS = 100
@@ -40,18 +41,23 @@ TEST_WINDOW_DAYS = 3
 FEATURE_LAG_DAYS = 7
 MAX_SOURCE_LAG = timedelta(days=2)
 MAX_MODEL_AGE = timedelta(days=8)
+HEX_EDGE_M = 100
+MAX_HEX_DISTANCE = 10
+MAX_ANALOG_DISTANCE_SQ = 16.0
 FEATURES = ("log_price", "log_area", "log_age", "return7", "return14", "cuts14", "days_since_change")
 TARGET_LABEL = "Цена предложения при сохранении объявления в продаже"
 LIMITATIONS = [
     "Это прогноз цены объявления, не цены состоявшейся сделки.",
     "Прогноз применим при сохранении квартиры в продаже; исчезновение не означает продажу.",
-    "Исторические аналоги: те же комнаты, площадь ±15%, цена ±35% и похожая история цены.",
-    "Расположение, ремонт и условия продажи могут отличаться: их история пока не подтверждена.",
+    "Исторические аналоги: тот же ближайший район, те же комнаты, площадь ±15%, цена ±35% и похожая история цены.",
+    "Район ограничен 10 ячейками сетки с ребром 100 м (примерно 1,7–2 км); координаты могут быть приблизительными.",
+    "По первичке точка может относиться ко всему проекту. Ремонт и условия продажи могут отличаться: их история пока не подтверждена.",
 ]
 _REASONS = {
     "insufficient_history": "Не хватает истории для отдельного обучения, калибровки и проверки этого срока.",
     "missing_source_history": "Исторические снимки не подтверждают актуальность цены на источнике в каждый день.",
     "missing_attribute_history": "Не подтверждено, какие характеристики квартиры были известны в прошлом.",
+    "missing_location_history": "Нет подтверждённой истории расположения квартиры для сравнения в ближайшем районе.",
     "insufficient_groups": "Недостаточно независимых квартир после разделения повторных объявлений.",
     "quality_gate_failed": "Модель ещё не прошла проверку на будущем периоде против сохранения текущей цены.",
     "insufficient_analogs": "Недостаточно независимых похожих квартир с проверяемым историческим исходом.",
@@ -82,6 +88,21 @@ def _finite(value) -> float | None:
     except (TypeError, ValueError):
         return None
     return n if math.isfinite(n) else None
+
+
+def _hex(value) -> tuple[int, int] | None:
+    if not isinstance(value, str) or not re.fullmatch(r"-?\d{1,4}:-?\d{1,4}", value):
+        return None
+    q, r = map(int, value.split(":"))
+    return (q, r) if max(abs(q), abs(r)) <= 2000 else None
+
+
+def hex_distance(first: str, second: str) -> int | None:
+    a, b = _hex(first), _hex(second)
+    if a is None or b is None:
+        return None
+    dq, dr = a[0] - b[0], a[1] - b[1]
+    return max(abs(dq), abs(dr), abs(dq + dr))
 
 
 def identity_bucket(group_id: str) -> int:
@@ -152,8 +173,15 @@ def prepare_records(records: list[dict], as_of: datetime) -> tuple[list[dict], d
         if market not in {"primary", "secondary", "unknown"}:
             counters["missing_attribute_history"] += 1
             continue
+        location = record.get("hex_id") if record.get("attribute_provenance") == "versioned_source_observation" else None
+        if _hex(location) is None or record.get("hex_edge_m") != HEX_EDGE_M:
+            counters["missing_location_history"] += 1
+            continue
+        complex_id = _finite(record.get("complex_id"))
+        complex_id = int(complex_id) if complex_id is not None and complex_id.is_integer() and complex_id > 0 else None
         output.append({"listing_id": str(record.get("listing_id", "")), "group_id": str(record["group_id"]),
                        "rooms": int(rooms), "area": area, "market_type": market,
+                       "hex_id": location, "hex_edge_m": HEX_EDGE_M, "complex_id": complex_id,
                        "known_at": known, "points": points})
     counters["usable_listings"] = len(output)
     counters["usable_points"] = sum(len(r["points"]) for r in output)
@@ -183,6 +211,7 @@ def features_at(record: dict, anchor: date) -> dict | None:
     return {"group_id": record["group_id"], "listing_id": record["listing_id"],
             "anchor": anchor, "anchor_available_at": cutoff, "price": price,
             "rooms": record["rooms"], "area": record["area"], "market_type": record["market_type"],
+            "hex_id": record["hex_id"], "complex_id": record["complex_id"],
             "x": [math.log(price), math.log(record["area"]), math.log1p(age),
                   lag_return(7), lag_return(14), float(cuts), math.log1p(days_since)]}
 
@@ -198,6 +227,12 @@ def build_examples(records: list[dict], horizon_days: int) -> list[dict]:
             future = record["points"].get(day + timedelta(days=horizon_days))
             if row is None or future is None:
                 continue
+            window = sorted((p for d, p in record["points"].items() if day <= d <= future["date"]),
+                            key=lambda p: p["date"])
+            if any((b["date"] - a["date"]).days > 2
+                   or b["source_observed_at"] - a["source_observed_at"] > MAX_SOURCE_LAG
+                   for a, b in zip(window, window[1:])):
+                continue  # gaps/possible withdrawal are censored, not unchanged
             output.append({**row, "target_date": future["date"], "target_available_at": future["captured_at"],
                            "future_price": future["price"], "y": math.log(future["price"] / row["price"])})
     return output
@@ -236,23 +271,35 @@ def fit_neighbours(rows: list[dict]) -> dict:
     return {"center": center.tolist(), "scale": scale.tolist(),
             "rows": [{"group_id": r["group_id"], "rooms": r["rooms"], "area": r["area"],
                       "market_type": r.get("market_type", "unknown"),
+                      "hex_id": r.get("hex_id"), "complex_id": r.get("complex_id"),
                       "price": r["price"], "x": r["x"], "y": r["y"]} for r in rows]}
 
 
 def predict_change(model: dict, query: dict) -> tuple[float | None, int]:
     """Independent historical apartments, no own-listing or future examples."""
     import numpy as np
+    if _hex(query.get("hex_id")) is None:
+        return None, 0
     eligible = [r for r in model["rows"] if r["group_id"] != query["group_id"]
                 and r.get("market_type", "unknown") == query.get("market_type", "unknown")
+                and hex_distance(r.get("hex_id"), query["hex_id"]) is not None
+                and hex_distance(r["hex_id"], query["hex_id"]) <= MAX_HEX_DISTANCE
                 and r["rooms"] == query["rooms"] and abs(r["area"] / query["area"] - 1) <= .15
                 and abs(r["price"] / query["price"] - 1) <= .35]
     if not eligible:
         return None, 0
+    if query.get("complex_id") is not None:
+        same_complex = [r for r in eligible if r.get("complex_id") == query["complex_id"]]
+        if len({r["group_id"] for r in same_complex}) >= MIN_ANALOGS:
+            eligible = same_complex
     matrix = np.asarray([r["x"] for r in eligible], dtype=float)
-    distance = np.sum(((matrix - query["x"]) / model["scale"]) ** 2, axis=1)
+    distance = (np.sum(((matrix - query["x"]) / model["scale"]) ** 2, axis=1)
+                + np.array([(hex_distance(r["hex_id"], query["hex_id"]) / MAX_HEX_DISTANCE) ** 2 for r in eligible]))
     order = np.argsort(distance, kind="stable")
     selected, groups = [], set()
     for ix in order:
+        if distance[int(ix)] > MAX_ANALOG_DISTANCE_SQ:
+            break  # no numerical extrapolation into a novel price trajectory
         group = eligible[int(ix)]["group_id"]
         if group in groups:
             continue
@@ -398,6 +445,8 @@ def train_forecaster(records: list[dict], *, as_of: datetime | None = None,
                     status = "missing_attribute_history"
                 elif audit.get("missing_identity_groups"):
                     status = "insufficient_groups"
+                elif audit.get("missing_location_history"):
+                    status = "missing_location_history"
                 elif not audit.get("unconfirmed_source_points"):
                     status = "insufficient_history"
             forecast_horizons.append({"horizon_days": horizon, "status": status, "validation": {}, "folds": []})
@@ -409,14 +458,16 @@ def train_forecaster(records: list[dict], *, as_of: datetime | None = None,
             "source_history_verified": source_history_verified, "audit": audit,
             "gate": {"min_folds": MIN_FOLDS, "min_test_properties": MIN_TEST_GROUPS,
                      "min_changed_properties": MIN_CHANGED_TEST_GROUPS, "min_rms_log_improvement_pct": 5,
-                     "interval_nominal_coverage_pct": INTERVAL_COVERAGE * 100, "min_empirical_coverage_pct": 75},
+                     "interval_nominal_coverage_pct": INTERVAL_COVERAGE * 100, "min_empirical_coverage_pct": 75,
+                     "hex_edge_m": HEX_EDGE_M, "max_hex_distance": MAX_HEX_DISTANCE,
+                     "max_analog_distance_sq": MAX_ANALOG_DISTANCE_SQ},
             "horizons": forecast_horizons}
 
 
 def forecast_listing(listing: dict, artifact: dict | None, *, now: datetime | None = None) -> dict:
     """Public projection; never expose training rows, identity groups or IDs."""
     now = _utc(now or datetime.now(timezone.utc))
-    prepared, _ = prepare_records([listing], now)
+    prepared, listing_audit = prepare_records([listing], now)
     record = prepared[0] if prepared else None
     latest_day = max(record["points"]) if record else None
     query = features_at(record, latest_day) if record else None
@@ -438,7 +489,7 @@ def forecast_listing(listing: dict, artifact: dict | None, *, now: datetime | No
         if status == "ready" and (trained is None or not trained <= now <= trained + MAX_MODEL_AGE):
             status = "stale_model"
         if status == "ready" and (not query or not latest_day or (now.date() - latest_day).days > 2):
-            status = "insufficient_listing_history"
+            status = "missing_location_history" if listing_audit.get("missing_location_history") else "insufficient_listing_history"
         p, count = None, 0
         if status == "ready":
             p, count = predict_change(report["model"], query)
@@ -547,11 +598,15 @@ def load_observation_history(directory: Path, *, as_of: datetime | None = None) 
             if source_key in seen_sources:
                 continue  # repeated captures of one old source check ≠ history
             seen_sources.add(source_key)
-            traits = (raw.get("rooms"), raw.get("area"), raw.get("market_type"))
+            traits = (raw.get("rooms"), raw.get("area"), raw.get("market_type"),
+                      raw.get("hex_id"), raw.get("hex_edge_m"), raw.get("complex_id"),
+                      raw.get("latest_reactivated_at"))
             if traits != signature:
                 current = {"listing_id": identifier, "group_id": find("listing:" + identifier),
                            "identity_grouping_verified": True, "rooms": traits[0], "area": traits[1],
                            "market_type": traits[2], "attributes_known_at": raw["captured_at"],
+                           "hex_id": traits[3], "hex_edge_m": traits[4], "complex_id": traits[5],
+                           "latest_reactivated_at": traits[6],
                            "attribute_provenance": "versioned_source_observation", "points": []}
                 records.append(current)
                 signature = traits
@@ -594,6 +649,8 @@ def load_artifact(path: Path) -> dict | None:
                     if len(row["x"]) != len(FEATURES) or any(_finite(v) is None for v in row["x"]):
                         return None
                     if _finite(row["y"]) is None:
+                        return None
+                    if _hex(row.get("hex_id")) is None:
                         return None
                     if (not isinstance(row.get("group_id"), str) or not row["group_id"]
                             or _finite(row.get("price")) is None or not 5_000_000 <= row["price"] <= 600_000_000

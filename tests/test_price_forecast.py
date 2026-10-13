@@ -26,7 +26,9 @@ def point(day, price=30_000_000, **overrides):
 def record(group="group-1", count=59, **overrides):
     return {"listing_id": "1000001", "group_id": group, "identity_grouping_verified": True,
             "rooms": 2, "area": 60, "attributes_known_at": "2026-08-14T08:00:00+00:00",
-            "attribute_provenance": "immutable_property_creation", "points": [point(i) for i in range(count)],
+            "attribute_provenance": "versioned_source_observation", "market_type": "secondary",
+            "hex_id": "0:0", "hex_edge_m": 100, "complex_id": 1,
+            "points": [point(i) for i in range(count)],
             **overrides}
 
 
@@ -41,6 +43,7 @@ def ready_artifact(**changes):
     query = pf.features_at(pf.prepare_records([record()], NOW)[0][0], START + timedelta(days=58))
     for i in range(30):
         model_rows.append({"group_id": f"other-{i}", "rooms": 2, "area": 60, "price": 30_000_000,
+                           "market_type": "secondary", "hex_id": "0:0", "complex_id": 1,
                            "x": query["x"], "y": -.02})
     artifact = {"schema_version": 1, "method_version": pf.METHOD_VERSION, "model_version": "test-1",
                 "trained_at": NOW.isoformat(), "target": "future_asking_price_conditional_on_remaining_listed",
@@ -155,7 +158,7 @@ def test_rolling_split_has_disjoint_physical_groups_and_purged_labels():
 
 def test_neighbours_deduplicate_groups_and_exclude_own_relists():
     query = {"group_id": "same-home", "rooms": 2, "area": 60, "price": 30_000_000,
-             "x": [0.0] * len(pf.FEATURES)}
+             "hex_id": "0:0", "x": [0.0] * len(pf.FEATURES)}
     rows = [{**query, "group_id": f"home-{i}", "y": -.02} for i in range(25)]
     rows += [{**query, "y": .3} for _ in range(100)]
     rows += [rows[0]] * 100
@@ -167,14 +170,14 @@ def test_neighbours_deduplicate_groups_and_exclude_own_relists():
 
 def test_nominally_many_rows_cannot_replace_twenty_independent_analogs():
     query = {"group_id": "self", "rooms": 2, "area": 60, "price": 30_000_000,
-             "x": [0.0] * len(pf.FEATURES)}
+             "hex_id": "0:0", "x": [0.0] * len(pf.FEATURES)}
     rows = [{**query, "group_id": "one-home", "y": -.02} for _ in range(200)]
     assert pf.predict_change(pf.fit_neighbours(rows), query) == (None, 1)
 
 
 def test_apartment_rooms_area_and_price_define_a_real_analog_band():
     query = {"group_id": "self", "rooms": 2, "area": 60, "price": 30_000_000,
-             "x": [0.0] * len(pf.FEATURES)}
+             "hex_id": "0:0", "x": [0.0] * len(pf.FEATURES)}
     rows = [{**query, "group_id": str(i), "y": -.02, "rooms": 3} for i in range(100)]
     rows += [{**query, "group_id": str(i + 100), "y": -.02, "area": 120} for i in range(100)]
     rows += [{**query, "group_id": str(i + 200), "y": -.02, "price": 60_000_000} for i in range(100)]
@@ -290,6 +293,7 @@ def observation(identifier, day, **changes):
     return {"schema_version": 1, "record_type": "price_observation", "listing_id": identifier,
             "group_id": identifier, "purge_keys": [], "identity_grouping_verified": True,
             "rooms": 2, "area": 60, "market_type": "secondary", "source": "krisha",
+            "hex_id": "0:0", "hex_edge_m": 100, "complex_id": 1,
             **point(day), **changes}
 
 
@@ -343,7 +347,7 @@ def test_reader_loads_real_collector_day_partitions(tmp_path):
 
 def test_same_rooms_area_primary_and_secondary_are_not_merged_as_analogs():
     query = {"group_id": "self", "rooms": 2, "area": 60, "price": 30_000_000,
-             "market_type": "secondary", "x": [0.0] * len(pf.FEATURES)}
+             "market_type": "secondary", "hex_id": "0:0", "x": [0.0] * len(pf.FEATURES)}
     rows = [{**query, "group_id": str(i), "market_type": "primary", "y": -.02} for i in range(100)]
     assert pf.predict_change(pf.fit_neighbours(rows), query) == (None, 0)
 
@@ -368,3 +372,68 @@ def test_training_and_calibration_execute_on_real_rolling_structure(monkeypatch)
     assert result["validation"]["sample_size"] > 0
     assert result["validation"]["baseline_rms_log_error"] > 0
     assert result["status"] in {"ready", "quality_gate_failed"}
+
+
+def test_an_apartment_in_another_district_is_not_a_historical_analog():
+    query = {"group_id": "self", "rooms": 2, "area": 60, "price": 30_000_000,
+             "hex_id": "0:0", "x": [0.0] * len(pf.FEATURES)}
+    rows = [{**query, "group_id": str(i), "hex_id": "40:20", "y": -.02} for i in range(100)]
+    assert pf.predict_change(pf.fit_neighbours(rows), query) == (None, 0)
+
+
+def test_unknown_location_does_not_inherit_a_citywide_numeric_forecast():
+    result = pf.forecast_listing(record(price=30_000_000, hex_id=None), ready_artifact(), now=NOW)
+    assert result["forecasts"][0]["status"] == "missing_location_history"
+    assert result["forecasts"][0]["estimate"] is None
+
+
+def test_current_location_cannot_be_added_retroactively_to_a_property_creation_snapshot():
+    prepared, audit = pf.prepare_records([record(attribute_provenance="immutable_property_creation")], NOW)
+    assert not prepared and audit["missing_location_history"] == 1
+
+
+def test_location_change_starts_a_new_known_version_without_overwriting_earlier_area(tmp_path):
+    write_observations(tmp_path / "capture.jsonl", [observation("1001", 1), observation("1001", 8),
+                                                  observation("1001", 15, hex_id="40:20", complex_id=2)])
+    records = pf.load_observation_history(tmp_path, as_of=NOW)
+    assert len(records) == 2
+    assert records[0]["hex_id"] == "0:0" and records[1]["hex_id"] == "40:20"
+    assert records[1]["attributes_known_at"] == point(15)["captured_at"]
+
+
+def test_endpoint_prices_do_not_prove_a_continuous_listing_across_a_gap():
+    raw = record(count=29)
+    prepared, _ = pf.prepare_records([raw], NOW)
+    row = pf.build_examples(prepared, 7)[0]
+    removed = {row["anchor"] + timedelta(days=i) for i in (2, 3, 4)}
+    raw["points"] = [p for p in raw["points"] if date.fromisoformat(p["date"]) not in removed]
+    prepared, _ = pf.prepare_records([raw], NOW)
+    assert row["anchor"] not in [r["anchor"] for r in pf.build_examples(prepared, 7)]
+
+
+def test_a_reactivation_resets_the_training_episode_even_when_daily_endpoint_prices_exist(tmp_path):
+    rows = [observation("1001", i, latest_reactivated_at=None if i < 13 else "2026-08-27T08:00:00+00:00")
+            for i in range(29)]
+    write_observations(tmp_path / "capture.jsonl", rows)
+    records = pf.load_observation_history(tmp_path, as_of=NOW)
+    assert len(records) == 2
+    prepared, _ = pf.prepare_records(records, NOW)
+    examples = pf.build_examples(prepared, 7)
+    assert not any(row["anchor"] < START + timedelta(days=13) <= row["target_date"] for row in examples)
+
+
+def test_a_novel_price_history_abstains_despite_many_similar_sized_neighbouring_apartments():
+    query = {"group_id": "self", "rooms": 2, "area": 60, "price": 30_000_000,
+             "hex_id": "0:0", "x": [0.0] * len(pf.FEATURES)}
+    rows = [{**query, "group_id": str(i), "y": -.02} for i in range(100)]
+    query["x"] = [0, 0, 0, -1.0, -1.0, 10, 0]
+    assert pf.predict_change(pf.fit_neighbours(rows), query) == (None, 0)
+
+
+def test_same_complex_is_preferred_when_enough_independent_historical_homes_exist():
+    query = {"group_id": "self", "rooms": 2, "area": 60, "price": 30_000_000,
+             "complex_id": 1, "hex_id": "0:0", "x": [0.0] * len(pf.FEATURES)}
+    own = [{**query, "group_id": str(i), "y": -.02} for i in range(25)]
+    other = [{**query, "group_id": str(i + 100), "complex_id": 2, "y": .2} for i in range(200)]
+    prediction, count = pf.predict_change(pf.fit_neighbours(own + other), query)
+    assert count == 25 and prediction < 0
