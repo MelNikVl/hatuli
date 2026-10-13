@@ -32,6 +32,12 @@ def first(snapshot):
     return snapshot["items"][0]
 
 
+def confirmed(snapshot):
+    for item in snapshot["items"]:
+        item.update(source_status="active", source_checked_at=snapshot["generated_at"])
+    return snapshot
+
+
 def test_fresh_median_correct_discount_not_upside_or_stale_score():
     sample = rows()
     sample[0].update(score_total=100, hex_details={"di": 2, "expected_m2": 1_000_000})
@@ -71,7 +77,7 @@ def test_known_property_duplicates_never_inflate_count_or_publish_twice():
 
 
 def test_excluded_candidate_retained_as_comparable_for_refill():
-    baseline = dp.build_daily_picks(rows(), NOW)
+    baseline = confirmed(dp.build_daily_picks(rows(), NOW))
     refill = dp.build_daily_picks(rows(), NOW, excluded_ids={"1016000000"})
     assert "1016000000" not in [item["id"] for item in refill["items"]]
     assert first(refill)["price_comparison"]["comparable_count"] == first(baseline)["price_comparison"]["comparable_count"]
@@ -153,21 +159,21 @@ def test_photo_allowlist_rejects_untrusted_urls(url):
 
 def test_atomic_failure_keeps_last_good_snapshot(tmp_path, monkeypatch):
     path = tmp_path / "daily.json"
-    baseline = dp.build_daily_picks(rows(), NOW)
+    baseline = confirmed(dp.build_daily_picks(rows(), NOW))
     dp.publish_snapshot(baseline, path)
     content = path.read_bytes()
     def fail(*args):
         raise OSError("simulated interrupted publish")
     monkeypatch.setattr(dp.os, "replace", fail)
     with pytest.raises(OSError):
-        dp.publish_snapshot(dp.build_daily_picks(rows(), NOW+timedelta(hours=1)), path)
+        dp.publish_snapshot(confirmed(dp.build_daily_picks(rows(), NOW+timedelta(hours=1))), path)
     assert path.read_bytes() == content
     assert list(tmp_path.iterdir()) == [path]
 
 
 def test_validation_fail_never_overwrites_previous_snapshot(tmp_path):
     path = tmp_path / "daily.json"
-    snapshot = dp.build_daily_picks(rows(), NOW)
+    snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
     dp.publish_snapshot(snapshot, path)
     content = path.read_bytes()
     snapshot["items"][0]["source_url"] = "javascript:alert(1)"
@@ -178,7 +184,7 @@ def test_validation_fail_never_overwrites_previous_snapshot(tmp_path):
 
 def test_load_strips_extra_fields_and_fails_closed(tmp_path):
     path = tmp_path / "daily.json"
-    snapshot = dp.build_daily_picks(rows(), NOW)
+    snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
     snapshot.update(database_password="secret")
     snapshot["items"][0].update(seller_phone="secret")
     snapshot["items"][0]["price_comparison"]["seller_phone"] = "secret"
@@ -193,6 +199,27 @@ def test_load_json_wrong_shape_fails_closed(tmp_path, bad):
     path = tmp_path / "daily.json"
     path.write_text(json.dumps(bad), encoding="utf-8")
     assert dp.load_daily_picks(path) is None
+
+
+def test_old_unverified_snapshot_fails_closed(tmp_path):
+    path = tmp_path / "daily.json"
+    snapshot = dp.build_daily_picks(rows(), NOW)
+    snapshot["schema_version"] = 1
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    assert dp.load_daily_picks(path) is None
+    snapshot["schema_version"] = 2
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    assert dp.load_daily_picks(path) is None
+
+
+def test_stale_or_nonactive_source_confirmation_rejected():
+    snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
+    snapshot["items"][0]["source_checked_at"] = (NOW-timedelta(hours=3)).isoformat()
+    with pytest.raises(ValueError):
+        dp.validate_snapshot(snapshot)
+    snapshot["items"][0].update(source_checked_at=NOW.isoformat(), source_status="archived")
+    with pytest.raises(ValueError):
+        dp.validate_snapshot(snapshot)
 
 
 def test_local_selection_date_uses_almaty_not_utc():

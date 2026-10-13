@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_PICKS = 30
 MAX_SOURCE_AGE = timedelta(hours=72)
 MIN_COMPARABLES = 5
@@ -34,14 +34,14 @@ _DISTRICTS = {
     "Есильский р-н": "Есильский район", "Нура р-н": "Нура", "Алматы р-н": "Алматы",
     "Сарайшык р-н": "Сарайшык", "Сарыарка р-н": "Сарыарка", "р-н Байконур": "Байконур",
 }
-_ITEM_FIELDS = ("id", "rank", "source_url", "title", "rooms", "area", "floor", "floors_total", "complex_name", "district", "price", "currency", "price_per_m2", "photo_urls", "reasons", "cautions", "observed_at", "price_comparison")
+_ITEM_FIELDS = ("id", "rank", "source_url", "title", "rooms", "area", "floor", "floors_total", "complex_name", "district", "price", "currency", "price_per_m2", "photo_urls", "reasons", "cautions", "observed_at", "source_checked_at", "source_status", "price_comparison")
 _COMPARISON_FIELDS = ("discount_pct", "reference_price_per_m2", "scope", "comparable_count")
 _SNAPSHOT_FIELDS = ("schema_version", "selection_date", "timezone", "generated_at", "source_observed_at", "total_candidates", "items", "methodology")
 METHODOLOGY = {
     "title": "Свежая цена и понятные основания",
     "summary": "Сравниваем цену за м² минимум с пятью объявлениями: столько же комнат, площадь ±15%. Сначала ищем аналоги в том же ЖК или доме; если их мало — в радиусе 800 м по приблизительным координатам. Расстояние по прямой. Если отделка известна у обоих объектов, она должна совпадать. Сначала — цена ниже медианы; на равной цене предпочитаем сравнение в доме или ЖК, затем средние этажи, снижение цены и свежесть наблюдения.",
-    "exclusions": ["Только вторичная продажа, активные объявления, замеченные за последние 72 часа.", "Убираем известные дубли, неполные характеристики, будущий год постройки, большой разброс цен аналогов и скидки более 30%.", "Публикуем до 30 вариантов с распознанными фотографиями интерьера. Премия к медиане допустима до 5% только на среднем этаже."],
-    "caveat": "Это цены объявлений, а не состоявшихся сделок. Ремонт и условия продажи могут отличаться. Наличие, итоговую цену, документы и долги нужно проверить у продавца до задатка.",
+    "exclusions": ["Только вторичная продажа; наличие каждого выбранного объявления и его цену проверяем на странице источника перед публикацией.", "Аналоги — объявления, наблюдавшиеся за последние 72 часа. Убираем известные дубли, подтверждённый архив, неполные характеристики, будущий год постройки, большой разброс цен аналогов и скидки более 30%.", "Публикуем до 30 вариантов с распознанными фотографиями интерьера. Премия к медиане допустима до 5% только на среднем этаже."],
+    "caveat": "Это цены объявлений, а не состоявшихся сделок. Сравнение использует недавние наблюдения аналогов; не каждый аналог проверяется повторно на источнике. Ремонт и условия продажи могут отличаться. После публикации объявление может измениться: наличие, итоговую цену, документы и долги уточните у продавца до задатка.",
 }
 
 
@@ -277,6 +277,8 @@ def validate_snapshot(snapshot: dict) -> dict:
                 raise ValueError("Invalid public numeric field")
         if not generated - MAX_SOURCE_AGE <= _utc(item["observed_at"]) <= generated:
             raise ValueError("Stale source within snapshot")
+        if item.get("source_status") != "active" or not generated - timedelta(hours=2) <= _utc(item["source_checked_at"]) <= generated:
+            raise ValueError("A recent active source confirmation is required")
         photos = item.get("photo_urls")
         if not isinstance(photos, list) or not 1 <= len(photos) <= 3 or any(safe_photo_url(p) is None for p in photos):
             raise ValueError("Invalid public photo")

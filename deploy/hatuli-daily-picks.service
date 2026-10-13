@@ -9,7 +9,7 @@ User=nik
 WorkingDirectory=/home/nik/krisha_bot
 Environment=HATULI_DAILY_PICKS_PATH=/home/nik/krisha_bot/var/daily-picks.json
 ExecStart=/home/nik/krisha_bot/venv/bin/python scripts/publish_daily_picks.py
-TimeoutStartSec=8min
+TimeoutStartSec=10min
 UMask=0027
 NoNewPrivileges=true
 PrivateTmp=true

@@ -9,12 +9,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
+import re
 import sys
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -103,6 +106,175 @@ async def verify_photos(snapshot: dict, deadline: float | None = None) -> tuple[
     return snapshot, checked
 
 
+class SourceBlockedError(RuntimeError):
+    """Stop immediately; no retry, header rotation, or alternate transport."""
+    def __init__(self, status: int):
+        self.status = status
+        super().__init__(f"Source access blocked with HTTP {status}")
+
+
+def parse_source_offer(html: str, item: dict) -> str:
+    """Only an identified main offer can confirm availability and current ask."""
+    from bs4 import BeautifulSoup
+    if not isinstance(html, str) or len(html) > 2_000_000:
+        return "unknown"
+    soup = BeautifulSoup(html, "html.parser")
+    canonical = soup.select_one('link[rel="canonical"]')
+    og_url = soup.select_one('meta[property="og:url"]')
+    urls = [tag.get(attr, "") for tag, attr in ((canonical, "href"), (og_url, "content")) if tag]
+    if not urls or any(url.rstrip("/") != item["source_url"] for url in urls):
+        return "unknown"
+    offer = soup.select_one(".offer") or soup.select_one("main")
+    title_el = (offer.select_one("h1") or offer.select_one(".offer__title")) if offer else None
+    price_el = offer.select_one(".offer__price") if offer else None
+    if not offer or not title_el or not price_el:
+        return "unknown"
+    text = offer.get_text(" ", strip=True)
+    if re.search(r"в архиве|может быть неактуальным|объявление (?:не найдено|удалено)", text, re.I):
+        return "archived"
+    title = title_el.get_text(" ", strip=True)
+    price_text = price_el.get_text(" ", strip=True)
+    if re.search(r"\bот\b", price_text, re.I) or not re.search(r"₸|тг|тенге", price_text, re.I):
+        return "unknown"
+    room_match = re.search(r"(\d+)[-\s]*комнат", title, re.I)
+    area_match = re.search(r"(\d+(?:[.,]\d+)?)\s*м(?:²|2)", title, re.I)
+    price_digits = re.sub(r"\D", "", price_text)
+    if not room_match or not area_match or not price_digits or "квартир" not in title.casefold():
+        return "unknown"
+    breadcrumbs = soup.select('[itemtype*="BreadcrumbList"] a, .breadcrumbs a, .bread-crumbs a')
+    sale_astana = False
+    sale_category, astana_city = False, False
+    for anchor in breadcrumbs:
+        try:
+            parsed = urlsplit(anchor.get("href", ""))
+            if parsed.path.rstrip("/") == "/prodazha/kvartiry/astana" and (not parsed.hostname or parsed.hostname in {"krisha.kz", "www.krisha.kz"}):
+                sale_astana = True
+            if not parsed.hostname or parsed.hostname in {"krisha.kz", "www.krisha.kz"}:
+                sale_category |= parsed.path.rstrip("/") == "/prodazha/kvartiry"
+                astana_city |= parsed.path.rstrip("/") == "/catalog/astana"
+        except ValueError:
+            continue
+    if not sale_astana and not (sale_category and astana_city):
+        return "unknown"
+    if int(price_digits) != item["price"] or int(room_match[1]) != item["rooms"] or abs(float(area_match[1].replace(",", ".")) - item["area"]) > .2:
+        return "mismatch"
+    floor_match = re.search(r"(\d+)\s*/\s*(\d+)\s*этаж", title, re.I)
+    if floor_match and (int(floor_match[1]) != item["floor"] or int(floor_match[2]) != item["floors_total"]):
+        return "mismatch"
+    return "active"
+
+
+async def verify_sources(snapshot: dict, deadline: float | None = None) -> tuple[dict, int, set[str]]:
+    """Bounded ordinary GETs; only positively confirmed sources are retained."""
+    import httpx
+    checked = 0
+    confirmed = []
+    invalid_ids = set()
+    async with httpx.AsyncClient(timeout=8, follow_redirects=False, headers={"User-Agent": "HatuliDailyPicks/1.0", "Accept-Language": "ru-RU,ru;q=0.9"}) as client:
+        for item in snapshot["items"]:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("Source verification budget exhausted")
+            try:
+                response = await client.get(item["source_url"])
+                checked += 1
+                if response.status_code in (403, 429, 468):
+                    raise SourceBlockedError(response.status_code)
+                if response.status_code in (404, 410):
+                    invalid_ids.add(item["id"])
+                elif response.status_code == 200 and response.headers.get("content-type", "").split(";", 1)[0].strip().lower() in {"text/html", "application/xhtml+xml"}:
+                    state = parse_source_offer(response.text, item)
+                    if state == "active":
+                        confirmed.append({**item, "source_status": "active", "source_checked_at": datetime.now(timezone.utc).isoformat()})
+                    elif state in {"archived", "mismatch"}:
+                        invalid_ids.add(item["id"])
+            except httpx.HTTPError:
+                checked += 1
+            await asyncio.sleep(1.5)
+    return {**snapshot, "items": confirmed}, checked, invalid_ids
+
+
+def load_source_checks(path: str, now: datetime) -> dict[str, dict]:
+    """Owner-created evidence from normal browser visits; not an end-user API."""
+    from datetime import timedelta
+    payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(payload, dict) or payload.get("method") != "normal_browser" or not isinstance(payload.get("items"), list) or len(payload["items"]) > 100:
+        raise ValueError("Invalid source confirmation file")
+    result = {}
+    for record in payload["items"]:
+        if not isinstance(record, dict) or record.get("status") not in {"active", "archived", "deleted", "mismatch", "unknown"}:
+            raise ValueError("Invalid browser confirmation")
+        lid = record.get("id")
+        if not isinstance(lid, str) or not re.fullmatch(r"[0-9]{5,20}", lid) or record.get("source_url") != f"https://krisha.kz/a/show/{lid}" or lid in result:
+            raise ValueError("Invalid browser source identity")
+        checked_at = datetime.fromisoformat(record["checked_at"])
+        if checked_at.tzinfo is None or not now - timedelta(hours=2) <= checked_at <= now:
+            raise ValueError("Stale browser source confirmation")
+        result[lid] = record
+    return result
+
+
+def apply_source_checks(snapshot: dict, checks: dict[str, dict]) -> tuple[dict, int, set[str]]:
+    confirmed, invalid = [], set()
+    for item in snapshot["items"]:
+        record = checks.get(item["id"])
+        if not record:
+            continue
+        if record["status"] in {"archived", "deleted", "mismatch"}:
+            invalid.add(item["id"])
+        elif record["status"] == "active":
+            if record.get("sale_astana") is not True or type(record.get("price")) is not int or record["price"] != item["price"] or type(record.get("rooms")) is not int or record["rooms"] != item["rooms"] or type(record.get("area")) not in {int, float} or not math.isfinite(record["area"]) or abs(record["area"] - item["area"]) > .2:
+                invalid.add(item["id"])
+                continue
+            if any(field in record and record[field] != item[field] for field in ("floor", "floors_total")):
+                invalid.add(item["id"])
+                continue
+            confirmed.append({**item, "source_status": "active", "source_checked_at": record["checked_at"]})
+    return {**snapshot, "items": confirmed}, 0, invalid
+
+
+async def export_candidate_pool(target: str, now: datetime) -> dict:
+    """Private review candidates, never a source-verified public snapshot."""
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+    load_dotenv(ROOT / "krisha_bot" / ".env")
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL is required")
+    rows = await read_candidates(dsn, now)
+    excluded = set()
+    items = []
+    for _ in range(3):
+        batch = build_daily_picks(rows, now, excluded_ids=excluded)
+        if not batch["items"]:
+            break
+        items.extend(batch["items"])
+        excluded.update(item["id"] for item in batch["items"])
+    for rank, item in enumerate(items, 1):
+        item["rank"] = rank
+    result = {"schema_version": 1, "kind": "unverified_review_candidates", "generated_at": now.isoformat(), "input_count": len(rows), "items": items}
+    encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
+    if target == "-":
+        print(encoded)
+    else:
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        import tempfile
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as output:
+                temporary = Path(output.name)
+                output.write(encoded)
+                output.flush()
+                os.fsync(output.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+            temporary = None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    return result
+
+
 @contextmanager
 def publisher_lock(path: Path):
     """Nonblocking, process-scoped Linux lock; web workers never acquire it."""
@@ -126,30 +298,42 @@ async def generate(args, now: datetime) -> dict:
     rows = await read_candidates(dsn, now)
     snapshot = build_daily_picks(rows, now)
     head_count = 0
+    source_gets = 0
+    source_checks = load_source_checks(args.source_checks, now) if getattr(args, "source_checks", None) else None
     if not args.skip_photo_check:
         # A failed image removes its card. Refill from the next eligible item;
         # at most 90 candidates and three photos each, bounded sequential HEADs.
-        checked_ids = set()
         attempted_ids = set()
-        selected = []
-        deadline = time.monotonic() + 240
+        invalid_ids = {lid for lid, check in (source_checks or {}).items() if check["status"] in {"archived", "deleted", "mismatch"}}
+        accepted = {}
+        deadline = time.monotonic() + 420
         for _ in range(3):
-            batch = build_daily_picks(rows, now, excluded_ids=attempted_ids)
+            remaining = [row for row in rows if str(row["id"]) not in invalid_ids]
+            batch = build_daily_picks(remaining, now, excluded_ids=attempted_ids)
             attempted_ids.update(item["id"] for item in batch["items"])
+            if source_checks is None:
+                batch, gets, newly_invalid = await verify_sources(batch, deadline)
+            else:
+                batch, gets, newly_invalid = apply_source_checks(batch, source_checks)
+            source_gets += gets
+            invalid_ids.update(newly_invalid)
             batch, count = await verify_photos(batch, deadline)
             head_count += count
             for item in batch["items"]:
-                if item["id"] not in checked_ids:
-                    selected.append(item)
-                    checked_ids.add(item["id"])
-            if len(selected) >= MAX_PICKS:
+                accepted[item["id"]] = item
+            remaining = [row for row in rows if str(row["id"]) not in invalid_ids]
+            excluded = {str(row["id"]) for row in remaining} - accepted.keys()
+            refreshed = build_daily_picks(remaining, now, excluded_ids=excluded)
+            if len(refreshed["items"]) >= MAX_PICKS:
                 break
             # Exclude attempted cards, retaining every row in the comparable pool.
-        snapshot["items"] = selected[:MAX_PICKS]
-        for rank, item in enumerate(snapshot["items"], 1):
-            item["rank"] = rank
+        snapshot = refreshed
+        snapshot["items"] = [{**item, "photo_urls": accepted[item["id"]]["photo_urls"], "source_status": "active", "source_checked_at": accepted[item["id"]]["source_checked_at"]} for item in snapshot["items"]]
+        finished_at = datetime.now(timezone.utc)
+        snapshot["generated_at"] = finished_at.isoformat()
+        snapshot["selection_date"] = finished_at.astimezone(LOCAL_TIMEZONE).date().isoformat()
         snapshot["source_observed_at"] = max((item["observed_at"] for item in snapshot["items"]), default=now.isoformat())
-    return {"snapshot": snapshot, "input_count": len(rows), "photo_heads": head_count}
+    return {"snapshot": snapshot, "input_count": len(rows), "photo_heads": head_count, "source_gets": source_gets}
 
 
 def main() -> int:
@@ -158,12 +342,19 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="Explicitly republish today's snapshot")
     parser.add_argument("--skip-photo-check", action="store_true", help="Dry-run only; avoids CDN HEAD requests")
     parser.add_argument("--allow-partial", action="store_true", help="Explicitly publish fewer than 30 eligible listings")
+    parser.add_argument("--source-checks", help="Fresh owner-created normal-browser confirmation JSON; missing confirmations fail closed")
+    parser.add_argument("--export-candidates", metavar="PATH", help="Read-only candidate export, no HTTP requests. Use '-' for JSON stdout.")
     args = parser.parse_args()
     if args.skip_photo_check and not args.dry_run:
         parser.error("--skip-photo-check is only permitted with --dry-run")
     now = datetime.now(timezone.utc)
     path = snapshot_path()
     try:
+        if args.export_candidates:
+            exported = asyncio.run(export_candidate_pool(args.export_candidates, now))
+            if args.export_candidates != "-":
+                print(json.dumps({"status": "candidates_exported", "count": len(exported["items"]), "input_count": exported["input_count"]}))
+            return 0
         if args.dry_run:
             result = asyncio.run(generate(args, now))
         else:
@@ -178,7 +369,7 @@ def main() -> int:
                     raise RuntimeError(f"Only {len(snapshot['items'])} qualifying cards; previous snapshot retained")
                 publish_snapshot(snapshot, path)
         snapshot = result["snapshot"]
-        print(json.dumps({"status": "dry_run" if args.dry_run else "published", "selection_date": snapshot["selection_date"], "input_count": result["input_count"], "eligible_count": snapshot["total_candidates"], "count": len(snapshot["items"]), "photo_heads": result["photo_heads"], "ids": [item["id"] for item in snapshot["items"]]}, ensure_ascii=False))
+        print(json.dumps({"status": "dry_run" if args.dry_run else "published", "selection_date": snapshot["selection_date"], "input_count": result["input_count"], "eligible_count": snapshot["total_candidates"], "count": len(snapshot["items"]), "photo_heads": result["photo_heads"], "source_gets": result["source_gets"], "ids": [item["id"] for item in snapshot["items"]]}, ensure_ascii=False))
         return 0
     except Exception as exc:
         # Do not log DSNs or raw rows; server logs retain only the error class.
