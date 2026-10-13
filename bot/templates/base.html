@@ -4,6 +4,22 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>{% block title %}{% if request.url.path.startswith("/admin") %}Панель управления{% elif "complex" in request.url.path %}Жилые комплексы{% elif "developer" in request.url.path %}Застройщики{% elif request.url.path == "/cabinet" %}Личный кабинет{% else %}Недвижимость Астаны{% endif %} — Hatuli{% endblock %}</title>
+  {% if not request.url.path.startswith('/admin') and request.url.path not in ('/cabinet', '/favorites') %}
+  <meta name="description" content="{% block description %}Данные о недвижимости Астаны: жилые комплексы, застройщики и источники для вопросов перед покупкой квартиры.{% endblock %}">
+  <link rel="canonical" href="https://hatuli.ai-groundtruth.com{{ request.url.path }}">
+  <meta property="og:site_name" content="Hatuli">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="ru_KZ">
+  <meta property="og:title" content="{{ self.title()|striptags|trim }}">
+  <meta property="og:description" content="{{ self.description()|striptags|trim }}">
+  <meta property="og:url" content="https://hatuli.ai-groundtruth.com{{ request.url.path }}">
+  {% include "_hatuli_social_image.html" %}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ self.title()|striptags|trim }}">
+  <meta name="twitter:description" content="{{ self.description()|striptags|trim }}">
+  <meta name="twitter:image" content="https://hatuli.ai-groundtruth.com/static/branding/hatuli-share.png">
+  <meta name="twitter:image:alt" content="Hatuli: история цены, похожие предложения и вопросы продавцу">
+  {% endif %}
   <link rel="icon" type="image/svg+xml" href="/static/branding/hatuli.svg"/>
   {% include "_hatuli_theme.html" %}
   <style>

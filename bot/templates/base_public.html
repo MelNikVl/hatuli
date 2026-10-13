@@ -11,10 +11,16 @@
        объявления должна нормально разворачиваться превью при шаринге ссылки). -->
   <meta property="og:type" content="website"/>
   <meta property="og:site_name" content="Hatuli"/>
+  <meta property="og:locale" content="ru_KZ"/>
   <meta property="og:title" content="{% block og_title %}Hatuli — карта квартир Астаны{% endblock %}"/>
   <meta property="og:description" content="{% block og_description %}Hatuli — карта квартир Астаны: продажа и аренда, тепловые карты цен, рейтинг жилых комплексов.{% endblock %}"/>
   <meta property="og:url" content="https://hatuli.ai-groundtruth.com{{ request.url.path }}"/>
-  {% block og_image %}{% endblock %}
+  {% block og_image %}{% include "_hatuli_social_image.html" %}{% endblock %}
+  <meta name="twitter:card" content="summary_large_image"/>
+  <meta name="twitter:title" content="{{ self.og_title()|striptags|trim }}"/>
+  <meta name="twitter:description" content="{{ self.og_description()|striptags|trim }}"/>
+  {% block twitter_image %}<meta name="twitter:image" content="https://hatuli.ai-groundtruth.com/static/branding/hatuli-share.png"/>
+  <meta name="twitter:image:alt" content="Hatuli: история цены, похожие предложения и вопросы продавцу"/>{% endblock %}
   <link rel="icon" type="image/svg+xml" href="/static/branding/hatuli.svg"/>
   <!-- Kepler.gl попап (ЖК-карточка/попап объявления) грузит внешний
        kepler.gl/demo в iframe — preconnect срезает DNS/TLS-хэндшейк ещё до

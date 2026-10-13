@@ -3,9 +3,8 @@
 {% block meta_description %}{{ listing_meta.description if listing_meta else 'Жилые комплексы и новостройки Астаны: карта, застройщики и характеристики домов.' }}{% endblock %}
 {% block og_title %}{{ listing_meta.title if listing_meta else 'ЖК и карта Астаны — Hatuli' }}{% endblock %}
 {% block og_description %}{{ listing_meta.description if listing_meta else 'Жилые комплексы и новостройки Астаны: карта, застройщики и характеристики домов.' }}{% endblock %}
-{% if listing_meta %}
-{% if listing_meta.image %}{% block og_image %}<meta property="og:image" content="{{ listing_meta.image }}"/>{% endblock %}{% endif %}
-{% endif %}
+{% block og_image %}{% if listing_meta and listing_meta.image %}<meta property="og:image" content="{{ listing_meta.image }}"/>{% else %}{{ super() }}{% endif %}{% endblock %}
+{% block twitter_image %}{% if listing_meta and listing_meta.image %}<meta name="twitter:image" content="{{ listing_meta.image }}"/>{% else %}{{ super() }}{% endif %}{% endblock %}
 {% block content %}
 {% set admin = is_admin(request) %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>

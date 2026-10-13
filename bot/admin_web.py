@@ -115,6 +115,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "- [ЖК и карта](https://hatuli.ai-groundtruth.com/map): публичные новостройки; частные объявления доступны после входа и ручного одобрения\n"
             "- [Жилые комплексы](https://hatuli.ai-groundtruth.com/complexes): каталог ЖК Астаны\n"
             "- [Как считаем](https://hatuli.ai-groundtruth.com/how-it-works): источники, подбор аналогов и ограничения\n"
+            "- [Чеклист перед задатком](https://hatuli.ai-groundtruth.com/guides/check-apartment-before-deposit): вопросы о документах, доверенности и коммунальных расчётах с официальными источниками Казахстана; автоматическая юридическая проверка не предоставляется\n"
         )
 
     @app.get("/sitemap.xml")
@@ -125,6 +126,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             ("https://hatuli.ai-groundtruth.com/example", "monthly", "0.9"),
             ("https://hatuli.ai-groundtruth.com/map", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/how-it-works", "monthly", "0.7"),
+            ("https://hatuli.ai-groundtruth.com/guides/check-apartment-before-deposit", "monthly", "0.7"),
             ("https://hatuli.ai-groundtruth.com/complexes", "daily", "0.9"),
             ("https://hatuli.ai-groundtruth.com/developers", "weekly", "0.6"),
             ("https://hatuli.ai-groundtruth.com/info", "monthly", "0.4"),
@@ -219,15 +221,19 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/", response_class=HTMLResponse)
     async def buyer_landing(request: Request):
-        return templates.TemplateResponse("buyer_landing.html", {"request": request, "example": load_public_example()})
+        return templates.TemplateResponse(request=request, name="buyer_landing.html", context={"request": request, "example": load_public_example()})
 
     @app.get("/example", response_class=HTMLResponse)
     async def buyer_example(request: Request):
-        return templates.TemplateResponse("buyer_example.html", {"request": request, "example": load_public_example()})
+        return templates.TemplateResponse(request=request, name="buyer_example.html", context={"request": request, "example": load_public_example()})
 
     @app.get("/how-it-works", response_class=HTMLResponse)
     async def buyer_methodology(request: Request):
-        return templates.TemplateResponse("buyer_methodology.html", {"request": request, "example": load_public_example()})
+        return templates.TemplateResponse(request=request, name="buyer_methodology.html", context={"request": request, "example": load_public_example()})
+
+    @app.get("/guides/check-apartment-before-deposit", response_class=HTMLResponse)
+    async def buyer_deposit_guide(request: Request):
+        return templates.TemplateResponse(request=request, name="buyer_deposit_guide.html", context={"request": request})
 
     @app.get("/map", response_class=HTMLResponse)
     async def public_map(request: Request):
