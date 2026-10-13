@@ -302,3 +302,36 @@ async def test_refresh_preview_uses_readonly_transaction_and_never_initializes_p
     assert conn.closed
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_method", ["merge_complex_pair", "approve_duplicate_candidate"])
+async def test_legacy_merge_functions_deny_before_sql(monkeypatch, legacy_method):
+    from bot.core import entity_resolution
+    from bot.db import pg
+    async def forbidden(*args, **kwargs):
+        pytest.fail("A legacy merge attempted database access")
+    for name in ("fetch", "fetchrow", "fetchval", "execute"):
+        monkeypatch.setattr(pg, name, forbidden)
+    with pytest.raises(review.ComplexIdentityReviewError) as error:
+        if legacy_method == "merge_complex_pair":
+            await entity_resolution.merge_complex_pair(2, 1, method="old_cli", matched_by="auto")
+        else:
+            await entity_resolution.approve_duplicate_candidate(7)
+    assert error.value.code == "preview_required"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", [review.asyncpg.SerializationError, review.asyncpg.DeadlockDetectedError])
+async def test_serializable_commit_conflict_becomes_refreshable_preview_error(error_type):
+    class ConflictTransaction(Transaction):
+        async def __aexit__(self, *args):
+            raise error_type("Concurrent operation")
+    class ConflictConnection:
+        def transaction(self, **kwargs):
+            assert kwargs["isolation"] == "serializable"
+            return ConflictTransaction()
+    async def completed(*args):
+        return {"applied": True}
+    with pytest.raises(review.ComplexIdentityReviewError) as error:
+        await review._serializable_action(ConflictConnection(), completed)
+    assert error.value.code == "stale_preview"
+

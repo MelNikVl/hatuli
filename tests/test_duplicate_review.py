@@ -1,11 +1,4 @@
-"""Регрессия review-UX для complex_duplicate_candidates (задача гейта 2,
-п.1 после массового транслит-мерджа): bot.core.entity_resolution.
-approve_duplicate_candidate()/reject_duplicate_candidate()/merge_complex_pair()
-— та же реализация, что использует massовый merge_translit_dups.py
-(общий код, не вторая копия). Тестовые complexes создаются и удаляются
-внутри теста (не трогает реальную review-очередь — там решения принимает
-человек через ритуал, не автотест).
-"""
+"""Legacy duplicate approval cannot bypass the reviewed redirect workflow."""
 import os
 import sys
 
@@ -30,10 +23,7 @@ async def db():
 
 @pytest_asyncio.fixture
 async def two_test_complexes(db):
-    """Канон (2 apartment_listings под своим именем — весит больше) +
-    дубль (1 apartment_listing под СВОИМ именем — именно её и должен
-    перенести merge_complex_pair на имя канона). Удаляются в finally,
-    даже если тест упал на середине."""
+    """Two records and original source names, removed in finally."""
     from bot.db.pg import fetchval, execute
     canon_id = await fetchval(
         "INSERT INTO complexes (name) VALUES ('__test_canon_dup_review__') RETURNING id")
@@ -56,7 +46,7 @@ async def two_test_complexes(db):
 
 
 @pytest.mark.asyncio
-async def test_approve_merges_and_marks_status(two_test_complexes):
+async def test_legacy_approve_preserves_candidate_and_source_names(two_test_complexes):
     from bot.db.pg import fetchval, execute
     from bot.core.entity_resolution import approve_duplicate_candidate
 
@@ -66,27 +56,23 @@ async def test_approve_merges_and_marks_status(two_test_complexes):
         VALUES ($1, $2, '__test_key__', 'no_confirming_signal', '{}'::jsonb) RETURNING id
     """, min(canon_id, dup_id), max(canon_id, dup_id))
 
-    result = await approve_duplicate_candidate(candidate_id, approved_by="pytest")
-    assert result is not None
-    # канон — та сторона, у которой больше данных (apartment_listing) —
-    # именно canon_id из фикстуры, независимо от того, кто из них
-    # complex_id_a/complex_id_b (approve сам считает score, не берёт "a").
-    assert result["canon_id"] == canon_id
-    assert result["dup_id"] == dup_id
-    assert result["listings_moved"] == 1  # 1 объявление было под именем ДУБЛЯ
+    from bot.core.complex_identity_review import ComplexIdentityReviewError
+    with pytest.raises(ComplexIdentityReviewError) as error:
+        await approve_duplicate_candidate(candidate_id, approved_by="pytest")
+    assert error.value.code == "preview_required"
 
     dup_row = await fetchval("SELECT is_garbage FROM complexes WHERE id = $1", dup_id)
     canon_row = await fetchval("SELECT is_garbage FROM complexes WHERE id = $1", canon_id)
-    assert dup_row is True
+    assert dup_row is not True
     assert canon_row is not True
 
     status = await fetchval("SELECT status FROM complex_duplicate_candidates WHERE id = $1", candidate_id)
-    assert status == "merged"
+    assert status == "review"
 
-    # объявление, что было под именем дубля, реально перенесено на имя канона
+    # The original source spelling remains a historical observation.
     listing_name = await fetchval(
         "SELECT complex_name FROM apartment_listings WHERE id = '__test_listing_dup1__'")
-    assert listing_name == "__test_canon_dup_review__"
+    assert listing_name == "__test_dup_dup_review__"
 
 
 @pytest.mark.asyncio
@@ -111,6 +97,9 @@ async def test_reject_marks_status_without_merging(two_test_complexes):
 
 
 @pytest.mark.asyncio
-async def test_approve_missing_candidate_returns_none(db):
+async def test_legacy_approve_requires_preview_before_any_database_access():
     from bot.core.entity_resolution import approve_duplicate_candidate
-    assert await approve_duplicate_candidate(-1, approved_by="pytest") is None
+    from bot.core.complex_identity_review import ComplexIdentityReviewError
+    with pytest.raises(ComplexIdentityReviewError) as error:
+        await approve_duplicate_candidate(-1, approved_by="pytest")
+    assert error.value.code == "preview_required"

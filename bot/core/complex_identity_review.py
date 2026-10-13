@@ -14,6 +14,8 @@ from math import isfinite
 from urllib.parse import urlsplit
 import uuid
 
+import asyncpg
+
 from bot.core.complex_binding import build_preview_sql
 from bot.core.complex_canonical import compute_canonical
 from bot.core.entity_resolution import _haversine_m, _phase_token, _PRODUCT_TOKEN_RE
@@ -340,12 +342,21 @@ async def apply_duplicate_candidate(candidate_id: int, *, expected_fingerprint: 
                                     reviewed_by: str = "admin", connection=None):
     validate_review(expected_fingerprint, review_note, source_urls, reviewed_by)
     if connection is not None:
-        async with connection.transaction(isolation="serializable"):
-            return await _apply(connection, candidate_id, expected_fingerprint, review_note, source_urls, reviewed_by)
+        return await _serializable_action(connection, _apply, candidate_id, expected_fingerprint,
+                                          review_note, source_urls, reviewed_by)
     from bot.db.pg import get_pool
     async with get_pool().acquire() as conn:
+        return await _serializable_action(conn, _apply, candidate_id, expected_fingerprint,
+                                          review_note, source_urls, reviewed_by)
+
+
+async def _serializable_action(conn, operation, *args):
+    try:
         async with conn.transaction(isolation="serializable"):
-            return await _apply(conn, candidate_id, expected_fingerprint, review_note, source_urls, reviewed_by)
+            return await operation(conn, *args)
+    except (asyncpg.SerializationError, asyncpg.DeadlockDetectedError):
+        raise ComplexIdentityReviewError(
+            "stale_preview", "Данные изменяются другим процессом; обновите предпросмотр") from None
 
 
 async def _rollback(conn, review_id, reviewed_by):
@@ -427,12 +438,10 @@ async def rollback_duplicate_review(review_id: str, *, reviewed_by="admin", conn
     if not isinstance(reviewed_by, str) or not reviewed_by.strip():
         raise ComplexIdentityReviewError("evidence_required", "Не указан проверяющий")
     if connection is not None:
-        async with connection.transaction(isolation="serializable"):
-            return await _rollback(connection, review_id, reviewed_by)
+        return await _serializable_action(connection, _rollback, review_id, reviewed_by)
     from bot.db.pg import get_pool
     async with get_pool().acquire() as conn:
-        async with conn.transaction(isolation="serializable"):
-            return await _rollback(conn, review_id, reviewed_by)
+        return await _serializable_action(conn, _rollback, review_id, reviewed_by)
 
 
 def discover_review_pairs(complexes, counts, existing_pairs=(), limit=20):
