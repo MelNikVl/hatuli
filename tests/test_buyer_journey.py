@@ -257,17 +257,71 @@ async def test_confirmed_price_mismatch_is_first_warning_so_three_item_display_c
     source = {"checked_at": NOW.isoformat(), "price": 29_000_000,
               "stored_price": 30_000_000, "price_matches": False, "is_fresh": False,
               "active": None, "historical_active": True}
-    monkeypatch.setattr(buyer_journey, "observed_source", lambda *a, **kw: source)
+    monkeypatch.setattr(buyer_journey, "observed_source", lambda identifier, *a, **kw: source if identifier == "123457" else None)
     monkeypatch.setattr(buyer_journey, "analyze_for_buyer", AsyncMock(return_value={
         "found": True, "listing": base, "better_nearby": [{"listing": row("123457"),
             "warnings": ["Неизвестен год", "Неизвестна отделка", "Неизвестен этаж", "Дополнительное замечание"]}]}))
     monkeypatch.setattr(buyer_journey.pg, "fetch", AsyncMock(return_value=[base]))
     result = await buyer_journey.build_buyer_journey("123456")
     warnings = result["alternatives"][0]["warnings"]
-    assert "29 000 000" in warnings[0] and "30 000 000" in warnings[0]
-    assert "13.10.2026 07:00 UTC" in warnings[0]
-    assert "Текущую цену и доступность нужно проверить заново" in warnings[0]
-    assert warnings[1] == "Неизвестен год"
+    assert "Ценовые преимущества и рейтинг не подтверждены" in warnings[0]
+    assert "29 000 000" in warnings[1] and "30 000 000" in warnings[1]
+    assert "13.10.2026 07:00 UTC" in warnings[1]
+    assert "Текущую цену и доступность нужно проверить заново" in warnings[1]
+    assert warnings[2] == "Неизвестен год"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base_mismatch,candidate_mismatch", [(True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("fresh", [True, False])
+async def test_known_base_or_candidate_price_mismatch_suppresses_price_and_score_claims_only(monkeypatch, base_mismatch, candidate_mismatch, fresh):
+    base = row(price=70_000_000, lat=51.1, lon=71.4)
+    alternative = row("123457", price=65_000_000)
+    facts = {"123456": {"price": 64_500_000, "stored_price": 70_000_000, "price_matches": not base_mismatch},
+             "123457": {"price": 63_000_000, "stored_price": 65_000_000, "price_matches": not candidate_mismatch}}
+    for fact in facts.values():
+        fact.update(checked_at=NOW.isoformat(), is_fresh=fresh, active=True if fresh else None)
+    monkeypatch.setattr(buyer_journey, "observed_source", lambda identifier, *a, **kw: facts.get(identifier))
+    candidate = {"listing": alternative, "category": "better", "warnings": ["Неизвестен год"],
+                 "advantages": ["Дешевле на 5.0 млн", "Больше на 2 м²", "Выше Deal Score",
+                                "Выгоднее относительно аналогов", "Этаж удобнее", "Выше оценка локации"],
+                 "tradeoffs": ["Дороже на 1.0 млн", "Ниже DealScore", "Менее выгодна относительно аналогов",
+                               "Потолки ниже", "Отделка слабее"]}
+    monkeypatch.setattr(buyer_journey, "analyze_for_buyer", AsyncMock(return_value={
+        "found": True, "listing": base, "better_nearby": [candidate]}))
+    monkeypatch.setattr(buyer_journey.pg, "fetch", AsyncMock(return_value=[base]))
+    result = await buyer_journey.build_buyer_journey("123456")
+    rendered = result["alternatives"][0]
+    assert rendered["category"] == "similar"
+    assert rendered["advantages"] == ["Больше на 2 м²", "Этаж удобнее", "Выше оценка локации"]
+    assert rendered["tradeoffs"] == ["Потолки ниже", "Отделка слабее"]
+    assert "Ценовые преимущества и рейтинг не подтверждены" in rendered["warnings"][0]
+    assert ("Подбор выполнен по сохранённой цене" in result["alternatives_message"]) is base_mismatch
+    if base_mismatch:
+        assert "Выбранная квартира" in " ".join(rendered["warnings"])
+    if candidate_mismatch:
+        assert "Альтернатива" in " ".join(rendered["warnings"])
+    assert base["price"] == 70_000_000 and rendered["price"] == 65_000_000
+    assert candidate["category"] == "better" and "Дешевле на 5.0 млн" in candidate["advantages"]
+
+
+@pytest.mark.asyncio
+async def test_matching_source_checks_do_not_remove_normal_price_claims_or_category(monkeypatch):
+    base = row(lat=51.1, lon=71.4)
+    source = {"checked_at": NOW.isoformat(), "price_matches": True, "is_fresh": True, "active": True}
+    monkeypatch.setattr(buyer_journey, "observed_source", lambda *a, **kw: source)
+    candidate = {"listing": row("123457"), "category": "better", "warnings": ["Неизвестен год"],
+                 "advantages": ["Дешевле на 1.0 млн", "Выше Deal Score", "Этаж удобнее"],
+                 "tradeoffs": ["Менее выгодна относительно аналогов", "Отделка слабее"]}
+    monkeypatch.setattr(buyer_journey, "analyze_for_buyer", AsyncMock(return_value={
+        "found": True, "listing": base, "better_nearby": [candidate]}))
+    monkeypatch.setattr(buyer_journey.pg, "fetch", AsyncMock(return_value=[base]))
+    result = await buyer_journey.build_buyer_journey("123456")
+    alternative = result["alternatives"][0]
+    assert alternative["category"] == "better"
+    assert alternative["advantages"] == candidate["advantages"] and alternative["tradeoffs"] == candidate["tradeoffs"]
+    assert alternative["warnings"] == candidate["warnings"]
+    assert "Подбор выполнен по сохранённой цене" not in result["alternatives_message"]
 
 
 @pytest.mark.asyncio

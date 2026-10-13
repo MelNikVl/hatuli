@@ -7,11 +7,22 @@ from functools import lru_cache
 import json
 import math
 from pathlib import Path
+import re
 
 from bot.core.buyer import analyze_for_buyer
 from bot.db import pg
 
 SOURCE_CHECKS_PATH = Path(__file__).resolve().parents[2] / "var" / "browser-source-checks.json"
+_PRICE_CLAIM = re.compile(r"\b(?:дешевле|дороже)\b|deal\s*score|(?:выгоднее|менее выгодна)\s+относительно\s+аналогов", re.IGNORECASE)
+
+
+def source_price_warning(source, label):
+    source_price = f"{source['price']:,.0f}".replace(",", " ")
+    stored_price = f"{source['stored_price']:,.0f}".replace(",", " ")
+    checked_label = datetime.fromisoformat(source["checked_at"]).strftime("%d.%m.%Y %H:%M UTC")
+    prefix = "При последней проверке" if source["is_fresh"] else "Расхождение цены из прошлой проверки"
+    return (f"{label}. {prefix} ({checked_label}): на Krisha {source_price} ₸, в Hatuli {stored_price} ₸. "
+            "Текущую цену и доступность нужно проверить заново.")
 
 
 @lru_cache(maxsize=2)
@@ -102,6 +113,7 @@ async def build_buyer_journey(identifier: str) -> dict:
         return {"found": False, "message": result.get("message")}
     listing = result["listing"]
     source_check = observed_source(identifier, listing.get("price"))
+    base_price_mismatch = bool(source_check and source_check.get("price_matches") is False)
     links = await pg.fetch("""
         SELECT a.id,a.url,a.rooms,a.area,a.price,a.last_seen,a.is_active,p.identity_status
         FROM property_listings pl JOIN apartment_listings a ON a.id=pl.listing_id
@@ -118,26 +130,35 @@ async def build_buyer_journey(identifier: str) -> dict:
         item = candidate["listing"]
         alternative_source = observed_source(str(item["id"]), item.get("price"))
         warnings = list(candidate.get("warnings", []))
-        if alternative_source and not alternative_source["price_matches"]:
-            source_price = f"{alternative_source['price']:,.0f}".replace(",", " ")
-            stored_price = f"{item['price']:,.0f}".replace(",", " ")
-            checked_label = datetime.fromisoformat(alternative_source["checked_at"]).strftime("%d.%m.%Y %H:%M UTC")
-            prefix = "При последней проверке" if alternative_source["is_fresh"] else "Сохранено неразрешённое расхождение"
-            warnings.insert(0, f"{prefix} ({checked_label}): на Krisha {source_price} ₸, в Hatuli {stored_price} ₸. "
-                               "Текущую цену и доступность нужно проверить заново.")
+        alternative_price_mismatch = bool(alternative_source and alternative_source.get("price_matches") is False)
+        price_mismatch = base_price_mismatch or alternative_price_mismatch
+        advantages = list(candidate.get("advantages", []))
+        tradeoffs = list(candidate.get("tradeoffs", []))
+        if price_mismatch:
+            advantages = [value for value in advantages if not _PRICE_CLAIM.search(str(value))]
+            tradeoffs = [value for value in tradeoffs if not _PRICE_CLAIM.search(str(value))]
+            price_warnings = ["Ценовые преимущества и рейтинг не подтверждены: обнаружено расхождение цены. "
+                              "Проверьте актуальные цены обоих объявлений."]
+            if base_price_mismatch:
+                price_warnings.append(source_price_warning(source_check, "Выбранная квартира"))
+            if alternative_price_mismatch:
+                price_warnings.append(source_price_warning(alternative_source, "Альтернатива"))
+            warnings = price_warnings + warnings
         alternatives.append({"id": str(item["id"]), "url": item.get("url"),
             "rooms": item.get("rooms"), "area": item.get("area"), "price": item.get("price"),
-            "distance_m": candidate.get("distance_m"), "advantages": candidate.get("advantages", []),
-            "tradeoffs": candidate.get("tradeoffs", []), "warnings": warnings,
-            "category": candidate.get("category"), "active_in_database": item.get("is_active") is True,
+            "distance_m": candidate.get("distance_m"), "advantages": advantages,
+            "tradeoffs": tradeoffs, "warnings": warnings,
+            "category": "similar" if price_mismatch else candidate.get("category"), "active_in_database": item.get("is_active") is True,
             "source_check": alternative_source})
     no_alternatives = ("Без координаты нельзя надёжно выбрать квартиры рядом."
                        if listing.get("lat") is None or listing.get("lon") is None else
                        "В радиусе 2 км не нашли подходящих квартир с тем же числом комнат и близкой площадью и ценой.")
+    alternatives_message = (no_alternatives if not alternatives else
+        f"Найдено {len(alternatives)} из максимум трёх вариантов. Сравнение по наблюдаемым предложениям, доступность уточняйте в источнике.")
+    if base_price_mismatch:
+        alternatives_message += " Подбор выполнен по сохранённой цене; после уточнения цены набор альтернатив нужно обновить."
     return {"found": True, "as_of": datetime.now(timezone.utc).isoformat(),
             "verdict": result.get("verdict"), "confidence": result.get("confidence"),
             "warnings": result.get("warnings", []), "publications": publications,
-            "alternatives": alternatives, "alternatives_message": (
-                no_alternatives if not alternatives else
-                f"Найдено {len(alternatives)} из максимум трёх вариантов. Сравнение по наблюдаемым предложениям, доступность уточняйте в источнике."),
+            "alternatives": alternatives, "alternatives_message": alternatives_message,
             "source_url": listing.get("url"), "source_check": source_check}
