@@ -86,13 +86,19 @@ def load_deposit_catalog(path: Path | str | None = None) -> dict:
         return {"schema_version": SCHEMA_VERSION, "offers": [], "sources": []}
 
 
-def _eligibility(offer: dict, now: datetime, capital: float | None = None) -> str | None:
+def _eligibility(offer: dict, now: datetime, capital: float | None = None,
+                 expected_term: int | None = 12) -> str | None:
     checked = _time(offer.get("checked_at"))
     if offer.get("status") != "verified":
         return "Условия изменились или источник недоступен: нужна повторная проверка"
     if checked is None or checked > now + timedelta(minutes=5) or now - checked > MAX_RATE_AGE:
         return "Ставка не подтверждалась последние 48 часов"
-    if offer.get("currency") != "KZT" or offer.get("term_months") != 12:
+    if offer.get("currency") != "KZT":
+        return "Программа не в тенге"
+    term = offer.get("term_months")
+    if isinstance(term, bool) or not isinstance(term, int) or not 1 <= term <= 60:
+        return "Срок программы не подтверждён"
+    if expected_term is not None and term != expected_term:
         return "Программа не рассчитана на полный срок 12 месяцев"
     if offer.get("rate_type") != "fixed":
         return "Плавающая ставка не даёт фиксированного дохода на год"
@@ -123,6 +129,43 @@ def _eligibility(offer: dict, now: datetime, capital: float | None = None) -> st
     except ValueError:
         return "Числовые условия источника не прошли проверку"
     return None
+
+
+def best_verified_deposit_benchmark(catalog: dict | None = None, now: datetime | None = None,
+                                    capital: float | None = None) -> dict | None:
+    """Highest verified annual effective rate on its actual contractual term.
+
+    This is a comparison threshold, never a forecast of twelve months of
+    short-term rollovers. Unknown, stale, floating and ineligible programs do
+    not enter it. Coverage is explicit because this is not the whole market.
+    """
+    catalog = load_deposit_catalog() if catalog is None else catalog
+    now = now or datetime.now(timezone.utc)
+    if capital is not None:
+        try:
+            capital = _number(capital, "Капитал", 1, 100_000_000_000)
+        except ValueError:
+            return None
+    available = [item for item in catalog.get("offers", [])
+                 if isinstance(item, dict) and item.get("bank_key") in tuple(_OFFICIAL)
+                 and _eligibility(item, now, capital, expected_term=None) is None]
+    if not available:
+        return None
+    offer = max(available, key=lambda item: (item["effective_pct"], item["term_months"]))
+    term = offer["term_months"]
+    verified_banks = {item["bank_key"] for item in available}
+    return {"bank": dict(BANKS)[offer["bank_key"]], "bank_key": offer["bank_key"],
+            "product": str(offer.get("name") or "Депозит")[:200],
+            "term_months": term, "effective_pct": offer["effective_pct"],
+            "source_url": _safe_source(offer), "checked_at": offer["checked_at"],
+            "checked_at_label": _label(offer["checked_at"]), "short_term": term < 12,
+            "scope_label": "Максимальная подтверждённая ГЭСВ среди отслеживаемых программ Freedom, Forte, Bereke и Home Credit",
+            "verified_bank_count": len(verified_banks), "coverage_complete": len(verified_banks) == len(BANKS),
+            "comparison_note": (f"ГЭСВ — годовая эффективная ставка; срок вклада {term} мес. "
+                                "При продлении ставка может измениться; доход за год не гарантирован."
+                                if term < 12 else
+                                f"ГЭСВ — годовая эффективная ставка; срок вклада {term} мес. "
+                                "Условия действуют при соблюдении полного срока вклада.")}
 
 
 def _best_offers(catalog: dict, now: datetime, capital: float | None = None) -> list[dict]:
@@ -164,7 +207,9 @@ def public_deposit_catalog(catalog: dict | None = None, now: datetime | None = N
     return {"updated_at_label": _label(catalog.get("checked_at")),
             "updated_at": catalog.get("checked_at"), "stale": not all(item["eligible"] for item in banks),
             "banks": banks, "guarantee_source": GUARANTEE_SOURCE,
-            "monitor": catalog.get("monitor", {}), "tracked_programs": len(catalog.get("offers", []))}
+            "monitor": catalog.get("monitor", {}), "tracked_programs": len(catalog.get("offers", [])),
+            "benchmark": best_verified_deposit_benchmark(catalog, now),
+            "tracked_scope": "Выбранные розничные программы Freedom, Forte, Bereke и Home Credit; не весь рынок вкладов"}
 
 
 def compare_investment(payload: dict, catalog: dict | None = None, now: datetime | None = None) -> dict:
@@ -239,7 +284,7 @@ def compare_investment(payload: dict, catalog: dict | None = None, now: datetime
             if deposit_end > guarantee:
                 row["warnings"].append("Часть начального капитала и процентов превышает гарантию КФГД в этом банке.")
         banks.append(row)
-    return {"assumptions": {"horizon_months": horizon, "price": price, "repair_cost": repair,
+    result = {"assumptions": {"horizon_months": horizon, "price": price, "repair_cost": repair,
              "buy_cost": buy_cost, "monthly_rent": rent, "annual_owner_cost": owner,
              "vacancy_months": vacancy, "annual_growth_pct": growth, "wait_months": wait,
              "sell_cost_pct": sell_pct, "mode": mode},
@@ -250,3 +295,22 @@ def compare_investment(payload: dict, catalog: dict | None = None, now: datetime
               "wait_rent_cost": round(buy_wait_rent, 2), "wealth": round(property_wealth, 2),
               "rent_months": rent_months, "avoided_rent": round(deposit_wait_rent - buy_wait_rent, 2)},
             "banks": banks, "warnings": warnings, "guarantee_source": GUARANTEE_SOURCE}
+    if mode == "rent_out":
+        benchmark = best_verified_deposit_benchmark(catalog, now, capital)
+        # First-year cash flow at zero appreciation. Up-front costs remain
+        # expenses; a user-entered price-growth scenario cannot turn letting
+        # into a claim that rental income beats a deposit.
+        annual_net_cash = gross_rent - owner - repair - buy_cost
+        net_cash_yield = annual_net_cash / capital * 100
+        required_rent = None
+        if benchmark is not None and rent_months > 0:
+            required_rent = (capital * benchmark["effective_pct"] / 100 + owner + repair + buy_cost) / rent_months
+        result["rental_benchmark"] = {
+            "benchmark": benchmark,
+            "net_cash_yield_pct": round(net_cash_yield, 4),
+            "annual_net_cash": round(annual_net_cash, 2),
+            "required_monthly_rent": round(required_rent, 2) if required_rent is not None else None,
+            "above_benchmark": bool(benchmark and benchmark["coverage_complete"] and
+                                    annual_net_cash > 0 and net_cash_yield > benchmark["effective_pct"]),
+        }
+    return result

@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime
+from datetime import datetime, timezone
+from statistics import median
 from urllib.parse import urlencode
 
 from fastapi import Query, Request
@@ -16,7 +17,9 @@ from bot.core.market_comparison import (
 )
 from bot.core.web_pages import not_found_page
 from bot.core.price_forecast_runtime import forecast_for_offer
-from bot.core.comparison_offer_details import DETAIL_FIELDS, details_for_selected_offer
+from bot.core.comparison_offer_details import DETAIL_FIELDS, details_for_selected_offer, source_characteristics_changed
+from bot.core.apartment_selection_reasons import apartment_selection_reasons
+from bot.core.comparison_rental_estimate import validate_rental_estimate
 
 
 def _public_offer(offer: dict) -> dict:
@@ -39,8 +42,28 @@ def _public_offer(offer: dict) -> dict:
         "observed_at": offer.get("observed_at"), "source_label": offer.get("source_label", "Krisha.kz"),
         "observed_at_label": observed_label, "build_status_label": offer.get("build_status_label"),
         "cautions": cautions,
+        "reasons": apartment_selection_reasons(offer),
         **{field: offer.get(field) for field in DETAIL_FIELDS},
+        "rental_estimate": validate_rental_estimate(offer.get("rental_estimate")),
     }
+
+
+def _primary_selection_offer(offer, market):
+    """Compare developer units within their own project, rooms and area band."""
+    peers = [row["price_per_m2"] for row in market.get("offers", [])
+             if row["market_type"] == "primary" and row["complex_id"] == offer["complex_id"]
+             and row["id"] != offer["id"] and row["rooms"] == offer["rooms"]
+             and offer["area"] * .85 <= row["area"] <= offer["area"] * 1.15]
+    generated = market.get("generated_at")
+    fresh = generated and 0 <= (datetime.now(timezone.utc)-datetime.fromisoformat(generated)).total_seconds() <= 26*3600
+    result = dict(offer)
+    if fresh and len(peers) >= 5:
+        prices = sorted(peers)
+        reference = median(prices)
+        if (prices[len(prices)*3//4] - prices[len(prices)//4]) / reference <= .5:
+            result["price_comparison"] = {"discount_pct": round((1-offer["price_per_m2"]/reference)*100, 1),
+                "reference_price_per_m2": reference, "scope": "в том же ЖК", "comparable_count": len(peers)}
+    return _public_offer(result)
 
 
 def _deposit_changes(catalog: dict) -> list[dict]:
@@ -82,13 +105,19 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
     details_by_id = {row["id"]: {**row, "current_price": row["price"]}
                      for row in market.get("offers", []) if row["market_type"] == "secondary"}
     details_by_id.update({row["id"]: row for row in market.get("listing_details", [])})
-    secondary = [_public_offer({**item, "market_type": "secondary",
-                               **details_for_selected_offer(details_by_id.get(item["id"]), item["price"])})
-                 for item in (picks or {}).get("items", [])]
+    secondary = []
+    for item in (picks or {}).get("items", []):
+        detail = details_by_id.get(item["id"])
+        enriched = {**item, "market_type": "secondary"}
+        if detail:
+            enriched.update(details_for_selected_offer(detail, item["price"], item["area"], item["rooms"]))
+            if detail.get("current_price", item["price"]) != item["price"] or source_characteristics_changed(detail, item):
+                enriched["price_comparison"] = None
+        secondary.append(_public_offer(enriched))
     selected = next((offer for offer in secondary if offer["id"] == listing), None) if listing else None
     primary = public_primary_offer(market, unit) if unit else None
     if primary:
-        selected = _public_offer(primary)
+        selected = _primary_selection_offer(primary, market)
     target = None
     if primary:
         target = primary
@@ -101,7 +130,7 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
         if selected:
             rooms, area = selected["rooms"], selected["area"]
     comparison = compare_market(market, hex_id=hex_id, rooms=rooms, area=area, scope=scope)
-    primary_choices = [_public_offer(offer) for offer in comparison["apartments"]]
+    primary_choices = [_primary_selection_offer(offer, market) for offer in comparison["apartments"]]
     choices = primary_choices + secondary
     by_id = {offer["id"]: offer for offer in market.get("offers", [])}
     radius = SCOPE_RADII[comparison["scope"]]

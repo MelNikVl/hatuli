@@ -195,7 +195,7 @@ def build_market_snapshot(primary_rows: list[dict], secondary_rows: list[dict], 
         identifier = str(row.get("id", ""))
         if not re.fullmatch(r"\d{5,20}", identifier) or row.get("market_type") != "secondary":
             raise ValueError("Invalid public comparison listing")
-        listing_details.append({"id": identifier, "current_price": row["price"],
+        listing_details.append({"id": identifier, "current_price": row["price"], "area": row.get("area"), "rooms": row.get("rooms"),
                                 **build_offer_details(row, "secondary", now=now)})
     return {
         "schema_version": SCHEMA_VERSION, "generated_at": now.isoformat(), "timezone": "Asia/Almaty",
@@ -219,7 +219,7 @@ def _validated_snapshot(raw: dict) -> dict:
         raise ValueError("Invalid public offer collection")
     offers, seen = [], set()
     for row in rows:
-        if not isinstance(row, dict) or not all(k in row for k in _OFFER_FIELDS):
+        if not isinstance(row, dict) or not all(k in row for k in _OFFER_FIELDS if k not in {"selection_facts", "rental_estimate"}):
             raise ValueError("Invalid public offer")
         market, identifier = row["market_type"], row["id"]
         if market not in {"primary", "secondary"} or not valid_hex(row["hex_id"]):
@@ -260,7 +260,7 @@ def _validated_snapshot(raw: dict) -> dict:
         stage, finish = row["build_status"], row["finish_level"]
         if stage not in _STAGE_LABEL or (finish is not None and finish not in _FINISH):
             raise ValueError("Invalid public status")
-        safe = {k: row[k] for k in _OFFER_FIELDS}
+        safe = {k: row.get(k) for k in _OFFER_FIELDS}
         safe.update(price=price, area=area, rooms=rooms, price_per_m2=round(price_per_m2))
         safe.update(validate_offer_details(row, market, price, now=generated))
         for field, limit in (("complex_name", 100), ("housing_class", 50)):
@@ -279,8 +279,14 @@ def _validated_snapshot(raw: dict) -> dict:
         current = _int(row.get("current_price"), 1, 10_000_000_000)
         if current is None:
             raise ValueError("Invalid comparison current price")
-        listing_details.append({"id": row["id"], "current_price": current,
-                                **validate_offer_details(row, "secondary", current, now=generated)})
+        area = _number(row.get("area"))
+        if area is not None and not 20 <= area <= 300:
+            raise ValueError("Invalid public comparison detail area")
+        rooms = _int(row.get("rooms"), 1, 6)
+        if row.get("rooms") is not None and rooms is None:
+            raise ValueError("Invalid public comparison detail rooms")
+        listing_details.append({"id": row["id"], "current_price": current, "area": area, "rooms": rooms,
+                                **validate_offer_details(row, "secondary", current, now=generated, area=area)})
         detail_ids.add(row["id"])
     coverage = raw.get("summary", {}).get("coverage", {})
     coverage = {k: v for k, v in coverage.items() if k in {"krisha_primary_recent", "primary_available_recent", "secondary_recent", "primary_stale_available"} and _int(v, 0, 10_000_000) is not None}

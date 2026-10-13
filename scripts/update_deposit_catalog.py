@@ -71,10 +71,18 @@ def build_catalog(previous: dict, fetched: dict, now: datetime, accept_terms: bo
             continue
         digest = hashlib.sha256(content).hexdigest()
         changed = bool(old.get("source_hash") and old["source_hash"] != digest)
-        if changed and not accept_terms:
+        needs_review = changed or old.get("review_required") or old.get("status") == "needs_review"
+        if needs_review and not accept_terms:
             document_flags[product_url] = "Изменён официальный документ условий; нужна проверка"
-            events.append({"kind": "document_changed", "url": url, "at": now.isoformat()})
-        sources.append({"url": url, "status": "verified", "checked_at": now.isoformat(), "source_hash": digest, "changed": changed})
+            if changed and old.get("pending_source_hash") != digest:
+                events.append({"kind": "document_changed", "url": url, "at": now.isoformat()})
+            # Keep the last accepted document and its verification timestamp.
+            # Repeated successful downloads do not approve changed conditions.
+            sources.append({**old, "url": url, "status": "needs_review", "attempted_at": now.isoformat(),
+                            "pending_source_hash": digest, "review_required": True, "changed": changed})
+        else:
+            sources.append({"url": url, "status": "verified", "checked_at": now.isoformat(),
+                            "source_hash": digest, "changed": changed, "review_required": False})
     for url in PRODUCT_SOURCES:
         response = fetched.get(url, {})
         source = {"url": url, "attempted_at": now.isoformat()}
@@ -85,18 +93,28 @@ def build_catalog(previous: dict, fetched: dict, now: datetime, accept_terms: bo
             if not parsed:
                 raise ValueError("Нет подтверждённых программ")
             source.update(status="verified", checked_at=now.isoformat(), source_hash=parsed[0]["source_hash"])
+            unresolved = [item for item in old_offers.values()
+                          if item.get("source_url") == url and
+                          (item.get("status") == "needs_review" or item.get("pending_terms_hash"))]
+            source_terms_changed = any(old_offers.get(item["id"]) and
+                                       old_offers[item["id"]].get("terms_hash") != item["terms_hash"]
+                                       for item in parsed)
+            source_needs_review = bool(unresolved) or source_terms_changed
             for candidate in parsed:
                 old = old_offers.get(candidate["id"])
                 changed = old and old.get("terms_hash") != candidate["terms_hash"]
-                needs_review = changed or (old and old.get("status") == "needs_review")
+                needs_review = source_needs_review or changed or (old and old.get("status") == "needs_review")
                 reason = document_flags.get(url)
                 if (needs_review and not accept_terms) or reason:
                     offer = dict(old or candidate)
+                    if old is None:
+                        offer["checked_at"] = None
                     offer.update(status="needs_review", attempted_at=now.isoformat(),
                                  pending_terms_hash=candidate["terms_hash"], pending_conditions=candidate["conditions"],
-                                 review_reason=reason or "Изменились условия программы; нужна проверка")
+                                 review_reason=reason or (unresolved[0].get("review_reason") if unresolved else None)
+                                 or "Изменились условия программы; нужна проверка")
                     offers.append(offer)
-                    if changed:
+                    if changed and old.get("pending_terms_hash") != candidate["terms_hash"]:
                         events.append({"kind": "conditions_changed", "id": candidate["id"], "at": now.isoformat()})
                 else:
                     offers.append(candidate)

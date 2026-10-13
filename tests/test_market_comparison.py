@@ -201,7 +201,7 @@ async def test_publisher_only_reads_in_enforced_readonly_transaction(monkeypatch
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
     monkeypatch.setattr("scripts.publish_market_comparison.load_daily_picks", lambda: None)
-    connection = SimpleNamespace(fetch=AsyncMock(side_effect=[[primary()], [secondary()], [], []]),
+    connection = SimpleNamespace(fetch=AsyncMock(side_effect=[[primary()], [secondary()], [], [], []]),
                                  fetchrow=AsyncMock(return_value={"krisha_primary_recent": 1}),
                                  fetchval=AsyncMock(return_value="100"), close=AsyncMock())
     def transaction(**kwargs):

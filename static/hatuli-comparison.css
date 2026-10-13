@@ -91,6 +91,11 @@
 .mc-offer > p { color: var(--muted); font-size: 11px; margin-top: 5px; }
 .mc-offer > strong { display: block; color: var(--heading); font-size: 22px; letter-spacing: -.5px; margin-top: 14px; }
 .mc-offer .mc-offer-complex { color: var(--text); font-weight: 550; }
+.mc-offer-reasons { min-width: 0; margin-top: 15px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface2); }
+.mc-offer-reasons h4 { color: var(--heading); font-size: 12px; margin-bottom: 9px; }
+.mc-offer-reasons li { font-size: 12px; overflow-wrap: anywhere; }
+.mc-offer-reasons li strong { color: var(--heading); font-weight: 650; }
+.mc-form-header .mc-offer-reasons li { font-size: 13px; }
 .mc-offer-address { margin-top: 12px; min-width: 0; }
 .mc-address-line { display: flex; align-items: start; gap: 7px; color: var(--text); font-size: 12px; line-height: 1.55; }
 .mc-address-line svg { flex: 0 0 17px; width: 17px; height: 17px; margin-top: 1px; color: var(--accent); }
@@ -118,6 +123,25 @@
 .mc-offer-actions a { text-decoration: none; }
 .mc-offer-actions a:hover { text-decoration: underline; }
 .mc-offer-selector { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 16px; align-items: center; margin-bottom: 22px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); padding: 18px 21px; }
+.mc-rental-guide { display: grid; grid-template-columns: minmax(0,1.2fr) minmax(0,1fr); gap: 24px; margin-block: 20px 24px; padding: 22px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface2); }
+.mc-rental-guide > div { min-width: 0; }
+.mc-rental-guide h3 { font-size: 19px; line-height: 1.4; margin-top: 7px; }
+.mc-rental-guide h4 { font-size: 13px; font-weight: 650; line-height: 1.55; margin-top: 9px; overflow-wrap: anywhere; }
+.mc-rental-guide :is(.mc-rental-guide-estimate,.mc-rental-guide-bank) > p:not(.mc-eyebrow,.mc-rental-guide-value) { font-size: 12px; line-height: 1.7; color: var(--muted); margin-top: 9px; overflow-wrap: anywhere; }
+.mc-rental-guide .mc-rental-guide-value { color: var(--heading); font-size: 28px; font-weight: 700; line-height: 1.3; letter-spacing: -.6px; margin-top: 12px; overflow-wrap: anywhere; }
+.mc-rental-guide-value span { display: block; margin-top: 4px; font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.mc-rental-guide-bank { border-left: 1px solid var(--border); padding-left: 24px; }
+.mc-rental-guide a,.mc-rental-result a { display: inline-block; color: var(--accent); font-size: 11px; font-weight: 600; margin-top: 10px; }
+.mc-rental-result { margin-top: 22px; padding: 17px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); min-width: 0; }
+.mc-rental-result h4 { color: var(--heading); font-size: 15px; line-height: 1.5; margin-top: 7px; }
+.mc-rental-result > p:not(.mc-eyebrow) { color: var(--muted); font-size: 11px; line-height: 1.7; margin-top: 10px; overflow-wrap: anywhere; }
+.mc-rental-result-metrics { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; padding-block: 15px 12px; margin-top: 3px !important; border-bottom: 1px solid var(--border); }
+.mc-rental-result-metrics dt { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.mc-rental-result-metrics dd { color: var(--heading); font-size: 19px; font-weight: 700; line-height: 1.4; margin: 5px 0 0; overflow-wrap: anywhere; }
+.mc-rental-result .mc-rental-benchmark-rate { color: var(--text); }
+.mc-rental-result .mc-rental-verdict { padding: 10px 11px; border-left: 2px solid var(--accent); border-radius: 5px; background: var(--surface2); color: var(--text); }
+.mc-rental-result .mc-rental-verdict-positive { color: var(--accent); font-weight: 650; }
+.mc-rental-guide .mc-rental-coverage,.mc-rental-result .mc-rental-coverage { color: var(--text); }
 .mc-calculator-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(300px,.94fr); align-items: start; gap: 24px; }
 .mc-form { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 17px; padding: 24px; }
 .mc-form-header { margin-bottom: 23px; }
@@ -220,6 +244,8 @@
   .mc-selection-note { font-size: 11px; flex-direction: column; gap: 5px; margin-top: 13px !important; }
   .mc-market-grid,.mc-calculator-layout,.mc-method { grid-template-columns: minmax(0,1fr); }
   .mc-offer-selector { grid-template-columns: minmax(0,1fr); gap: 12px; padding: 18px; }
+  .mc-rental-guide { grid-template-columns: minmax(0,1fr); padding: 18px; gap: 18px; }
+  .mc-rental-guide-bank { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 18px; }
   .mc-market-card { padding: 22px; }
   .mc-stat-value { font-size: 32px; }
   .mc-reasons li { font-size: 13px; }
@@ -239,6 +265,8 @@
   .mc-field label { font-size: 11px; }
   .mc-field input { font-size: 13px; padding-left: 10px; }
   .mc-stat-facts { column-gap: 10px; }
+  .mc-rental-guide .mc-rental-guide-value { font-size: 25px; }
+  .mc-rental-result-metrics { grid-template-columns: minmax(0,1fr); gap: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .mc-balance-bar span { transition: none; }

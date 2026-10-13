@@ -77,6 +77,8 @@ def _offer(key: str, name: str, program: str, nominal: float, effective: float,
            savings: bool, capitalization: str, early: str, url: str,
            checked_at: datetime, terms_hash: str, source_hash: str, term: int = 12,
            warnings: list[str] | None = None) -> dict:
+    if isinstance(term, bool) or not isinstance(term, int) or not 1 <= term <= 60:
+        raise ValueError("Срок вклада вне допустимого диапазона")
     if effective < nominal or not 0 <= nominal <= effective <= 30:
         raise ValueError("Номинальная ставка/ГЭСВ не согласованы")
     return {"id": program, "bank_key": key, "name": name, "currency": "KZT",
@@ -145,16 +147,29 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
     source_hash = hashlib.sha256(html.encode()).hexdigest()
     if url == FORTE:
         rows = _forte_rows(soup)
-        term_column = _row(rows, "Срок").index("12 месяцев")
-        nominal = _percent(_row(rows, "Номинальная")[term_column])
-        effective = _percent(_row(rows, "Эффективная")[term_column])
+        term_cells = _row(rows, "Срок")[1:]
+        term_matches = [re.fullmatch(r"(\d+)\s+месяц(?:а|ев)?", cell) for cell in term_cells]
+        if not all(term_matches):
+            raise ValueError("Неоднозначные сроки Forte")
+        term_months = [int(match[1]) for match in term_matches]
+        if len(set(term_months)) != len(term_months) or 12 not in term_months:
+            raise ValueError("Неоднозначные сроки Forte")
+        nominal_row = _row(rows, "Номинальная")[1:]
+        effective_row = _row(rows, "Эффективная")[1:]
+        if len(nominal_row) != len(term_months) or len(effective_row) != len(term_months):
+            raise ValueError("Сроки и ставки Forte не согласованы")
+        if _row(rows, "Валюта")[-1] != "KZT":
+            raise ValueError("Валюта Forte не подтверждена")
         terms = " ".join(" ".join(row) for row in rows)
         if not all(text in terms for text in ("100 000 ₸", "32 календарных", "0,1%", "не предусмотрено")):
             raise ValueError("Условия Forte требуют проверки")
-        return [_offer("forte", "Сберегательный без права пополнения", "forte-no-topup-12", nominal, effective,
+        offered = [_offer("forte", "Сберегательный без права пополнения", f"forte-no-topup-{term}",
+              _percent(nominal_row[index]), _percent(effective_row[index]),
               100_000, None, False, False, True, "ежемесячная", "Досрочно: 0,1% годовых, возврат не ранее 32 дней",
-              url, checked_at, _terms_hash(rows), source_hash,
-              warnings=["Максимальную сумму и тариф перевода денег на покупку уточните у банка."])]
+              url, checked_at, _terms_hash(rows), source_hash, term,
+              warnings=["Максимальную сумму и тариф перевода денег на покупку уточните у банка."])
+              for index, term in enumerate(term_months)]
+        return sorted(offered, key=lambda item: (item["term_months"] != 12, item["term_months"]))
     tables = soup.find_all("table")
     if not tables:
         raise ValueError("Таблица условий отсутствует")
@@ -166,17 +181,26 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
                 or _row(rows, "Пополнение")[1] != ("нет" if capital else "есть")
                 or _row(rows, "Частичное снятие")[1] != "нет"):
             raise ValueError("Условия сберегательного вклада Freedom изменены")
-        rates = []
+        rate_pairs = []
         for prefix in ("Номинальная ставка", "Годовая эффективная"):
-            matches = re.findall(r"(\d+(?:[.,]\d+)?)%\s*12\s*мес\.", _row(rows, prefix)[1])
-            if len(matches) != 1:
-                raise ValueError("Неоднозначная ставка Freedom на 12 месяцев")
-            rates.append(_percent(matches[0] + "%"))
-        return [_offer("freedom", "Капитал" if capital else "Стратегия", "freedom-" + ("capital" if capital else "strategy") + "-12",
-                rates[0], rates[1], minimum, None, not capital, False, True, "ежемесячная",
+            rate_text = _row(rows, prefix)[1]
+            pair_pattern = r"(\d+(?:[.,]\d+)?)%\s*(\d+)\s*мес\."
+            matches = re.findall(pair_pattern, rate_text)
+            if (not matches or re.sub(pair_pattern, "", rate_text).strip()
+                    or sum(term == "12" for _, term in matches) != 1):
+                raise ValueError("Неоднозначные ставки Freedom")
+            rate_pairs.append(matches)
+        if ([term for _, term in rate_pairs[0]] != [term for _, term in rate_pairs[1]]
+                or len({int(term) for _, term in rate_pairs[0]}) != len(rate_pairs[0])):
+            raise ValueError("Сроки и ставки Freedom не согласованы")
+        offered = [_offer("freedom", "Капитал" if capital else "Стратегия",
+                "freedom-" + ("capital" if capital else "strategy") + f"-{term}",
+                _percent(nominal + "%"), _percent(effective + "%"), minimum, None, not capital, False, True, "ежемесячная",
                 "Досрочно: возврат после 30 дней, проценты по ставке до востребования",
-                url, checked_at, _terms_hash(rows), source_hash,
-                warnings=["Сумма до 10% капитала банка; индивидуальный максимум и тарифы переводов уточните у банка."])]
+                url, checked_at, _terms_hash(rows), source_hash, int(term),
+                warnings=["Сумма до 10% капитала банка; индивидуальный максимум и тарифы переводов уточните у банка."])
+                for (nominal, term), (effective, _) in zip(*rate_pairs)]
+        return sorted(offered, key=lambda item: (item["term_months"] != 12, item["term_months"]))
     if url == FREEDOM:
         rows = _rows(tables[0])
         if _row(rows, "Валюта")[1] != "KZT" or _row(rows, "Минимальная сумма")[1] != "500 ₸":
@@ -236,13 +260,17 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
             raise ValueError("Нет таблицы Home Credit")
         rows = _rows(table)
         savings = url != HOME_SIMPLE
-        if savings:
-            term_column = _row(rows, "Срок депозита").index("12 месяцев")
-        else:
-            # This product puts the term row after currency/rate rows.
-            term_column = _row(rows, "Срок депозита").index("12 месяцев")
-        nominal = _percent(_row(rows, "Номинальная ставка")[term_column])
-        effective = _percent(_row(rows, "Годовая эффективная")[term_column])
+        term_cells = _row(rows, "Срок депозита")[1:]
+        term_matches = [re.fullmatch(r"(\d+)\s+месяц(?:а|ев)?", cell) for cell in term_cells]
+        if not all(term_matches):
+            raise ValueError("Неоднозначные сроки Home Credit")
+        term_months = [int(match[1]) for match in term_matches]
+        if len(set(term_months)) != len(term_months) or 12 not in term_months:
+            raise ValueError("Неоднозначные сроки Home Credit")
+        nominal_row = _row(rows, "Номинальная ставка")[1:]
+        effective_row = _row(rows, "Годовая эффективная")[1:]
+        if len(nominal_row) < len(term_months) or len(effective_row) < len(term_months):
+            raise ValueError("Сроки и ставки Home Credit не согласованы")
         minimum = 100_000 if url == HOME_SAVINGS else 1_000
         if _row(rows, "Минимальная сумма")[1] != f"{minimum:,}".replace(",", " ") + " ₸":
             raise ValueError("Минимум Home Credit изменился")
@@ -250,8 +278,37 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
             raise ValueError("Капитализация Home Credit изменена")
         top_up, withdraw = url != HOME_SAVINGS, url == HOME_SIMPLE
         name = {HOME_SIMPLE: "Простой", HOME_SAVINGS: "Сберегательный Хоум", HOME_PLUS: "Сберегательный Хоум+"}[url]
-        return [_offer("home_credit", name, "home-" + ("simple" if withdraw else "savings-plus" if top_up else "savings") + "-12",
-                nominal, effective, minimum, None, top_up, withdraw, savings, "ежедневная",
+        # Shared cells use colspan: Хоум has no maximum at 6/12 months,
+        # but a 100 million cap at 24 months. Preserve that distinction.
+        max_cells = None
+        max_rows = [row for row in table.find_all("tr")
+                    if row.find(["td", "th"]) is not None
+                    and _text(row.find(["td", "th"]).get_text(" ", strip=True)).startswith("Максимальная сумма")]
+        if len(max_rows) > 1:
+            raise ValueError("Неоднозначный максимум Home Credit")
+        if max_rows:
+            max_cells = []
+            for cell in max_rows[0].find_all(["td", "th"], recursive=False)[1:]:
+                span = str(cell.get("colspan", "1"))
+                if not span.isdigit() or not 1 <= int(span) <= 6:
+                    raise ValueError("Неоднозначный максимум Home Credit")
+                max_cells.extend([_text(cell.get_text(" ", strip=True))] * int(span))
+            if len(max_cells) == 1:
+                max_cells *= len(term_months)
+            if len(max_cells) < len(term_months):
+                raise ValueError("Не подтверждены максимумы Home Credit по срокам")
+        offered = []
+        for index, term in enumerate(term_months):
+            maximum = None
+            if max_cells is not None and max_cells[index] != "без ограничений":
+                amount = re.fullmatch(r"([\d ]+)\s*₸", max_cells[index])
+                if not amount:
+                    raise ValueError("Не подтверждён максимум Home Credit")
+                maximum = int(amount[1].replace(" ", ""))
+            offered.append(_offer("home_credit", name,
+                "home-" + ("simple" if withdraw else "savings-plus" if top_up else "savings") + f"-{term}",
+                _percent(nominal_row[index]), _percent(effective_row[index]), minimum, maximum, top_up, withdraw, savings, "ежедневная",
                 "Досрочно: деньги с вознаграждением в течение 24 часов" if withdraw else "Досрочно: без вознаграждения, возврат через 30 календарных дней",
-                url, checked_at, _terms_hash(rows), source_hash)]
+                url, checked_at, _terms_hash(rows), source_hash, term))
+        return sorted(offered, key=lambda item: (item["term_months"] != 12, item["term_months"]))
     raise ValueError("Неизвестный официальный источник")

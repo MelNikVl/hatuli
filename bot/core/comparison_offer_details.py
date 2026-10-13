@@ -11,9 +11,11 @@ import math
 from zoneinfo import ZoneInfo
 
 from bot.core.price_history_integrity import inspect_price_history
+from bot.core.apartment_selection_reasons import selection_facts, validate_selection_facts
+from bot.core.comparison_rental_estimate import validate_rental_estimate
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
-DETAIL_FIELDS = ("address", "address_note", "building", "section", "price_history")
+DETAIL_FIELDS = ("address", "address_note", "building", "section", "price_history", "selection_facts", "rental_estimate")
 MAX_EVENTS = 5_000
 
 
@@ -117,10 +119,12 @@ def build_offer_details(row, market, *, now):
                              else "Адрес из объявления; точный номер дома и корпус подтвердите у продавца.") if address else "Точный адрес не указан в источнике.",
             "building": _text(row.get("building"), 100) if primary else None,
             "section": _text(str(row["section"]) if row.get("section") is not None else None, 100) if primary else None,
-            "price_history": price_history(events, row["price"], now=now, baseline_unknown=primary)}
+            "price_history": price_history(events, row["price"], now=now, baseline_unknown=primary),
+            "selection_facts": selection_facts(row),
+            "rental_estimate": validate_rental_estimate(row.get("rental_estimate"), now)}
 
 
-def validate_offer_details(row, market, current_price, *, now):
+def validate_offer_details(row, market, current_price, *, now, area=None):
     """Public snapshot allowlist, including a nested event allowlist."""
     history = row.get("price_history")
     if not isinstance(history, dict) or history.get("baseline_unknown") is not (market == "primary"):
@@ -132,18 +136,35 @@ def validate_offer_details(row, market, current_price, *, now):
                              else "Адрес из объявления; точный номер дома и корпус подтвердите у продавца.") if address else "Точный адрес не указан в источнике.",
             "building": _text(row.get("building"), 100) if primary else None,
             "section": _text(row.get("section"), 100) if primary else None,
-            "price_history": price_history(history.get("events"), current_price, now=now, baseline_unknown=primary)}
+            "price_history": price_history(history.get("events"), current_price, now=now, baseline_unknown=primary),
+            "selection_facts": validate_selection_facts(row.get("selection_facts"), area if area is not None else row.get("area")),
+            "rental_estimate": validate_rental_estimate(row.get("rental_estimate"), now)}
 
 
-def details_for_selected_offer(details, displayed_price):
+def source_characteristics_changed(details, offer):
+    """Do not silently merge a verified card with changed source characteristics."""
+    if not details:
+        return False
+    area, displayed = details.get("area"), offer.get("area")
+    if area is not None and displayed is not None and abs(float(area)-float(displayed)) > .15:
+        return True
+    rooms, displayed_rooms = details.get("rooms"), offer.get("rooms")
+    return rooms is not None and displayed_rooms is not None and rooms != displayed_rooms
+
+
+def details_for_selected_offer(details, displayed_price, displayed_area=None, displayed_rooms=None):
     """Daily browser-verified price may differ from the later scanner snapshot."""
     if not details:
         return {"address": None, "address_note": "Точный адрес пока не получен из источника.",
                 "building": None, "section": None,
                 "price_history": {"status": "unavailable", "events": [], "changes_count": 0,
                                   "warning": "История цены пока не загружена.", "net_change": None,
-                                  "net_pct": None, "baseline_unknown": False}}
-    safe = {field: details[field] for field in DETAIL_FIELDS}
+                                  "net_pct": None, "baseline_unknown": False},
+                "selection_facts": dict.fromkeys(("ceiling_height", "kitchen_area", "finish_level", "is_owner")),
+                "rental_estimate": None}
+    safe = {field: details.get(field) for field in DETAIL_FIELDS}
+    if displayed_area is not None:
+        safe["selection_facts"] = selection_facts({**(safe.get("selection_facts") or {}), "area": displayed_area})
     history = details["price_history"]
     # The file was validated at load time; use its newest event as the date
     # bound so a historic snapshot stays readable without changing its facts.
@@ -154,4 +175,10 @@ def details_for_selected_offer(details, displayed_price):
         safe["price_history"].update(status="incomplete", net_change=None, net_pct=None)
         safe["price_history"]["warning"] = " ".join(filter(None, [safe["price_history"]["warning"],
             "Цена в подборке отличается от цены последнего обновления базы. Проверьте актуальную цену в источнике."]))
+    if source_characteristics_changed(details, {"area": displayed_area, "rooms": displayed_rooms}):
+        safe["selection_facts"] = selection_facts({})
+        safe["rental_estimate"] = None
+        safe["price_history"].update(status="incomplete", net_change=None, net_pct=None)
+        safe["price_history"]["warning"] = " ".join(filter(None, [safe["price_history"]["warning"],
+            "Характеристики объявления изменились после проверки подборки. Уточните квартиру в источнике."]))
     return safe

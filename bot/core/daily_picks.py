@@ -18,6 +18,12 @@ from statistics import median
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+from bot.core.apartment_selection_reasons import (
+    apartment_selection_reasons, selection_facts, strong_selection_reason,
+    validate_selection_facts,
+)
+from bot.core.comparison_offer_details import build_offer_details, price_history
+
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
 SCHEMA_VERSION = 2
 MAX_PICKS = 30
@@ -34,7 +40,7 @@ _DISTRICTS = {
     "Есильский р-н": "Есильский район", "Нура р-н": "Нура", "Алматы р-н": "Алматы",
     "Сарайшык р-н": "Сарайшык", "Сарыарка р-н": "Сарыарка", "р-н Байконур": "Байконур",
 }
-_ITEM_FIELDS = ("id", "rank", "source_url", "title", "rooms", "area", "floor", "floors_total", "complex_name", "district", "price", "currency", "price_per_m2", "photo_urls", "reasons", "cautions", "observed_at", "source_checked_at", "source_status", "price_comparison")
+_ITEM_FIELDS = ("id", "rank", "source_url", "title", "rooms", "area", "floor", "floors_total", "complex_name", "district", "price", "currency", "price_per_m2", "photo_urls", "reasons", "cautions", "observed_at", "source_checked_at", "source_status", "price_comparison", "selection_facts", "price_history")
 _COMPARISON_FIELDS = ("discount_pct", "reference_price_per_m2", "scope", "comparable_count")
 _COMPARISON_SCOPES = {"в том же доме", "в том же ЖК", "в радиусе 800 м по приблизительным координатам"}
 _NEARBY_SCOPE = "в радиусе 800 м по приблизительным координатам"
@@ -42,8 +48,8 @@ _NEARBY_CAUTION = "Аналоги в радиусе 800 м; координаты
 _SNAPSHOT_FIELDS = ("schema_version", "selection_date", "timezone", "generated_at", "source_observed_at", "total_candidates", "items", "methodology")
 METHODOLOGY = {
     "title": "Свежая цена и понятные основания",
-    "summary": "Сравниваем цену за м² минимум с пятью объявлениями: столько же комнат, площадь ±15%. Сначала ищем аналоги в том же ЖК или доме; если их мало — в радиусе 800 м по приблизительным координатам. Расстояние по прямой. Если отделка известна у обоих объектов, она должна совпадать. Сначала — цена ниже медианы; на равной цене предпочитаем сравнение в доме или ЖК, затем средние этажи, снижение цены и свежесть наблюдения.",
-    "exclusions": ["Только вторичная продажа; наличие каждого выбранного объявления и его цену проверяем на странице источника перед публикацией.", "Аналоги — объявления, наблюдавшиеся за последние 72 часа. Убираем известные дубли, подтверждённый архив, неполные характеристики, будущий год постройки, большой разброс цен аналогов и скидки более 30%.", "Публикуем до 30 вариантов с распознанными фотографиями интерьера. Премия к медиане допустима до 5% только на среднем этаже."],
+    "summary": "Сравниваем цену за м² минимум с пятью объявлениями: столько же комнат, площадь ±15%. Сначала ищем аналоги в том же ЖК или доме; если их мало — в радиусе 800 м по приблизительным координатам. Расстояние по прямой. Если отделка известна у обоих объектов, она должна совпадать. Сначала — цена ниже медианы. Для цены на уровне рынка нужны известные преимущества: высокие потолки, большая кухня, готовая отделка или недавнее снижение цены с непрерывной историей.",
+    "exclusions": ["Только вторичная продажа; наличие каждого выбранного объявления и его цену проверяем на странице источника перед публикацией.", "Аналоги — объявления, наблюдавшиеся за последние 72 часа. Убираем известные дубли, подтверждённый архив, неполные характеристики, будущий год постройки, большой разброс цен аналогов и скидки более 30%.", "Публикуем до 30 вариантов с распознанными фотографиями интерьера. Цена на уровне медианы или выше неё до 5% допустима только с дополнительным известным преимуществом; среднего этажа недостаточно."],
     "caveat": "Это цены объявлений, а не состоявшихся сделок. Сравнение использует недавние наблюдения аналогов; не каждый аналог проверяется повторно на источнике. Ремонт и условия продажи могут отличаться. После публикации объявление может измениться: наличие, итоговую цену, документы и долги уточните у продавца до задатка.",
 }
 
@@ -138,20 +144,6 @@ def _similar(a: dict, b: dict) -> bool:
     return not finish_a or not finish_b or finish_a == finish_b
 
 
-def _price_reasons(discount_pct: float, scope: str, comparable_count: int) -> list[str]:
-    """Short public copy; precise comparison scope stays in metadata."""
-    place = {"в том же доме": "в этом доме", "в том же ЖК": "в этом ЖК"}.get(scope, "рядом")
-    label = f"{abs(discount_pct):g}".replace(".", ",")
-    if discount_pct >= 1:
-        price_reason = f"Цена за м² на {label}% ниже медианы похожих предложений {place}."
-    elif discount_pct <= -1:
-        price_reason = f"Цена за м² на {label}% выше медианы похожих предложений {place}."
-    else:
-        price_reason = f"Цена за м² близка к медиане похожих предложений {place}."
-    word = "аналогов" if 11 <= comparable_count % 100 <= 14 else {1: "аналог", 2: "аналога", 3: "аналога", 4: "аналога"}.get(comparable_count % 10, "аналогов")
-    return [price_reason, f"{comparable_count} {word}: столько же комнат, площадь ±15%."]
-
-
 def _eligible(row: dict, now: datetime) -> bool:
     if not _ID.fullmatch(str(row.get("id", ""))) or not _valid_source(row) or row.get("is_active") is not True or row.get("is_duplicate") is True or row.get("dup_needs_review") is True or row.get("market_type") != "secondary":
         return False
@@ -214,20 +206,26 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
             continue
         discount = 1 - price / area / reference
         midfloor = 1 < floor < floors
-        # A slight premium has no sufficient reason unless a middle floor is known.
-        if not -MAX_PREMIUM <= discount <= MAX_DISCOUNT or (discount < .01 and not midfloor):
+        if not -MAX_PREMIUM <= discount <= MAX_DISCOUNT:
             continue
         percent = round(discount * 100, 1)
         scope = ("в том же доме" if local_group[0] == "house" else "в том же ЖК") if local_group else _NEARBY_SCOPE
-        reasons = _price_reasons(percent, scope, len(peers))
+        comparison = {"discount_pct": percent, "reference_price_per_m2": round(reference), "scope": scope, "comparable_count": len(peers)}
+        facts = selection_facts(row)
+        try:
+            history = build_offer_details({"price": price, "area": area, "price_events": _list(row.get("price_events"))}, "secondary", now=now)["price_history"]
+        except (ValueError, TypeError, KeyError):
+            continue
+        evidence = {"price": price, "area": round(area, 1), "price_comparison": comparison,
+                    "selection_facts": facts, "price_history": history}
+        if discount < .01 and not strong_selection_reason(evidence, now):
+            continue
+        reasons = apartment_selection_reasons(evidence, now)
         cautions = []
-        first_price = _number(row.get("first_price_30d"))
-        latest_price = _number(row.get("latest_history_price"))
-        cut = 1 - price / first_price if first_price and latest_price == price and first_price > price else 0
-        if .02 <= cut <= .30:
-            reasons.append(f"За последние 30 дней заявленная цена снизилась на {round(cut * 100):d}%.")
-        elif midfloor:
-            reasons.append(f"Средний этаж: {int(floor)} из {int(floors)} — не первый и не последний.")
+        recent_history = [event for event in history["events"] if _utc(event["at"]) >= now-timedelta(days=90)]
+        first_price = recent_history[0]["old_price"] if recent_history else None
+        cut = (1 - price / first_price if history["status"] == "consistent" and first_price
+               and first_price > price and recent_history[-1]["direction"] == "down" else 0)
         if not midfloor:
             cautions.append("Первый этаж." if floor == 1 else "Последний этаж: уточните состояние крыши.")
         if row.get("is_owner") is False:
@@ -247,7 +245,7 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
             "floor": int(floor), "floors_total": int(floors), "complex_name": complex_name, "district": district,
             "price": price, "currency": "KZT", "price_per_m2": round(price / area), "photo_urls": photos,
             "reasons": reasons, "cautions": cautions, "observed_at": _utc(row["last_seen"]).isoformat(),
-            "price_comparison": {"discount_pct": percent, "reference_price_per_m2": round(reference), "scope": scope, "comparable_count": len(peers)},
+            "price_comparison": comparison, "selection_facts": facts, "price_history": history,
         }
         basis_priority = 2 if local_group and local_group[0] == "house" else 1 if local_group else 0
         ranked.append(((discount, basis_priority, midfloor, cut, _utc(row["last_seen"]).timestamp(), row["id"]), item))
@@ -292,7 +290,7 @@ def validate_snapshot(snapshot: dict) -> dict:
         photos = item.get("photo_urls")
         if not isinstance(photos, list) or not 1 <= len(photos) <= 3 or any(safe_photo_url(p) is None for p in photos):
             raise ValueError("Invalid public photo")
-        if not isinstance(item.get("reasons"), list) or not 2 <= len(item["reasons"]) <= 3 or any(not isinstance(reason, str) or len(reason) > 200 for reason in item["reasons"]):
+        if not isinstance(item.get("reasons"), list) or not 1 <= len(item["reasons"]) <= 4 or any(not isinstance(reason, str) or len(reason) > 200 for reason in item["reasons"]):
             raise ValueError("Invalid public reasons")
         if not isinstance(item.get("cautions"), list) or len(item["cautions"]) > 4 or any(not isinstance(caution, str) or len(caution) > 200 for caution in item["cautions"]):
             raise ValueError("Invalid public cautions")
@@ -322,9 +320,17 @@ def validate_snapshot(snapshot: dict) -> dict:
             raise ValueError("Asking price per square meter contradicts the listing")
         safe_item = {key: item.get(key) for key in _ITEM_FIELDS}
         safe_item["price_comparison"] = {key: comparison.get(key) for key in _COMPARISON_FIELDS}
+        safe_item["selection_facts"] = validate_selection_facts(item.get("selection_facts"), public_area)
+        raw_history = item.get("price_history")
+        if raw_history is not None:
+            if not isinstance(raw_history, dict) or raw_history.get("baseline_unknown") is not False:
+                raise ValueError("Invalid daily price history")
+            safe_item["price_history"] = price_history(raw_history.get("events"), asking_price, now=generated)
+        else:
+            safe_item["price_history"] = None
         # Refresh copy for already verified snapshots without reranking or
         # changing their source confirmations, observations, or publication date.
-        safe_item["reasons"] = _price_reasons(discount, scope, count) + item["reasons"][2:]
+        safe_item["reasons"] = apartment_selection_reasons(safe_item, generated)
         safe_item["cautions"] = [_NEARBY_CAUTION if text == "Координаты приблизительные; расположение нужно уточнить." else text for text in item["cautions"]]
         if scope == _NEARBY_SCOPE and _NEARBY_CAUTION not in safe_item["cautions"]:
             if len(safe_item["cautions"]) >= 4:
@@ -335,7 +341,7 @@ def validate_snapshot(snapshot: dict) -> dict:
     safe["items"] = safe_items
     if not isinstance(snapshot.get("methodology"), dict):
         raise ValueError("Invalid methodology shape")
-    safe["methodology"] = {key: snapshot["methodology"][key] for key in METHODOLOGY}
+    safe["methodology"] = dict(METHODOLOGY)
     return safe
 
 

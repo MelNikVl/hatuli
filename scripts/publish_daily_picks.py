@@ -39,18 +39,20 @@ WITH photos AS (
       AND p.photos @> jsonb_build_array(f.photo_url)
     GROUP BY f.listing_id
 ), history AS (
-    SELECT listing_id, (array_agg(old_price ORDER BY changed_at))[1] AS first_price_30d,
-           (array_agg(new_price ORDER BY changed_at DESC))[1] AS latest_history_price
+    SELECT listing_id, jsonb_agg(jsonb_build_object(
+        'old_price', old_price, 'new_price', new_price, 'changed_at', changed_at)
+        ORDER BY changed_at,id) AS price_events
     FROM price_history
-    WHERE changed_at BETWEEN $1::timestamptz - interval '30 days' AND $1
+    WHERE changed_at <= $1
     GROUP BY listing_id
 )
 SELECT a.id, a.url, a.price, a.area, a.rooms, a.floor, a.floors_total, a.district,
        a.year_built, a.is_owner, a.is_active, a.is_duplicate, a.dup_needs_review,
        a.market_type, a.last_seen, a.resolved_house_id, a.house_attribution,
-       a.complex_id, a.complex_resolution, a.lat, a.lon, a.finish_level, pl.property_id,
+       a.complex_id, a.complex_resolution, a.lat, a.lon, a.finish_level,
+       a.ceiling_height, a.kitchen_area, pl.property_id,
        c.name AS canonical_complex_name, c.year_built AS complex_year_built,
-       p.approved_photo_urls, h.first_price_30d, h.latest_history_price
+       p.approved_photo_urls, coalesce(h.price_events,'[]'::jsonb) AS price_events
 FROM apartment_listings a
 LEFT JOIN property_listings pl ON pl.listing_id = a.id
 LEFT JOIN complexes c ON c.id = a.complex_id

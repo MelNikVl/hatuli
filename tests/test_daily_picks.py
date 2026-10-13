@@ -19,7 +19,7 @@ def row(index=0, **changes):
                  area=60., rooms=2, floor=5, floors_total=12, district="Есильский р-н",
                  is_active=True, is_duplicate=False, dup_needs_review=False,
                  market_type="secondary", last_seen=NOW - timedelta(hours=2),
-                 year_built=2020, complex_id=1, complex_resolution="url",
+                 year_built=2020, ceiling_height=3, complex_id=1, complex_resolution="url",
                  canonical_complex_name="Тестовый ЖК", approved_photo_urls=[PHOTO])
     return {**value, **changes}
 
@@ -90,9 +90,9 @@ def test_nearby_fallback_exact_scope_and_rejects_distance_or_finish_mismatch():
     item = first(dp.build_daily_picks(sample, NOW))
     assert item["price_comparison"]["scope"] == "в радиусе 800 м по приблизительным координатам"
     assert item["price_comparison"]["comparable_count"] == 5
-    assert "медианы похожих предложений рядом" in item["reasons"][0]
+    assert "похожих предложений рядом" in item["reasons"][0]
     assert "800" not in " ".join(item["reasons"])
-    assert item["reasons"][1] == "5 аналогов: столько же комнат, площадь ±15%."
+    assert not any("аналогов" in reason or "±15%" in reason for reason in item["reasons"])
     assert any("800 м" in caution for caution in item["cautions"])
     assert any("приблизительные" in caution for caution in item["cautions"])
 
@@ -122,28 +122,63 @@ def test_extreme_discount_excluded_not_celebrated():
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
 
 
-def test_near_median_premium_requires_middle_floor():
+def test_near_median_premium_requires_strong_fact_not_middle_floor():
     sample = rows()
-    sample[0].update(price=31_000_000, floor=1)
+    sample[0].update(price=31_000_000, floor=1, ceiling_height=None)
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
     sample[0]["floor"] = 5
+    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
+    sample[0]["ceiling_height"] = 3
     result = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
-    assert "выше медианы" in result["reasons"][0]
+    assert "выше похожих предложений" in result["reasons"][0]
     assert result["price_comparison"]["discount_pct"] < 0
 
 
 def test_floor_caution_survives_price_cut_reason():
     sample = rows()
-    sample[0].update(floor=12, first_price_30d=27_000_000, latest_history_price=24_000_000)
+    sample[0].update(floor=12, price_events=[{"old_price": 27_000_000, "new_price": 24_000_000, "changed_at": NOW-timedelta(days=5)}])
     item = first(dp.build_daily_picks(sample, NOW))
-    assert "снизилась" in item["reasons"][2]
+    assert any("Снижение цены" in reason and "3 млн" in reason for reason in item["reasons"])
     assert "Последний этаж" in item["cautions"][0]
 
 
 def test_price_cut_not_reported_if_history_outdated():
     sample = rows()
-    sample[0].update(first_price_30d=27_000_000, latest_history_price=25_000_000)
-    assert not any("снизилась" in reason for reason in first(dp.build_daily_picks(sample, NOW))["reasons"])
+    sample[0].update(price_events=[{"old_price": 27_000_000, "new_price": 25_000_000, "changed_at": NOW-timedelta(days=5)}])
+    assert not any("Снижение цены" in reason for reason in first(dp.build_daily_picks(sample, NOW))["reasons"])
+
+
+def test_recorded_recent_price_reduction_qualifies_market_price_without_other_strong_facts():
+    sample = rows()
+    sample[0].update(price=30_000_000, ceiling_height=None,
+        price_events=[{"old_price": 32_000_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=7)}])
+    item = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
+    assert "на уровне" in item["reasons"][0]
+    assert any("2 млн" in reason for reason in item["reasons"])
+
+
+def test_duplicate_or_broken_history_is_not_a_reason_to_select_market_price():
+    sample = rows()
+    sample[0].update(price=30_000_000, ceiling_height=None, price_events=[
+        {"old_price": 32_000_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=7)},
+        {"old_price": 32_000_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=2)}])
+    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
+
+
+def test_legacy_snapshot_remains_visible_but_unsupported_reasons_are_removed():
+    data = confirmed(dp.build_daily_picks(rows(), NOW))
+    for item in data["items"]:
+        item.pop("selection_facts")
+        item.pop("price_history")
+        item["reasons"] = ["Цена за м² ниже рынка.", "7 аналогов: столько же комнат, площадь ±15%.", "Квартира срочно продаётся, коммуналка низкая."]
+    safe = dp.validate_snapshot(data)
+    assert len(safe["items"]) == len(data["items"])
+    assert safe["generated_at"] == data["generated_at"] and safe["selection_date"] == data["selection_date"]
+    for old, new in zip(data["items"], safe["items"]):
+        assert new["rank"] == old["rank"] and new["id"] == old["id"]
+        assert new["source_checked_at"] == old["source_checked_at"]
+        assert len(new["reasons"]) == 1
+        assert "срочно" not in new["reasons"][0] and "коммунал" not in new["reasons"][0]
 
 
 def test_personal_or_confidential_fields_not_projected():
@@ -229,7 +264,9 @@ def test_existing_verified_snapshot_copy_refresh_keeps_facts_and_source_dates():
     snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
     snapshot["items"][0]["reasons"][:2] = ["Цена за м² на 20% ниже медианы в том же ЖК.", "Сравнение с 7 объявлениями: столько же комнат, площадь ±15%."]
     item = dp.validate_snapshot(snapshot)["items"][0]
-    assert item["reasons"][:2] == ["Цена за м² на 20% ниже медианы похожих предложений в этом ЖК.", "7 аналогов: столько же комнат, площадь ±15%."]
+    assert "20% ниже похожих предложений в этом ЖК" in item["reasons"][0]
+    assert "6 млн" in item["reasons"][0]
+    assert not any("аналогов" in text or "±15%" in text for text in item["reasons"])
     assert item["price_comparison"] == snapshot["items"][0]["price_comparison"]
     assert item["source_checked_at"] == snapshot["items"][0]["source_checked_at"]
     assert item["rank"] == snapshot["items"][0]["rank"]

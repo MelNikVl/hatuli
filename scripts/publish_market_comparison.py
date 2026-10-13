@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 from bot.core.market_comparison import build_market_snapshot, publish_market_snapshot, snapshot_path
 from bot.core.daily_picks import load_daily_picks
+from bot.core.comparison_rental_estimate import RENTAL_COMPARISON_SQL, estimate_rental_offer
 
 PRIMARY_SQL = """
 SELECT u.id, coalesce(c.canonical_id,c.id) AS complex_id, canonical.name AS complex_name,
@@ -41,6 +42,7 @@ ORDER BY u.id
 SECONDARY_SQL = """
 SELECT a.id,a.url,a.market_type,a.price,a.area,a.rooms,a.floor,a.floors_total,
        a.year_built,a.finish_level,a.lat,a.lon,a.is_active,a.is_duplicate,a.dup_needs_review,a.last_seen,a.address,
+       a.ceiling_height,a.kitchen_area,a.is_owner,
        canonical.id AS complex_id,canonical.name AS complex_name,canonical.housing_class,
        p.property_id,EXISTS(SELECT 1 FROM unit_source_links l WHERE l.source='krisha' AND l.source_id=a.id) AS linked_primary_unit
 FROM apartment_listings a
@@ -57,9 +59,13 @@ ORDER BY a.id
 """
 
 COMPARISON_DETAILS_SQL = """
-SELECT id,market_type,price,address FROM apartment_listings
-WHERE id=ANY($1::text[]) AND market_type='secondary'
-ORDER BY id
+SELECT a.id,a.market_type,a.price,a.address,a.area,a.rooms,a.finish_level,a.ceiling_height,a.kitchen_area,a.is_owner,
+       canonical.id AS complex_id
+FROM apartment_listings a
+LEFT JOIN complexes c ON c.id=a.complex_id
+LEFT JOIN complexes canonical ON canonical.id=coalesce(c.canonical_id,c.id)
+WHERE a.id=ANY($1::text[]) AND a.market_type='secondary'
+ORDER BY a.id
 """
 PRIMARY_HISTORY_SQL = """
 SELECT unit_id,price,changed_at FROM newbuild_unit_price_history
@@ -102,19 +108,24 @@ async def read_market_rows(dsn: str, now: datetime) -> tuple[list[dict], list[di
             primary_history = await connection.fetch(PRIMARY_HISTORY_SQL, [row["id"] for row in primary], now)
             secondary_history = await connection.fetch(SECONDARY_HISTORY_SQL,
                 sorted({row["id"] for row in secondary + details}), now)
+            rentals = [dict(row) for row in await connection.fetch(RENTAL_COMPARISON_SQL, now)]
             histories = {}
             for row in primary_history:
                 histories.setdefault(row["unit_id"], []).append(dict(row))
             for row in primary:
                 row["price_events"] = histories.get(row["id"], [])
+                row["market_type"] = "primary"
+                # Unknown/unfinished homes do not receive a ready rental estimate.
+                row["rental_estimate"] = estimate_rental_offer({**row, "build_status": "commissioned" if row.get("build_status") == "Сдан в эксплуатацию" else "unknown"}, rentals, now)
             histories = {}
             for row in secondary_history:
                 histories.setdefault(row["listing_id"], []).append(dict(row))
             for row in secondary:
                 row["price_events"] = histories.get(row["id"], [])
+                row["rental_estimate"] = estimate_rental_offer(row, rentals, now)
             for row in details:
                 row.update(comparison_only=True, public_comparison_listing=True,
-                           price_events=histories.get(row["id"], []))
+                           price_events=histories.get(row["id"], []), rental_estimate=estimate_rental_offer(row, rentals, now))
             secondary.extend(details)
             coverage = dict(await connection.fetchrow(COVERAGE_SQL, now))
             configured_edge = await connection.fetchval("SELECT value FROM app_settings WHERE key='HEX_EDGE_M'")
