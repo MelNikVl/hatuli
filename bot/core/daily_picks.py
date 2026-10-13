@@ -148,7 +148,8 @@ def _price_reasons(discount_pct: float, scope: str, comparable_count: int) -> li
         price_reason = f"Цена за м² на {label}% выше медианы похожих предложений {place}."
     else:
         price_reason = f"Цена за м² близка к медиане похожих предложений {place}."
-    return [price_reason, f"{comparable_count} аналогов: столько же комнат, площадь ±15%."]
+    word = "аналогов" if 11 <= comparable_count % 100 <= 14 else {1: "аналог", 2: "аналога", 3: "аналога", 4: "аналога"}.get(comparable_count % 10, "аналогов")
+    return [price_reason, f"{comparable_count} {word}: столько же комнат, площадь ±15%."]
 
 
 def _eligible(row: dict, now: datetime) -> bool:
