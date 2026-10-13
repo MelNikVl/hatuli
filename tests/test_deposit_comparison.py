@@ -105,6 +105,7 @@ def test_invalid_user_inputs_rejected(field, value):
     {"source_url": "https://user@bankffin.kz/foo"}, {"source_url": "https://bankffin.kz:443/foo"},
     {"guarantee_limit": 30_000_000},
     {"effective_pct": 12}, {"deposit_type": "other"}, {"deposit_type": None},
+    {"max_amount": "100000000"}, {"min_amount": "100000"}, {"nominal_pct": "15.7"},
 ])
 def test_uncertain_program_never_calculated(changes):
     bad = offer(**changes)

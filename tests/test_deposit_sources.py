@@ -129,6 +129,11 @@ def test_program_discovery_ignores_foreign_business_and_unsafe_urls():
     assert discover_programs("https://home.kz/deposits", html) == ["https://home.kz/deposits/new"]
 
 
+def test_forte_discovery_sees_new_unknown_program_route_in_deposit_card():
+    html = '<div><h3>Новый депозит</h3><a href="/ru/new-program">Подробнее</a></div>'
+    assert discover_programs("https://bank.forte.kz/ru/deposits", html) == ["https://bank.forte.kz/ru/new-program"]
+
+
 def test_atomic_runtime_file_can_be_loaded_and_previous_remains_on_serialization_error(tmp_path):
     path = tmp_path / "catalog.json"
     data = build_catalog({}, fetched_freedom(), NOW)

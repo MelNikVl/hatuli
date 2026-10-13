@@ -41,8 +41,15 @@ def discover_programs(url: str, html: str) -> list[str]:
         path = parts.path.rstrip("/")
         if host == "bankffin.kz" and path.startswith("/ru/deposits/physical/"):
             result.add(target)
-        elif host == "bank.forte.kz" and path in ("/ru/so-snyatiem", "/ru/sberegatelnyi", "/ru/sber_noadd"):
-            result.add(target)
+        elif host == "bank.forte.kz":
+            nearby_text = link.get_text(" ", strip=True).lower()
+            for container in (link.parent, link.parent.parent):
+                if container is not None:
+                    nearby_text += " " + " ".join(heading.get_text(" ", strip=True).lower()
+                                                  for heading in container.find_all(["h2", "h3"]))
+            if path != "/ru/deposits" and (path in ("/ru/so-snyatiem", "/ru/sberegatelnyi", "/ru/sber_noadd")
+                    or any(word in nearby_text for word in ("депозит", "сберегательный вклад"))):
+                result.add(target)
         elif host in ("berekebank.kz", "home.kz") and "/deposits/" in path:
             result.add(target)
     return sorted(result)

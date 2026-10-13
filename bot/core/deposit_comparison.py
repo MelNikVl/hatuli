@@ -110,6 +110,8 @@ def _eligibility(offer: dict, now: datetime, capital: float | None = None) -> st
         minimum = _number(offer.get("min_amount"), "Минимум вклада", 0, 10_000_000_000)
         maximum = offer.get("max_amount")
         if maximum is not None:
+            if _display_number(maximum) is None:
+                return "Максимальная сумма источника не прошла проверку"
             maximum = _number(maximum, "Максимум вклада", minimum, 100_000_000_000)
         cap = _number(offer.get("guarantee_limit"), "Гарантия", 0, 20_000_000)
         if cap not in (10_000_000, 20_000_000):
