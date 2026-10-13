@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from bot.admin_web import create_admin_app
-from bot.core.daily_picks import LOCAL_TIMEZONE, validate_snapshot
+from bot.core.daily_picks import LOCAL_TIMEZONE, SCHEMA_VERSION, validate_snapshot
 from bot.core.daily_picks_display import prepare_daily_picks
 
 
@@ -36,12 +36,13 @@ def snapshot(now):
             "photo_urls": ["https://krisha-photos.kcdn.online/webp/10/01234567-89ab-cdef-0123-456789abcdef/1-full.webp"],
             "reasons": ["Цена за м² ниже медианы аналогов.", "Средний этаж: 4 из 12."],
             "cautions": [], "observed_at": now.isoformat(),
+            "source_status": "active", "source_checked_at": now.isoformat(),
             "price_comparison": {"discount_pct": 2.9, "reference_price_per_m2": 700_000, "scope": "в том же ЖК", "comparable_count": 8},
             "seller_phone": "PRIVATE-PHONE", "private_note": "PRIVATE-NOTE",
         })
     from bot.core.daily_picks import METHODOLOGY
     return validate_snapshot({
-        "schema_version": 1, "timezone": "Asia/Almaty",
+        "schema_version": SCHEMA_VERSION, "timezone": "Asia/Almaty",
         "selection_date": now.astimezone(LOCAL_TIMEZONE).date().isoformat(),
         "generated_at": now.isoformat(), "source_observed_at": now.isoformat(),
         "total_candidates": 70, "items": items, "methodology": dict(METHODOLOGY),
