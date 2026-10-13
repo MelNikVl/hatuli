@@ -122,22 +122,71 @@ async def test_apply_locked_fields_receipt_written_before_commit(tmp_path, monke
     events = []
     def writer(path, report):
         if "transaction_status" in report:
-            events.append((report["transaction_status"], connection.in_transaction, connection.committed))
+            events.append((report["transaction_status"], connection.in_transaction,
+                           connection.committed, report.get("source_checks_status")))
         original_writer(path, report)
     monkeypatch.setattr(module, "atomic_json", writer)
     await module.run(args)
     assert connection.transaction_kwargs == {"isolation": "repeatable_read", "readonly": False}
     assert any("FOR UPDATE" in query for query, _ in connection.calls)
-    assert events == [("prepared", True, False), ("committed", False, True)]
+    assert events == [("prepared", True, False, None),
+                      ("committed", False, True, None),
+                      ("committed", False, True, "published")]
     assert connection.rows[record["listing_id"]]["price"] == record["before"]["price"]
     assert connection.rows[record["listing_id"]]["last_seen"] == module.timestamp(record["before"]["last_seen"])
     receipt = json.loads((tmp_path / "receipt.json").read_text())
     assert receipt["summary"] == {"applied": 1}
+    assert receipt["transaction_status"] == "committed"
+    assert receipt["source_checks_status"] == "published" and receipt["source_checks_records"] == 1
     assert set(receipt["rows"][0]["after"]) == set(module.FIELDS)
     checks = json.loads((tmp_path / "checks.json").read_text())
     assert checks["records"][0]["checked_at"] == record["checked_at"]
     assert "last_seen" not in checks["records"][0]
     assert connection.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["malformed_existing_cache", "source_disk_failure"])
+async def test_post_commit_source_publisher_failure_records_partial_status_without_claiming_database_rollback(tmp_path, monkeypatch, failure):
+    args, record, connection = prepare(tmp_path, monkeypatch, apply=True)
+    path = tmp_path / "checks.json"
+    if failure == "malformed_existing_cache":
+        path.write_text("{invalid existing source cache", encoding="utf8")
+        expected_exception = ValueError
+        expected_message = "malformed"
+    else:
+        old = {key: record[key] for key in ("listing_id", "source_listing_id", "url", "checked_at",
+            "source_active", "source_price", "source_rooms", "source_area")}
+        old["checked_at"] = (module.timestamp(record["checked_at"]) - timedelta(hours=1)).isoformat()
+        path.write_text(json.dumps({"schema_version": 1, "records": [old]}), encoding="utf8")
+        expected_exception = OSError
+        expected_message = "source disk failure"
+    original_cache = path.read_bytes()
+    original_writer = module.atomic_json
+    events = []
+    def writer(target, report):
+        if failure == "source_disk_failure" and target == path:
+            raise OSError("simulated source disk failure")
+        if "transaction_status" in report:
+            events.append((report["transaction_status"], connection.in_transaction,
+                           connection.committed, report.get("source_checks_status")))
+        original_writer(target, report)
+    monkeypatch.setattr(module, "atomic_json", writer)
+    with pytest.raises(expected_exception, match=expected_message):
+        await module.run(args)
+    assert events == [("prepared", True, False, None),
+                      ("committed", False, True, None),
+                      ("committed", False, True, "not_published")]
+    assert connection.committed is True and connection.closed
+    assert connection.rows[record["listing_id"]]["photos"] == record["photos"]
+    assert connection.rows[record["listing_id"]]["price"] == record["before"]["price"]
+    assert connection.rows[record["listing_id"]]["last_seen"] == module.timestamp(record["before"]["last_seen"])
+    receipt = json.loads((tmp_path / "receipt.json").read_text())
+    assert receipt["transaction_status"] == "committed" and receipt["summary"] == {"applied": 1}
+    assert receipt["source_checks_status"] == "not_published" and expected_message in receipt["source_checks_error"]
+    assert receipt["mode"] == "apply" and "operation" not in receipt
+    assert path.read_bytes() == original_cache
+    assert not path.with_name(path.name + ".lock").exists()
 
 
 @pytest.mark.asyncio
