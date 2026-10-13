@@ -116,9 +116,13 @@ async def test_empty_sources_do_not_invent_rates_or_recommendations(app, monkeyp
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/compare")
     assert response.status_code == 200
-    assert "Свежие данные ещё не получены" in response.text
-    assert "Пока мало данных" in response.text
-    assert "подтверждённый вклад" in response.text
+    assert "Свежие данные ещё не получены" not in response.text
+    assert "Пока мало данных" not in response.text
+    assert "Для сравнения нужен подтверждённый вклад" not in response.text
+    assert 'class="mc-rental-guide' not in response.text
+    assert 'class="mc-bank-section"' not in response.text
+    assert 'id="mc-initial-calculation"' not in response.text
+    assert Forms(response.text).inputs["price"]["value"] == ""
     assert "Базовая цена первички ниже" not in response.text
     assert "16,87%" not in response.text
 
@@ -158,8 +162,9 @@ async def test_native_offer_selector_supports_developer_ids_and_manual_mode(app)
     assert Forms(primary.text).inputs["listing"]["value"] == "newbuild:2"
     assert Forms(primary.text).inputs["hex"]["value"] == "3:-2"
     assert Forms(manual.text).inputs["listing"]["value"] == ""
-    assert Forms(manual.text).inputs["price"]["value"] == "40000000"
-    assert "В поле цены — пример суммы" in manual.text
+    assert Forms(manual.text).inputs["price"]["value"] == ""
+    assert "В поле цены — пример суммы" not in manual.text
+    assert 'id="mc-initial-calculation"' not in manual.text
 
 
 @pytest.mark.asyncio

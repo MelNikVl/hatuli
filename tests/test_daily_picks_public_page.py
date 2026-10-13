@@ -128,6 +128,7 @@ async def test_daily_cards_show_source_address_and_native_graph_for_any_price_ch
     now = datetime.now(timezone.utc)
     edition = snapshot(now)
     selected = edition["items"][0]
+    selected["floor"] = None
     detail = {"id": selected["id"], "area": selected["area"], "rooms": selected["rooms"],
               "current_price": selected["price"]}
     detail.update(build_offer_details({"price": selected["price"], "address": "улица Сыганак, 12/1",
@@ -141,7 +142,15 @@ async def test_daily_cards_show_source_address_and_native_graph_for_any_price_ch
         response = await client.get("/best-apartments")
     assert response.status_code == 200
     assert "улица Сыганак, 12/1" in response.text
-    assert "Точный адрес не указан в источнике" in response.text
+    assert "Точный адрес не указан в источнике" not in response.text
+    assert response.text.count('class="picks-address"') == 1
+    assert response.text.count('aria-label="История цены предложения"') == 1
+    assert "Изменения цены пока не зафиксированы" not in response.text
+    assert "История изменений цены пока не загружена" not in response.text
+    assert "Этаж уточняйте у продавца" not in response.text
+    assert response.text.count('class="picks-floor"') == 29
+    assert "Цена и срок фактической продажи" not in response.text
+    assert "недостаточно подтверждённых сделок" not in response.text
     assert 'data-price-history-chart' in response.text
     assert 'data-direction="up"' in response.text and 'data-direction="down"' in response.text
     assert "Все изменения по датам" in response.text

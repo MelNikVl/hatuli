@@ -98,15 +98,16 @@
   }
   function eligibleBanks(calculation) {
     return (calculation.banks || []).filter(function (bank) {
-      return bank.eligible !== false && finite(bank.deposit_cash_after_rent);
+      return bank.eligible === true && finite(bank.deposit_cash_after_rent);
     });
   }
   function renderRentalBenchmark(calculation) {
     if (!calculation.assumptions || calculation.assumptions.mode !== 'rent_out' || !calculation.rental_benchmark) return null;
     var rental = calculation.rental_benchmark;
+    if (!finite(rental.net_cash_yield_pct) || !finite(rental.annual_net_cash)) return null;
     var benchmark = rental.benchmark;
     var panel = node('section', 'mc-rental-result');
-    panel.setAttribute('aria-label', 'Доходность аренды и максимальная ставка вклада');
+    panel.setAttribute('aria-label', 'Доход от аренды после расходов');
     panel.setAttribute('data-mc-rental-benchmark', '');
     panel.append(node('p', 'mc-eyebrow', 'Для сдачи · без роста цены'), node('h4', '', 'Доход от аренды после расходов'));
     var metrics = node('dl', 'mc-rental-result-metrics');
@@ -116,10 +117,9 @@
     cash.append(node('dt', '', 'Деньги после расходов'), node('dd', '', money(rental.annual_net_cash)));
     metrics.append(cashYield, cash);
     panel.append(metrics, node('p', '', 'После ремонта, расходов при покупке, расходов владельца и месяцев без арендатора. Рост цены квартиры сюда не входит.'));
-    if (!benchmark || !finite(benchmark.effective_pct)) {
-      panel.append(node('p', 'mc-rental-verdict', 'Нет свежей подтверждённой ставки для вашей суммы. Сравнение арендной доходности пока недоступно.'));
-      return panel;
-    }
+    if (!benchmark || benchmark.coverage_complete !== true || !finite(benchmark.effective_pct) || benchmark.effective_pct <= 0
+        || !benchmark.bank || !benchmark.product || !finite(benchmark.term_months) || benchmark.term_months <= 0
+        || typeof benchmark.source_url !== 'string' || !/^https:\/\//.test(benchmark.source_url)) return panel;
     var rateLabel = node('p', 'mc-rental-benchmark-rate');
     rateLabel.append(node('strong', '', rate(benchmark.effective_pct) + ' ГЭСВ'),
       document.createTextNode(' · ' + String(benchmark.bank || '') + ' · ' + String(benchmark.product || '') + ' · срок ' + String(benchmark.term_months) + ' мес.'));
@@ -133,9 +133,6 @@
       panel.append(threshold);
     } else {
       panel.append(node('p', 'mc-rental-verdict', 'В первом году нет месяцев для сдачи. Проверьте срок готовности квартиры и простой.'));
-    }
-    if (benchmark.coverage_complete !== true) {
-      panel.append(node('p', 'mc-rental-coverage', 'Подтверждены программы ' + String(benchmark.verified_bank_count || 0) + ' из 4 банков. Пока данные неполны, преимущество над самым доходным вкладом не подтверждаем.'));
     }
     if (typeof benchmark.comparison_note === 'string') panel.append(node('p', 'mc-rental-note', benchmark.comparison_note));
     panel.append(node('p', 'mc-rental-note', 'Максимум среди отслеживаемых программ Freedom, Forte, Bereke и Home Credit. Сравнение капитала через год показано выше.'));
@@ -159,14 +156,14 @@
     capital.append(node('dt', '', 'Одинаковая стартовая сумма'), node('dd', '', money(calculation.initial_capital)));
     var fragment = document.createDocumentFragment();
     fragment.append(capital, node('p', 'mc-eyebrow', 'Через 12 месяцев · ваш сценарий'), node('h3', '', 'Сколько останется после расходов'));
-    fragment.append(node('p', 'mc-result-intro', 'Стоимость квартиры показана с учётом ваших расходов и ' + (renting ? 'арендного дохода' : 'аренды до готовности') + '. Вклад — после ' + (renting ? '12 месяцев.' : 'аренды жилья на время ожидания.')));
+    fragment.append(node('p', 'mc-result-intro', 'Стоимость квартиры показана с учётом ваших расходов и ' + (renting ? 'арендного дохода' : 'аренды до готовности') + '.' + (banks.length ? ' Вклад — после ' + (renting ? '12 месяцев.' : 'аренды жилья на время ожидания.') : '')));
     fragment.append(balanceRow('Квартира', calculation.property.wealth, 'Стоимость жилья' + (renting ? ' + доход от аренды' : '') + ' − расходы', 'property'));
     banks.forEach(function (bank) {
       fragment.append(balanceRow(bank.bank + ' · вклад', bank.deposit_cash_after_rent,
         (renting ? 'Через 12 месяцев' : 'После аренды на время ожидания') + ' · ' + bank.product, 'bank'));
     });
-    var verdict = node('div', 'mc-scenario-verdict');
-    if (banks.length) {
+    if (banks.length === 4) {
+      var verdict = node('div', 'mc-scenario-verdict');
       var strongest = banks.slice().sort(function (a, b) { return b.deposit_cash_after_rent - a.deposit_cash_after_rent; })[0];
       var difference = calculation.property.wealth - strongest.deposit_cash_after_rent;
       verdict.append(node('strong', '', difference === 0 ? 'Квартира и самый доходный подходящий вклад на 12 месяцев равны в этом сценарии.'
@@ -176,10 +173,8 @@
       if (finite(strongest.break_even_growth_pct)) explanation += ' Для равного результата квартире нужен рост цены ' + percent(strongest.break_even_growth_pct) + ' за год.';
       explanation += ' Измените рост, ремонт или аренду и проверьте другой сценарий.';
       verdict.append(node('p', '', explanation));
-    } else {
-      verdict.append(node('strong', '', 'Для сравнения нужен подтверждённый вклад на 12 месяцев'), node('p', '', 'Нет свежей подходящей ставки или не подтверждены условия. Доходность на другой срок не переносим на год.'));
+      fragment.append(verdict);
     }
-    fragment.append(verdict);
     var rentalPanel = renderRentalBenchmark(calculation);
     if (rentalPanel) fragment.append(rentalPanel);
     if (calculation.warnings && calculation.warnings.length) {
@@ -191,6 +186,7 @@
       fragment.append(details);
     }
     result.replaceChildren(fragment);
+    result.hidden = false;
     updateBankCards(banks);
     resizeBars();
   }

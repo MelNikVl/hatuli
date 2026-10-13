@@ -38,9 +38,10 @@ def _public_offer(offer: dict) -> dict:
         "complex_name": offer.get("complex_name"), "rooms": offer["rooms"], "area": offer["area"],
         "price": offer["price"], "url": f"/listing/nb-{identifier.removeprefix('newbuild:')}" if primary else offer.get("url") or offer.get("source_url"),
         "href": "/compare?" + urlencode(params) + "#investment", "wait_months": wait,
-        "finish_label": offer.get("finish_label", "Отделку и состояние нужно уточнить"),
+        "finish_label": offer.get("finish_label") if offer.get("finish_level") else None,
         "observed_at": offer.get("observed_at"), "source_label": offer.get("source_label", "Krisha.kz"),
-        "observed_at_label": observed_label, "build_status_label": offer.get("build_status_label"),
+        "observed_at_label": observed_label,
+        "build_status_label": offer.get("build_status_label") if offer.get("build_status") in {"under_construction", "commissioned"} else None,
         "cautions": cautions,
         "reasons": apartment_selection_reasons(offer),
         **{field: offer.get(field) for field in DETAIL_FIELDS},
@@ -173,7 +174,7 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
         active = (not comparison.get("stale", True) if selected["market_type"] == "primary"
                   else bool(picks and not snapshot_status(picks)["is_stale"]))
         selected = {**selected, "price_forecast": forecast_for_offer(selected["id"], selected["price"], active=active)}
-    form = {"price": selected["price"] if selected else 40_000_000, "repair_cost": 0,
+    form = {"price": selected["price"] if selected else "", "repair_cost": 0,
             "buy_cost": 0, "monthly_rent": 0, "annual_owner_cost": 0, "vacancy_months": 0,
             "annual_growth_pct": 0, "wait_months": selected["wait_months"] if selected else 0,
             "sell_cost_pct": 0, "mode": "live", "listing": selected["id"] if selected else ""}
@@ -181,17 +182,18 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
     errors = []
     if (listing or unit) and selected is None:
         errors.append("Выбранное объявление отсутствует в свежем публичном снимке. Выберите другой вариант или укажите цену вручную.")
-    try:
-        calculation = compare_investment(form, catalog=catalog)
-    except ValueError as error:
-        calculation = None
-        errors.append(str(error))
+    calculation = None
+    if selected or overrides is not None:
+        try:
+            calculation = compare_investment(form, catalog=catalog)
+        except ValueError as error:
+            errors.append(str(error))
     return {"comparison": comparison, "deposits": public_deposit_catalog(catalog),
             "calculation": calculation, "form_values": form, "offer_choices": choices,
             "local_offer_choices": local_choices, "calculation_error": " ".join(errors),
             "selected_offer": selected, "errors": errors,
             "deposit_changes": _deposit_changes(catalog),
-            "manual_price_example": selected is None and overrides is None}
+            "manual_price_example": False}
 
 
 def register_public_comparison_routes(app, templates) -> None:

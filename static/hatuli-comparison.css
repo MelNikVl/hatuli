@@ -107,6 +107,7 @@
 .mc-offer-actions a:hover { text-decoration: underline; }
 .mc-offer-selector { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 16px; align-items: center; margin-bottom: 22px; border: 1px solid var(--border); border-radius: 13px; background: var(--surface); padding: 18px 21px; }
 .mc-rental-guide { display: grid; grid-template-columns: minmax(0,1.2fr) minmax(0,1fr); gap: 24px; margin-block: 20px 24px; padding: 22px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface2); }
+.mc-rental-guide-single { grid-template-columns: minmax(0,1fr); }
 .mc-rental-guide > div { min-width: 0; }
 .mc-rental-guide h3 { font-size: 19px; line-height: 1.4; margin-top: 7px; }
 .mc-rental-guide h4 { font-size: 13px; font-weight: 650; line-height: 1.55; margin-top: 9px; overflow-wrap: anywhere; }
