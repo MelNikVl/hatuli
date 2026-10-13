@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish 30 Hatuli apartments each morning
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 Asia/Almaty
+Persistent=true
+AccuracySec=1min
+Unit=hatuli-daily-picks.service
+
+[Install]
+WantedBy=timers.target
