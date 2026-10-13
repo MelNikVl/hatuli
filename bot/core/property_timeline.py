@@ -116,6 +116,7 @@ import re
 from datetime import datetime
 
 from bot.core.listing_activity import confirmed_relists
+from bot.core.price_history_integrity import inspect_price_history, valid_price
 
 
 # ── нормализация seller_name (та же формула, что property_linker.py's
@@ -226,26 +227,21 @@ def _observed_market_days(listings: list[dict], archive_history_by_listing: dict
 # ── унифицированная price trajectory (для initial/latest/min/max/pct) ───
 
 def _price_trajectory(listings: list[dict], price_history_by_listing: dict[str, list[dict]]) -> list[tuple[datetime, int]]:
-    """Один хронологический список (timestamp, price) точек по ВСЕЙ
-    property — НЕ raw snapshot'ы разных listing'ов вперемешку (задача,
-    явно предостерегает от этого для volatility, тот же принцип и здесь
-    для initial/latest/min/max): на listing начальная точка — старейшая
-    известная цена (первый price_history.old_price, если есть история
-    изменений; иначе текущая apartment_listings.price как единственное,
-    что вообще известно — честная оговорка, не выдуманная "историческая"
-    цена), дальше — каждое реальное изменение (price_history.new_price)."""
+    """Dated recorded values, without backdating a current price to first_seen.
+
+    The old price of an event is known only as the previous price at that
+    detected change. Values on either side of a gap remain separate evidence.
+    """
     points: list[tuple[datetime, int]] = []
     for listing in listings:
-        first_seen = listing.get("first_seen")
-        if first_seen is None:
-            continue
         history = price_history_by_listing.get(listing["listing_id"], [])
-        initial_price = history[0]["old_price"] if history else listing.get("price")
-        if initial_price is not None:
-            points.append((first_seen, initial_price))
         for h in history:
-            if h.get("changed_at") is not None and h.get("new_price") is not None:
-                points.append((h["changed_at"], h["new_price"]))
+            if h.get("changed_at") is not None:
+                for key in ("old_price", "new_price"):
+                    if valid_price(h.get(key)):
+                        points.append((h["changed_at"], h[key]))
+        if listing.get("last_seen") is not None and valid_price(listing.get("price")):
+            points.append((listing["last_seen"], listing["price"]))
     points.sort(key=lambda p: p[0])
     return points
 
@@ -268,12 +264,21 @@ def _compute_metrics(listings: list[dict], price_history_by_listing: dict[str, l
     seller_names.discard(None)
 
     trajectory = _price_trajectory(listings, price_history_by_listing)
+    price_integrity = {
+        l["listing_id"]: inspect_price_history(
+            price_history_by_listing.get(l["listing_id"], []), l.get("price"), l.get("last_seen"))
+        for l in listings
+    }
     initial_price = trajectory[0][1] if trajectory else None
     latest_price = trajectory[-1][1] if trajectory else None
     min_price = min(p for _, p in trajectory) if trajectory else None
     max_price = max(p for _, p in trajectory) if trajectory else None
+    # A difference between endpoints is not an observed trajectory if even
+    # one linked listing lacks a usable change log or has a broken chain.
+    continuous_price_history = bool(price_integrity) and all(
+        p["can_compute_net_change"] for p in price_integrity.values())
     total_price_change_pct = round((latest_price - initial_price) / initial_price * 100, 2) \
-        if initial_price else None
+        if initial_price and continuous_price_history else None
     price_change_count = sum(len(v) for v in price_history_by_listing.values())
 
     return {
@@ -289,6 +294,10 @@ def _compute_metrics(listings: list[dict], price_history_by_listing: dict[str, l
         "max_price": max_price,
         "total_price_change_pct": total_price_change_pct,
         "price_change_count": price_change_count,
+        "price_history_integrity": price_integrity,
+        "price_history_continuous": continuous_price_history,
+        "price_history_start_at": _iso(trajectory[0][0]) if trajectory else None,
+        "price_metrics_basis": "recorded_changes_and_current_listing_cache",
         "observed_market_days": _observed_market_days(listings, archive_history_by_listing),
     }
 
@@ -353,8 +362,9 @@ def _build_events(listings: list[dict], price_history_by_listing: dict[str, list
             "type": "listing_first_seen",
             "listing_id": listing["listing_id"],
             "before": None,
-            "after": {"price": listing.get("price"), "seller_name": listing.get("seller_name")},
-            "evidence": {"address": listing.get("address"), "complex_name": listing.get("complex_name")},
+            "after": {"price": None, "seller_name": listing.get("seller_name")},
+            "evidence": {"address": listing.get("address"), "complex_name": listing.get("complex_name"),
+                         "price_note": "Цена на дату первого появления не зафиксирована; текущая цена есть отдельно в listings."},
         })
         if i == 0:
             events.append({

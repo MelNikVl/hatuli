@@ -135,10 +135,12 @@ def price_history_lines(history: dict) -> list[str]:
         return ['История цены временно недоступна.']
     events = history.get('events') or []
     if not events:
-        return []
+        return [history['history_warning']] if history.get('history_warning') else []
     arrow = '📉' if events[-1]['new_price'] < events[-1]['old_price'] else '📈'
     lines = [arrow + ' ' + price_event_text(events[-1])]
-    if len(events) > 1:
+    if history.get('history_warning'):
+        lines.append(history['history_warning'])
+    if len(events) > 1 and history.get('net_change') is not None:
         net = history['net_change']
         signed = ('−' if net < 0 else '+') + exact_money(abs(net)) if net else 'без итогового изменения'
         lines.append(f"Всего изменений: {len(events)}; за записанную историю: {signed}.")
@@ -146,10 +148,13 @@ def price_history_lines(history: dict) -> list[str]:
 
 
 def render_history(result: dict, page: int) -> tuple[str, InlineKeyboardMarkup]:
-    events = list(reversed(result.get('price_history', {}).get('events', [])))
+    history = result.get('price_history', {})
+    events = list(reversed(history.get('events', [])))
     pages = max(1, (len(events) + 7) // 8)
     page = max(0, min(page, pages - 1))
     lines = [f'История цены · {page+1}/{pages}', 'Последние изменения сверху.']
+    if history.get('history_warning'):
+        lines.append(history['history_warning'])
     lines += [price_event_text(e) for e in events[page*8:(page+1)*8]]
     lid = str(result['listing']['id'])
     buttons = []

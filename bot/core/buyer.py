@@ -140,11 +140,19 @@ def risk_text(item: dict) -> str:
 
 
 def summarize_price_history(history: dict) -> dict:
+    from bot.core.price_history_integrity import inspect_price_history, valid_price
+
+    raw_events = history.get('events') or []
+    integrity = inspect_price_history(raw_events, history.get('current'), history.get('current_at'))
     events = [e for e in history.get('events', [])
-              if e.get('old_price') is not None and e.get('new_price') is not None
+              if valid_price(e.get('old_price')) and valid_price(e.get('new_price'))
               and e['old_price'] != e['new_price']]
     return {'available': history.get('available', True), 'events': events, 'changes': len(events),
-            'net_change': events[-1]['new_price'] - events[0]['old_price'] if events else None}
+            'net_change': (events[-1]['new_price'] - events[0]['old_price']
+                           if events and integrity['can_compute_net_change'] else None),
+            'integrity': integrity, 'integrity_status': integrity['status'],
+            'history_warning': integrity['message'],
+            'current': history.get('current'), 'current_at': history.get('current_at')}
 
 
 def price_summary(d: dict) -> dict:
@@ -450,7 +458,7 @@ async def _detail(lid: str, *, similar_limit: int = 0) -> dict:
     return detail
 
 
-async def analyze_for_buyer(listing_url_or_id: str, user_id: int | None = None) -> dict:
+async def analyze_for_buyer(listing_url_or_id: str, user_id: int | None = None, *, allow_import: bool = True) -> dict:
     value = str(listing_url_or_id).strip()
     url = extract_krisha_url(value)
     if not url and not re.fullmatch(r'\d{5,20}', value):
@@ -458,6 +466,8 @@ async def analyze_for_buyer(listing_url_or_id: str, user_id: int | None = None) 
     resolved = await resolve_listing(url or value)
     lid = resolved.data.get('listing_id')
     if not resolved.data.get('found'):
+        if not allow_import:
+            return {'found': False, 'message': 'Объявления пока нет в базе Hatuli. Можно запросить отдельный разбор по ссылке.'}
         if not lid or not await import_listing(lid):
             return {'found': False, 'message': 'Объявления нет в базе, а загрузить его не удалось. Возможно, оно снято или Krisha временно недоступна. Попробуйте позже. Работаем с продажей квартир в Астане.'}
     try:

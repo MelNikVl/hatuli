@@ -335,34 +335,42 @@ async def fetch_liquidity_forecast(listing_id: str) -> dict | None:
 
 
 async def build_price_history(listing_id: str) -> dict:
-    """История цены для карточки/попапа на карте (/admin/api/price-history).
-    Публичная (как и сама карта) — ничего чувствительного тут нет, тира
-    на входе нет и не было в исходном роуте."""
+    """Recorded asking-price changes; callers enforce their access policy."""
     from bot.db.pg import fetch as pg_fetch, fetchrow as pg_fetchrow
+    from bot.core.price_history_integrity import inspect_price_history
 
     rows = await pg_fetch("""
         SELECT old_price, new_price, changed_at
         FROM price_history
         WHERE listing_id = $1
-        ORDER BY changed_at ASC
+        ORDER BY changed_at ASC, id ASC
     """, listing_id)
     cur = await pg_fetchrow(
-        "SELECT price, first_seen FROM apartment_listings WHERE id = $1",
+        "SELECT price, first_seen, last_seen FROM apartment_listings WHERE id = $1",
         listing_id)
+    events = [{"at": r["changed_at"].strftime("%d.%m.%Y"),
+               "observed_at": r["changed_at"].isoformat(),
+               "old_price": r["old_price"], "new_price": r["new_price"]}
+              for r in rows]
+    integrity = inspect_price_history(events, cur["price"] if cur else None,
+                                      cur["last_seen"] if cur else None)
     points = []
-    # стартовая точка — цена при первом появлении в базе
-    if cur and cur["first_seen"]:
-        first_price = rows[0]["old_price"] if rows else cur["price"]
-        points.append({"at": cur["first_seen"].strftime("%d.%m.%Y"),
-                       "price": first_price})
-    for r in rows:
-        points.append({"at": r["changed_at"].strftime("%d.%m.%Y"),
-                       "price": r["new_price"]})
+    if integrity["can_compute_net_change"]:
+        # The previous price is known at the first detected change, not at
+        # first_seen. Neither a gap nor a cached current price is backfilled.
+        points.append({"at": events[0]["at"], "price": events[0]["old_price"],
+                       "basis": "previous_price_at_change"})
+        points.extend({"at": e["at"], "price": e["new_price"],
+                       "basis": "recorded_price_change"} for e in events)
     return {
         "points": points,
         "current": cur["price"] if cur else None,
+        "current_at": cur["last_seen"].isoformat() if cur and cur["last_seen"] else None,
         "changes": len(rows),
-        "events": [{"at": r["changed_at"].strftime("%d.%m.%Y"),
-                    "old_price": r["old_price"], "new_price": r["new_price"]}
-                   for r in rows],
+        "events": events,
+        "net_change": (events[-1]["new_price"] - events[0]["old_price"]
+                       if integrity["can_compute_net_change"] else None),
+        "integrity": integrity,
+        "integrity_status": integrity["status"],
+        "history_warning": integrity["message"],
     }

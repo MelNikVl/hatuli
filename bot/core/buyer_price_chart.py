@@ -5,7 +5,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 def render_price_chart(history: dict) -> bytes | None:
     events = history.get('events') or []
-    if not events:
+    from bot.core.price_history_integrity import inspect_price_history
+
+    integrity = inspect_price_history(events, history.get('current'), history.get('current_at'))
+    if (history.get('available') is False or not events or not integrity['can_compute_net_change']
+            or history.get('integrity_status') == 'incomplete'):
         return None
     values = [events[0]['old_price']] + [e['new_price'] for e in events]
     labels = ['До изменений'] + [str(e['at']) for e in events]
