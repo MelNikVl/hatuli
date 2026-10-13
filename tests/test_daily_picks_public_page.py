@@ -147,3 +147,30 @@ async def test_daily_cards_show_source_address_and_native_graph_for_any_price_ch
     assert "Все изменения по датам" in response.text
     assert "до 100 млн ₸" in response.text
     assert "33 000 000" in response.text and "35 000 000" in response.text and "34 000 000" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_ready_forecast", [False, True])
+async def test_daily_page_only_renders_a_forecast_for_an_offer_with_validated_numbers(monkeypatch, has_ready_forecast):
+    from tests.test_price_forecast_display import payload
+    now = datetime.now(timezone.utc)
+    edition = snapshot(now)
+    selected_id = edition["items"][0]["id"]
+    unavailable = {"as_of": now.isoformat(), "forecasts": [
+        {"status": "insufficient_history", "horizon_days": 7,
+         "reason": "NOT-FOR-BUYER: insufficient training history"}]}
+    monkeypatch.setattr("bot.admin_web.load_daily_picks", lambda: edition)
+    monkeypatch.setattr("bot.core.daily_picks_display.load_market_snapshot", lambda: {"offers": [], "listing_details": []})
+    monkeypatch.setattr("bot.core.daily_picks_display.forecast_for_offer",
+                        lambda identifier, *args, **kwargs: payload() if has_ready_forecast and identifier == selected_id else unavailable)
+    app = create_admin_app(NoPrivateDB(), "test-form-secret", "test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/best-apartments")
+    assert response.status_code == 200
+    assert Cards(response.text).cards == 30
+    assert response.text.count('aria-label="Оценка цены и прогноз"') == int(has_ready_forecast)
+    assert response.text.count("Что будет с ценой?") == int(has_ready_forecast)
+    assert "NOT-FOR-BUYER" not in response.text
+    assert "Пока недостаточно истории" not in response.text
+    if has_ready_forecast:
+        assert "31 500 000 ₸" in response.text and "Цена предложения через 7 дней" in response.text

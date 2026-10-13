@@ -1,39 +1,45 @@
 {# Public projection only. The backend owns all predictions and quality gates. #}
 {% macro pf_money(value) -%}{{ value|fmt_num }} ₸{%- endmacro %}
 {% macro pf_date(value) -%}{% if value %}{{ (value|string)[8:10] ~ '.' ~ (value|string)[5:7] ~ '.' ~ (value|string)[:4] }}{% endif %}{%- endmacro %}
-{% macro pf_unavailable(status) -%}{% if status == 'insufficient_history' %}Пока недостаточно истории{% elif status == 'missing_source_history' %}Не хватает подтверждённой истории{% elif status == 'missing_attribute_history' %}Не хватает истории характеристик{% elif status == 'insufficient_groups' %}Пока недостаточно независимых квартир{% elif status == 'insufficient_listing_history' %}Пока мало истории этой квартиры{% elif status == 'insufficient_analogs' %}Пока недостаточно похожих квартир{% elif status == 'quality_gate_failed' %}Точность пока недостаточна{% elif status == 'stale_model' %}Ждём свежий расчёт{% else %}Прогноз пока недоступен{% endif %}{%- endmacro %}
 {% set pf = price_forecast or {} %}
-{% set market = pf.market_now %}
+{% set market = pf.market_now or {} %}
 {% set forecasts = pf.forecasts or [] %}
-{% set ns = namespace(ready=[], missing=[]) %}
+{% set ns = namespace(ready=[], limitations=[]) %}
 {% for forecast in forecasts %}
-  {% set ready = forecast.status == 'ready' and forecast.estimate is number and forecast.low is number and forecast.high is number and forecast.low > 0 and forecast.low <= forecast.estimate <= forecast.high and forecast.horizon_days is number and forecast.horizon_days > 0 and forecast.historical_analog_count is number and forecast.historical_analog_count > 0 and forecast.validation and forecast.validation.sample_size is number and forecast.validation.sample_size > 0 and forecast.validation.mape_pct is number and forecast.validation.mape_pct >= 0 and forecast.target_date and (forecast.as_of or pf.as_of) %}
-  {% if ready %}{% set ns.ready = ns.ready + [forecast] %}{% else %}{% set ns.missing = ns.missing + [forecast] %}{% endif %}
+  {% set validation = forecast.validation or {} %}
+  {% set numeric = namespace(valid=true) %}
+  {% for value in [forecast.estimate, forecast.low, forecast.high, forecast.horizon_days, forecast.historical_analog_count, validation.sample_size, validation.mape_pct] %}
+    {% if value is not number or value is boolean or value - value != 0 %}{% set numeric.valid = false %}{% endif %}
+  {% endfor %}
+  {% set ready = forecast.status == 'ready' and numeric.valid and forecast.low > 0 and forecast.low <= forecast.estimate <= forecast.high and forecast.horizon_days > 0 and forecast.historical_analog_count > 0 and validation.sample_size > 0 and validation.mape_pct >= 0 and forecast.target_date and (forecast.as_of or pf.as_of) %}
+  {% if ready %}{% set ns.ready = ns.ready + [forecast] %}{% endif %}
 {% endfor %}
-<section class="hatuli-forecast{% if forecast_compact|default(false) %} hatuli-forecast--compact{% endif %}" aria-label="Оценка цены и прогноз" data-forecast-status="{% if ns.ready %}ready{% elif ns.missing and ns.missing[0].status != 'ready' %}{{ ns.missing[0].status }}{% else %}unavailable{% endif %}">
+{% if ns.ready %}
+{% set market_numeric = namespace(valid=true) %}
+{% for value in [market.estimate, market.low, market.high, market.analog_count] %}
+  {% if value is not number or value is boolean or value - value != 0 %}{% set market_numeric.valid = false %}{% endif %}
+{% endfor %}
+{% for limitation in pf.limitations or [] %}{% if limitation is string and limitation|trim %}{% set ns.limitations = ns.limitations + [limitation] %}{% endif %}{% endfor %}
+<section class="hatuli-forecast{% if forecast_compact|default(false) %} hatuli-forecast--compact{% endif %}" aria-label="Оценка цены и прогноз" data-forecast-status="ready">
   <div class="pf-heading"><h4>Что будет с ценой?</h4>{% if pf.as_of %}<time class="pf-date" datetime="{{ (pf.as_of|string)[:10] }}">Расчёт от {{ pf_date(pf.as_of) }}</time>{% endif %}</div>
   <dl class="pf-values">
-    {% if market %}
-    <div class="pf-value"><dt>Оценка рынка сегодня</dt><dd>{% if market.status == 'ready' and market.estimate is number and market.low is number and market.high is number and market.low > 0 and market.low <= market.estimate <= market.high and market.analog_count is number and market.analog_count > 0 %}<strong class="pf-amount">{{ pf_money(market.estimate) }}</strong><span class="pf-range">Расчётный диапазон: {{ pf_money(market.low) }} – {{ pf_money(market.high) }}</span><p class="pf-caption">Похожие предложения: {{ market.analog_count }}{% if market.basis %} · {{ market.basis }}{% endif %}</p>{% else %}<strong class="pf-unavailable">Пока недостаточно аналогов</strong>{% if market.reason %}<p class="pf-reason">{{ market.reason }}</p>{% endif %}{% endif %}</dd></div>
+    {% if market.status == 'ready' and market_numeric.valid and market.low > 0 and market.low <= market.estimate <= market.high and market.analog_count > 0 %}
+    <div class="pf-value"><dt>Оценка рынка сегодня</dt><dd><strong class="pf-amount">{{ pf_money(market.estimate) }}</strong><span class="pf-range">Расчётный диапазон: {{ pf_money(market.low) }} – {{ pf_money(market.high) }}</span><p class="pf-caption">Похожие предложения: {{ market.analog_count }}{% if market.basis %} · {{ market.basis }}{% endif %}</p></dd></div>
     {% endif %}
     {% for forecast in ns.ready %}
     <div class="pf-value"><dt>Цена предложения через {{ forecast.horizon_days }} дней</dt><dd><strong class="pf-amount">{{ pf_money(forecast.estimate) }}</strong><span class="pf-range">Расчётный диапазон: {{ pf_money(forecast.low) }} – {{ pf_money(forecast.high) }}</span><p class="pf-caption">К {{ pf_date(forecast.target_date) }} · похожих квартир в истории: {{ forecast.historical_analog_count }}</p></dd></div>
-    {% else %}
-    <div class="pf-value"><dt>Прогноз цены предложения</dt><dd><strong class="pf-unavailable">{{ pf_unavailable(ns.missing[0].status if ns.missing else 'unavailable') }}</strong>{% if ns.missing and ns.missing[0].reason %}<p class="pf-reason">{{ ns.missing[0].reason }}</p>{% endif %}</dd></div>
     {% endfor %}
   </dl>
-  {% if ns.ready and ns.missing %}<p class="pf-horizons">На {% for forecast in ns.missing %}{{ forecast.horizon_days }} дней{% if not loop.last %}, {% endif %}{% endfor %} надёжного прогноза пока нет.</p>{% endif %}
   <details class="pf-method"><summary>На чём основан расчёт</summary><div class="pf-method-body">
     {% if pf.methodology_label %}<p>{{ pf.methodology_label }}</p>{% endif %}
     {% for forecast in ns.ready %}
     <p>Горизонт {{ forecast.horizon_days }} дней: проверка на прошлых периодах, {{ forecast.validation.sample_size }} наблюдений. Средняя процентная ошибка: {{ forecast.validation.mape_pct|fmt_num(1)|replace(',0', '') }}%.</p>
-    {% if forecast.validation.baseline_mape_pct is number and forecast.validation.baseline_mape_pct >= 0 %}<p>Ошибка простого ориентира «цена не изменится»: {{ forecast.validation.baseline_mape_pct|fmt_num(1)|replace(',0', '') }}%.</p>{% endif %}
-    {% if forecast.validation.coverage_pct is number and 0 <= forecast.validation.coverage_pct <= 100 %}<p>В расчётный диапазон попали {{ forecast.validation.coverage_pct|fmt_num(1)|replace(',0', '') }}% наблюдений на проверке.</p>{% endif %}
+    {% if forecast.validation.baseline_mape_pct is number and forecast.validation.baseline_mape_pct is not boolean and forecast.validation.baseline_mape_pct - forecast.validation.baseline_mape_pct == 0 and forecast.validation.baseline_mape_pct >= 0 %}<p>Ошибка простого ориентира «цена не изменится»: {{ forecast.validation.baseline_mape_pct|fmt_num(1)|replace(',0', '') }}%.</p>{% endif %}
+    {% if forecast.validation.coverage_pct is number and forecast.validation.coverage_pct is not boolean and 0 <= forecast.validation.coverage_pct <= 100 %}<p>В расчётный диапазон попали {{ forecast.validation.coverage_pct|fmt_num(1)|replace(',0', '') }}% наблюдений на проверке.</p>{% endif %}
     {% endfor %}
-    {% if ns.ready %}<p>Прогноз относится к наблюдаемой цене объявления, если квартира останется в продаже. У снятого объявления цена сделки неизвестна.</p>{% endif %}
-    {% for forecast in ns.missing %}<p>На {{ forecast.horizon_days }} дней: {{ pf_unavailable(forecast.status)|lower }}.{% if forecast.reason %} {{ forecast.reason }}{% endif %}</p>{% endfor %}
-    {% if pf.limitations %}<ul>{% for limitation in pf.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>{% endif %}
-    {% if not forecasts %}<p>Для прогноза нужны похожие квартиры в прошлых периодах и проверка точности на последующих наблюдениях.</p>{% endif %}
+    <p>Прогноз относится к наблюдаемой цене объявления, если квартира останется в продаже. У снятого объявления цена сделки неизвестна.</p>
+    {% if ns.limitations %}<ul>{% for limitation in ns.limitations %}<li>{{ limitation }}</li>{% endfor %}</ul>{% endif %}
   </div></details>
   <p class="pf-footnote">Цены предложений. Это не цена сделки и не прогноз доходности за год.</p>
 </section>
+{% endif %}

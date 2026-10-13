@@ -11,7 +11,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/yield-heat.js?v=20261008"></script>
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261014">
-<script src="/static/hatuli-forecast.js?v=20261014"></script>
+<script src="/static/hatuli-forecast.js?v=20261014-ready-only"></script>
 <link rel="stylesheet" href="/static/hatuli-journey.css?v=20261013">
 <script src="/static/hatuli-journey.js?v=20261013-2"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
@@ -4864,29 +4864,22 @@ async function loadModalPriceHeat(kind) {
 // modalGoTo), источник фото — [планировка юнита, …фото ЖК], плюс описание
 // ЖК (complexes.description) и застройщик + кнопка "Связаться".
 function modalPriceForecastPlaceholder(kind) {
-  const modalClass = kind === 'secondary' ? ' hatuli-forecast--modal' : '';
-  return `<div data-modal-price-forecast="${kind}">
-<section class="hatuli-forecast${modalClass}" aria-label="Оценка цены и прогноз" data-forecast-status="unavailable">
-  <div class="pf-heading"><h4>Что будет с ценой?</h4></div>
-  <p class="pf-unavailable">Прогноз пока недоступен</p>
-  <p class="pf-reason">Для этой квартиры пока нет подтверждённого расчёта. Нужны похожие варианты в истории и проверка точности на следующих периодах.</p>
-  <p class="pf-footnote">Цены предложений. Это не цена сделки и не прогноз доходности за год.</p>
-</section></div>`;
+  return `<div data-modal-price-forecast="${kind}"${kind === 'primary' ? ' style="margin-top:16px;"' : ''} hidden></div>`;
 }
 
 function mountModalPriceForecast(content, payload) {
   const target = content.querySelector('[data-modal-price-forecast]');
-  if (!target || !window.HatuliPriceForecast) return;
-  const fallback = {forecasts: [7, 14, 30, 90, 365].map(horizon => ({
-    status: 'unavailable', horizon_days: horizon,
-    reason: 'Для этой квартиры пока нет подтверждённого расчёта.'
-  }))};
+  if (!target) return;
+  target.replaceChildren();
+  target.hidden = true;
+  if (!window.HatuliPriceForecast) return;
   try {
-    window.HatuliPriceForecast.mount(target, payload || fallback, {
+    window.HatuliPriceForecast.mount(target, payload, {
       modal: target.dataset.modalPriceForecast === 'secondary'
     });
   } catch (_) {
-    // An unavailable forecast must never prevent opening the apartment itself.
+    target.replaceChildren();
+    target.hidden = true;
   }
 }
 
@@ -4937,7 +4930,7 @@ function renderNewbuildDetail(unitId, content) {
       ${d.building ? `<span style="${pillStyle}">корпус ${escapeHtml(d.building)}</span>` : ''}
       ${d.section ? `<span style="${pillStyle}">подъезд ${escapeHtml(d.section)}</span>` : ''}
     </div>
-    <div style="margin-top:16px;">${modalPriceForecastPlaceholder('primary')}</div>
+    ${modalPriceForecastPlaceholder('primary')}
     <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
       <div style="font-weight:800;font-size:17px;"><a href="/complex/${d.complex_id}" style="color:inherit;text-decoration:none;">🏢 ЖК ${escapeHtml(d.complex_name || '')}</a></div>
       <div style="font-size:13px;color:var(--text);margin-top:4px;">
