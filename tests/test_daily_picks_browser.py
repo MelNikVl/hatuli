@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+import asyncio
 import json
 import sys
 import time
@@ -531,6 +532,43 @@ def test_main_manual_status_never_replaces_job_status(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "worker_lock", lock)
     monkeypatch.setattr(worker, "open_manual_browser", manual)
     assert worker.main(["--open-browser", "--headed", "--source-url", item()["source_url"]]) == 0
+    assert (root / "last-run.json").read_bytes() == b"blocked job"
+
+
+@pytest.mark.asyncio
+async def test_hung_manual_launch_is_cancelled_and_does_not_replace_job_status(tmp_path, monkeypatch):
+    root = tmp_path / "daily-picks-browser"
+    root.mkdir()
+    (root / "last-run.json").write_bytes(b"blocked job")
+    public = tmp_path / "daily-picks.json"
+    public.write_bytes(b"last verified snapshot")
+    runtime = {"started": False, "closed": False}
+    @contextmanager
+    def lock(path):
+        yield
+    @asynccontextmanager
+    async def hung_launch(profile, *, headless=True):
+        assert headless is False
+        runtime["started"] = True
+        try:
+            # Simulate a driver launch that never reaches its context return.
+            await asyncio.Future()
+            yield None
+        finally:
+            runtime["closed"] = True
+    async def reject_publish(*args):
+        raise AssertionError("A manual browser must never reach publication")
+    monkeypatch.setattr(worker.publisher, "snapshot_path", lambda: public)
+    monkeypatch.setattr(worker, "worker_lock", lock)
+    monkeypatch.setattr(worker, "ordinary_browser", hung_launch)
+    monkeypatch.setattr(worker.publisher, "generate", reject_publish)
+    result = await asyncio.to_thread(worker.main, ["--open-browser", "--source-url", item()["source_url"],
+                                                  "--budget-seconds", "1"])
+    assert result == 1 and runtime == {"started": True, "closed": True}
+    status = json.loads((tmp_path / "browser-picks" / "manual-status.json").read_text())
+    assert status["status"] == "failed" and status["error_type"] == "TimeoutError"
+    assert status["mode"] == "manual_browser" and status["published"] is False
+    assert public.read_bytes() == b"last verified snapshot"
     assert (root / "last-run.json").read_bytes() == b"blocked job"
 
 

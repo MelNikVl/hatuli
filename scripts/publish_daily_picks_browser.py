@@ -455,7 +455,11 @@ def main(argv: list[str] | None = None) -> int:
         with worker_lock(run_root):
             try:
                 if args.open_browser:
-                    status = asyncio.run(open_manual_browser(args, snapshot.parent / "browser-picks" / "manual-status.json"))
+                    # The deadline includes Chromium startup, which can hang
+                    # before launch_persistent_context returns on a desktop.
+                    status = asyncio.run(asyncio.wait_for(
+                        open_manual_browser(args, snapshot.parent / "browser-picks" / "manual-status.json"),
+                        timeout=args.budget_seconds))
                     print(json.dumps(status, ensure_ascii=False))
                     return 0
                 if not args.force and not args.dry_run and already_published(snapshot, utc_now()):
