@@ -2968,7 +2968,7 @@ function sparklineSVG(points, w, h) {
     return `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="8" fill="transparent" stroke="none" style="cursor:pointer;"><title>${p.at}: ${(p.price/1e6).toFixed(2)} млн ₸</title></circle>` +
            `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="4.5" fill="#2563eb" stroke="#fff" stroke-width="1.5" style="pointer-events:none;"/>`;
   }).join('');
-  return `<svg width="${w}" height="${h}" style="display:block;overflow:visible;">` +
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;max-width:100%;height:auto;overflow:visible;">` +
          `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">` +
          `<stop offset="0%" stop-color="#2563eb" stop-opacity="0.45"/>` +
          `<stop offset="100%" stop-color="#2563eb" stop-opacity="0.03"/></linearGradient></defs>` +
@@ -3279,7 +3279,7 @@ function loadListingExtras(id) {
       // вместе с ним убрали Смарт рейтинг/Deal Score из превью (просили
       // короче), поэтому объяснение теперь только на странице объявления.
       el.innerHTML = `<div>
-        <span style="color:#16a34a;font-weight:800;white-space:nowrap;">реальная цена ${targetM} млн ₸</span>
+        <span style="color:#16a34a;font-weight:800;white-space:nowrap;">ценовой ориентир ${targetM} млн ₸</span>
         <a href="javascript:void(0)" onclick="event.stopPropagation();openDetailModal('${id}', event, true)" style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#555;font-size:11.5px;font-weight:700;text-decoration:none;">почему?</a>
       </div>`;
     } else {
@@ -4959,7 +4959,7 @@ function openDetailModal(id, ev, scrollToScore) {
     const bargainHtml = (d.bargain && d.bargain.discount_pct > 0) ? `
 <div style="margin:14px 22px 0;">
   <div style="color:#16a34a;font-weight:800;font-size:19px;display:inline-block;">
-    ${d.bargain.target_price ? 'реальная цена ' + (d.bargain.target_price/1e6).toFixed(1) + ' млн ₸' : 'можно торговаться на ' + d.bargain.discount_pct + '%'}
+    ${d.bargain.target_price ? 'ценовой ориентир ' + (d.bargain.target_price/1e6).toFixed(1) + ' млн ₸' : 'можно торговаться на ' + d.bargain.discount_pct + '%'}
   </div>
   ${d.bargain.recommendation ? `<div style="font-size:13.5px;color:var(--text);margin-top:4px;">${escapeHtml(d.bargain.recommendation)}</div>` : ''}
 </div>` : '';
@@ -5312,7 +5312,7 @@ ${krishaSourceFooterHtml}
         el.textContent = 'Изменений цены пока не зафиксировано. Это не подтверждает неизменность цены с момента появления квартиры.';
         return;
       }
-      const phw = Math.max(180, (el.parentElement.clientWidth || 420) - 4);
+      const phw = Math.max(180, (el.clientWidth || 420) - 4);
       el.innerHTML = sparklineSVG(dh.points, phw, 160) + '<div style="font-size:12px;color:#aaa;margin-top:2px;">наведи на точку — точная дата</div>';
     }).catch(() => {});
   }).catch(() => {
