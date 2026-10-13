@@ -72,7 +72,7 @@ def project_rental_detail(row: dict, history: list, *, history_available=True, n
         status = "unknown"
     labels = {"confirmed_removed": "Объявление снято с публикации",
               "unconfirmed_inactive": "Неактивно в нашей базе; снятие источником не подтверждено",
-              "active_observed": "Замечено в последнем обходе списка",
+              "active_observed": "Замечено в списке за последние 72 часа",
               "unknown": "Актуальность требует проверки"}
     kind = row.get("prop_type") if row.get("prop_type") in ("apartment", "parking", "commercial") else "unknown"
     return {"id": identifier, "source_url": "https://krisha.kz/a/show/" + identifier,

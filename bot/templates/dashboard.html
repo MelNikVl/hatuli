@@ -5003,7 +5003,7 @@ function renderRentalDetailHtml(data) {
     <p style="font-size:26px;font-weight:800;margin:10px 0;">${money(data.price)}${Number.isFinite(data.price) && data.price > 0 && data.monthly_category ? '/мес' : ''}</p>
     <p>${escapeHtml(room)}${data.area ? ' · ' + data.area + ' м²' : ''}${data.floor ? ' · этаж ' + data.floor + (data.floors_total ? '/' + data.floors_total : '') : ''}</p>
     <p style="margin-top:10px;">Адрес из объявления: ${escapeHtml(data.address || 'не указан')}</p>
-    ${data.complex ? `<p>ЖК из объявления: ${escapeHtml(data.complex)}</p>` : ''}
+    ${data.complex ? `<p>ЖК: ${escapeHtml(data.complex)}</p>` : ''}
     <p style="margin:12px 0;color:var(--muted);">${escapeHtml(data.status_label || 'Актуальность требует проверки')} · ${escapeHtml(date(data.last_seen))}</p>
     <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">${escapeHtml(data.archive_note || 'Снятие объявления не подтверждает сдачу квартиры.')}</p>
     ${photos.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:8px;">${photos.map((photo,index) => `<img src="${escapeHtml(proxyImg(photo))}" alt="Фото аренды ${index+1}" loading="lazy" style="display:block;width:100%;aspect-ratio:4/3;object-fit:contain;background:var(--surface2);border-radius:8px;">`).join('')}</div>` : '<p style="color:var(--muted);">Фотографии ещё не сохранены.</p>'}
