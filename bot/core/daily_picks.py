@@ -135,6 +135,19 @@ def _similar(a: dict, b: dict) -> bool:
     return not finish_a or not finish_b or finish_a == finish_b
 
 
+def _price_reasons(discount_pct: float, scope: str, comparable_count: int) -> list[str]:
+    """Short public copy; precise comparison scope stays in metadata."""
+    place = {"в том же доме": "в этом доме", "в том же ЖК": "в этом ЖК"}.get(scope, "рядом")
+    label = f"{abs(discount_pct):g}".replace(".", ",")
+    if discount_pct >= 1:
+        price_reason = f"Цена за м² на {label}% ниже медианы похожих предложений {place}."
+    elif discount_pct <= -1:
+        price_reason = f"Цена за м² на {label}% выше медианы похожих предложений {place}."
+    else:
+        price_reason = f"Цена за м² близка к медиане похожих предложений {place}."
+    return [price_reason, f"{comparable_count} аналогов: столько же комнат, площадь ±15%."]
+
+
 def _eligible(row: dict, now: datetime) -> bool:
     if not _ID.fullmatch(str(row.get("id", ""))) or not _valid_source(row) or row.get("is_active") is not True or row.get("is_duplicate") is True or row.get("dup_needs_review") is True or row.get("market_type") != "secondary":
         return False
@@ -202,14 +215,7 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
             continue
         percent = round(discount * 100, 1)
         scope = ("в том же доме" if local_group[0] == "house" else "в том же ЖК") if local_group else "в радиусе 800 м по приблизительным координатам"
-        if percent >= 1:
-            label = f"{percent:g}".replace(".", ",")
-            reason = f"Цена за м² на {label}% ниже медианы {scope}."
-        elif percent <= -1:
-            reason = f"Цена за м² выше медианы {scope} на {abs(percent):g}% — в пределах 5%."
-        else:
-            reason = f"Цена за м² близка к медиане {scope}."
-        reasons = [reason, f"Сравнение с {len(peers)} объявлениями: столько же комнат, площадь ±15%."]
+        reasons = _price_reasons(percent, scope, len(peers))
         cautions = []
         first_price = _number(row.get("first_price_30d"))
         latest_price = _number(row.get("latest_history_price"))
@@ -227,7 +233,7 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
         elif not row.get("finish_level"):
             cautions.append("Состояние и ремонт уточните у продавца.")
         if local_group is None:
-            cautions.append("Координаты приблизительные; расположение нужно уточнить.")
+            cautions.append("Аналоги в радиусе 800 м; координаты приблизительные, расположение нужно уточнить.")
         district = _DISTRICTS.get(row.get("district"), "Астана")
         complex_name = str(row.get("canonical_complex_name") or "")[:100]
         # Only the canonical catalog label is allowed; raw listing complex_name is not.
@@ -291,6 +297,10 @@ def validate_snapshot(snapshot: dict) -> dict:
             raise ValueError("Invalid comparison")
         safe_item = {key: item.get(key) for key in _ITEM_FIELDS}
         safe_item["price_comparison"] = {key: comparison.get(key) for key in _COMPARISON_FIELDS}
+        # Refresh copy for already verified snapshots without reranking or
+        # changing their source confirmations, observations, or publication date.
+        safe_item["reasons"] = _price_reasons(comparison["discount_pct"], comparison["scope"], comparison["comparable_count"]) + item["reasons"][2:]
+        safe_item["cautions"] = ["Аналоги в радиусе 800 м; координаты приблизительные, расположение нужно уточнить." if text == "Координаты приблизительные; расположение нужно уточнить." else text for text in item["cautions"]]
         safe_items.append(safe_item)
     safe = {key: snapshot.get(key) for key in _SNAPSHOT_FIELDS}
     safe["items"] = safe_items

@@ -90,7 +90,10 @@ def test_nearby_fallback_exact_scope_and_rejects_distance_or_finish_mismatch():
     item = first(dp.build_daily_picks(sample, NOW))
     assert item["price_comparison"]["scope"] == "в радиусе 800 м по приблизительным координатам"
     assert item["price_comparison"]["comparable_count"] == 5
-    assert "в радиусе 800 м" in item["reasons"][0]
+    assert "медианы похожих предложений рядом" in item["reasons"][0]
+    assert "800" not in " ".join(item["reasons"])
+    assert item["reasons"][1] == "5 аналогов: столько же комнат, площадь ±15%."
+    assert any("800 м" in caution for caution in item["cautions"])
     assert any("приблизительные" in caution for caution in item["cautions"])
 
 
@@ -220,6 +223,16 @@ def test_stale_or_nonactive_source_confirmation_rejected():
     snapshot["items"][0].update(source_checked_at=NOW.isoformat(), source_status="archived")
     with pytest.raises(ValueError):
         dp.validate_snapshot(snapshot)
+
+
+def test_existing_verified_snapshot_copy_refresh_keeps_facts_and_source_dates():
+    snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
+    snapshot["items"][0]["reasons"][:2] = ["Цена за м² на 20% ниже медианы в том же ЖК.", "Сравнение с 7 объявлениями: столько же комнат, площадь ±15%."]
+    item = dp.validate_snapshot(snapshot)["items"][0]
+    assert item["reasons"][:2] == ["Цена за м² на 20% ниже медианы похожих предложений в этом ЖК.", "7 аналогов: столько же комнат, площадь ±15%."]
+    assert item["price_comparison"] == snapshot["items"][0]["price_comparison"]
+    assert item["source_checked_at"] == snapshot["items"][0]["source_checked_at"]
+    assert item["rank"] == snapshot["items"][0]["rank"]
 
 
 def test_local_selection_date_uses_almaty_not_utc():
