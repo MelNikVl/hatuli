@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Hatuli bank deposit changes every six hours
+
+[Timer]
+OnCalendar=*-*-* 02,08,14,20:10:00 Asia/Almaty
+Persistent=true
+AccuracySec=1min
+Unit=hatuli-deposit-monitor.service
+
+[Install]
+WantedBy=timers.target

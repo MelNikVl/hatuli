@@ -1910,6 +1910,7 @@ function newbuildComplexPopupHtml(p, photoIdx) {
       ${yearTxt ? `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${escapeHtml(yearTxt)}</span>` : ''}
     </div>
     <a href="/complex/${p.id}" style="display:inline-block;margin-top:9px;padding:6px 12px;border-radius:8px;background:#16a34a;color:#fff;font-size:12.5px;font-weight:700;text-decoration:none;">Подробнее про ЖК</a>
+    <a href="/compare?complex=${encodeURIComponent(p.id)}" style="display:block;margin-top:8px;color:var(--accent);font-size:12px;font-weight:650;text-decoration:none;">Сравнить первичку и вторичку рядом →</a>
   </div>
 </div>`;
 }

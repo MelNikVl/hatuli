@@ -22,6 +22,7 @@ from bot.core.admin_sessions import (
 from bot.core.public_buyer_example import load_public_example
 from bot.core.daily_picks import load_daily_picks
 from bot.core.daily_picks_display import prepare_daily_picks
+from bot.public_comparison_routes import register_public_comparison_routes
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _LOG_FILE = "web.log"
@@ -39,6 +40,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.state.analysis_form_secret = os.getenv("HATULI_FORM_SECRET") or admin_password
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=_TEMPLATES_DIR)
+    register_public_comparison_routes(app, templates)
 
     def _fmt_num(value, digits: int = 0) -> str:
         """1234567 -> '1 234 567' / 12.3 -> '12,3' — форматирование больших
@@ -119,6 +121,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "- [Как считаем](https://hatuli.ai-groundtruth.com/how-it-works): источники, подбор аналогов и ограничения\n"
             "- [Чеклист перед задатком](https://hatuli.ai-groundtruth.com/guides/check-apartment-before-deposit): вопросы о документах, доверенности и коммунальных расчётах с официальными источниками Казахстана; автоматическая юридическая проверка не предоставляется\n"
             "- [Лучшие варианты](https://hatuli.ai-groundtruth.com/best-apartments): ежедневная публичная подборка до 30 квартир в продаже с фотографиями и объяснением выбора\n"
+            "- [Первичка, вторичка или вклад](https://hatuli.ai-groundtruth.com/compare): сравнение базовых цен от гексагона до города и сценарий покупки против вклада на 12 месяцев с официальными условиями банков\n"
         )
 
     @app.get("/sitemap.xml")
@@ -128,6 +131,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             ("https://hatuli.ai-groundtruth.com/", "weekly", "1.0"),
             ("https://hatuli.ai-groundtruth.com/example", "monthly", "0.9"),
             ("https://hatuli.ai-groundtruth.com/best-apartments", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/compare", "daily", "0.9"),
             ("https://hatuli.ai-groundtruth.com/map", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/how-it-works", "monthly", "0.7"),
             ("https://hatuli.ai-groundtruth.com/guides/check-apartment-before-deposit", "monthly", "0.7"),

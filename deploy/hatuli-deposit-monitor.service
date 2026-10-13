@@ -1,0 +1,16 @@
+[Unit]
+Description=Monitor official Hatuli bank deposit terms and rates
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python scripts/update_deposit_catalog.py
+TimeoutStartSec=5min
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/nik/krisha_bot/var

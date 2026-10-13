@@ -76,6 +76,8 @@
 .picks-observed { font-size: 10px; line-height: 1.6; color: var(--muted); }
 .picks-observed span { display: block; }
 .picks-page a.picks-card-button { justify-content: space-between; padding-inline: 16px; margin-top: 11px; min-height: 46px; }
+.picks-investment-link { margin-top: 12px; text-align: center; font-size: 12px; font-weight: 600; color: var(--accent); text-decoration: none; }
+.picks-investment-link:hover { text-decoration: underline; }
 .picks-empty,.picks-filter-empty { border: 1px solid var(--border); border-radius: 18px; padding: 44px 28px; background: var(--surface); text-align: center; }
 .picks-empty h2,.picks-filter-empty h3 { margin-top: 12px; font-size: 25px; letter-spacing: -.5px; }
 .picks-empty p:not(.picks-eyebrow),.picks-filter-empty p { color: var(--muted); font-size: 15px; max-width: 580px; margin: 12px auto 22px; }

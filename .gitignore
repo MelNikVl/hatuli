@@ -22,3 +22,9 @@ research/phase_c/data/
 /var/daily-picks.json.lock
 /var/.daily-picks.json.*.tmp
 /var/daily-picks-*.json
+/var/market-comparison.json
+/var/market-comparison.json.lock
+/var/.market-comparison.json.*.tmp
+/var/deposit-catalog.json
+/var/deposit-catalog.json.lock
+/var/.deposit-catalog.json.*.tmp
