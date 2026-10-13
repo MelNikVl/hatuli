@@ -16,18 +16,19 @@ def card(lid, price="200 000"):
 
 
 @pytest.mark.asyncio
-async def test_unbounded_rental_scan_passes_page_10_and_stops_on_repeated_last_page(monkeypatch):
+async def test_unbounded_rental_scan_passes_page_10_and_stops_on_confirmed_last_page(monkeypatch):
     pages = []
     def serve(request):
         page = int(request.url.params.get("page", "1"))
         pages.append(page)
-        return httpx.Response(200, text=card(str(min(page, 12))))
+        pager = '<nav class="paginator"><a href="?page=12" rel="last">12</a></nav>'
+        return httpx.Response(200, text=card(str(min(page, 12))) + pager)
     client_class = httpx.AsyncClient
     monkeypatch.setattr(rentals.httpx, "AsyncClient", lambda **kw: client_class(
         transport=httpx.MockTransport(serve), **kw))
     monkeypatch.setattr(rentals.asyncio, "sleep", AsyncMock())
     result = await rentals.parse_rental_path("/arenda/kvartiry/astana/", "apartment")
-    assert pages == list(range(1, 14))
+    assert pages == list(range(1, 13))
     assert {r.id for r in result} == {str(i) for i in range(1, 13)}
 
 
@@ -36,7 +37,7 @@ async def test_filtered_out_cards_are_not_end_of_search():
     async with httpx.AsyncClient(transport=httpx.MockTransport(
             lambda request: httpx.Response(200, text=card("1", "цена не указана")))) as client:
         page = await rentals._fetch_page_result(client, "https://krisha.kz/test", "apartment")
-    assert page.listings == []
+    assert len(page.listings) == 1 and page.listings[0].price is None
     cursor = rentals.RentalPagination()
     assert not cursor.advance(page)
     assert cursor.page == 2
@@ -55,7 +56,7 @@ async def test_failed_search_is_not_empty_page(status, html):
 @pytest.mark.asyncio
 async def test_recognised_empty_search_completes_pass():
     async with httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, text='<div class="a-list"></div>'))) as client:
+            lambda request: httpx.Response(200, text='<div class="a-list-empty">Ничего не найдено</div>'))) as client:
         page = await rentals._fetch_page_result(client, "https://krisha.kz/test", "apartment")
     cursor = rentals.RentalPagination(page=50)
     assert cursor.advance(page)
@@ -67,8 +68,9 @@ def test_cursor_roundtrip_preserves_repeat_detection():
     assert not cursor.advance(rentals.RentalPage([], ("1", "2")))
     restored = rentals.RentalPagination.loads(cursor.dumps())
     assert restored.page == 18
-    assert restored.advance(rentals.RentalPage([], ("2", "1")))
-    assert restored.page == 1
+    with pytest.raises(ValueError, match="without confirmed catalog end"):
+        restored.advance(rentals.RentalPage([], ("2", "1")))
+    assert restored.page == 18
 
 
 @pytest.mark.asyncio

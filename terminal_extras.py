@@ -34,6 +34,7 @@ from bot.db.pg import fetch
 from bot.core.complex_metrics import IDENTITY_CTES
 from bot.core.complex_membership import listing_complex_column_match_sql, rental_complex_match_sql, unit_complex_match_sql
 from bot.core.web_pages import not_found_page
+from bot.core.rental_data_quality import rental_clean_sql, rental_live_sql, rental_confirmed_archive_sql, rental_consumer_health
 
 logger = logging.getLogger(__name__)
 
@@ -217,14 +218,14 @@ async def hex_price_cells(lat0: float, lon0: float, rooms: int | None = None) ->
         SELECT lat, lon, price, area FROM rental_listings
         WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
           AND price > 0 AND area > 0
-          AND is_active IS NOT FALSE AND last_seen > now() - interval '30 days'
+          AND {rental_live_sql()}
           {rental_room_cond}
     """, *rental_params)
     nearby_rental_archived = await fetch(f"""
         SELECT lat, lon, price, area FROM rental_listings
         WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
           AND price > 0 AND area > 0
-          AND is_active = FALSE AND archived_at > now() - interval '30 days'
+          AND {rental_confirmed_archive_sql()} AND archived_at > now() - interval '30 days'
           {rental_room_cond}
     """, *rental_params)
     return (_build(nearby_sale, archive_rows=nearby_sale_archived),
@@ -1232,7 +1233,8 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse(content=content, headers={"Access-Control-Allow-Origin": "*"})
 
         table = "rental_listings" if type == "rental" else "apartment_listings"
-        active_sql = "AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE" if type != "rental" else ""
+        active_sql = ("AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE" if type != "rental"
+                      else "AND " + rental_live_sql())
         rows_db = await pg_fetch(f"""
             SELECT lat, lon, price, rooms FROM {table}
             WHERE lat IS NOT NULL AND lon IS NOT NULL AND price IS NOT NULL
@@ -1292,7 +1294,7 @@ def make_extras_router(templates) -> APIRouter:
             SELECT id, lat, lon, price, area, rooms, district
             FROM rental_listings
             WHERE lat IS NOT NULL AND lon IS NOT NULL AND price IS NOT NULL
-              {bbox_sql}
+              AND {rental_live_sql()} {bbox_sql}
             ORDER BY id""", *params)
         feats = []
         for r in rows:
@@ -4420,6 +4422,10 @@ def make_extras_router(templates) -> APIRouter:
                 WHERE lat IS NOT NULL AND lon IS NOT NULL
                   AND last_seen > now() - interval '14 days'
                   AND COALESCE(is_duplicate, FALSE) = FALSE
+                  AND is_active IS TRUE AND archived_at IS NULL
+                  AND prop_type = 'apartment' AND city = 'astana'
+                  AND COALESCE(dup_needs_review, FALSE) = FALSE
+                  AND NULLIF(btrim(duplicate_of), '') IS NULL
                 LIMIT 20000
             """)
             return JSONResponse({"points": [[float(r["lat"]), float(r["lon"])] for r in rows]})
@@ -4896,11 +4902,10 @@ def make_extras_router(templates) -> APIRouter:
         if denied is not None:
             return denied
         from bot.db.pg import fetch as pg_fetch
-        rows = await pg_fetch("""
+        rows = await pg_fetch(f"""
             SELECT id, lat, lon, price, rooms
             FROM rental_listings
-            WHERE is_active = FALSE AND archived_at IS NOT NULL
-              AND COALESCE(is_duplicate, FALSE) = FALSE
+            WHERE {rental_confirmed_archive_sql()}
               AND lat IS NOT NULL AND lon IS NOT NULL
               AND price > 0
               AND archived_at > now() - interval '30 days'
@@ -5510,7 +5515,7 @@ def make_extras_router(templates) -> APIRouter:
         rentals = await fetch(f"""
             SELECT rooms, price, area, found_at
             FROM rental_listings
-            WHERE {_rental_id_match} AND price > 0
+            WHERE {_rental_id_match} AND price > 0 AND {rental_live_sql()}
             ORDER BY found_at DESC LIMIT 30
         """, complex_id)
 
@@ -5569,18 +5574,21 @@ def make_extras_router(templates) -> APIRouter:
               AND COALESCE(is_duplicate, FALSE) = FALSE
         """, complex_id) if include_children else None
 
-        # Аренда: скорость ухода. "Ушло" = не видели парсером > 3 дней.
+        # Только явно подтверждённые архивы; сбой обхода не означает сдачу.
         rental_stats = await fetch(f"""
             SELECT rooms,
-                   COUNT(*) AS cnt,
-                   percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_rent,
-                   COUNT(*) FILTER (WHERE COALESCE(last_seen, found_at) < now() - interval '3 days') AS gone_cnt,
-                   AVG(EXTRACT(EPOCH FROM (COALESCE(last_seen, found_at) - found_at))/86400)
-                       FILTER (WHERE COALESCE(last_seen, found_at) < now() - interval '3 days'
-                               AND last_seen IS NOT NULL AND last_seen > found_at)
+                   COUNT(*) FILTER (WHERE {rental_live_sql()}) AS cnt,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY price)
+                       FILTER (WHERE {rental_live_sql()}) AS median_rent,
+                   COUNT(*) FILTER (WHERE is_active IS FALSE AND archived_at IS NOT NULL
+                       AND archive_reason IN ('archived_badge', 'confirmed_gone')) AS gone_cnt,
+                   AVG(EXTRACT(EPOCH FROM (archived_at - found_at))/86400)
+                       FILTER (WHERE is_active IS FALSE AND archived_at IS NOT NULL
+                               AND archive_reason IN ('archived_badge', 'confirmed_gone')
+                               AND archived_at >= found_at)
                        AS avg_days_listed
             FROM rental_listings
-            WHERE {_rental_id_match} AND price > 0
+            WHERE {_rental_id_match} AND price > 0 AND {rental_clean_sql()}
             GROUP BY rooms ORDER BY rooms
         """, complex_id)
 
@@ -6180,7 +6188,7 @@ def make_extras_router(templates) -> APIRouter:
         cx, sale_match, rental_match = context
         if kind == "rental":
             table, time_col = "rental_listings", "found_at"
-            membership = rental_match
+            membership = f"{rental_match} AND {rental_clean_sql()}"
         else:
             table, time_col = "apartment_listings", "first_seen"
             membership = f"{sale_match} AND COALESCE(is_duplicate, FALSE) = FALSE"
@@ -6212,7 +6220,11 @@ def make_extras_router(templates) -> APIRouter:
                 "median_price": float(r["median_price"]),
                 "n": r["n"],
             })
-        return JSONResponse({"data": by_rooms})
+        result = {"data": by_rooms}
+        if kind == "rental":
+            result["data_quality"] = await rental_consumer_health()
+            result["series_note"] = "Текущие цены объявлений по дате первого наблюдения. Историческая цена рынка по этим данным неизвестна."
+        return JSONResponse(result)
 
     @router.get("/admin/api/complex/{complex_id}/turnover-dynamics")
     async def complex_turnover_dynamics(request: Request, complex_id: int,
@@ -6240,18 +6252,17 @@ def make_extras_router(templates) -> APIRouter:
             room_cond = "AND rooms = $3"
             params.append(int(rooms))
         if kind == "rental":
-            # "Ушло" = не видели парсером > 3 дня (см. rental_stats в
-            # complex_detail выше) — тот же критерий, теперь по неделям.
+            # Дата подтверждения архива; прекращение обновлений само по себе
+            # не доказывает уход и тем более фактическую сдачу квартиры.
             rows = await pg_fetch(f"""
-                SELECT date_trunc('week', COALESCE(last_seen, found_at))::date AS d, rooms,
-                       AVG(EXTRACT(EPOCH FROM (COALESCE(last_seen, found_at) - found_at))/86400) AS avg_days,
+                SELECT date_trunc('week', archived_at)::date AS d, rooms,
+                       AVG(EXTRACT(EPOCH FROM (archived_at - found_at))/86400) AS avg_days,
                        COUNT(*) AS n
                 FROM rental_listings
-                WHERE {rental_match} AND price > 0
+                WHERE {rental_match} AND price > 0 AND {rental_confirmed_archive_sql()}
                   AND rooms IS NOT NULL
-                  AND COALESCE(last_seen, found_at) < now() - interval '3 days'
-                  AND last_seen IS NOT NULL AND last_seen > found_at
-                  AND COALESCE(last_seen, found_at) >= now() - ($2 || ' days')::interval
+                  AND archived_at >= found_at
+                  AND archived_at >= now() - ($2 || ' days')::interval
                   {room_cond}
                 GROUP BY 1, 2
                 ORDER BY 1, 2
@@ -6280,7 +6291,10 @@ def make_extras_router(templates) -> APIRouter:
                 "avg_days": round(float(r["avg_days"]), 1),
                 "n": r["n"],
             })
-        return JSONResponse({"data": by_rooms})
+        result = {"data": by_rooms}
+        if kind == "rental":
+            result["data_quality"] = await rental_consumer_health()
+        return JSONResponse(result)
 
     # "Создать ЖК" (задача 2026-08-13, кнопка рядом с "Добавить дом к ЖК") —
     # ручное создание ЖК с нуля: название + адрес + минимум 3 фото. До этого
@@ -7045,11 +7059,9 @@ def make_extras_router(templates) -> APIRouter:
         фактического снятия объявления с Крыши — это дата, когда МЫ это
         заметили при следующей проверке.
 
-        Плюс отдельная серия "аренда": у rental_listings нет явного
-        archived_at (нет детального парсера, который бы проверял страницу на
-        пометку "В архиве") — как и в карточке ЖК ("скорость ухода аренды"),
-        считаем объявление ушедшим, если его не видели 3+ дня подряд после
-        last_seen, и датой ухода — last_seen + 3 дня."""
+        Серия аренды использует явный подтверждённый архив (archived_at),
+        а не пропуск обновлений сканером. Это дата обнаружения снятия
+        объявления; факт сдачи и дата договора неизвестны."""
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch
@@ -7062,13 +7074,13 @@ def make_extras_router(templates) -> APIRouter:
             GROUP BY 1, 2
             ORDER BY 1
         """, str(days))
-        rental_rows = await pg_fetch("""
-            SELECT (last_seen::date + interval '3 days')::date AS d,
+        rental_rows = await pg_fetch(f"""
+            SELECT archived_at::date AS d,
                    CASE WHEN rooms >= 3 THEN 3 ELSE COALESCE(rooms, 0) END AS room_bucket,
                    COUNT(*) AS cnt
             FROM rental_listings
-            WHERE last_seen < now() - interval '3 days'
-              AND last_seen::date + interval '3 days' > now() - ($1 || ' days')::interval
+            WHERE {rental_confirmed_archive_sql()}
+              AND archived_at > now() - ($1 || ' days')::interval
             GROUP BY 1, 2
             ORDER BY 1
         """, str(days))
@@ -7087,6 +7099,7 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({
             "days": [d.strftime("%d.%m") for d in days_set],
             "series": series,
+            "rental_data_quality": await rental_consumer_health(),
         })
 
     @router.get("/admin/api/archived-hex-points")
@@ -7112,10 +7125,11 @@ def make_extras_router(templates) -> APIRouter:
         if type == "rental":
             rows = await pg_fetch(f"""
                 SELECT lat, lon, price, rooms,
-                       EXTRACT(EPOCH FROM (last_seen - found_at)) / 86400.0 AS days
+                       EXTRACT(EPOCH FROM (archived_at - found_at)) / 86400.0 AS days
                 FROM rental_listings
-                WHERE last_seen < now() - interval '3 days'
-                  AND last_seen > now() - ($1 || ' days')::interval
+                WHERE {rental_confirmed_archive_sql()}
+                  AND archived_at >= found_at
+                  AND archived_at > now() - ($1 || ' days')::interval
                   AND lat IS NOT NULL AND lon IS NOT NULL
                   AND price > 0
                   {room_cond}

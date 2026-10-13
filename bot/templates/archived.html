@@ -49,8 +49,9 @@
     <span><span style="display:inline-block;width:10px;height:10px;background:#3b82f6;border-radius:2px;"></span> 1-комн</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;"></span> 2-комн</span>
     <span><span style="display:inline-block;width:10px;height:10px;background:#f59e0b;border-radius:2px;"></span> 3+-комн</span>
-    <span style="color:#555;">·  два бара в день: <b>продажа</b> / <b>аренда</b> (аренда: ≥3 дня не видели)</span>
+    <span style="color:#555;">· два бара в день: <b>продажа</b> / <b>аренда</b> (аренда: подтверждённый архив объявления)</span>
   </div>
+  <p id="archived-rental-quality" style="font-size:12px;color:var(--muted);margin:0 0 10px;">Снятие объявления не подтверждает сдачу квартиры.</p>
   <div class="chart-block-inner" id="archived-chart"></div>
 </div>
 
@@ -246,6 +247,9 @@ function loadArchivedChart(days) {
     b.style.color = active ? '#fff' : 'var(--text)';
   });
   fetch('/admin/api/archived-history?days=' + days).then(r => r.json()).then(d => {
+    if (d.rental_data_quality) {
+      document.getElementById('archived-rental-quality').textContent = d.rental_data_quality.note + ' ' + d.rental_data_quality.archive_note;
+    }
     const el = document.getElementById('archived-chart');
     if (!d.days || !d.days.length) {
       el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;">пока нет данных за этот период</div>';

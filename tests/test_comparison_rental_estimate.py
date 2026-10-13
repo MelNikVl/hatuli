@@ -16,7 +16,8 @@ def rentals():
     return [{"id": str(100000+i), "complex_id": 10, "rooms": 2, "area": 59+i*.2,
              "price": price, "floor": i+1, "floors_total": 12, "is_active": True,
              "is_duplicate": False, "dup_needs_review": False, "prop_type": "apartment",
-             "rent_period": "monthly", "city": "astana", "last_seen": NOW-timedelta(hours=i+1)}
+             "rent_period": "monthly", "complex_binding_verified": True,
+             "city": "astana", "last_seen": NOW-timedelta(hours=i+1)}
             for i, price in enumerate((200_000, 220_000, 240_000, 260_000, 280_000))]
 
 
@@ -41,6 +42,8 @@ def test_range_is_asking_rents_and_safe_projection_only():
     ("is_active", False), ("is_active", None), ("is_duplicate", True), ("is_duplicate", "false"),
     ("dup_needs_review", True), ("duplicate_of", "100001"), ("archived_at", NOW),
     ("city", "almaty"), ("prop_type", "parking"), ("rent_period", "daily"), ("rent_period", None),
+    ("complex_binding_verified", False), ("complex_binding_verified", None),
+    ("complex_binding_verified", "true"),
     ("rooms", 3), ("complex_id", 20), ("complex_id", None), ("area", 50), ("area", 70),
     ("area", float("nan")), ("price", 49_999), ("price", 2_000_001), ("price", True),
     ("last_seen", NOW-timedelta(hours=72, seconds=1)), ("last_seen", NOW+timedelta(seconds=1)),

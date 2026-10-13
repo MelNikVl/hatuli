@@ -26,6 +26,7 @@ HTTP-проверка → is_active=TRUE + запись в listing_archive_histo
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -170,10 +171,27 @@ def rental_health(settings: dict[str, str], now: datetime) -> tuple[SweepHealth,
         duration_s = float(settings.get(f'{RENTAL_PREFIX}_DURATION_SEC') or 0)
     except ValueError:
         duration_s = 0.0
+    if not math.isfinite(duration_s) or duration_s <= 0:
+        duration_s = 0.0
     days = rental_stale_days(duration_s)
     if completed is None or duration_s <= 0:
         return SweepHealth(False, 'нет завершённого круга аренды с замером длительности'), days
+    if settings.get(f'{RENTAL_PREFIX}_COMPLETED_VERIFIED') != '1':
+        return SweepHealth(False, 'старый курсор не подтверждает полный обход аренды'), days
+    try:
+        pages = int(settings.get(f'{RENTAL_PREFIX}_LAST_PAGES') or 0)
+        unique = int(settings.get(f'{RENTAL_PREFIX}_UNIQUE_SEEN') or 0)
+        total = int(settings.get(f'{RENTAL_PREFIX}_TOTAL') or 0)
+    except ValueError:
+        pages = unique = total = 0
+    if pages <= 0 or unique <= 0 or total <= 0 or unique < MIN_COVERAGE * total:
+        return SweepHealth(False, 'нет подтверждённого покрытия хотя бы 95% каталога аренды'), days
+    latest = _parse_ts(settings.get(f'{RENTAL_PREFIX}_LAST_SUCCESS_AT'))
+    if latest is None or not timedelta(0) <= now - latest <= timedelta(minutes=30):
+        return SweepHealth(False, 'нет свежего успешного шага обхода аренды'), days
     age = now - completed
+    if age < timedelta(0) or duration_s > 48 * 3600:
+        return SweepHealth(False, 'некорректная дата или слишком медленный круг аренды'), days
     if age > timedelta(seconds=max(2 * duration_s, MAX_CIRCLE_AGE.total_seconds())):
         return SweepHealth(False, f'последний круг аренды завершён {age.total_seconds() / 3600:.0f} ч назад',
                            completed, duration_s / 3600), days

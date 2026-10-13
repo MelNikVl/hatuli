@@ -1138,7 +1138,7 @@ function cxdSetKind(kind) {
   document.getElementById('cxd-kind-rental').style.background = kind === 'rental' ? color : 'var(--bg)';
   document.getElementById('cxd-kind-rental').style.color = kind === 'rental' ? '#fff' : 'var(--text)';
   document.getElementById('cxd-title').textContent = kind === 'rental' ? '🔑 Динамика цены по комнатности (аренда)' : '📈 Динамика цены по комнатности (продажа)';
-  document.getElementById('cxd-subtitle').textContent = kind === 'rental' ? 'медиана арендной ставки по дням — своя линия на каждую комнатность' : 'медиана цены объявлений по дням — своя линия на каждую комнатность';
+  document.getElementById('cxd-subtitle').textContent = kind === 'rental' ? 'текущие арендные ставки по дате первого наблюдения — это не историческая цена рынка' : 'медиана цены объявлений по дням — своя линия на каждую комнатность';
   // активные rooms/days-кнопки перекрашиваем в цвет нового kind (активность
   // определяем из состояния, а не читая обратно computed style)
   document.querySelectorAll('.cxd-rooms-btn').forEach(b => {
@@ -1258,7 +1258,7 @@ document.addEventListener('hatuli:chart-resize', (e) => {
     {% endfor %}
   </div>
   <div id="cxt-chart" class="chart-block-inner"></div>
-  <p style="font-size:11.5px;color:#888;margin-top:6px;">«Ушло» = продажа — не в выдаче парсера &gt;3 дн. (в архиве); аренда — та же логика. Малое число дней = высокий спрос в этом ЖК. Аренда наполняется с 12.07.2026.</p>
+  <p style="font-size:11.5px;color:#888;margin-top:6px;">Для аренды показано время от первого наблюдения до подтверждения архива объявления. Это не подтверждённая сдача квартиры. Задержки обхода влияют на наблюдения; отсутствие обновлений не доказывает уход с рынка.</p>
 </div>
 
 <script>
@@ -1274,6 +1274,7 @@ function cxtSetKind(kind) {
   document.getElementById('cxt-kind-rental').style.background = kind === 'rental' ? color : 'var(--bg)';
   document.getElementById('cxt-kind-rental').style.color = kind === 'rental' ? '#fff' : 'var(--text)';
   document.getElementById('cxt-title').textContent = kind === 'rental' ? '⏱ Скорость ухода (аренда)' : '⏱ Скорость ухода (продажа)';
+  document.getElementById('cxt-subtitle').textContent = kind === 'rental' ? 'наблюдаемое время до подтверждения архива объявления — фактическая сдача неизвестна' : 'среднее число дней в экспозиции до ухода — по неделям, своя линия на каждую комнатность';
   document.querySelectorAll('.cxt-rooms-btn').forEach(b => {
     if (b.dataset.rooms === CXT_STATE.rooms) b.style.background = color;
   });
@@ -1309,6 +1310,9 @@ async function cxtLoad() {
   try {
     const r = await fetch(`/admin/api/complex/{{ cx.id }}/turnover-dynamics?kind=${st.kind}&days=${st.days}&rooms=${st.rooms}`);
     const d = await r.json();
+    if (st.kind === 'rental' && d.data_quality) {
+      document.getElementById('cxt-subtitle').textContent = d.data_quality.note + ' ' + d.data_quality.archive_note;
+    }
     cxtRender(el, d.data || {}, st.colors[st.kind]);
   } catch (e) {
     el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">ошибка загрузки</div>';

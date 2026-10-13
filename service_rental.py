@@ -1,173 +1,279 @@
 #!/usr/bin/env python3
-"""
-Сервис парсинга АРЕНДЫ.
-Парсит krisha.kz/arenda/ каждые 5-15 минут (по одной странице).
-После каждого полного прохода пересчитывает rental_index и синкает в Google Sheets.
+"""Rental lists first; sequential enrichment has an explicit cycle budget."""
+from __future__ import annotations
 
-Запуск:  python service_rental.py
-Логи:    rental.log
-"""
 import asyncio
 import logging
 import os
 import random
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Callable
 
 from dotenv import load_dotenv
-load_dotenv()
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("rental.log", encoding="utf-8", errors="replace"),
-    ],
+from bot.core.rental_service_metrics import (
+    MaintenanceBudget, RentalCyclePlan, record_rental_cycle, source_failure_counters,
 )
-log = logging.getLogger("rental_service")
 
+load_dotenv()
+log = logging.getLogger("rental_service")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
 
 
-async def main():
+def configure_logging() -> None:
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    # Production redirects stdout/stderr to rental.log. A FileHandler pointed
+    # at the same inode previously wrote every event twice.
+    redirected = False
+    try:
+        target = os.stat("rental.log")
+        redirected = any(os.fstat(stream.fileno()).st_ino == target.st_ino
+                         and os.fstat(stream.fileno()).st_dev == target.st_dev
+                         for stream in (sys.stdout, sys.stderr))
+    except (OSError, ValueError, AttributeError):
+        pass
+    if not redirected:
+        handlers.append(logging.FileHandler("rental.log", encoding="utf-8", errors="replace"))
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+                        handlers=handlers)
+
+
+def service_revision() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True,
+            stderr=subprocess.DEVNULL, timeout=3).strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
+@dataclass
+class RentalServiceState:
+    cycle: int = 0
+    pages_since_index: int = 0
+    index_refreshes: int = 0
+    completed_types: set[str] = field(default_factory=set)
+    last_success: dict[str, float] = field(default_factory=dict)
+    page_intervals: dict[str, float] = field(default_factory=dict)
+    interval_samples: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class RentalOperations:
+    collect: Callable
+    rebuild_index: Callable
+    sync_sheets: Callable
+    dedup: Callable
+    backfill: Callable
+    archive: Callable
+    bind_address: Callable
+    bind_geo: Callable
+    set_setting: Callable
+
+
+async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceState,
+                        operations: RentalOperations, plan: RentalCyclePlan, *,
+                        type_count: int = 3, index_refresh_pages: int = 15,
+                        sleep_seconds: float = 120.0, clock=time.monotonic) -> dict:
+    """One list step and bounded maintenance; callers always rotate types."""
+    state.cycle += 1
+    started = clock()
+    list_started = clock()
+    step = {}
+    counters = {"cycles": 1}
+    list_status = "ok"
+    try:
+        step = await operations.collect(client, path, prop_type, refresh_head=True)
+        log.info("[%s] page %d: saved %d; completed=%s; head_pages=%d; durable_pages=%d",
+                 prop_type, step["page"], step["saved"], step["completed"],
+                 step.get("head_pages", 0), step.get("durable_pages", 1))
+        durable_pages = step.get("durable_pages", 1)
+        state.pages_since_index += durable_pages
+        if step["completed"]:
+            state.completed_types.add(prop_type)
+        counters.update({
+            "pages": durable_pages, "head_pages": step.get("head_pages", 0),
+            "saved_observations": step["saved"],
+            "list_requests": step.get("requests", durable_pages + step.get("head_pages", 0)),
+            "new": step.get("new", 0), "updated": step.get("updated", 0),
+            "reactivated": step.get("reactivated", 0),
+            "raw_cards": step.get("raw_cards", 0), "accepted_cards": step.get("accepted_cards", 0),
+            "unpriced_cards": step.get("unpriced_cards", 0),
+        })
+    except Exception as exc:
+        list_status = "blocked" if source_failure_counters(exc)["blocked"] else "error"
+        counters.update(source_failure_counters(exc))
+        partial = getattr(exc, "rental_metrics", {})
+        counters.update({key: partial.get(key, 0) for key in (
+            "head_pages", "new", "updated", "reactivated", "raw_cards", "accepted_cards", "unpriced_cards")})
+        counters["saved_observations"] = partial.get("saved", 0)
+        counters["list_requests"] = partial.get("requests", 1)
+        log.error("[%s] rental list step %s: %s", prop_type, list_status, exc,
+                  exc_info=list_status != "blocked")
+    list_seconds = max(0.0, clock() - list_started)
+    estimated_circle_hours = None
+    if list_status == "ok" and counters.get("pages", 0):
+        previous_success = state.last_success.get(prop_type)
+        successful_at = clock()
+        if previous_success is not None and successful_at > previous_success:
+            observed = successful_at - previous_success
+            old = state.page_intervals.get(prop_type, observed)
+            state.page_intervals[prop_type] = round(0.25 * observed + 0.75 * old, 3)
+            state.interval_samples[prop_type] = state.interval_samples.get(prop_type, 0) + 1
+        state.last_success[prop_type] = successful_at
+        last_page = step.get("expected_last_page")
+        if last_page and prop_type in state.page_intervals:
+            estimated_circle_hours = round(last_page * state.page_intervals[prop_type] / 3600, 2)
+    # A blocked list is not a reason to send detail traffic in the same cycle.
+    budget = MaintenanceBudget(plan.maintenance_seconds if list_status == "ok" else 0.0,
+                               clock=clock)
+    full_pass = len(state.completed_types) >= type_count
+    if full_pass or state.pages_since_index >= index_refresh_pages:
+        await budget.run("index", lambda _: operations.rebuild_index(), cap=15)
+        if budget.stages["index"]["status"] == "ok":
+            state.pages_since_index = 0
+            state.index_refreshes += 1
+            if full_pass:
+                log.info("--- Full rental pass complete ---")
+                state.completed_types.clear()
+            if state.index_refreshes % 3 == 0:
+                await budget.run("sheets", lambda _: operations.sync_sheets(), cap=10)
+                if budget.stages["sheets"]["status"] == "ok":
+                    await operations.set_setting("SHEETS_RENTAL_SYNCED_AT",
+                        datetime.now(timezone.utc).isoformat())
+
+    if state.cycle % plan.db_every == 0:
+        await budget.run("dedup", lambda _: operations.dedup(), cap=8)
+        await budget.run("address_bind", lambda _: operations.bind_address("rental_listings"), cap=8)
+        if plan.allow_geo_complex_guess:
+            await budget.run("geo_bind", lambda _: operations.bind_geo(), cap=8)
+
+    # Alternate enrichment priority so neither queue monopolizes the budget.
+    order = ("backfill", "archive") if state.cycle % 2 else ("archive", "backfill")
+    for name in order:
+        progress = {}
+        if name == "backfill" and plan.backfill_batch:
+            result = await budget.run(name, lambda seconds: operations.backfill(
+                plan.backfill_batch, budget_seconds=seconds, progress=progress), cap=30)
+        elif name == "archive" and plan.archive_batch:
+            result = await budget.run(name, lambda seconds: operations.archive(
+                limit=plan.archive_batch, budget_seconds=seconds, progress=progress), cap=20)
+        else:
+            continue
+        if not isinstance(result, dict):
+            result = progress
+        if isinstance(result, dict):
+            counters[f"{'detail' if name == 'backfill' else 'archive'}_requests"] = result.get("requests", 0)
+            counters["blocked"] = counters.get("blocked", 0) + result.get("blocked", 0)
+            counters["http_468"] = counters.get("http_468", 0) + result.get("http_468", 0)
+            counters["errors"] = counters.get("errors", 0) + result.get("errors", 0)
+            if name == "archive":
+                counters["archived"] = result.get("archived", 0)
+            log.info("Rental %s: %s", name, result)
+
+    for stage in budget.stages.values():
+        counters["timeouts"] = counters.get("timeouts", 0) + int(stage["status"] == "timeout")
+        counters["errors"] = counters.get("errors", 0) + int(stage["status"] == "error")
+    maintenance_seconds = max(0.0, clock() - budget.started)
+    counters.update({"list_ms": round(list_seconds * 1000),
+                     "maintenance_ms": round(maintenance_seconds * 1000),
+                     "sleep_ms": round(sleep_seconds * 1000)})
+    cycle = {"at": datetime.now(timezone.utc).isoformat(), "type": prop_type,
+             "cycle": state.cycle, "list_status": list_status,
+             "page": step.get("page"), "saved": step.get("saved", 0),
+             "head_pages": counters.get("head_pages", 0),
+             "durable_pages": counters.get("pages", 0),
+             "page_interval_seconds": state.page_intervals.get(prop_type),
+             "page_interval_samples": state.interval_samples.get(prop_type, 0),
+             "estimated_circle_hours": estimated_circle_hours,
+             "list_seconds": round(list_seconds, 3), "stages": budget.stages,
+             "maintenance_seconds": round(maintenance_seconds, 3),
+             "geo_complex_guess_enabled": plan.allow_geo_complex_guess,
+             "work_seconds": round(max(0.0, clock() - started), 3),
+             "sleep_seconds": round(sleep_seconds, 3)}
+    try:
+        async def persist_metrics():
+            await record_rental_cycle(cycle, counters)
+            if list_status == "ok" and prop_type in state.page_intervals:
+                prefix = f"RENTAL_CRAWL_V1_{prop_type.upper()}"
+                await operations.set_setting(f"{prefix}_PAGE_INTERVAL_SEC",
+                                             str(state.page_intervals[prop_type]))
+                await operations.set_setting(f"{prefix}_PAGE_INTERVAL_SAMPLES",
+                                             str(state.interval_samples[prop_type]))
+                if estimated_circle_hours is not None:
+                    await operations.set_setting(f"{prefix}_ESTIMATED_HOURS", str(estimated_circle_hours))
+        await asyncio.wait_for(persist_metrics(), timeout=5)
+    except Exception:
+        log.warning("Rental cycle metrics could not be persisted", exc_info=True)
+    log.info("Rental cycle timing: %s", cycle)
+    return cycle
+
+
+async def bind_rental_geo() -> None:
+    from bot.db.pg import execute
+    await execute("""
+        UPDATE rental_listings r
+        SET complex_name = (
+            SELECT c2.name FROM complexes c2
+            WHERE c2.lat IS NOT NULL AND c2.lon IS NOT NULL
+              AND COALESCE(c2.is_street, FALSE) = FALSE
+              AND COALESCE(c2.is_garbage, FALSE) = FALSE
+            ORDER BY (c2.lat - r.lat)^2 + (c2.lon - r.lon)^2 LIMIT 1)
+        WHERE (r.complex_name IS NULL OR btrim(r.complex_name) = '')
+          AND r.lat IS NOT NULL AND r.lon IS NOT NULL
+          AND (SELECT min((c.lat - r.lat)^2 + (c.lon - r.lon)^2)
+               FROM complexes c WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL
+                 AND COALESCE(c.is_street, FALSE) = FALSE
+                 AND COALESCE(c.is_garbage, FALSE) = FALSE) < 2.0e-5
+    """)
+
+
+async def main() -> None:
     from bot.db.pg import init_pool
+    from bot.db import settings
     from bot.core.rental_parser import (
-        collect_rental_page, RENTAL_INDEX_REFRESH_PAGES,
-        rebuild_rental_index, DEFAULT_HEADERS, RENTAL_PATHS
+        collect_rental_page, rebuild_rental_index, backfill_rental_details,
+        DEFAULT_HEADERS, RENTAL_PATHS, RENTAL_INDEX_REFRESH_PAGES,
     )
     from bot.core.sheets_sync_rental import sync_rental_to_sheets
+    from bot.core.dedup_listings import deduplicate_rental_listings
+    from bot.core.archive_check import check_archived_rentals
+    from bot.core.rebind import bind_by_address
     import httpx
 
+    configure_logging()
     await init_pool(DATABASE_URL)
-    log.info("=== Rental service started ===")
-
+    revision = service_revision()
+    await settings.set("RENTAL_SERVICE_REVISION", revision)
+    await settings.set("RENTAL_SERVICE_STARTED_AT", datetime.now(timezone.utc).isoformat())
+    log.info("=== Rental service started; revision=%s; list-first maintenance<=60s ===", revision)
+    operations = RentalOperations(collect_rental_page, rebuild_rental_index,
+        sync_rental_to_sheets, deduplicate_rental_listings, backfill_rental_details,
+        check_archived_rentals, bind_by_address, bind_rental_geo, settings.set)
+    state = RentalServiceState()
     paths = list(RENTAL_PATHS.items())
     path_idx = 0
-    completed_types = set()
-    pages_since_index = 0
-    index_refreshes = 0
-
     while True:
+        sleep_seconds = random.uniform(60, 180)
         try:
+            await settings.load()
+            plan = RentalCyclePlan.from_settings(settings.get)
             path, prop_type = paths[path_idx]
             async with httpx.AsyncClient(
-                headers=DEFAULT_HEADERS, follow_redirects=True, timeout=20
-            ) as client:
-                step = await collect_rental_page(client, path, prop_type)
-            log.info("[%s] page %d: saved %d; completed=%s", prop_type,
-                     step["page"], step["saved"], step["completed"])
-            pages_since_index += 1
-            if step["completed"]:
-                completed_types.add(prop_type)
-            # Each type has a durable independent cursor. A long apartment
-            # sweep cannot starve parking/commercial or index refreshes.
-            full_pass = len(completed_types) == len(paths)
-            if full_pass or pages_since_index >= RENTAL_INDEX_REFRESH_PAGES:
-                await rebuild_rental_index()
-                pages_since_index = 0
-                index_refreshes += 1
-                if full_pass:
-                    log.info("--- Full rental pass complete ---")
-                    completed_types.clear()
-                if index_refreshes % 3 == 0:
-                    try:
-                        await sync_rental_to_sheets()
-                        from bot.db import settings as app_settings
-                        from datetime import datetime, timezone
-                        await app_settings.set("SHEETS_RENTAL_SYNCED_AT",
-                                               datetime.now(timezone.utc).isoformat())
-                    except Exception as e:
-                        log.warning("Sheets sync failed: %s", e)
-
-        except Exception as e:
-            log.error("Rental loop error: %s", e, exc_info=True)
+                    headers=DEFAULT_HEADERS, follow_redirects=True, timeout=20) as client:
+                await run_one_cycle(client, path, prop_type, state, operations, plan,
+                    type_count=len(paths), index_refresh_pages=RENTAL_INDEX_REFRESH_PAGES,
+                    sleep_seconds=sleep_seconds)
+        except Exception:
+            log.error("Rental service cycle failed", exc_info=True)
         finally:
             path_idx = (path_idx + 1) % len(paths)
-        # === Дедупликация аренды ===
-        try:
-            from bot.core.dedup_listings import deduplicate_rental_listings
-            dup_count = await deduplicate_rental_listings()
-            if dup_count:
-                log.info("Deduplicated %d rental listings", dup_count)
-        except Exception as e:
-            log.warning("Rental deduplication failed: %s", e)
-
-        # === Бэкфилл привязки аренды: ЖК (офиц. блок Крыши) / координаты / адрес ===
-        try:
-            from bot.db import settings as _st_r
-            from bot.core.rental_parser import backfill_rental_details
-            await _st_r.load()
-            rb = _st_r.get_int("RENTAL_BACKFILL_BATCH", 8)
-            if rb > 0:
-                res = await backfill_rental_details(rb)
-                if res.get("checked"):
-                    log.info("Rental backfill: %s", res)
-        except Exception as e:
-            log.warning("Rental backfill failed: %s", e)
-
-        # === Проверка архивности объявлений аренды ===
-        try:
-            from bot.db import settings as _st_arch
-            from bot.core.archive_check import check_archived_rentals
-            await _st_arch.load()
-            archive_batch = _st_arch.get_int("RENTAL_ARCHIVE_CHECK_BATCH", 60)
-            if archive_batch > 0:
-                res = await check_archived_rentals(limit=archive_batch)
-                log.info("Rental archive check: %s", res)
-        except Exception as e:
-            log.warning("Rental archive check failed: %s", e)
-
-        # === Привязка аренды по адресу (см. bot.core.rebind.bind_by_address) ===
-        # Приоритет ПЕРЕД геопривязкой по близости ниже: точное совпадение
-        # нормализованного адреса с адресом уже подтверждённых объявлений
-        # ПРОДАЖИ того же ЖК — надёжнее, чем "ближайший по прямой" (см.
-        # докстринг rebind.py — та же логика, что убрали для sale-объявлений
-        # из-за качества). Правильный порядок: сначала точные сигналы
-        # (офиц. блок Крыши в backfill выше, потом адрес), и только если
-        # ничего не подтвердилось — угадывание по близости как крайний
-        # случай, а не как основной способ привязки.
-        try:
-            from bot.core.rebind import bind_by_address
-            n_addr = await bind_by_address("rental_listings")
-            if n_addr:
-                log.info("Rental address-bind: %d", n_addr)
-        except Exception as e:
-            log.warning("Rental address-bind failed: %s", e)
-
-        # === Геопривязка аренды к ближайшему ЖК (≤ ~350 м, без ЖК-улиц) ===
-        # КРАЙНИЙ СЛУЧАЙ — только для того, что не подтвердилось выше ни
-        # офиц. ссылкой Крыши, ни адресом. Блайнд-угадывание по расстоянию,
-        # без текстового подтверждения; для sale-объявлений аналогичная
-        # стадия была убрана вовсе (см. rebind.py) — здесь пока оставлена
-        # (у аренды меньше альтернативных сигналов), но теперь выполняется
-        # ПОСЛЕДНЕЙ, а не единственной.
-        try:
-            from bot.db.pg import execute as _pex_geo
-            await _pex_geo("""
-                UPDATE rental_listings r
-                SET complex_name = (
-                    SELECT c2.name FROM complexes c2
-                    WHERE c2.lat IS NOT NULL AND c2.lon IS NOT NULL
-                      AND COALESCE(c2.is_street, FALSE) = FALSE
-                      AND COALESCE(c2.is_garbage, FALSE) = FALSE
-                    ORDER BY (c2.lat - r.lat)^2 + (c2.lon - r.lon)^2
-                    LIMIT 1)
-                WHERE (r.complex_name IS NULL OR btrim(r.complex_name) = '')
-                  AND r.lat IS NOT NULL AND r.lon IS NOT NULL
-                  AND (SELECT min((c.lat - r.lat)^2 + (c.lon - r.lon)^2)
-                       FROM complexes c
-                       WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL
-                         AND COALESCE(c.is_street, FALSE) = FALSE
-                         AND COALESCE(c.is_garbage, FALSE) = FALSE) < 2.0e-5
-            """)
-        except Exception as e:
-            log.warning("Rental geo-bind failed: %s", e)
-
-
-        # Было 5-15 мин: при ~198 страницах квартир и ротации 3 типов круг шёл ~5 суток.
-        # 1-3 мин — круг квартир ~1 сутки (задача 2026-10-03); нагрузка ~на порядок ниже deep sweep продажи.
-        sleep_sec = random.uniform(60, 180)
-        log.info("Sleeping %.0f min...\n", sleep_sec / 60)
-        await asyncio.sleep(sleep_sec)
+        log.info("Sleeping %.0f sec...", sleep_seconds)
+        await asyncio.sleep(sleep_seconds)
 
 
 if __name__ == "__main__":

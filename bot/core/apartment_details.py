@@ -374,9 +374,12 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
     #    ссылка на его страницу (там адрес и карта ЖК). Самый надёжный источник.
     cx_el = soup.select_one(
         'div.offer__info-item[data-name="map.complex"] a[href*="/complex/show/"]')
+    result["complex_source"] = "official_map_block" if cx_el else None
     if not cx_el:
         # запасной вариант — любая ссылка на карточку ЖК на странице
         cx_el = soup.select_one('a[href*="/complex/show/"]')
+        if cx_el:
+            result["complex_source"] = "page_link"
     if cx_el:
         cx_name = cx_el.get_text(strip=True)
         if cx_name:
@@ -396,6 +399,7 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
             m = re.search(pat, combined, re.IGNORECASE)
             if m:
                 result["complex_name"] = m.group(1).strip().title()
+                result["complex_source"] = "text"
                 break
 
     # ── Seller type ────────────────────────────────────────────────────────

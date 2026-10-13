@@ -41,7 +41,8 @@ WITH cx AS (
 )
 SELECT r.id,r.price,r.area,r.rooms,r.floor,r.floors_total,r.last_seen,
        r.city,r.prop_type,r.is_active,r.is_duplicate,r.dup_needs_review,r.duplicate_of,
-       r.archived_at,r.title,nk.cid AS complex_id,'monthly'::text AS rent_period
+       r.archived_at,r.title,nk.cid AS complex_id,'monthly'::text AS rent_period,
+       TRUE AS complex_binding_verified
 FROM rental_listings r
 JOIN name_keys nk ON nk.n=complex_name_key(r.complex_name)
 JOIN complexes canonical ON canonical.id=nk.cid
@@ -51,6 +52,20 @@ WHERE r.city='astana' AND r.prop_type='apartment' AND r.is_active IS TRUE
   AND r.last_seen BETWEEN $1::timestamptz-interval '72 hours' AND $1
   AND r.price BETWEEN 50000 AND 2000000 AND r.area BETWEEN 20 AND 300
   AND r.rooms BETWEEN 1 AND 6
+  -- A nearest-building guess cannot establish comparable rents in this JK.
+  -- Require the listing's source link to agree with the canonical project's
+  -- existing source identity as well as its unambiguous name.
+  AND r.complex_url ~ '^https://krisha[.]kz/complex/show/[^/?#]+(/[^/?#]+)?/?$'
+  AND (
+    rtrim(r.complex_url,'/') = rtrim(split_part(split_part(canonical.krisha_url,'?',1),'#',1),'/')
+    OR EXISTS (
+      SELECT 1 FROM complex_source_links sl
+      JOIN cx source_complex ON source_complex.id=sl.complex_id
+      WHERE sl.source='krisha' AND source_complex.cid=nk.cid
+        AND rtrim(r.complex_url,'/') = rtrim(split_part(split_part(sl.url,'?',1),'#',1),'/')
+        AND (sl.match_method='manual' OR sl.confidence>=0.85)
+    )
+  )
   AND NOT coalesce(canonical.is_garbage,false) AND NOT coalesce(canonical.is_street,false)
   AND NOT coalesce(canonical.is_umbrella,false)
   AND canonical.canonical_reason IS DISTINCT FROM 'junk_unmatched'
@@ -128,7 +143,8 @@ def estimate_rental_offer(offer: dict, rental_rows: list[dict], now: datetime | 
         if (row.get("is_active") is not True or (row.get("is_duplicate") is not False and row.get("is_duplicate") is not None)
                 or (row.get("dup_needs_review") is not False and row.get("dup_needs_review") is not None) or row.get("duplicate_of")
                 or row.get("archived_at") is not None or row.get("prop_type") != "apartment"
-                or row.get("rent_period") != "monthly" or str(row.get("city") or "").lower() not in ("astana", "астана")):
+                or row.get("rent_period") != "monthly" or row.get("complex_binding_verified") is not True
+                or str(row.get("city") or "").lower() not in ("astana", "астана")):
             continue
         if _integer(row.get("complex_id"), 1, 2_147_483_647) != cid or _integer(row.get("rooms"), 1, 6) != rooms:
             continue

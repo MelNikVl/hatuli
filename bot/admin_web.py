@@ -801,7 +801,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         rental_stats = await pg_fetch("""
             SELECT rooms, median_price, sample_count
             FROM rental_index
-            WHERE prop_type = 'apartment' AND rooms IN (1, 2)
+            WHERE city = 'astana' AND prop_type = 'apartment' AND rooms IN (1, 2)
+              AND district IS NULL AND complex_name IS NULL AND sample_count >= 5
+              AND updated_at BETWEEN now() - interval '72 hours' AND now()
             ORDER BY rooms, sample_count DESC
         """)
         rental_summary = {}
@@ -809,7 +811,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             k = int(r["rooms"])
             if k not in rental_summary:
                 rental_summary[k] = {"price": r["median_price"], "n": 0}
-            rental_summary[k]["n"] += r["sample_count"] or 0
+                rental_summary[k]["n"] = r["sample_count"] or 0
 
         # Общее покрытие данными — раньше жило тайлами на главной карте,
         # перенесено сюда (главная карта — рабочий инструмент поиска, не
@@ -1740,26 +1742,19 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             r"(Есиль|Алматы|Сарыарка|Нура|Байконур)", _district_raw, _re_district.I)
         district_norm = _m_district.group(1).capitalize() if _m_district else None
 
-        rental_comps = await pg_fetch("""
+        from bot.core.rental_data_quality import rental_live_sql
+        rental_scope = rental_live_sql()
+        rental_comps = await pg_fetch(f"""
             SELECT complex_name, district, rooms, price, area
             FROM rental_listings
             WHERE ($1::text IS NULL OR district = $1)
               AND ($2::int IS NULL OR rooms = $2)
               AND price > 0
-            ORDER BY found_at DESC
+              AND {rental_scope}
+              AND ($3::float IS NULL OR area BETWEEN $3 * 0.85 AND $3 * 1.15)
+            ORDER BY last_seen DESC
             LIMIT 10
-        """, district_norm, listing.get("rooms"))
-
-        # Если по точному району+комнатам пусто — тот же район без фильтра
-        # по комнатам (лучше приблизительные соседи, чем "данных нет")
-        if not rental_comps and district_norm:
-            rental_comps = await pg_fetch("""
-                SELECT complex_name, district, rooms, price, area
-                FROM rental_listings
-                WHERE district = $1 AND price > 0
-                ORDER BY found_at DESC
-                LIMIT 10
-            """, district_norm)
+        """, district_norm, listing.get("rooms"), listing.get("area") if (listing.get("area") or 0) > 0 else None)
 
         # Аргументы для торга и вопросы продавцу
         from bot.core.listing_intel import build_negotiation_points, build_seller_questions
@@ -2271,5 +2266,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.include_router(make_analysis_requests_router(templates))
     from bot.web.seller_review import make_seller_review_router
     app.include_router(make_seller_review_router(templates))
+    from bot.rental_health_web import register_rental_health_routes
+    register_rental_health_routes(app, templates)
 
     return app
