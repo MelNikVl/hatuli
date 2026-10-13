@@ -80,6 +80,19 @@ def safe_photo_url(value) -> str | None:
     return value
 
 
+def _valid_source(row: dict) -> bool:
+    value = row.get("url")
+    if not isinstance(value, str) or len(value) > 500:
+        return False
+    try:
+        parsed = urlsplit(value)
+        return (parsed.scheme == "https" and parsed.hostname in {"krisha.kz", "www.krisha.kz"}
+                and not parsed.username and not parsed.password and parsed.port is None
+                and parsed.path.rstrip("/") == f"/a/show/{row['id']}")
+    except (KeyError, ValueError):
+        return False
+
+
 def _list(value) -> list:
     if isinstance(value, str):
         try:
@@ -123,7 +136,7 @@ def _similar(a: dict, b: dict) -> bool:
 
 
 def _eligible(row: dict, now: datetime) -> bool:
-    if not _ID.fullmatch(str(row.get("id", ""))) or row.get("is_active") is not True or row.get("is_duplicate") is True or row.get("dup_needs_review") is True or row.get("market_type") != "secondary":
+    if not _ID.fullmatch(str(row.get("id", ""))) or not _valid_source(row) or row.get("is_active") is not True or row.get("is_duplicate") is True or row.get("dup_needs_review") is True or row.get("market_type") != "secondary":
         return False
     price, area, rooms = (_number(row.get(key)) for key in ("price", "area", "rooms"))
     if price is None or area is None or rooms is None or not (5_000_000 <= price <= 600_000_000 and 20 <= area <= 300 and rooms.is_integer() and 1 <= rooms <= 6 and 14 <= area / rooms <= 100 and 150_000 <= price / area <= 3_000_000):

@@ -15,7 +15,7 @@ PHOTO = "https://krisha-photos.kcdn.online/webp/c7/c70532b0-9310-4f48-bc2d-e59a8
 
 
 def row(index=0, **changes):
-    value = dict(id=str(1016000000 + index), property_id=index, price=30_000_000,
+    value = dict(id=str(1016000000 + index), url=f"https://krisha.kz/a/show/{1016000000 + index}", property_id=index, price=30_000_000,
                  area=60., rooms=2, floor=5, floors_total=12, district="Есильский р-н",
                  is_active=True, is_duplicate=False, dup_needs_review=False,
                  market_type="secondary", last_seen=NOW - timedelta(hours=2),
@@ -47,6 +47,7 @@ def test_fresh_median_correct_discount_not_upside_or_stale_score():
     dict(last_seen=NOW-timedelta(hours=73)), dict(last_seen=NOW+timedelta(seconds=1)),
     dict(last_seen=datetime(2026,10,13)), dict(year_built=2027), dict(complex_resolution="geo"),
     dict(id="https://evil.example/"), dict(floor=None), dict(floor=13), dict(approved_photo_urls=[]),
+    dict(url="https://evil.example/a/show/1016000000"), dict(url="https://krisha.kz/a/show/1016000001"),
 ])
 def test_invalid_or_unreliable_card_excluded(change):
     sample = rows()

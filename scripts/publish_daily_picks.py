@@ -42,7 +42,7 @@ WITH photos AS (
     WHERE changed_at BETWEEN $1::timestamptz - interval '30 days' AND $1
     GROUP BY listing_id
 )
-SELECT a.id, a.price, a.area, a.rooms, a.floor, a.floors_total, a.district,
+SELECT a.id, a.url, a.price, a.area, a.rooms, a.floor, a.floors_total, a.district,
        a.year_built, a.is_owner, a.is_active, a.is_duplicate, a.dup_needs_review,
        a.market_type, a.last_seen, a.resolved_house_id, a.house_attribution,
        a.complex_id, a.complex_resolution, a.lat, a.lon, a.finish_level, pl.property_id,
