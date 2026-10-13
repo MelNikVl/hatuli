@@ -105,6 +105,30 @@ def _extract_complex(text: str) -> str:
     return m.group(1).strip()[:80] if m else ""
 
 
+def _rental_card_photo_url(value: object) -> str | None:
+    """Allow observed rental preview CDNs without changing fingerprint rules."""
+    from bot.core.daily_picks import safe_photo_url
+    approved = safe_photo_url(value)
+    if approved:
+        return approved
+    if not isinstance(value, str) or len(value) > 400:
+        return None
+    try:
+        parsed = urlparse(value)
+        if (parsed.scheme != "https" or parsed.hostname != "astps-photos-kr.kcdn.kz"
+                or parsed.username or parsed.password or parsed.port is not None
+                or parsed.query or parsed.fragment or parsed.params):
+            return None
+        match = re.fullmatch(
+            r"/webp/[0-9a-f]{2}/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/"
+            r"\d{1,4}-(\d{1,4})x(\d{1,4})\.(?:jpg|jpeg|webp)", parsed.path, re.I)
+        if not match or any(not 1 <= int(size) <= 4096 for size in match.groups()):
+            return None
+    except ValueError:
+        return None
+    return value
+
+
 async def fetch_complex_name(listing_id: str) -> str | None:
     """Парсит страницу объявления и возвращает название ЖК."""
     url = f"{BASE_URL}/a/show/{listing_id}"
@@ -184,12 +208,11 @@ def _parse_card(card, prop_type: str) -> RentalListing | None:
         photo_url = None
         photo = card.select_one("img.a-image__img")
         if photo:
-            from bot.core.daily_picks import safe_photo_url
             for attribute in ("src", "data-src", "data-original"):
                 value = photo.get(attribute)
                 if isinstance(value, str):
                     value = "https:" + value if value.startswith("//") else value
-                candidate = safe_photo_url(value)
+                candidate = _rental_card_photo_url(value)
                 if candidate:
                     photo_url = candidate
                     break
@@ -334,7 +357,7 @@ async def _fetch_page_result(client: httpx.AsyncClient, url: str, prop_type: str
         r"подтвердите.{0,30}(робот|человек)|access denied|just a moment", text)
     challenge = re.search(r"captcha|капч|подтвердите.{0,30}(робот|человек)|провер.{0,20}(робот|человек)|access denied|just a moment", text)
     main_list = soup.select_one(".a-list.a-search-list")
-    cards = (main_list.select("div.a-card, section.a-card") if main_list is not None
+    cards = (main_list.select(":scope > div.a-card, :scope > section.a-card") if main_list is not None
              else soup.select("div.a-card, section.a-card"))
     if explicit_challenge or (challenge and not cards):
         raise RentalSearchBlockedError(f"Blocked rental search response: {url}")

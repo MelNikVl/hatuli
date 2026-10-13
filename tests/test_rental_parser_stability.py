@@ -176,6 +176,19 @@ async def test_main_inventory_excludes_promoted_and_footer_cards():
 
 
 @pytest.mark.asyncio
+async def test_nested_promoted_section_is_not_counted_as_main_catalog_inventory():
+    html = ('<div class="a-list a-search-list">' + card("1") +
+            '<div class="highlighted-section">' + card("9") + '</div>' +
+            card("2").replace('<div class="a-card"', '<section class="a-card"', 1).rsplit('</div>', 1)[0] +
+            '</section></div>')
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, text=html))) as client:
+        result = await rentals._fetch_page_result(client, rentals.BASE_URL + PATH, "apartment")
+    assert result.card_ids == ("1", "2")
+    assert [listing.id for listing in result.listings] == ["1", "2"]
+
+
+@pytest.mark.asyncio
 async def test_explicit_challenge_with_recommendation_cards_is_still_blocked():
     html = '<h1>Подтвердите, что вы не робот</h1><div class="highlighted-section">' + card("1") + '</div>'
     async with httpx.AsyncClient(transport=httpx.MockTransport(
@@ -266,6 +279,28 @@ def test_arbitrary_image_host_is_not_persisted_as_source_photo():
     listing = rentals._parse_card(rentals.BeautifulSoup(
         card("1", extra='<img class="a-image__img" src="https://example.com/private.jpg">'), "html.parser").div, "apartment")
     assert listing.photo_url is None
+
+
+def test_live_rental_preview_cdn_image_is_saved_without_weakening_daily_pick_rules():
+    from bot.core.daily_picks import safe_photo_url
+    photo = "https://astps-photos-kr.kcdn.kz/webp/56/56e36366-f634-480b-be27-f81efd89f4b1/4-400x300.jpg"
+    listing = rentals._parse_card(rentals.BeautifulSoup(
+        card("1", extra=f'<img class="a-image__img" src="{photo}">'), "html.parser").div, "apartment")
+    assert listing.photo_url == photo
+    assert safe_photo_url(photo) is None
+
+
+@pytest.mark.parametrize("url", [
+    "https://astps-photos-kr.kcdn.kz.evil.test/webp/56/56e36366-f634-480b-be27-f81efd89f4b1/4-400x300.jpg",
+    "http://astps-photos-kr.kcdn.kz/webp/56/56e36366-f634-480b-be27-f81efd89f4b1/4-400x300.jpg",
+    "https://user@astps-photos-kr.kcdn.kz/webp/56/56e36366-f634-480b-be27-f81efd89f4b1/4-400x300.jpg",
+    "https://astps-photos-kr.kcdn.kz:443/webp/56/56e36366-f634-480b-be27-f81efd89f4b1/4-400x300.jpg",
+    "https://astps-photos-kr.kcdn.kz/webp/56/56e36366-f634-480b-be27-f81efd89f4b1/4-400x300.jpg?token=secret",
+    "https://astps-photos-kr.kcdn.kz/webp/56/56e36366-f634-480b-be27-f81efd89f4b1/4-400x300.jpg#fragment",
+    "https://astps-photos-kr.kcdn.kz/private.jpg",
+])
+def test_rental_preview_validator_rejects_unapproved_urls(url):
+    assert rentals._rental_card_photo_url(url) is None
 
 
 @pytest.mark.asyncio
