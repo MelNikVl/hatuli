@@ -16,7 +16,7 @@ for argument in "$@"; do
     chmod 700 -- "$TMPDIR"
     while IFS= read -r entry; do
       case "$entry" in
-        DISPLAY=*|XAUTHORITY=*|WAYLAND_DISPLAY=*) export "$entry" ;;
+        DISPLAY=*|XAUTHORITY=*|WAYLAND_DISPLAY=*|DBUS_SESSION_BUS_ADDRESS=*|XDG_SESSION_TYPE=*|XDG_CURRENT_DESKTOP=*) export "$entry" ;;
       esac
     done < <(systemctl --user show-environment)
     exec "$project_root/venv/bin/python" scripts/publish_daily_picks_browser.py --headed "$@"
