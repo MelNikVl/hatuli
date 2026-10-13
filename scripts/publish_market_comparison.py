@@ -20,6 +20,7 @@ PRIMARY_SQL = """
 SELECT u.id, coalesce(c.canonical_id,c.id) AS complex_id, canonical.name AS complex_name,
        u.source,u.status,u.price,u.area,u.rooms,u.floor,u.floors_total,u.last_seen_at,
        coalesce(c.lat,canonical.lat) AS lat,coalesce(c.lon,canonical.lon) AS lon,
+       CASE WHEN c.lat IS NOT NULL AND c.lon IS NOT NULL THEN c.coords_source ELSE canonical.coords_source END AS coords_source,
        coalesce(c.build_status,canonical.build_status) AS build_status,
        coalesce(c.completion_year,canonical.completion_year) AS completion_year,
        coalesce(c.completion_quarter,canonical.completion_quarter) AS completion_quarter,

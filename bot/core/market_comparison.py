@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from bot.core.hexgrid import hex_id as point_hex
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
 MAX_SOURCE_AGE = timedelta(hours=72)
 MIN_COMPARABLES = 5
@@ -35,7 +35,10 @@ _HEX = re.compile(r"(-?\d{1,5}):(-?\d{1,5})\Z")
 _FINISH = {"rough": "Черновая", "prefinish": "Предчистовая", "finished": "Чистовая", "renovated": "С ремонтом", "furnished": "С мебелью", "designer": "Дизайнерский ремонт", "needs_repair": "Требуется ремонт"}
 _STAGE = {"Строящийся": "under_construction", "Сдан в эксплуатацию": "commissioned"}
 _STAGE_LABEL = {"under_construction": "Строится по данным каталога", "commissioned": "В каталоге указан ввод в эксплуатацию", "unknown": "Статус ввода не подтверждён"}
-_OFFER_FIELDS = ("id", "market_type", "complex_id", "complex_name", "hex_id", "rooms", "area", "price", "price_per_m2", "floor", "floors_total", "finish_level", "finish_label", "build_status", "build_status_label", "completion_year", "completion_quarter", "housing_class", "source_label", "url", "observed_at")
+_OFFER_FIELDS = ("id", "market_type", "complex_id", "complex_name", "hex_id", "rooms", "area", "price", "price_per_m2", "floor", "floors_total", "finish_level", "finish_label", "build_status", "build_status_label", "completion_year", "completion_quarter", "housing_class", "source_label", "url", "observed_at", "geo_source", "geo_quality")
+_CATALOG_GEO_SOURCES = {"listings", "homsters", "korter", "developer", "nominatim", "unknown"}
+_GEO_QUALITY = {"listings": "listing_centroid", "homsters": "source_project_point", "korter": "source_project_point",
+                "developer": "source_project_point", "nominatim": "geocoded_project_point", "unknown": "unknown"}
 
 
 def snapshot_path() -> Path:
@@ -121,6 +124,8 @@ def _public_offer(row: dict, market: str, now: datetime, edge_m: float) -> dict 
             return None
         identifier, url, source_label = f"newbuild:{uid}", f"/complex/{cid}", PRIMARY_SOURCES[source]
         finish = None  # Unit-level finish is absent from the structured source.
+        geo_source = row.get("coords_source") if row.get("coords_source") in _CATALOG_GEO_SOURCES else "unknown"
+        geo_quality = _GEO_QUALITY[geo_source]
     else:
         identifier = str(row.get("id", ""))
         url = _safe_secondary_url(row.get("url"), identifier)
@@ -129,6 +134,7 @@ def _public_offer(row: dict, market: str, now: datetime, edge_m: float) -> dict 
                 or row.get("linked_primary_unit")):
             return None
         source_label = "Krisha · вторичка"
+        geo_source, geo_quality = "krisha_listing", "approximate_listing_point"
         finish = row.get("finish_level") if row.get("finish_level") in _FINISH else None
         year = _int(row.get("year_built"), 1800, 2200)
         if year is not None and year > now.astimezone(LOCAL_TIMEZONE).year:
@@ -148,7 +154,7 @@ def _public_offer(row: dict, market: str, now: datetime, edge_m: float) -> dict 
         "completion_year": _int(row.get("completion_year"), 2000, 2200),
         "completion_quarter": _int(row.get("completion_quarter"), 1, 4),
         "housing_class": housing_class, "source_label": source_label, "url": url,
-        "observed_at": observed.isoformat(),
+        "observed_at": observed.isoformat(), "geo_source": geo_source, "geo_quality": geo_quality,
     }
 
 
@@ -209,7 +215,8 @@ def _validated_snapshot(raw: dict) -> dict:
         price, area, rooms = _int(row["price"], 5_000_000, 600_000_000), _number(row["area"]), _int(row["rooms"], 1, 6)
         if price is None or area is None or not 20 <= area <= 300 or rooms is None:
             raise ValueError("Invalid public price or size")
-        if abs(price / area - row["price_per_m2"]) > 100 or not 100_000 <= price / area <= 3_000_000:
+        price_per_m2 = _number(row["price_per_m2"])
+        if price_per_m2 is None or abs(price / area - price_per_m2) > 100 or not 100_000 <= price / area <= 3_000_000:
             raise ValueError("Price per metre does not match offer")
         observed = _utc(row["observed_at"])
         if not generated - MAX_SOURCE_AGE <= observed <= generated:
@@ -230,13 +237,17 @@ def _validated_snapshot(raw: dict) -> dict:
                 raise ValueError("Invalid public primary target")
             if row["source_label"] not in PRIMARY_SOURCES.values() or row["finish_level"] is not None:
                 raise ValueError("Unverified developer/finish")
+            if row["geo_source"] not in _CATALOG_GEO_SOURCES or row["geo_quality"] != _GEO_QUALITY[row["geo_source"]]:
+                raise ValueError("Unverified catalogue coordinate quality")
         elif (not re.fullmatch(r"\d{5,20}", identifier) or not _safe_secondary_url(row["url"], identifier)
-              or row["source_label"] != "Krisha · вторичка"):
+              or row["source_label"] != "Krisha · вторичка" or row["geo_source"] != "krisha_listing"
+              or row["geo_quality"] != "approximate_listing_point"):
             raise ValueError("Invalid public secondary target")
         stage, finish = row["build_status"], row["finish_level"]
         if stage not in _STAGE_LABEL or (finish is not None and finish not in _FINISH):
             raise ValueError("Invalid public status")
         safe = {k: row[k] for k in _OFFER_FIELDS}
+        safe.update(price=price, area=area, rooms=rooms, price_per_m2=round(price_per_m2))
         for field, limit in (("complex_name", 100), ("housing_class", 50)):
             if safe[field] is not None and (not isinstance(safe[field], str) or len(safe[field]) > limit):
                 raise ValueError("Invalid public text")
@@ -312,6 +323,7 @@ def _stats(offers: list[dict], market: str) -> dict:
     med = median(prices) if prices else None
     finishes = Counter(o["finish_level"] or "unknown" for o in offers)
     stages = Counter(o["build_status"] for o in offers)
+    geo_quality = Counter(o["geo_quality"] for o in offers)
     newest = max((o["observed_at"] for o in offers), default=None)
     oldest = min((o["observed_at"] for o in offers), default=None)
     advantages, cautions = [], []
@@ -326,12 +338,17 @@ def _stats(offers: list[dict], market: str) -> dict:
             cautions.append(f"У {stages['unknown']} вариантов статус ввода не подтверждён. Плановый год сдачи не доказывает готовность.")
         if offers:
             cautions.append("Отделка юнита, ремонт, меблировка и схема оплаты не подтверждены: базовая цена не равна сумме для заселения.")
+            cautions.append("Координата относится к ЖК, а не к корпусу конкретного юнита. Границы маленьких гексов не подтверждены.")
+        if geo_quality["listing_centroid"]:
+            cautions.append(f"{geo_quality['listing_centroid']} вариантов привязаны к центру объявлений ЖК; это оценочная точка, не подтверждённый адрес корпуса.")
+        if geo_quality["unknown"]:
+            cautions.append(f"У {geo_quality['unknown']} вариантов источник координаты ЖК не установлен.")
     else:
         ready = sum(finishes[k] for k in ("finished", "renovated", "furnished", "designer"))
         if ready:
             advantages.append(f"{ready} вариантов с указанной готовой отделкой; состояние нужно проверить на просмотре.")
         if offers:
-            advantages.append("Можно осмотреть существующую квартиру, дом и окружение до покупки.")
+            advantages.append("У готовой квартиры можно осмотреть состояние, дом и окружение до покупки; готовность объекта нужно подтвердить.")
             cautions.append("Проверить право собственности, обременения, долги, перепланировку и состояние инженерных сетей.")
         if finishes["unknown"]:
             cautions.append(f"У {finishes['unknown']} вариантов отделка неизвестна: стоимость ремонта не учтена.")
@@ -346,6 +363,7 @@ def _stats(offers: list[dict], market: str) -> dict:
             "complex_count": len({o["complex_id"] for o in offers if o["complex_id"] is not None}),
             "finish_known_count": len(offers) - finishes["unknown"], "finish_counts": dict(finishes),
             "stage_counts": dict(stages), "housing_class_known_count": sum(bool(o["housing_class"]) for o in offers),
+            "geo_quality_counts": dict(geo_quality),
             "observed_at": newest, "observed_at_label": _date_label(newest), "oldest_observed_at": oldest,
             "advantages": advantages, "cautions": cautions}
 
@@ -389,12 +407,19 @@ def compare_market(snapshot: dict, hex_id: str | None = None, rooms: int = 2, ar
         stats = {"primary": _stats(primary, "primary"), "secondary": _stats(secondary, "secondary")}
         sufficient = len(primary) >= MIN_COMPARABLES and len(secondary) >= MIN_COMPARABLES
         dispersion_ok = sufficient and all(stats[m]["relative_iqr"] <= MAX_RELATIVE_IQR for m in stats)
-        comparable = bool(sufficient and dispersion_ok and not stale)
+        # Every available primary coordinate is a project point, often the
+        # centroid of advertisements. No current pipeline verifies unit/building
+        # locations at this resolution. Never turn that uncertainty into a
+        # confident 1/7/19-cell price conclusion, even with many observations.
+        micro_geo_unknown = radius is not None and radius <= 2 and bool(primary)
+        comparable = bool(sufficient and dispersion_ok and not stale and not micro_geo_unknown)
         delta = round((stats["secondary"]["median_per_m2"] - stats["primary"]["median_per_m2"]) / stats["secondary"]["median_per_m2"] * 100, 1) if comparable else None
-        confidence = ("Недостаточно аналогов: нужно не менее 5 вариантов каждого рынка." if not sufficient
+        confidence = ("Снимок устарел; обновление необходимо до вывода о цене." if stale
+                      else "Точность координаты ЖК до корпуса не подтверждена. На масштабе 1, 7 и 19 гексов ценовую дельту не показываем; количества и цены служат ориентиром." if micro_geo_unknown
+                      else "Недостаточно аналогов: нужно не менее 5 вариантов каждого рынка." if not sufficient
                       else "Большой разброс цен: смешанная выборка не даёт надёжного сравнения." if not dispersion_ok
-                      else "Снимок устарел; обновление необходимо до вывода о цене." if stale
-                      else "Базовые цены сопоставлены по комнатам и площади ±15%; отделка и класс могут различаться.")
+                      else "Городской срез смешивает локации и классы домов. Базовые цены сопоставлены по комнатам и площади ±15%; это ориентир, не аналог конкретной квартиры." if key == "city"
+                      else "Широкий срез по приблизительным точкам ЖК и объявлений: границы зоны не подтверждены до корпуса. Базовые цены сопоставлены по комнатам и площади ±15%; отделка и класс могут различаться.")
         if comparable and delta and abs(delta) >= 1:
             lower = "primary" if delta > 0 else "secondary"
             pct = abs(delta) if delta > 0 else abs(delta) / (1 + abs(delta) / 100)
@@ -406,14 +431,16 @@ def compare_market(snapshot: dict, hex_id: str | None = None, rooms: int = 2, ar
         tiers.append({"key": key, "scope": key, "label": SCOPE_LABELS[key],
                       "cells_count": len({o["hex_id"] for o in all_offers}) if radius is None else 1 + 3 * radius * (radius + 1),
                       "primary_count": len(primary), "secondary_count": len(secondary), "delta_pct": delta,
-                      "comparable": comparable, "confidence_reason": confidence, "href": href})
+                      "comparable": comparable, "confidence_reason": confidence, "geo_micro_confirmed": False, "href": href})
         stats_by_scope[key], rows_by_scope[key] = stats, rows
     seen_complexes, locations = set(), []
     for o in sorted((o for o in all_offers if o["market_type"] == "primary" and o["complex_name"]), key=lambda x: x["complex_name"]):
         if o["complex_id"] not in seen_complexes:
-            locations.append({"hex_id": o["hex_id"], "name": o["complex_name"], "complex_id": o["complex_id"]})
+            locations.append({"hex_id": o["hex_id"], "name": o["complex_name"], "complex_id": o["complex_id"], "geo_source": o["geo_source"], "geo_quality": o["geo_quality"]})
             seen_complexes.add(o["complex_id"])
-    names = sorted({o["complex_name"] for o in all_offers if o["hex_id"] == center and o["complex_name"]})
+    names = sorted({o["complex_name"] for o in all_offers if o["market_type"] == "primary" and o["hex_id"] == center and o["complex_name"]})
+    if not names:
+        names = sorted({o["complex_name"] for o in all_offers if o["hex_id"] == center and o["complex_name"]})
     selected_label = ", ".join(names[:2]) if names else f"Гексагон {center}"
     apartments = sorted((o for o in rows_by_scope[scope] if o["market_type"] == "primary"), key=lambda o: (abs(o["area"] - area), o["price_per_m2"], o["id"]))[:30]
     apartments = [{**o, "observed_at_label": _date_label(o["observed_at"]),

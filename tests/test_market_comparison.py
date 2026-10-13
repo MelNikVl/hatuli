@@ -40,7 +40,7 @@ def snapshot(primary_count=5, secondary_count=5, **kwargs):
 def test_matched_prices_rooms_area_and_denominator():
     data = build_market_snapshot([primary(i+1) for i in range(5)] + [primary(99, rooms=3, price=10_000_000), primary(98, area=100)],
                                  [secondary(i+100000) for i in range(5)] + [secondary(900000, area=100)], now=NOW)
-    result = compare_market(data, "0:0", rooms=2, area=60, now=NOW)
+    result = compare_market(data, "0:0", rooms=2, area=60, scope="ring4", now=NOW)
     assert result["stats"]["primary"]["count"] == result["stats"]["secondary"]["count"] == 5
     assert result["stats"]["primary"]["median_per_m2"] == 500000
     assert result["stats"]["secondary"]["median_per_m2"] == 600000
@@ -99,7 +99,7 @@ def test_completion_year_does_not_prove_commission_or_finish():
 def test_minimum_evidence_and_dispersion_hide_price_claim():
     assert compare_market(snapshot(4, 20), "0:0", now=NOW)["delta_pct"] is None
     varying = [primary(i+1, price=price) for i, price in enumerate((10_000_000, 20_000_000, 30_000_000, 60_000_000, 100_000_000))]
-    result = compare_market(build_market_snapshot(varying, [secondary(i+100000) for i in range(5)], now=NOW), "0:0", now=NOW)
+    result = compare_market(build_market_snapshot(varying, [secondary(i+100000) for i in range(5)], now=NOW), "0:0", scope="city", now=NOW)
     assert result["delta_pct"] is None
     assert "разброс" in result["confidence_reason"]
 
@@ -161,6 +161,37 @@ def test_invalid_user_parameters_have_safe_defaults():
     result = compare_market(snapshot(), hex_id="evil<script>", rooms=True, area=float("inf"), scope="invalid", now=NOW)
     assert result["rooms"] == 2 and result["area"] == 60 and result["scope"] == "hex"
     assert result["selected_hex"] == "0:0"
+
+
+@pytest.mark.parametrize("source,expected", [("listings", "listing_centroid"), (None, "unknown"), ("homsters", "source_project_point")])
+def test_unverified_project_coordinates_never_claim_micro_advantage(source, expected):
+    data = build_market_snapshot([primary(i+1, coords_source=source) for i in range(5)], [secondary(i+100000) for i in range(5)], now=NOW)
+    assert data["offers"][0]["geo_quality"] == expected
+    result = compare_market(data, "0:0", now=NOW)
+    assert all(t["delta_pct"] is None and not t["comparable"] for t in result["tiers"][:3])
+    assert all(t["comparable"] for t in result["tiers"][3:])
+    assert "Точность координаты" in result["confidence_reason"]
+    assert not any("медиана за м² ниже" in reason for group in result["stats"].values() for reason in group["advantages"])
+    assert result["stats"]["primary"]["count"] == 5
+
+
+def test_header_prefers_project_of_selected_developer_units():
+    data = build_market_snapshot([primary(complex_name="Qasteev", coords_source="listings")],
+                                 [secondary(complex_name="BUQAR JYRAU EXCLUSIVE"), secondary(100001, complex_name="BUQAR JYRAU EXCLUSIVE 2")], now=NOW)
+    result = compare_market(data, "0:0", now=NOW)
+    assert result["selected_label"] == "Qasteev"
+
+
+def test_old_snapshot_and_forged_geo_verification_fail_closed(tmp_path):
+    path = tmp_path / "comparison.json"
+    data = snapshot()
+    data["schema_version"] = 1
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert not load_market_snapshot(path)["offers"]
+    data = snapshot()
+    data["offers"][0]["geo_quality"] = "building_verified"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert not load_market_snapshot(path)["offers"]
 
 
 @pytest.mark.asyncio
