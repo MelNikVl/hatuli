@@ -82,7 +82,7 @@ def test_nearby_fallback_exact_scope_and_rejects_distance_or_finish_mismatch():
     sample += [row(i, complex_id=i+10, lat=51.1001, lon=71.4001, finish_level="finished") for i in range(1,6)]
     sample += [row(6, complex_id=20, lat=51.13, lon=71.4), row(7, complex_id=21, lat=51.1001, lon=71.4001, finish_level="shell")]
     item = first(dp.build_daily_picks(sample, NOW))
-    assert item["price_comparison"]["scope"] == "в радиусе 800 м по координатам объявлений"
+    assert item["price_comparison"]["scope"] == "в радиусе 800 м по приблизительным координатам"
     assert item["price_comparison"]["comparable_count"] == 5
     assert "в радиусе 800 м" in item["reasons"][0]
     assert any("приблизительные" in caution for caution in item["cautions"])
