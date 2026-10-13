@@ -36,3 +36,10 @@ research/phase_c/data/
 /var/browser-source-checks.json
 /var/browser-listing-*.json
 /var/complex-identity-review-*.json
+
+# Dedicated server browser profiles, cookies, evidence and private run status.
+/var/browser-picks/
+/var/daily-picks-browser/
+/var/server-browser-probe-*
+/var/browser-smoke-*.py
+/var/gui-smoke-*.py
