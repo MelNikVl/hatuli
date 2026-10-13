@@ -43,7 +43,8 @@ def test_atomic_rental_observation_and_daily_metrics(monkeypatch):
             listing = RentalListing(id='123456789',url='https://krisha.kz/a/show/123456789',
                 title='2-комнатная квартира',price=200000,area=60,rooms=2,floor=3,
                 floors_total=10,address='QA',district='Есиль',complex_name=None,
-                city='astana',prop_type='apartment',published_at='13 окт.')
+                city='astana',prop_type='apartment',published_at='13 окт.',
+                photo_url='https://krisha-photos.kcdn.online/webp/42/421f9dc4-7436-486a-b74c-c4f488e40159/1-400x300.jpg')
             first = await save_rental_listings([listing])
             assert (int(first),first.new,first.updated,first.reactivated)==(1,1,0,0)
             found = await connection.fetchval('SELECT found_at FROM rental_listings')
@@ -54,6 +55,7 @@ def test_atomic_rental_observation_and_daily_metrics(monkeypatch):
             row = await connection.fetchrow('SELECT * FROM rental_listings')
             assert row['is_active'] and row['archived_at'] is None and row['archive_reason'] is None
             assert row['found_at']==found and row['price']==180000
+            assert row['photo_url']==listing.photo_url
             history = await connection.fetchrow('SELECT * FROM rental_price_history')
             assert (history['old_price'],history['new_price'])==(200000,180000)
             third = await save_rental_listings([listing])

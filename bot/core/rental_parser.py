@@ -115,7 +115,7 @@ def _rental_card_photo_url(value: object) -> str | None:
         return None
     try:
         parsed = urlparse(value)
-        if (parsed.scheme != "https" or parsed.hostname != "astps-photos-kr.kcdn.kz"
+        if (parsed.scheme != "https" or parsed.hostname not in ("astps-photos-kr.kcdn.kz", "krisha-photos.kcdn.online")
                 or parsed.username or parsed.password or parsed.port is not None
                 or parsed.query or parsed.fragment or parsed.params):
             return None
