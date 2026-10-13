@@ -146,7 +146,7 @@ async def test_refill_replaces_failed_cards_without_changing_comparable_pool(mon
         is_active=True, market_type="secondary", price=30_000_000,
         area=60, rooms=2, last_seen=NOW, complex_id=1, complex_resolution="name",
         floor=5, floors_total=12, approved_photo_urls=[PHOTO_ROOT + "1-full.jpg"],
-        finish_level="finished") for index in range(60)]
+        finish_level="finished", ceiling_height=3.0) for index in range(60)]
     batches = []
 
     async def read(dsn, now):
@@ -312,7 +312,7 @@ async def test_confirmed_archived_sources_are_removed_from_final_comparison_pool
         is_active=True, market_type="secondary", price=30_000_000,
         area=60, rooms=2, last_seen=NOW, complex_id=1, complex_resolution="name",
         floor=5, floors_total=12, approved_photo_urls=[PHOTO_ROOT + "1-full.jpg"],
-        finish_level="finished") for index in range(60)]
+        finish_level="finished", ceiling_height=3.0) for index in range(60)]
     source_batches = []
     archived = set()
 

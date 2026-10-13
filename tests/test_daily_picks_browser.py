@@ -366,7 +366,7 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
     rows = [dict(id=row["id"], url=row["source_url"], property_id=index, is_active=True,
                  market_type="secondary", last_seen=now, complex_id=1, complex_resolution="name",
                  price=row["price"], rooms=row["rooms"], area=row["area"], floor=row["floor"],
-                 floors_total=row["floors_total"], finish_level="finished",
+                 floors_total=row["floors_total"], finish_level="finished", ceiling_height=3.0,
                  approved_photo_urls=["https://krisha-photos.kcdn.online/webp/c7/c70532b0-9310-4f48-bc2d-e59a83f9f345/1-full.jpg"])
             for index, row in enumerate(item(i) for i in range(1, 31))]
     async def read(*args):
