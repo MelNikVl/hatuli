@@ -442,7 +442,11 @@ def train_forecaster(records: list[dict], *, as_of: datetime | None = None,
         if not source_history_verified or not prepared:
             status = "missing_source_history"
             if source_history_verified:
-                if audit.get("missing_attribute_history"):
+                if audit.get("insufficient_source_points"):
+                    # A growing valid cohort is not globally invalidated by
+                    # a minority of excluded out-of-domain attribute rows.
+                    status = "insufficient_history"
+                elif audit.get("missing_attribute_history"):
                     status = "missing_attribute_history"
                 elif audit.get("missing_identity_groups"):
                     status = "insufficient_groups"

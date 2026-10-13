@@ -283,6 +283,19 @@ def test_one_day_of_real_new_collection_is_insufficient_history_not_missing_prov
     assert all(h["status"] == "insufficient_history" for h in artifact["horizons"])
 
 
+def test_first_day_valid_cohort_keeps_its_history_reason_when_invalid_attributes_are_excluded():
+    records = [record(count=1), record(group="excluded-outlier", count=1, area=900)]
+    artifact = pf.train_forecaster(records, as_of=NOW, source_history_verified=True)
+    assert artifact["audit"]["insufficient_source_points"] == 1
+    assert artifact["audit"]["missing_attribute_history"] == 1
+    assert all(h["status"] == "insufficient_history" for h in artifact["horizons"])
+
+
+def test_no_valid_attribute_cohort_retains_the_missing_attribute_history_reason():
+    artifact = pf.train_forecaster([record(count=1, area=900)], as_of=NOW, source_history_verified=True)
+    assert all(h["status"] == "missing_attribute_history" for h in artifact["horizons"])
+
+
 def test_prediction_target_is_anchored_to_latest_checked_quote_not_publication_date():
     result = pf.forecast_listing(record(price=30_000_000), ready_artifact(), now=NOW)
     assert result["as_of"].startswith("2026-10-11")
