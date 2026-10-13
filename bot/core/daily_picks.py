@@ -36,6 +36,9 @@ _DISTRICTS = {
 }
 _ITEM_FIELDS = ("id", "rank", "source_url", "title", "rooms", "area", "floor", "floors_total", "complex_name", "district", "price", "currency", "price_per_m2", "photo_urls", "reasons", "cautions", "observed_at", "source_checked_at", "source_status", "price_comparison")
 _COMPARISON_FIELDS = ("discount_pct", "reference_price_per_m2", "scope", "comparable_count")
+_COMPARISON_SCOPES = {"в том же доме", "в том же ЖК", "в радиусе 800 м по приблизительным координатам"}
+_NEARBY_SCOPE = "в радиусе 800 м по приблизительным координатам"
+_NEARBY_CAUTION = "Аналоги в радиусе 800 м; координаты приблизительные, расположение нужно уточнить."
 _SNAPSHOT_FIELDS = ("schema_version", "selection_date", "timezone", "generated_at", "source_observed_at", "total_candidates", "items", "methodology")
 METHODOLOGY = {
     "title": "Свежая цена и понятные основания",
@@ -214,7 +217,7 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
         if not -MAX_PREMIUM <= discount <= MAX_DISCOUNT or (discount < .01 and not midfloor):
             continue
         percent = round(discount * 100, 1)
-        scope = ("в том же доме" if local_group[0] == "house" else "в том же ЖК") if local_group else "в радиусе 800 м по приблизительным координатам"
+        scope = ("в том же доме" if local_group[0] == "house" else "в том же ЖК") if local_group else _NEARBY_SCOPE
         reasons = _price_reasons(percent, scope, len(peers))
         cautions = []
         first_price = _number(row.get("first_price_30d"))
@@ -233,7 +236,7 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
         elif not row.get("finish_level"):
             cautions.append("Состояние и ремонт уточните у продавца.")
         if local_group is None:
-            cautions.append("Аналоги в радиусе 800 м; координаты приблизительные, расположение нужно уточнить.")
+            cautions.append(_NEARBY_CAUTION)
         district = _DISTRICTS.get(row.get("district"), "Астана")
         complex_name = str(row.get("canonical_complex_name") or "")[:100]
         # Only the canonical catalog label is allowed; raw listing complex_name is not.
@@ -293,14 +296,39 @@ def validate_snapshot(snapshot: dict) -> dict:
         if not isinstance(item.get("cautions"), list) or len(item["cautions"]) > 4 or any(not isinstance(caution, str) or len(caution) > 200 for caution in item["cautions"]):
             raise ValueError("Invalid public cautions")
         comparison = item["price_comparison"]
-        if not isinstance(comparison, dict) or _number(comparison.get("comparable_count")) is None or comparison["comparable_count"] < MIN_COMPARABLES or not -5 <= comparison["discount_pct"] <= 30:
+        if not isinstance(comparison, dict):
             raise ValueError("Invalid comparison")
+        count = comparison.get("comparable_count")
+        discount = comparison.get("discount_pct")
+        reference = comparison.get("reference_price_per_m2")
+        scope = comparison.get("scope")
+        if (type(count) is not int or count < MIN_COMPARABLES
+                or type(discount) not in {int, float} or _number(discount) is None or not -5 <= discount <= 30
+                or type(reference) not in {int, float} or _number(reference) is None or reference <= 0
+                or not isinstance(scope, str) or scope not in _COMPARISON_SCOPES):
+            raise ValueError("Invalid comparison evidence")
+        # The displayed percent must follow the stored asking price and median,
+        # allowing one decimal place of rounding in both the median and percent.
+        actual_m2 = _number(item["price_per_m2"])
+        expected_discount = round((1 - actual_m2 / reference) * 100, 1)
+        if abs(discount - expected_discount) > .100001:
+            raise ValueError("Comparison percent contradicts its price evidence")
+        # Public area is rounded to 0.1 m²; allow that precision and the rounded
+        # asking price per m², rather than treating unrelated numbers as proof.
+        public_area = _number(item["area"])
+        asking_price = _number(item["price"])
+        if public_area <= .05 or not asking_price / (public_area + .05) - .5 <= actual_m2 <= asking_price / (public_area - .05) + .5:
+            raise ValueError("Asking price per square meter contradicts the listing")
         safe_item = {key: item.get(key) for key in _ITEM_FIELDS}
         safe_item["price_comparison"] = {key: comparison.get(key) for key in _COMPARISON_FIELDS}
         # Refresh copy for already verified snapshots without reranking or
         # changing their source confirmations, observations, or publication date.
-        safe_item["reasons"] = _price_reasons(comparison["discount_pct"], comparison["scope"], comparison["comparable_count"]) + item["reasons"][2:]
-        safe_item["cautions"] = ["Аналоги в радиусе 800 м; координаты приблизительные, расположение нужно уточнить." if text == "Координаты приблизительные; расположение нужно уточнить." else text for text in item["cautions"]]
+        safe_item["reasons"] = _price_reasons(discount, scope, count) + item["reasons"][2:]
+        safe_item["cautions"] = [_NEARBY_CAUTION if text == "Координаты приблизительные; расположение нужно уточнить." else text for text in item["cautions"]]
+        if scope == _NEARBY_SCOPE and _NEARBY_CAUTION not in safe_item["cautions"]:
+            if len(safe_item["cautions"]) >= 4:
+                raise ValueError("Nearby comparison requires its location caveat")
+            safe_item["cautions"].append(_NEARBY_CAUTION)
         safe_items.append(safe_item)
     safe = {key: snapshot.get(key) for key in _SNAPSHOT_FIELDS}
     safe["items"] = safe_items
