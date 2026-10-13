@@ -153,6 +153,8 @@ def preview():
         "canonical_changes": decision()["canonical_changes"],
         "listing_changes": {"count": 1, "rebound": 1, "detached": 0, "method_only": 0, "samples": []},
         "preserved": {"source_links": 2, "newbuild_units": 3, "properties": 4, "favorites": 1},
+        "rollback_guard": {"component_ids": [1,2], "listings_hash": "test", "complexes_hash": "test",
+                           "preserved_counts": {"source_links": 2, "newbuild_units": 3, "properties": 4, "favorites": 1}},
     }
 
 
@@ -167,6 +169,26 @@ async def test_stale_preview_does_not_write_identity(monkeypatch):
     assert error.value.code == "stale_preview"
     assert all("UPDATE " not in sql and "INSERT " not in sql for sql, _ in conn.executed)
 
+
+def test_rollback_guard_tracks_new_membership_and_exact_preserved_identity():
+    affected = [{"id":"original","complex_id":2,"complex_resolution":"name",
+                 "complex_name":"Тумар Клаб","complex_url":None,"resolved_house_id":None}]
+    changed = [{"listing_id":"original","complex_id":1,"method":"name"}]
+    canonical = decision()["canonical_changes"]
+    guard = review.build_rollback_guard(affected, complexes(), changed, canonical, [1,2], {},
+                                        preserved_identity_hash="identity-proof")
+    expected = [{**affected[0],"complex_id":1}]
+    assert guard["listings_hash"] == review._digest(expected)
+    assert guard["listings_hash"] != review._digest(expected + [{**expected[0],"id":"new-arrival"}])
+    assert guard["preserved_identity_hash"] == "identity-proof"
+    assert affected[0]["complex_id"] == 2
+
+
+def test_preserved_identity_hash_detects_a_foreign_key_move_without_count_change():
+    before = [{"kind":"newbuild_units","identity_id":"31","complex_id":2,"key_a":"developer","key_b":"unit"}]
+    after = [{**before[0],"complex_id":1}]
+    assert len(before) == len(after)
+    assert review._digest(before) != review._digest(after)
 
 @pytest.mark.asyncio
 async def test_apply_preserves_source_spine_text_and_property_unit_favorite_identity(monkeypatch):

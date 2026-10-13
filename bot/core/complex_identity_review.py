@@ -25,6 +25,53 @@ VERSION = "complex_identity_review_v1"
 _LOCK = 728143
 _SEPARATE = {"sibling_phase", "same_umbrella_project", "separate_neighbor_complex"}
 
+_COMPLEX_ROWS_SQL = """
+    SELECT id,name,address,lat,lon,developer_id,parent_complex_id,is_umbrella,
+           housing_class,is_newbuild,krisha_url,canonical_id,canonical_reason,
+           COALESCE(is_garbage,false) AS is_garbage,COALESCE(is_street,false) AS is_street
+    FROM complexes ORDER BY id
+"""
+_AFFECTED_SQL = """
+    SELECT a.id,a.complex_id,a.complex_resolution,a.complex_name,a.complex_url,a.resolved_house_id
+    FROM apartment_listings a
+    WHERE a.complex_id=ANY($1::int[]) OR a.resolved_house_id=ANY($1::int[])
+       OR EXISTS(SELECT 1 FROM complexes c WHERE c.id=ANY($1::int[])
+                 AND complex_name_key(c.name)=complex_name_key(a.complex_name))
+       OR EXISTS(SELECT 1 FROM complex_aliases ca WHERE ca.complex_id=ANY($1::int[])
+                 AND ca.status='verified' AND ca.normalized_name=complex_name_key(a.complex_name))
+       OR EXISTS(SELECT 1 FROM complexes c WHERE c.id=ANY($1::int[])
+                 AND nullif(c.krisha_url,'') IS NOT NULL
+                 AND lower(substring(c.krisha_url from '/complex/show/[^/]+/([^/?#]+)')) =
+                     lower(substring(a.complex_url from '/complex/show/[^/]+/([^/?#]+)')))
+    ORDER BY a.id
+"""
+_PRESERVED_SQL = """
+    SELECT (SELECT count(*) FROM complex_source_links WHERE complex_id=ANY($1::int[])) AS source_links,
+           (SELECT count(*) FROM newbuild_units WHERE complex_id=ANY($1::int[])) AS newbuild_units,
+           (SELECT count(*) FROM properties WHERE complex_id=ANY($1::int[])) AS properties,
+           (SELECT count(*) FROM complex_favorites WHERE complex_id=ANY($1::int[])) AS favorites
+"""
+
+_PRESERVED_IDENTITIES_SQL = """
+    SELECT 'source_links'::text AS kind,id::text AS identity_id,complex_id,source AS key_a,source_id AS key_b
+    FROM complex_source_links WHERE complex_id=ANY($1::int[])
+    UNION ALL
+    SELECT 'newbuild_units',id::text,complex_id,source,source_unit_id
+    FROM newbuild_units WHERE complex_id=ANY($1::int[])
+    UNION ALL
+    SELECT 'properties',property_id::text,complex_id,address_hash,NULL
+    FROM properties WHERE complex_id=ANY($1::int[])
+    UNION ALL
+    SELECT 'favorites',user_id::text||'/'||complex_id::text,complex_id,NULL,NULL
+    FROM complex_favorites WHERE complex_id=ANY($1::int[])
+    ORDER BY kind,identity_id
+"""
+_REVIEW_LOCK_SQL = """LOCK TABLE complexes,apartment_listings,complex_canonical_overrides,
+    complex_relations,complex_aliases,complex_duplicate_candidates,complex_source_links,
+    newbuild_units,properties,complex_favorites IN SHARE ROW EXCLUSIVE MODE"""
+
+
+
 
 class ComplexIdentityReviewError(ValueError):
     def __init__(self, code: str, detail: str):
@@ -165,12 +212,7 @@ async def _snapshot(conn, candidate_id):
     if candidate_row is None:
         raise ComplexIdentityReviewError("not_found", "Кандидат не найден")
     candidate = dict(candidate_row)
-    complexes = [dict(row) for row in await conn.fetch("""
-        SELECT id,name,address,lat,lon,developer_id,parent_complex_id,is_umbrella,
-               housing_class,is_newbuild,krisha_url,canonical_id,canonical_reason,
-               COALESCE(is_garbage,false) AS is_garbage,COALESCE(is_street,false) AS is_street
-        FROM complexes ORDER BY id
-    """)]
+    complexes = [dict(row) for row in await conn.fetch(_COMPLEX_ROWS_SQL)]
     counts = {row["complex_id"]: row["n"] for row in await conn.fetch(
         "SELECT complex_id,count(*) AS n FROM apartment_listings WHERE complex_id IS NOT NULL GROUP BY 1")}
     relations = [dict(row) for row in await conn.fetch(
@@ -179,20 +221,7 @@ async def _snapshot(conn, candidate_id):
         "SELECT complex_id,canonical_id FROM complex_canonical_overrides ORDER BY 1")]
     decision = build_decision(candidate, complexes, counts, relations, overrides)
     ids = decision["component_ids"]
-    affected = [dict(row) for row in await conn.fetch("""
-        SELECT a.id,a.complex_id,a.complex_resolution,a.complex_name,a.complex_url,a.resolved_house_id
-        FROM apartment_listings a
-        WHERE a.complex_id=ANY($1::int[]) OR a.resolved_house_id=ANY($1::int[])
-           OR EXISTS(SELECT 1 FROM complexes c WHERE c.id=ANY($1::int[])
-                     AND complex_name_key(c.name)=complex_name_key(a.complex_name))
-           OR EXISTS(SELECT 1 FROM complex_aliases ca WHERE ca.complex_id=ANY($1::int[])
-                     AND ca.status='verified' AND ca.normalized_name=complex_name_key(a.complex_name))
-           OR EXISTS(SELECT 1 FROM complexes c WHERE c.id=ANY($1::int[])
-                     AND nullif(c.krisha_url,'') IS NOT NULL
-                     AND lower(substring(c.krisha_url from '/complex/show/[^/]+/([^/?#]+)')) =
-                         lower(substring(a.complex_url from '/complex/show/[^/]+/([^/?#]+)')))
-        ORDER BY a.id
-    """, ids)]
+    affected = [dict(row) for row in await conn.fetch(_AFFECTED_SQL, ids)]
     changes = []
     if not decision["blockers"]:
         changes = [dict(row) for row in await conn.fetch(
@@ -205,12 +234,8 @@ async def _snapshot(conn, candidate_id):
     pair = [row for row in complexes if row["id"] in {
         candidate["complex_id_a"], candidate["complex_id_b"]
     }]
-    preserved = dict(await conn.fetchrow("""
-        SELECT (SELECT count(*) FROM complex_source_links WHERE complex_id=ANY($1::int[])) AS source_links,
-               (SELECT count(*) FROM newbuild_units WHERE complex_id=ANY($1::int[])) AS newbuild_units,
-               (SELECT count(*) FROM properties WHERE complex_id=ANY($1::int[])) AS properties,
-               (SELECT count(*) FROM complex_favorites WHERE complex_id=ANY($1::int[])) AS favorites
-    """, ids))
+    preserved = dict(await conn.fetchrow(_PRESERVED_SQL, ids))
+    preserved_identity_hash = _digest([dict(row) for row in await conn.fetch(_PRESERVED_IDENTITIES_SQL, ids)])
     fingerprint = hashlib.sha256(_json({
         "candidate": candidate, "complexes": complexes, "counts": counts,
         "relations": relations, "overrides": overrides, "affected": affected,
@@ -233,8 +258,33 @@ async def _snapshot(conn, candidate_id):
         "listing_changes": summary, "preserved": preserved,
         "signals": decision["signals"], "geo_m": decision["geo_m"],
         "methodology_version": VERSION,
+        "rollback_guard": build_rollback_guard(affected, complexes, changes,
+                                                decision["canonical_changes"], ids, preserved,
+                                                preserved_identity_hash=preserved_identity_hash),
     }
     return public, changes
+
+
+def _digest(value):
+    return hashlib.sha256(_json(value).encode()).hexdigest()
+
+
+def build_rollback_guard(affected, complexes, listing_changes, canonical_changes, component_ids, preserved,
+                         *, preserved_identity_hash=None):
+    """Expected complete family membership after approval, without volatile prices."""
+    targets = {row["listing_id"]: row for row in listing_changes}
+    expected_listings = [{**row,
+        "complex_id": targets[row["id"]]["complex_id"] if row["id"] in targets else row["complex_id"],
+        "complex_resolution": targets[row["id"]]["method"] if row["id"] in targets else row["complex_resolution"],
+    } for row in affected]
+    redirects = {row["complex_id"]: row for row in canonical_changes}
+    expected_complexes = [{**row,
+        "canonical_id": redirects[row["id"]]["canonical_id"] if row["id"] in redirects else row["canonical_id"],
+        "canonical_reason": redirects[row["id"]]["reason"] if row["id"] in redirects else row["canonical_reason"],
+    } for row in complexes if row["id"] in component_ids]
+    return {"component_ids": component_ids, "listings_hash": _digest(expected_listings),
+            "complexes_hash": _digest(expected_complexes), "preserved_counts": preserved,
+            "preserved_identity_hash": preserved_identity_hash}
 
 
 async def preview_duplicate_candidate(candidate_id: int, *, connection=None):
@@ -267,9 +317,7 @@ async def _apply(conn, candidate_id, expected_fingerprint, review_note, source_u
     await conn.fetchval("SELECT pg_advisory_xact_lock($1)", _LOCK)
     # Ordinary ingestion is briefly held while the reviewed before/after state
     # is checked. Concurrent source changes cannot invalidate the chosen rows.
-    await conn.execute("""LOCK TABLE complexes,apartment_listings,complex_canonical_overrides,
-        complex_relations,complex_aliases,complex_duplicate_candidates
-        IN SHARE ROW EXCLUSIVE MODE""")
+    await conn.execute(_REVIEW_LOCK_SQL)
     preview, changes = await _snapshot(conn, candidate_id)
     if preview["fingerprint"] != expected_fingerprint:
         raise ComplexIdentityReviewError("stale_preview", "Данные изменились; обновите предпросмотр")
@@ -291,6 +339,7 @@ async def _apply(conn, candidate_id, expected_fingerprint, review_note, source_u
         "created_relation": existing_relation is None,
         "relation_pair": [a, b],
         "reviewed_by": reviewed_by,
+        "rollback_guard": preview["rollback_guard"],
     }
     await conn.execute("""
         INSERT INTO complex_relations(complex_id_a,complex_id_b,relation_type,confidence,
@@ -361,9 +410,7 @@ async def _serializable_action(conn, operation, *args):
 
 async def _rollback(conn, review_id, reviewed_by):
     await conn.fetchval("SELECT pg_advisory_xact_lock($1)", _LOCK)
-    await conn.execute("""LOCK TABLE complexes,apartment_listings,complex_canonical_overrides,
-        complex_relations,complex_aliases,complex_duplicate_candidates
-        IN SHARE ROW EXCLUSIVE MODE""")
+    await conn.execute(_REVIEW_LOCK_SQL)
     log = await conn.fetchrow("""
         SELECT complex_id,canonical_id,evidence FROM complex_canonical_override_log
         WHERE evidence->>'review_id'=$1 ORDER BY log_id LIMIT 1
@@ -398,6 +445,20 @@ async def _rollback(conn, review_id, reviewed_by):
             "SELECT evidence FROM complex_relations WHERE complex_id_a=$1 AND complex_id_b=$2", a, b)
         if relation is None or _decode(relation["evidence"]).get("review_id") != review_id:
             raise ComplexIdentityReviewError("rollback_conflict", "Отношение ЖК изменилось после применения")
+    guard = evidence.get("rollback_guard")
+    if not isinstance(guard, dict):
+        raise ComplexIdentityReviewError("rollback_conflict", "Для прежней версии решения нужен отдельный план отката")
+    ids = guard["component_ids"]
+    current_listings = [dict(row) for row in await conn.fetch(_AFFECTED_SQL, ids)]
+    current_complexes = [dict(row) for row in await conn.fetch(_COMPLEX_ROWS_SQL) if row["id"] in ids]
+    current_counts = dict(await conn.fetchrow(_PRESERVED_SQL, ids))
+    current_identity_hash = _digest([dict(row) for row in await conn.fetch(_PRESERVED_IDENTITIES_SQL, ids)])
+    if (_digest(current_listings) != guard["listings_hash"] or
+            _digest(current_complexes) != guard["complexes_hash"] or
+            current_counts != guard["preserved_counts"] or
+            current_identity_hash != guard.get("preserved_identity_hash")):
+        raise ComplexIdentityReviewError(
+            "rollback_conflict", "После решения изменился состав или данные ЖК; нужен новый план отката")
     inverse = {"rollback_of": review_id, "reviewed_by": reviewed_by, "resolver_version": VERSION}
     for change in evidence["canonical_changes"]:
         await conn.execute("UPDATE complexes SET canonical_id=$2,canonical_reason=$3 WHERE id=$1",
