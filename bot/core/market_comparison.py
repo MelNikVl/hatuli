@@ -21,8 +21,9 @@ from urllib.parse import urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 from bot.core.hexgrid import hex_id as point_hex
+from bot.core.comparison_offer_details import DETAIL_FIELDS, build_offer_details, validate_offer_details
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
 MAX_SOURCE_AGE = timedelta(hours=72)
 MIN_COMPARABLES = 5
@@ -35,7 +36,7 @@ _HEX = re.compile(r"(-?\d{1,5}):(-?\d{1,5})\Z")
 _FINISH = {"rough": "Черновая", "prefinish": "Предчистовая", "finished": "Чистовая", "renovated": "С ремонтом", "furnished": "С мебелью", "designer": "Дизайнерский ремонт", "needs_repair": "Требуется ремонт"}
 _STAGE = {"Строящийся": "under_construction", "Сдан в эксплуатацию": "commissioned"}
 _STAGE_LABEL = {"under_construction": "Строится по данным каталога", "commissioned": "В каталоге указан ввод в эксплуатацию", "unknown": "Статус ввода не подтверждён"}
-_OFFER_FIELDS = ("id", "market_type", "complex_id", "complex_name", "hex_id", "rooms", "area", "price", "price_per_m2", "floor", "floors_total", "finish_level", "finish_label", "build_status", "build_status_label", "completion_year", "completion_quarter", "housing_class", "source_label", "url", "observed_at", "geo_source", "geo_quality")
+_OFFER_FIELDS = ("id", "market_type", "complex_id", "complex_name", "hex_id", "rooms", "area", "price", "price_per_m2", "floor", "floors_total", "finish_level", "finish_label", "build_status", "build_status_label", "completion_year", "completion_quarter", "housing_class", "source_label", "url", "observed_at", "geo_source", "geo_quality") + DETAIL_FIELDS
 _CATALOG_GEO_SOURCES = {"listings", "homsters", "korter", "developer", "nominatim", "unknown"}
 _GEO_QUALITY = {"listings": "listing_centroid", "homsters": "source_project_point", "korter": "source_project_point",
                 "developer": "source_project_point", "nominatim": "geocoded_project_point", "unknown": "unknown"}
@@ -97,6 +98,8 @@ def _safe_secondary_url(value, listing_id: str) -> str | None:
 
 def _public_offer(row: dict, market: str, now: datetime, edge_m: float) -> dict | None:
     """Keep basic public fields only; discard all private fields and coordinates."""
+    if row.get("comparison_only"):
+        return None
     rooms, price = _int(row.get("rooms"), 1, 6), _int(row.get("price"), 5_000_000, 600_000_000)
     area = _number(row.get("area"))
     lat, lon = _number(row.get("lat")), _number(row.get("lon"))
@@ -155,6 +158,7 @@ def _public_offer(row: dict, market: str, now: datetime, edge_m: float) -> dict 
         "completion_quarter": _int(row.get("completion_quarter"), 1, 4),
         "housing_class": housing_class, "source_label": source_label, "url": url,
         "observed_at": observed.isoformat(), "geo_source": geo_source, "geo_quality": geo_quality,
+        **build_offer_details(row, market, now=now),
     }
 
 
@@ -184,12 +188,22 @@ def build_market_snapshot(primary_rows: list[dict], secondary_rows: list[dict], 
     safe_coverage = {str(k): int(v) for k, v in (coverage or {}).items()
                      if k in {"krisha_primary_recent", "primary_available_recent", "secondary_recent", "primary_stale_available"}
                      and _int(v, 0, 10_000_000) is not None}
+    listing_details = []
+    for row in secondary_rows:
+        if not row.get("public_comparison_listing"):
+            continue
+        identifier = str(row.get("id", ""))
+        if not re.fullmatch(r"\d{5,20}", identifier) or row.get("market_type") != "secondary":
+            raise ValueError("Invalid public comparison listing")
+        listing_details.append({"id": identifier, "current_price": row["price"],
+                                **build_offer_details(row, "secondary", now=now)})
     return {
         "schema_version": SCHEMA_VERSION, "generated_at": now.isoformat(), "timezone": "Asia/Almaty",
         "edge_m": edge, "grid": "scanner_axial", "freshness_hours": 72,
         "summary": {"primary_count": counts["primary"], "secondary_count": counts["secondary"],
                     "observed_hexes": len({o["hex_id"] for o in offers}), "coverage": safe_coverage},
         "offers": offers,
+        "listing_details": listing_details,
     }
 
 
@@ -248,6 +262,7 @@ def _validated_snapshot(raw: dict) -> dict:
             raise ValueError("Invalid public status")
         safe = {k: row[k] for k in _OFFER_FIELDS}
         safe.update(price=price, area=area, rooms=rooms, price_per_m2=round(price_per_m2))
+        safe.update(validate_offer_details(row, market, price, now=generated))
         for field, limit in (("complex_name", 100), ("housing_class", 50)):
             if safe[field] is not None and (not isinstance(safe[field], str) or len(safe[field]) > limit):
                 raise ValueError("Invalid public text")
@@ -255,12 +270,25 @@ def _validated_snapshot(raw: dict) -> dict:
         offers.append(safe)
         seen.add((market, identifier))
     counts = Counter(o["market_type"] for o in offers)
+    listing_details, detail_ids = [], set()
+    if not isinstance(raw.get("listing_details"), list) or len(raw["listing_details"]) > 30:
+        raise ValueError("Invalid public comparison details")
+    for row in raw["listing_details"]:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not re.fullmatch(r"\d{5,20}", row["id"]) or row["id"] in detail_ids:
+            raise ValueError("Invalid public comparison detail identifier")
+        current = _int(row.get("current_price"), 1, 10_000_000_000)
+        if current is None:
+            raise ValueError("Invalid comparison current price")
+        listing_details.append({"id": row["id"], "current_price": current,
+                                **validate_offer_details(row, "secondary", current, now=generated)})
+        detail_ids.add(row["id"])
     coverage = raw.get("summary", {}).get("coverage", {})
     coverage = {k: v for k, v in coverage.items() if k in {"krisha_primary_recent", "primary_available_recent", "secondary_recent", "primary_stale_available"} and _int(v, 0, 10_000_000) is not None}
     return {"schema_version": SCHEMA_VERSION, "generated_at": generated.isoformat(), "timezone": "Asia/Almaty",
             "edge_m": edge, "grid": "scanner_axial", "freshness_hours": 72,
             "summary": {"primary_count": counts["primary"], "secondary_count": counts["secondary"],
-                        "observed_hexes": len({o["hex_id"] for o in offers}), "coverage": coverage}, "offers": offers}
+                        "observed_hexes": len({o["hex_id"] for o in offers}), "coverage": coverage}, "offers": offers,
+            "listing_details": listing_details}
 
 
 @lru_cache(maxsize=2)
@@ -279,7 +307,7 @@ def load_market_snapshot(path: Path | None = None) -> dict:
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return {"schema_version": SCHEMA_VERSION, "generated_at": None, "timezone": "Asia/Almaty",
                 "edge_m": 50, "grid": "scanner_axial", "freshness_hours": 72,
-                "summary": {"primary_count": 0, "secondary_count": 0, "observed_hexes": 0, "coverage": {}}, "offers": []}
+                "summary": {"primary_count": 0, "secondary_count": 0, "observed_hexes": 0, "coverage": {}}, "offers": [], "listing_details": []}
 
 
 def publish_market_snapshot(snapshot: dict, path: Path | None = None) -> None:
@@ -294,6 +322,8 @@ def publish_market_snapshot(snapshot: dict, path: Path | None = None) -> None:
             temporary = Path(output.name)
             json.dump(safe, output, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
             output.flush()
+            if os.fstat(output.fileno()).st_size > 40_000_000:
+                raise ValueError("Market snapshot too large; retain the previous snapshot")
             os.fsync(output.fileno())
         os.chmod(temporary, 0o640)
         os.replace(temporary, path)

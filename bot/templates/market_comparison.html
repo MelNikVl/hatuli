@@ -2,13 +2,41 @@
 {% block title %}Первичка, вторичка или вклад — сравнение в Астане · Hatuli{% endblock %}
 {% block description %}Сравните новостройки и вторичные квартиры рядом, расширьте поиск до города и посчитайте покупку против банковского вклада на ваших цифрах.{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="/static/hatuli-comparison.css?v=20261013.2">
+<link rel="stylesheet" href="/static/hatuli-comparison.css?v=20261013.3">
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261013">
 <script src="/static/hatuli-comparison.js?v=20261013" defer></script>
 {% endblock %}
 {% macro money(value, suffix='₸') -%}{% if value is not none and value is defined %}{{ value|fmt_num }} {{ suffix }}{% else %}—{% endif %}{%- endmacro %}
 {% macro pct(value) -%}{% if value is not none and value is defined %}{{ value|fmt_num(1)|replace(',0', '') }}%{% else %}—{% endif %}{%- endmacro %}
 {% macro rate(value) -%}{% if value is not none and value is defined %}{{ value|fmt_num(2)|replace(',00', '') }}%{% else %}—{% endif %}{%- endmacro %}
+{% macro offer_address(offer) %}
+<div class="mc-offer-address">
+  <p class="mc-address-line"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M15.5 8.5c0 4-5.5 8-5.5 8s-5.5-4-5.5-8a5.5 5.5 0 1 1 11 0Z" stroke="currentColor" stroke-width="1.4"/><circle cx="10" cy="8.5" r="1.8" stroke="currentColor" stroke-width="1.4"/></svg><span>{{ offer.address or 'Точный адрес не указан в источнике' }}</span></p>
+  {% if offer.building or offer.section %}<p class="mc-address-building">{% if offer.building %}Корпус {{ offer.building }}{% endif %}{% if offer.building and offer.section %} · {% endif %}{% if offer.section %}Секция {{ offer.section }}{% endif %}</p>{% endif %}
+  {% if offer.address_note %}<p class="mc-address-note">{{ offer.address_note }}</p>{% endif %}
+</div>
+{% endmacro %}
+{% macro price_event(event) %}
+<div class="mc-price-event" data-direction="{{ event.direction if event.direction in ['down', 'up'] else 'unknown' }}">
+  <p class="mc-price-event-date">{% if event.at %}<time datetime="{{ event.at }}">{{ event.date_label or event.at }}</time>{% else %}Дата изменения не сохранена{% endif %}</p>
+  <p class="mc-price-event-values">{% if event.old_price is defined and event.old_price is not none %}<span>{{ money(event.old_price) }}</span><span aria-hidden="true">→</span><strong>{{ money(event.new_price) }}</strong>{% else %}<span>Цена после изменения:</span><strong>{{ money(event.new_price) }}</strong>{% endif %}</p>
+  {% if event.delta is defined and event.delta is not none %}<p class="mc-price-event-delta">{% if event.delta > 0 %}Подорожала на {{ money(event.delta) }}{% elif event.delta < 0 %}Снизилась на {{ money(-event.delta) }}{% else %}Цена не изменилась{% endif %}{% if event.delta_pct is defined and event.delta_pct is not none and event.delta != 0 %} · {{ pct(event.delta_pct|abs) }}{% endif %}</p>{% elif event.old_price is not defined or event.old_price is none %}<p class="mc-price-event-note">Предыдущая цена не сохранена; размер изменения неизвестен.</p>{% endif %}
+</div>
+{% endmacro %}
+{% macro offer_price_history(offer) %}
+{% set history = offer.price_history or {} %}
+{% set events = history.events or [] %}
+<div class="mc-price-history" data-history-status="{{ history.status or 'unavailable' }}">
+  {% if events %}
+  <p class="mc-price-history-heading">Последнее изменение цены</p>
+  {{ price_event(events[-1]) }}
+  {% if events|length > 1 %}<details class="mc-price-history-more"><summary>Ещё изменений: {{ events|length - 1 }}</summary><div class="mc-price-history-list">{% for event in events[:-1]|reverse %}{{ price_event(event) }}{% endfor %}</div></details>{% endif %}
+  {% elif history.status == 'no_changes_recorded' %}<p class="mc-price-history-empty">Изменения цены пока не зафиксированы.</p>
+  {% else %}<p class="mc-price-history-empty">История изменений цены пока не загружена.</p>{% endif %}
+  {% if history.status == 'incomplete' %}<p class="mc-price-history-warning">{{ history.warning or 'В истории есть пропуски. Отдельные изменения сохранены; итоговое изменение не рассчитываем.' }}</p>{% elif history.warning %}<p class="mc-price-history-note">{{ history.warning }}</p>{% endif %}
+  {% if events %}<p class="mc-price-history-note">Изменения цены предложения, а не цены сделки.</p>{% endif %}
+</div>
+{% endmacro %}
 {% macro scenario_bank(result) %}
 <div class="mc-balance-row" data-kind="bank">
   <div class="mc-balance-caption"><span>{{ result.bank }} · вклад</span><strong>{{ money(result.deposit_cash_after_rent) }}</strong></div>
@@ -75,17 +103,30 @@
     <div class="mc-expansion"><h3>Что меняется, если искать шире?</h3><p>Рядом могут оказаться единичные предложения. Расширение области показывает, сохраняется ли разница в цене.</p><div class="mc-table-wrap" tabindex="0" role="region" aria-label="Сравнение по размеру области"><table class="mc-table"><thead><tr><th scope="col">Область</th><th scope="col">Первичка</th><th scope="col">Вторичка</th><th scope="col">Разница</th></tr></thead><tbody>{% for tier in cmp.tiers %}<tr {% if tier.key == cmp.scope %}aria-current="true"{% endif %}><td><a href="{{ tier.href }}#market"><strong>{{ tier.label }}</strong></a><small>{{ tier.cells_count }} гексагонов{% if tier.key == 'city' %} с наблюдениями{% endif %}</small></td><td>{{ tier.primary_count }} предложений{% if tier.primary_median_per_m2 %}<small>{{ money(tier.primary_median_per_m2, '₸ / м²') }}</small>{% endif %}</td><td>{{ tier.secondary_count }} предложений{% if tier.secondary_median_per_m2 %}<small>{{ money(tier.secondary_median_per_m2, '₸ / м²') }}</small>{% endif %}</td><td>{% if tier.comparable and tier.delta_pct is not none %}<strong>{% if tier.delta_pct > 0 %}Первичка дешевле на {{ pct(tier.delta_pct) }}{% elif tier.delta_pct < 0 %}Первичка дороже на {{ pct(-tier.delta_pct) }}{% else %}Медианы равны{% endif %}</strong>{% else %}<strong>Вывод пока не надёжен</strong>{% endif %}<small>{{ tier.confidence_reason }}</small></td></tr>{% endfor %}</tbody></table></div></div>
     {% endif %}
     {% if local_offer_choices %}
-    <div class="mc-apartments"><h3>Квартиры в выбранной области</h3><div class="mc-offer-grid">{% for offer in local_offer_choices[:6] %}<article class="mc-offer" {% if form.listing|string == offer.id|string %}aria-current="true"{% endif %}><p class="mc-offer-label">{% if offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %}{% if offer.finish_label %} · {{ offer.finish_label }}{% endif %}</p><h4>{{ offer.title or offer.complex_name or 'Квартира в Астане' }}</h4><p>{{ offer.rooms }} комнаты · {{ offer.area|fmt_num(1)|replace(',0', '') }} м²{% if offer.build_status_label %}<br>{{ offer.build_status_label }}{% endif %}</p><strong>{{ money(offer.price) }}</strong><div class="mc-offer-actions"><a href="{{ offer.href }}">Сравнить со вкладом →</a>{% if offer.url %}<a href="{{ offer.url }}" target="_blank" rel="noopener noreferrer nofollow" aria-label="Открыть источник предложения: {{ offer.title or offer.complex_name }}">Источник ↗</a>{% endif %}</div></article>{% endfor %}</div></div>
+    <div class="mc-apartments"><h3>Квартиры в выбранной области</h3><div class="mc-offer-grid">
+      {% for offer in local_offer_choices[:6] %}
+      <article class="mc-offer" {% if form.listing|string == offer.id|string %}aria-current="true"{% endif %}>
+        <p class="mc-offer-label">{% if offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %}{% if offer.finish_label %} · {{ offer.finish_label }}{% endif %}</p>
+        <h4>{{ offer.title or offer.complex_name or 'Квартира в Астане' }}</h4>
+        {% if offer.complex_name and offer.complex_name != offer.title %}<p class="mc-offer-complex">{{ offer.complex_name }}</p>{% endif %}
+        <p>{{ offer.rooms }} комнаты · {{ offer.area|fmt_num(1)|replace(',0', '') }} м²{% if offer.build_status_label %}<br>{{ offer.build_status_label }}{% endif %}</p>
+        {{ offer_address(offer) }}
+        <strong>{{ money(offer.price) }}</strong>
+        {{ offer_price_history(offer) }}
+        <div class="mc-offer-actions"><a href="{{ offer.href }}">Сравнить со вкладом →</a>{% if offer.url %}<a href="{{ offer.url }}" target="_blank" rel="noopener noreferrer nofollow" aria-label="Открыть источник предложения: {{ offer.title or offer.complex_name }}">Источник ↗</a>{% endif %}</div>
+      </article>
+      {% endfor %}
+    </div></div>
     {% endif %}
   </section>
 
   <section class="mc-section" id="investment" aria-labelledby="mc-investment-title">
     <div class="mc-heading"><div><p class="mc-eyebrow">Шаг 2 · одинаковая стартовая сумма</p><h2 id="mc-investment-title">Купить сейчас или подождать год?</h2></div><p>Результат зависит от роста цены, ремонта и аренды. Измените их и посмотрите, при каких условиях квартира обгонит вклад.</p></div>
-    {% if offer_choices %}<form class="mc-offer-selector" action="/compare#investment" method="get"><div class="mc-field"><label for="mc-offer-choice">Выберите квартиру или введите свою цену ниже</label><select name="listing" id="mc-offer-choice"><option value="" {% if not selected_offer %}selected{% endif %}>Своя цена · ручной сценарий</option>{% for offer in offer_choices %}<option value="{{ offer.id }}" {% if form.listing|string == offer.id|string %}selected{% endif %}>{% if offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %} · {{ offer.title or offer.complex_name }} · {{ money(offer.price) }}</option>{% endfor %}</select><small>Доступные предложения по Астане. Выбор квартиры не меняет область сравнения выше.</small></div><input type="hidden" name="hex" value="{{ cmp.selected_hex or '' }}"><input type="hidden" name="rooms" value="{{ cmp.rooms or 2 }}"><input type="hidden" name="area" value="{{ cmp.area or 60 }}"><input type="hidden" name="scope" value="{{ cmp.scope or 'hex' }}"><button class="mc-button" type="submit">Выбрать →</button></form>{% endif %}
+    {% if offer_choices %}<form class="mc-offer-selector" action="/compare#investment" method="get"><div class="mc-field"><label for="mc-offer-choice">Выберите квартиру или введите свою цену ниже</label><select name="listing" id="mc-offer-choice"><option value="" {% if not selected_offer %}selected{% endif %}>Своя цена · ручной сценарий</option>{% for offer in offer_choices %}<option value="{{ offer.id }}" {% if form.listing|string == offer.id|string %}selected{% endif %}>{% if offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %} · {{ offer.title or offer.complex_name }} · {{ offer.address or 'Точный адрес не указан' }}{% if offer.building %} · корпус {{ offer.building }}{% endif %} · {{ money(offer.price) }}{% if offer.price_history and offer.price_history.events %} · изменение {{ offer.price_history.events[-1].date_label }}{% endif %}</option>{% endfor %}</select><small>Доступные предложения по Астане. Выбор квартиры не меняет область сравнения выше.</small></div><input type="hidden" name="hex" value="{{ cmp.selected_hex or '' }}"><input type="hidden" name="rooms" value="{{ cmp.rooms or 2 }}"><input type="hidden" name="area" value="{{ cmp.area or 60 }}"><input type="hidden" name="scope" value="{{ cmp.scope or 'hex' }}"><button class="mc-button" type="submit">Выбрать →</button></form>{% endif %}
     {% if selected_offer %}{% with price_forecast=selected_offer.price_forecast, forecast_compact=true %}{% include '_price_forecast.html' %}{% endwith %}{% endif %}
     <div class="mc-calculator-layout">
       <form class="mc-form" action="/compare/calculate#investment" method="post" data-mc-calculator>
-        <div class="mc-form-header"><h3>{% if selected_offer %}{{ selected_offer.title or selected_offer.complex_name or 'Выбранная квартира' }}{% else %}Ваш сценарий покупки{% endif %}</h3>{% if selected_offer %}<p>{% if selected_offer.complex_name %}{{ selected_offer.complex_name }} · {% endif %}{% if selected_offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %}{% if selected_offer.observed_at_label %}<br>Цена наблюдалась: {{ selected_offer.observed_at_label }}{% endif %}{% if selected_offer.cautions %}<br>{{ selected_offer.cautions|join(' ') }}{% endif %}</p>{% endif %}<p>Срок сравнения — 12 месяцев. Цена + ремонт + расходы на покупку = сумма, которую сравниваем со вкладом.</p>{% if manual_price_example %}<p class="mc-form-example">В поле цены — пример суммы. Замените её фактической ценой своей квартиры.</p>{% endif %}{% if selected_offer and selected_offer.url %}<a href="{{ selected_offer.url }}" target="_blank" rel="noopener noreferrer nofollow">Проверить цену в источнике ↗</a>{% endif %}</div>
+        <div class="mc-form-header"><h3>{% if selected_offer %}{{ selected_offer.title or selected_offer.complex_name or 'Выбранная квартира' }}{% else %}Ваш сценарий покупки{% endif %}</h3>{% if selected_offer %}<p>{% if selected_offer.complex_name %}{{ selected_offer.complex_name }} · {% endif %}{% if selected_offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %}{% if selected_offer.observed_at_label %}<br>Цена наблюдалась: {{ selected_offer.observed_at_label }}{% endif %}{% if selected_offer.cautions %}<br>{{ selected_offer.cautions|join(' ') }}{% endif %}</p>{{ offer_address(selected_offer) }}{{ offer_price_history(selected_offer) }}{% endif %}<p>Срок сравнения — 12 месяцев. Цена + ремонт + расходы на покупку = сумма, которую сравниваем со вкладом.</p>{% if manual_price_example %}<p class="mc-form-example">В поле цены — пример суммы. Замените её фактической ценой своей квартиры.</p>{% endif %}{% if selected_offer and selected_offer.url %}<a href="{{ selected_offer.url }}" target="_blank" rel="noopener noreferrer nofollow">Проверить цену в источнике ↗</a>{% endif %}</div>
         <p class="mc-error" role="alert" {% if not calculation_error %}hidden{% endif %} data-mc-error>{{ calculation_error or '' }}</p>
         <input type="hidden" name="listing" value="{{ form.listing or '' }}">
         <input type="hidden" name="hex" value="{{ cmp.selected_hex or '' }}"><input type="hidden" name="rooms" value="{{ cmp.rooms or 2 }}"><input type="hidden" name="area" value="{{ cmp.area or 60 }}"><input type="hidden" name="scope" value="{{ cmp.scope or 'hex' }}">

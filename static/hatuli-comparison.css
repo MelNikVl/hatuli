@@ -90,6 +90,30 @@
 .mc-offer h4 { font-size: 14px; line-height: 1.4; font-weight: 650; }
 .mc-offer > p { color: var(--muted); font-size: 11px; margin-top: 5px; }
 .mc-offer > strong { display: block; color: var(--heading); font-size: 22px; letter-spacing: -.5px; margin-top: 14px; }
+.mc-offer .mc-offer-complex { color: var(--text); font-weight: 550; }
+.mc-offer-address { margin-top: 12px; min-width: 0; }
+.mc-address-line { display: flex; align-items: start; gap: 7px; color: var(--text); font-size: 12px; line-height: 1.55; }
+.mc-address-line svg { flex: 0 0 17px; width: 17px; height: 17px; margin-top: 1px; color: var(--accent); }
+.mc-address-line span { min-width: 0; overflow-wrap: anywhere; }
+.mc-address-building { color: var(--text); font-size: 11px; line-height: 1.55; padding-left: 24px; margin-top: 3px !important; }
+.mc-address-note { color: var(--muted); font-size: 10px; line-height: 1.55; margin-top: 4px !important; }
+.mc-price-history { min-width: 0; margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--border); }
+.mc-price-history-heading { color: var(--text); font-size: 11px; font-weight: 650; margin-bottom: 7px !important; }
+.mc-price-event { min-width: 0; }
+.mc-price-event-date { color: var(--muted); font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
+.mc-price-event-values { display: flex; align-items: baseline; flex-wrap: wrap; gap: 3px 7px; margin-top: 4px !important; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.mc-price-event-values strong { color: var(--heading); font-weight: 650; }
+.mc-price-event-delta { color: var(--text); font-size: 11px; font-weight: 600; line-height: 1.6; margin-top: 5px !important; }
+.mc-price-event[data-direction="down"] .mc-price-event-delta { color: var(--accent); }
+.mc-price-event[data-direction="up"] .mc-price-event-delta { color: var(--yellow); }
+.mc-price-history-empty,.mc-price-event-note,.mc-price-history-note { color: var(--muted); font-size: 10px; line-height: 1.6; }
+.mc-price-event-note,.mc-price-history-note { margin-top: 6px !important; }
+.mc-price-history-warning { padding: 9px 10px; border-left: 2px solid var(--yellow); border-radius: 5px; background: var(--surface2); color: var(--text); font-size: 11px; line-height: 1.65; margin-top: 9px !important; }
+.mc-price-history .mc-price-history-more { border-top: 0; margin-top: 8px; padding-top: 0; }
+.mc-price-history .mc-price-history-more summary { color: var(--accent); font-size: 11px; line-height: 1.6; font-weight: 600; cursor: pointer; }
+.mc-price-history-more summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
+.mc-price-history-list { display: grid; gap: 10px; padding-top: 10px; }
+.mc-price-history-list .mc-price-event { border-top: 1px solid var(--border); padding-top: 10px; }
 .mc-offer-actions { display: flex; gap: 12px; justify-content: space-between; align-items: center; padding-top: 16px; margin-top: auto; font-size: 11px; font-weight: 600; }
 .mc-offer-actions a { text-decoration: none; }
 .mc-offer-actions a:hover { text-decoration: underline; }

@@ -15,10 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from bot.core.market_comparison import build_market_snapshot, publish_market_snapshot, snapshot_path
+from bot.core.daily_picks import load_daily_picks
 
 PRIMARY_SQL = """
 SELECT u.id, coalesce(c.canonical_id,c.id) AS complex_id, canonical.name AS complex_name,
        u.source,u.status,u.price,u.area,u.rooms,u.floor,u.floors_total,u.last_seen_at,
+       c.address,u.building,u.section,
        coalesce(c.lat,canonical.lat) AS lat,coalesce(c.lon,canonical.lon) AS lon,
        CASE WHEN c.lat IS NOT NULL AND c.lon IS NOT NULL THEN c.coords_source ELSE canonical.coords_source END AS coords_source,
        coalesce(c.build_status,canonical.build_status) AS build_status,
@@ -38,7 +40,7 @@ ORDER BY u.id
 
 SECONDARY_SQL = """
 SELECT a.id,a.url,a.market_type,a.price,a.area,a.rooms,a.floor,a.floors_total,
-       a.year_built,a.finish_level,a.lat,a.lon,a.is_active,a.is_duplicate,a.dup_needs_review,a.last_seen,
+       a.year_built,a.finish_level,a.lat,a.lon,a.is_active,a.is_duplicate,a.dup_needs_review,a.last_seen,a.address,
        canonical.id AS complex_id,canonical.name AS complex_name,canonical.housing_class,
        p.property_id,EXISTS(SELECT 1 FROM unit_source_links l WHERE l.source='krisha' AND l.source_id=a.id) AS linked_primary_unit
 FROM apartment_listings a
@@ -52,6 +54,22 @@ WHERE a.market_type='secondary' AND a.is_active IS TRUE
   AND a.last_seen BETWEEN $1::timestamptz-interval '72 hours' AND $1
   AND a.price>0 AND a.area>0
 ORDER BY a.id
+"""
+
+COMPARISON_DETAILS_SQL = """
+SELECT id,market_type,price,address FROM apartment_listings
+WHERE id=ANY($1::text[]) AND market_type='secondary'
+ORDER BY id
+"""
+PRIMARY_HISTORY_SQL = """
+SELECT unit_id,price,changed_at FROM newbuild_unit_price_history
+WHERE unit_id=ANY($1::integer[]) AND changed_at <= $2
+ORDER BY unit_id,changed_at,id
+"""
+SECONDARY_HISTORY_SQL = """
+SELECT listing_id,old_price,new_price,changed_at FROM price_history
+WHERE listing_id=ANY($1::text[]) AND changed_at <= $2
+ORDER BY listing_id,changed_at,id
 """
 
 COVERAGE_SQL = """
@@ -69,6 +87,9 @@ SELECT
 
 async def read_market_rows(dsn: str, now: datetime) -> tuple[list[dict], list[dict], float, dict]:
     import asyncpg
+    # Only IDs already selected for the public daily page may enter this
+    # supplemental projection. Deduped/ungeocoded rows still need their history.
+    public_ids = [item["id"] for item in (load_daily_picks() or {}).get("items", [])]
     connection = await asyncpg.connect(
         dsn, command_timeout=60,
         server_settings={"default_transaction_read_only": "on", "application_name": "hatuli_market_comparison_readonly"},
@@ -77,6 +98,24 @@ async def read_market_rows(dsn: str, now: datetime) -> tuple[list[dict], list[di
         async with connection.transaction(isolation="repeatable_read", readonly=True):
             primary = [dict(row) for row in await connection.fetch(PRIMARY_SQL, now)]
             secondary = [dict(row) for row in await connection.fetch(SECONDARY_SQL, now)]
+            details = [dict(row) for row in await connection.fetch(COMPARISON_DETAILS_SQL, public_ids)] if public_ids else []
+            primary_history = await connection.fetch(PRIMARY_HISTORY_SQL, [row["id"] for row in primary], now)
+            secondary_history = await connection.fetch(SECONDARY_HISTORY_SQL,
+                sorted({row["id"] for row in secondary + details}), now)
+            histories = {}
+            for row in primary_history:
+                histories.setdefault(row["unit_id"], []).append(dict(row))
+            for row in primary:
+                row["price_events"] = histories.get(row["id"], [])
+            histories = {}
+            for row in secondary_history:
+                histories.setdefault(row["listing_id"], []).append(dict(row))
+            for row in secondary:
+                row["price_events"] = histories.get(row["id"], [])
+            for row in details:
+                row.update(comparison_only=True, public_comparison_listing=True,
+                           price_events=histories.get(row["id"], []))
+            secondary.extend(details)
             coverage = dict(await connection.fetchrow(COVERAGE_SQL, now))
             configured_edge = await connection.fetchval("SELECT value FROM app_settings WHERE key='HEX_EDGE_M'")
             edge = float(configured_edge) if configured_edge is not None else 50.0

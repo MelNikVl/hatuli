@@ -77,11 +77,12 @@ def test_excludes_unconfirmed_unavailable_invalid_and_stale(kind, field, value):
 
 
 def test_no_private_projection_or_primary_double_count():
-    secret = {"address": "private apartment address", "phone": "+700000000", "raw_json": {"contact": "private"}, "description": "owner info"}
+    secret = {"address": "Айнаколь 62 — private ad tail", "phone": "+700000000", "raw_json": {"contact": "private"}, "description": "owner info"}
     data = build_market_snapshot([primary(**secret)], [secondary(property_id=77, **secret), secondary(100001, property_id=77)], now=NOW,
                                  coverage={"krisha_primary_recent": 1064, "secret_address": 123})
     serialized = json.dumps(data)
-    assert all(s not in serialized for s in ("private", "address", "phone", "raw_json", "property_id", '"lat"', '"lon"'))
+    assert all(s not in serialized for s in ("private", "phone", "raw_json", "property_id", '"lat"', '"lon"'))
+    assert all(offer["address"] == "Айнаколь 62" for offer in data["offers"])
     assert data["summary"]["primary_count"] == 1
     assert data["summary"]["secondary_count"] == 1
     assert data["summary"]["coverage"] == {"krisha_primary_recent": 1064}
@@ -199,7 +200,8 @@ async def test_publisher_only_reads_in_enforced_readonly_transaction(monkeypatch
     class Transaction:
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
-    connection = SimpleNamespace(fetch=AsyncMock(side_effect=[[primary()], [secondary()]]),
+    monkeypatch.setattr("scripts.publish_market_comparison.load_daily_picks", lambda: None)
+    connection = SimpleNamespace(fetch=AsyncMock(side_effect=[[primary()], [secondary()], [], []]),
                                  fetchrow=AsyncMock(return_value={"krisha_primary_recent": 1}),
                                  fetchval=AsyncMock(return_value="100"), close=AsyncMock())
     def transaction(**kwargs):

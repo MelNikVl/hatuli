@@ -16,6 +16,7 @@ from bot.core.market_comparison import (
 )
 from bot.core.web_pages import not_found_page
 from bot.core.price_forecast_runtime import forecast_for_offer
+from bot.core.comparison_offer_details import DETAIL_FIELDS, details_for_selected_offer
 
 
 def _public_offer(offer: dict) -> dict:
@@ -38,6 +39,7 @@ def _public_offer(offer: dict) -> dict:
         "observed_at": offer.get("observed_at"), "source_label": offer.get("source_label", "Krisha.kz"),
         "observed_at_label": observed_label, "build_status_label": offer.get("build_status_label"),
         "cautions": cautions,
+        **{field: offer.get(field) for field in DETAIL_FIELDS},
     }
 
 
@@ -77,7 +79,12 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
     market = load_market_snapshot()
     catalog = load_deposit_catalog()
     picks = load_daily_picks()
-    secondary = [_public_offer({**item, "market_type": "secondary"}) for item in (picks or {}).get("items", [])]
+    details_by_id = {row["id"]: {**row, "current_price": row["price"]}
+                     for row in market.get("offers", []) if row["market_type"] == "secondary"}
+    details_by_id.update({row["id"]: row for row in market.get("listing_details", [])})
+    secondary = [_public_offer({**item, "market_type": "secondary",
+                               **details_for_selected_offer(details_by_id.get(item["id"]), item["price"])})
+                 for item in (picks or {}).get("items", [])]
     selected = next((offer for offer in secondary if offer["id"] == listing), None) if listing else None
     primary = public_primary_offer(market, unit) if unit else None
     if primary:

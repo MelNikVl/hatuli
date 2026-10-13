@@ -37,7 +37,7 @@ def market_snapshot(now):
     common = {"complex_id": 10, "complex_name": "<script>UNSAFE-NAME</script>",
               "rooms": 2, "area": 60, "price": 30_000_000, "floor": 3, "floors_total": 10,
               "lat": latitude, "lon": longitude,
-              "address": "PRIVATE-ADDRESS", "phone": "PRIVATE-PHONE", "raw_json": "PRIVATE-RAW"}
+              "address": "улица Айнаколь, 62", "phone": "PRIVATE-PHONE", "raw_json": "PRIVATE-RAW"}
     primary = [{**common, "id": index + 1, "source": "bi_group", "status": "available",
                 "last_seen_at": now, "build_status": None, "completion_year": 2020} for index in range(5)]
     secondary = [{**common, "id": str(9100000000 + index),
@@ -45,7 +45,10 @@ def market_snapshot(now):
                   "last_seen": now, "market_type": "secondary", "is_active": True,
                   "is_duplicate": False, "dup_needs_review": False, "finish_level": "renovated"}
                  for index in range(5)]
-    return build_market_snapshot(primary, secondary, now=now)
+    public_detail = {"id": "1000000001", "market_type": "secondary", "price": 32_000_000,
+                     "address": "улица Сыганак, 12/1", "comparison_only": True,
+                     "public_comparison_listing": True, "phone": "PRIVATE-PHONE", "price_events": []}
+    return build_market_snapshot(primary, secondary + [public_detail], now=now)
 
 
 def deposit_catalog(now):
@@ -311,3 +314,72 @@ async def test_unknown_complex_has_honest_public_not_found_response(app):
     assert "Для этого ЖК пока нет свежих данных сравнения" in response.text
     assert 'href="/compare"' in response.text
     assert "PRIVATE" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_source_address_and_all_price_events_visible_in_cards_and_selected_offer(app, monkeypatch, isolated_sources):
+    data = market_snapshot(isolated_sources)
+    data["offers"][-1]["id"] = "1000000001"
+    details = data["listing_details"][0]
+    from bot.core.comparison_offer_details import build_offer_details
+    details.update(build_offer_details({"price": 32_000_000, "address": '<script>ADDRESS-XSS</script> Сыганак 12/1',
+        "price_events": [{"old_price": 35_000_000, "new_price": 34_000_000, "changed_at": isolated_sources-timedelta(days=2)},
+                         {"old_price": 34_000_000, "new_price": 32_000_000, "changed_at": isolated_sources-timedelta(days=1)}]},
+        "secondary", now=isolated_sources))
+    monkeypatch.setattr("bot.public_comparison_routes.load_market_snapshot", lambda: data)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/compare?listing=1000000001&scope=city")
+    assert response.status_code == 200
+    assert '<script>ADDRESS-XSS</script>' not in response.text
+    assert '&lt;script&gt;ADDRESS-XSS&lt;/script&gt;' in response.text
+    assert 'data-history-status="consistent"' in response.text
+    assert 'Ещё изменений: 1' in response.text
+    assert '35 000 000' in response.text and '34 000 000' in response.text and '32 000 000' in response.text
+    assert response.text.count('Снизилась на') == 4  # two events in card and selected offer
+    assert 'PRIVATE' not in response.text
+
+
+@pytest.mark.asyncio
+async def test_new_daily_id_uses_market_metadata_before_supplement_refresh(app, monkeypatch, isolated_sources):
+    data = market_snapshot(isolated_sources)
+    data["listing_details"] = []
+    source = dict(data["offers"][-1], id="1000000001", price=32_000_000, address="Туран 10")
+    data["offers"].append(source)
+    monkeypatch.setattr("bot.public_comparison_routes.load_market_snapshot", lambda: data)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/compare?listing=1000000001")
+    assert response.status_code == 200
+    assert 'Туран 10' in response.text
+    assert 'История изменений цены пока не загружена' not in response.text
+
+
+@pytest.mark.asyncio
+async def test_developer_single_recorded_change_never_invents_previous_price(app, monkeypatch, isolated_sources):
+    data = market_snapshot(isolated_sources)
+    from bot.core.comparison_offer_details import build_offer_details
+    data["offers"][0].update(build_offer_details({"price": 30_000_000, "address": "Ұлы дала, участок 18", "building": "C", "section": "1",
+        "price_events": [{"price": 30_000_000, "changed_at": isolated_sources-timedelta(days=1)}]}, "primary", now=isolated_sources))
+    monkeypatch.setattr("bot.public_comparison_routes.load_market_snapshot", lambda: data)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/compare?unit=1")
+    assert response.status_code == 200
+    assert 'Цена после изменения:' in response.text and 'Предыдущая цена не сохранена' in response.text
+    assert 'Корпус C' in response.text and 'Секция 1' in response.text
+    assert 'Адрес проекта из каталога' in response.text
+
+
+@pytest.mark.asyncio
+async def test_incomplete_history_warning_keeps_individual_events(app, monkeypatch, isolated_sources):
+    data = market_snapshot(isolated_sources)
+    data["offers"][-1]["id"] = "1000000001"
+    from bot.core.comparison_offer_details import build_offer_details
+    data["listing_details"][0].update(build_offer_details({"price": 32_000_000,
+        "price_events": [{"old_price": 35_000_000, "new_price": 32_000_000, "changed_at": isolated_sources-timedelta(days=2)},
+                         {"old_price": 35_000_000, "new_price": 32_000_000, "changed_at": isolated_sources-timedelta(days=1)}]}, "secondary", now=isolated_sources))
+    monkeypatch.setattr("bot.public_comparison_routes.load_market_snapshot", lambda: data)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/compare?listing=1000000001&scope=city")
+    assert response.status_code == 200
+    assert 'data-history-status="incomplete"' in response.text
+    assert 'есть пропуски' in response.text
+    assert response.text.count('Снизилась на') == 4
