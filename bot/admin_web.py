@@ -20,6 +20,8 @@ from bot.core.admin_sessions import (
     destroy_admin_session, set_admin_session_cookie, clear_admin_session_cookie,
 )
 from bot.core.public_buyer_example import load_public_example
+from bot.core.daily_picks import load_daily_picks
+from bot.core.daily_picks_display import prepare_daily_picks
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _LOG_FILE = "web.log"
@@ -116,6 +118,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "- [Жилые комплексы](https://hatuli.ai-groundtruth.com/complexes): каталог ЖК Астаны\n"
             "- [Как считаем](https://hatuli.ai-groundtruth.com/how-it-works): источники, подбор аналогов и ограничения\n"
             "- [Чеклист перед задатком](https://hatuli.ai-groundtruth.com/guides/check-apartment-before-deposit): вопросы о документах, доверенности и коммунальных расчётах с официальными источниками Казахстана; автоматическая юридическая проверка не предоставляется\n"
+            "- [Лучшие варианты](https://hatuli.ai-groundtruth.com/best-apartments): ежедневная публичная подборка до 30 квартир в продаже с фотографиями и объяснением выбора\n"
         )
 
     @app.get("/sitemap.xml")
@@ -124,6 +127,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         urls = [
             ("https://hatuli.ai-groundtruth.com/", "weekly", "1.0"),
             ("https://hatuli.ai-groundtruth.com/example", "monthly", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/best-apartments", "daily", "0.9"),
             ("https://hatuli.ai-groundtruth.com/map", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/how-it-works", "monthly", "0.7"),
             ("https://hatuli.ai-groundtruth.com/guides/check-apartment-before-deposit", "monthly", "0.7"),
@@ -234,6 +238,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     @app.get("/guides/check-apartment-before-deposit", response_class=HTMLResponse)
     async def buyer_deposit_guide(request: Request):
         return templates.TemplateResponse(request=request, name="buyer_deposit_guide.html", context={"request": request})
+
+    @app.get("/best-apartments", response_class=HTMLResponse)
+    async def public_daily_picks(request: Request):
+        snapshot = prepare_daily_picks(load_daily_picks())
+        response = templates.TemplateResponse(request=request, name="daily_picks.html", context={"request": request, "snapshot": snapshot})
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/map", response_class=HTMLResponse)
     async def public_map(request: Request):

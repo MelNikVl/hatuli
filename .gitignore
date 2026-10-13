@@ -16,3 +16,8 @@ research/phase_c/data/
 
 # Live identity audit/rollout manifests contain private production records.
 /artifacts/
+
+# Runtime publication; refreshed atomically by the daily selection service.
+/var/daily-picks.json
+/var/daily-picks.json.lock
+/var/.daily-picks.json.*.tmp
