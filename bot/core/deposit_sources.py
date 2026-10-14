@@ -141,6 +141,80 @@ def _forte_rows(soup: BeautifulSoup) -> list[list[str]]:
     return eligible[0]
 
 
+def _bereke_product_rows(soup: BeautifulSoup, name: str) -> list[str]:
+    """Read one explicitly spanned product, independent of its neighbours."""
+    matches = []
+    for table in soup.find_all("table"):
+        for index, row in enumerate(table.find_all("tr")):
+            cells = row.find_all(["td", "th"], recursive=False)
+            if cells and _text(cells[0].get_text(" ", strip=True)) == name:
+                matches.append((table, index, cells))
+    if len(matches) != 1:
+        raise ValueError("Неоднозначный раздел Bereke")
+    table, start, header = matches[0]
+    if table.find_parent("table") is not None or table.find("table") is not None:
+        raise ValueError("Вложенная таблица Bereke")
+    rows = table.find_all("tr")
+    span_text = str(header[0].get("rowspan", ""))
+    if (len(header) != 2 or not re.fullmatch(r"[0-9]{1,3}", span_text)
+            or not 2 <= int(span_text) <= 100 or start + int(span_text) > len(rows)):
+        raise ValueError("Не подтверждены границы раздела Bereke")
+    stop = start + int(span_text)
+    # An earlier merged cell must not overlap this product's first row.
+    for index, row in enumerate(rows[:start]):
+        for cell in row.find_all(["td", "th"], recursive=False):
+            earlier_span = str(cell.get("rowspan", "1"))
+            if (not re.fullmatch(r"[0-9]{1,3}", earlier_span)
+                    or not 1 <= int(earlier_span) <= 100
+                    or index + int(earlier_span) > start):
+                raise ValueError("Пересекаются разделы Bereke")
+    values = []
+    for index, row in enumerate(rows[start:stop]):
+        cells = row.find_all(["td", "th"], recursive=False)
+        if len(cells) != (2 if index == 0 else 1):
+            raise ValueError("Неоднозначные ячейки раздела Bereke")
+        for cell_index, cell in enumerate(cells):
+            expected_span = span_text if index == cell_index == 0 else "1"
+            if (str(cell.get("colspan", "1")) != "1"
+                    or str(cell.get("rowspan", "1")) != expected_span):
+                raise ValueError("Пересекаются разделы Bereke")
+        values.append(_text(cells[-1].get_text(" ", strip=True)))
+    return values
+
+
+def _validate_bereke_terms(values: list[str], top_up: bool) -> None:
+    rows = [[value] for value in values[1:]]
+    expected = {
+        "Валюта": "Валюта теңге",
+        "Минимальная сумма": "Минимальная сумма 5 000 теңге",
+        "Максимальная сумма": "Максимальная сумма 10 000 000 000 теңге",
+        "Дополнительные взносы": ("Дополнительные взносы осуществляется до максимальной суммы вклада"
+                                 if top_up else "Дополнительные взносы не предусмотрены"),
+        "Частичные изъятия": "Частичные изъятия не предусмотрены",
+        "Начисление вознаграждения": (
+            "Начисление вознаграждения - ежемесячная капитализация и выплата в конце срока депозита "
+            "- ежемесячная выплата на текущий счет"),
+    }
+    if any(_row(rows, prefix)[0] != value for prefix, value in expected.items()):
+        raise ValueError("Условия Bereke требуют проверки")
+    terms = re.fullmatch(r"Срок ([0-9]+(?:, [0-9]+)*) месяцев", _row(rows, "Срок")[0])
+    if not terms:
+        raise ValueError("Неоднозначные сроки Bereke")
+    months = [int(value) for value in terms[1].split(", ")]
+    if 12 not in months or len(months) != len(set(months)):
+        raise ValueError("Неоднозначные сроки Bereke")
+    early = re.fullmatch(
+        r"Досрочное расторжение предусмотрено\. Досрочный возврат осуществляется не позднее "
+        r"([1-7]) календарных дней\. Вознаграждение по депозиту пересчитывается по ставке 0%\.?",
+        _row(rows, "Досрочное расторжение")[0],
+    )
+    if not early:
+        raise ValueError("Досрочный возврат Bereke требует проверки")
+    # Preserve unknown extra restrictions in the terms hash, rather than
+    # silently dropping them or treating adjacent products as this product.
+    _row(rows, "Пролонгация")
+
+
 def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
     if checked_at.tzinfo is None:
         raise ValueError("Время проверки должно содержать часовой пояс")
@@ -237,19 +311,21 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
             raise ValueError("Не подтверждены обе схемы выплаты на 12 месяцев")
         return offered
     if url == BEREKE:
-        rows = _rows(next((table for table in tables if "Bereke депозит (срочный)" in table.get_text()), tables[0]))
-        text = " ".join(" ".join(row) for row in rows)
         offered = []
-        for name, end, program, top_up in (("Bereke депозит (срочный)", "Bereke с пополнением (срочный)", "bereke-term-12", False),
-                ("Bereke с пополнением (срочный)", "Bereke депозит Табыс", "bereke-topup-12", True)):
-            try:
-                segment = text.split(name, 1)[1].split(end, 1)[0]
-            except IndexError:
-                raise ValueError("Раздел Bereke не найден") from None
-            rates = re.findall(r"12 месяцев\s*[-–]\s*(\d+(?:[.,]\d+)?)%\s*\(ГЭСВ\*?\s*[-–]\s*(\d+(?:[.,]\d+)?)%\)", segment)
-            if len(rates) != 1 or not all(value in segment for value in ("5 000", "10 000 000 000", "7 календарных", "0%")):
+        for name, program, top_up in (("Bereke депозит (срочный)", "bereke-term-12", False),
+                ("Bereke с пополнением (срочный)", "bereke-topup-12", True)):
+            values = _bereke_product_rows(soup, name)
+            _validate_bereke_terms(values, top_up)
+            if not values[0].startswith("Номинальная ставка вознаграждения "):
+                raise ValueError("Не подтверждена строка ставок Bereke")
+            rates = re.findall(r"12 месяцев\s*[-–]\s*(\d+(?:[.,]\d+)?)%\s*\(ГЭСВ\*?\s*[-–]\s*(\d+(?:[.,]\d+)?)%\)", values[0])
+            if len(rates) != 1:
                 raise ValueError("Неоднозначные условия Bereke")
             nominal, effective = map(lambda value: _percent(value + "%"), rates[0])
+            # Leading/trailing spaces reproduce the previously accepted
+            # product segment and hash; a structural repair is not approval
+            # of changed conditions. Only this product's rowspan is included.
+            segment = " " + " ".join(values) + " "
             # Rates occur inside a combined row. Mask only explicit percent
             # values; duration, amounts and all early withdrawal terms remain.
             rate_part, separator, terms_part = segment.partition("* Годовая эффективная")
@@ -258,7 +334,8 @@ def parse_source(url: str, html: str, checked_at: datetime) -> list[dict]:
             normalized = re.sub(r"\d+(?:[.,]\d+)?%", "RATE", rate_part) + separator + terms_part
             offered.append(_offer("bereke", name, program, nominal, effective, 5_000, 10_000_000_000,
                   top_up, False, False, "ежемесячная", "Досрочно: ставка 0%, возврат не позднее 7 календарных дней",
-                  url, checked_at, _digest(normalized), source_hash))
+                  url, checked_at, _digest(normalized), source_hash,
+                  warnings=["ГЭСВ предполагает сохранение процентов, а не выплаты на другой счёт."]))
         return offered
     if url in (HOME_SIMPLE, HOME_SAVINGS, HOME_PLUS):
         table = next((table for table in tables if "Номинальная ставка" in _text(table.get_text())), None)
