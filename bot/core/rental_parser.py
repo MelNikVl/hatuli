@@ -3,6 +3,7 @@ Rental index builder.
 
 Парсит объявления об АРЕНДЕ с Krisha.kz:
   /arenda/kvartiry/astana/        → квартиры
+  /arenda/kvartiry-posutochno/astana/ → квартиры посуточно
   /arenda/garazhi/astana/        → паркинги/гаражи
   /arenda/kommercheskaya-nedvizhimost/astana/ → коммерческая
 
@@ -10,6 +11,12 @@ Rental index builder.
   медиана/среднее/p25/p75 по (город, район, ЖК, комнаты, тип).
 
 Запуск: await run_rental_cycle()
+
+Period paths verified in a normal browser on 2026-10-15 22:36 UTC+5:
+monthly switch/heading and first 23 cards said «за месяц»; daily switch led
+to /arenda/kvartiry-posutochno/astana/ and its first 23 cards said «за сутки».
+These are bounded source samples, not proof of the entire catalog's period.
+Explicit contradictory card text remains unknown; prices never imply period.
 """
 from __future__ import annotations
 
@@ -21,6 +28,7 @@ import re
 import statistics
 import time
 import random
+import asyncpg
 from urllib.parse import parse_qs, urlparse
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -28,6 +36,8 @@ from datetime import datetime, timezone
 
 import httpx
 from bs4 import BeautifulSoup
+from bot.core.rental_period import classify_rental_period, rental_period_conflict, catalog_period, catalog_cursor_key, catalog_page_url
+from bot.core.rental_stage0_identity import RentalStage0MigrationRequired, resolve_rental_complex, observed_hex, source_complex_url
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +51,7 @@ DEFAULT_HEADERS = {
 # path → prop_type
 RENTAL_PATHS: dict[str, str] = {
     "/arenda/kvartiry/astana/":       "apartment",
+    "/arenda/kvartiry-posutochno/astana/": "apartment",
     "/arenda/garazhi/astana/":       "parking",
     "/arenda/kommercheskaya-nedvizhimost/astana/": "commercial",
 }
@@ -69,6 +80,9 @@ class RentalListing:
     published_at: str
     complex_url: str | None = None
     photo_url: str | None = None
+    rent_period: str = "unknown"
+    complex_id: int | None = None
+    rent_period_conflict: bool = False
 
 
 def _extract_int(text: str) -> int | None:
@@ -150,7 +164,7 @@ async def fetch_complex_name(listing_id: str) -> str | None:
     return None
 
 
-def _parse_card(card, prop_type: str) -> RentalListing | None:
+def _parse_card(card, prop_type: str, *, verified_catalog_period: str = "unknown") -> RentalListing | None:
     try:
         # ID из data-id атрибута div карточки
         listing_id = card.get("data-id", "").strip()
@@ -225,6 +239,8 @@ def _parse_card(card, prop_type: str) -> RentalListing | None:
             city="astana", prop_type=prop_type, published_at=published_at,
             complex_url=complex_url,
             photo_url=photo_url,
+            rent_period=classify_rental_period(price_text, title, verified_catalog_period=verified_catalog_period),
+            rent_period_conflict=rental_period_conflict(price_text, title, verified_catalog_period=verified_catalog_period),
         )
     except Exception as e:
         logger.debug("Card parse error: %s", e)
@@ -386,7 +402,7 @@ async def _fetch_page_result(client: httpx.AsyncClient, url: str, prop_type: str
         # both coverage accounting and the persisted card, not just the former.
         if not card.get("data-id"):
             card["data-id"] = listing_id
-        listing = _parse_card(card, prop_type)
+        listing = _parse_card(card, prop_type, verified_catalog_period=catalog_period(url))
         if listing:
             results[listing.id] = listing
     return RentalPage(list(results.values()), tuple(card_ids), last_page,
@@ -408,7 +424,7 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
     """
     from bot.db import settings as app_settings
     await app_settings.load()
-    key = f"RENTAL_CRAWL_V1_{prop_type.upper()}"
+    key = catalog_cursor_key(prop_type, path)
     cursor = RentalPagination.loads(app_settings.get(key, ""))
     metrics = {"requests": 0, "head_pages": 0, "durable_pages": 0,
                "saved": 0, "new": 0, "updated": 0, "reactivated": 0,
@@ -417,7 +433,7 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
 
     async def fetch_page(page: int) -> RentalPage:
         metrics["requests"] += 1
-        url = BASE_URL + path + (f"?page={page}" if page > 1 else "")
+        url = catalog_page_url(path, page)
         return await _fetch_page_result(client, url, prop_type)
 
     async def save_page(result: RentalPage) -> None:
@@ -511,7 +527,7 @@ async def parse_rental_path(path: str, prop_type: str, max_pages: int | None = M
     async with httpx.AsyncClient(follow_redirects=True) as client:
         while not max_pages or cursor.page <= max_pages:
             page = cursor.page
-            url = BASE_URL + path + (f"?page={page}" if page > 1 else "")
+            url = catalog_page_url(path, page)
             result = await _fetch_page_result(client, url, prop_type)
             all_listings.update((listing.id, listing) for listing in result.listings)
             if cursor.advance(result):
@@ -550,17 +566,19 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
     unique = {listing.id: listing for listing in listings}
     for listing in unique.values():
         try:
+            cid = await resolve_rental_complex(complex_url=listing.complex_url, complex_name=listing.complex_name,
+                                               address=listing.address, title=listing.title)
             outcome = await fetchrow(
                 """
                 WITH previous AS MATERIALIZED (
-                    SELECT id, price, is_active FROM rental_listings
+                    SELECT id, price, is_active, rent_period, complex_id, hex_id, hex_edge_m, rent_period_conflict FROM rental_listings
                      WHERE id = $1 FOR UPDATE
                 ), observed AS (
                     INSERT INTO rental_listings
                         (id, url, title, price, area, rooms, floor, floors_total,
                          address, district, complex_name, city, prop_type,
-                         published_at, found_at, last_seen, complex_url, photo_url)
-                    SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15,$16,$17
+                         published_at, found_at, last_seen, complex_url, photo_url, rent_period, complex_id, rent_period_conflict)
+                    SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15,$16,$17,$18,$19,$20
                       FROM (SELECT count(*) FROM previous) previous_observation
                      WHERE TRUE
                     ON CONFLICT (id) DO UPDATE SET
@@ -572,6 +590,16 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                                           NULLIF(btrim(EXCLUDED.complex_name), '')) END,
                         complex_url = COALESCE(EXCLUDED.complex_url, rental_listings.complex_url),
                         photo_url = COALESCE(EXCLUDED.photo_url, rental_listings.photo_url),
+                        rent_period = CASE WHEN rental_listings.rent_period_conflict OR EXCLUDED.rent_period_conflict
+                            OR (rental_listings.rent_period IN ('daily','monthly')
+                            AND EXCLUDED.rent_period IN ('daily','monthly')
+                            AND rental_listings.rent_period <> EXCLUDED.rent_period) THEN 'unknown'
+                            ELSE EXCLUDED.rent_period END,
+                        rent_period_conflict = rental_listings.rent_period_conflict OR EXCLUDED.rent_period_conflict
+                            OR (rental_listings.rent_period IN ('daily','monthly')
+                            AND EXCLUDED.rent_period IN ('daily','monthly')
+                            AND rental_listings.rent_period <> EXCLUDED.rent_period),
+                        complex_id = EXCLUDED.complex_id,
                         url = EXCLUDED.url,
                         title = EXCLUDED.title,
                         area = EXCLUDED.area,
@@ -592,6 +620,8 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                     SELECT observed.id, previous.price, observed.price
                       FROM observed JOIN previous USING (id)
                      WHERE previous.price > 0 AND observed.price > 0
+                       AND previous.rent_period = $18 AND $18 IN ('daily','monthly')
+                       AND NOT previous.rent_period_conflict AND NOT $20
                        AND previous.price <> observed.price
                     RETURNING listing_id
                 )
@@ -604,6 +634,7 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                 listing.address, listing.district, listing.complex_name,
                 listing.city, listing.prop_type, listing.published_at,
                 datetime.now(timezone.utc), listing.complex_url, listing.photo_url,
+                listing.rent_period, cid, listing.rent_period_conflict,
             )
             if outcome is None:
                 raise RuntimeError("Rental upsert returned no outcome")
@@ -611,8 +642,10 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
             new += int(outcome["is_new"])
             updated += int(not outcome["is_new"])
             reactivated += int(outcome["reactivated"])
+        except asyncpg.UndefinedColumnError as exc:
+            raise RentalStage0MigrationRequired() from exc
         except Exception as exc:
-            logger.warning("Save error %s: %s", listing.id, exc)
+            logger.warning("Save error %s: %s", listing.id, type(exc).__name__)
     return RentalSaveCount(saved, new=new, updated=updated, reactivated=reactivated)
 
 
@@ -959,11 +992,19 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
         report["cooldown"] = True
         return report
     deadline = time.monotonic() + budget_seconds
+    from bot.db import settings as app_settings
+    edge_m = app_settings.get("HEX_EDGE_M", "50")
+    edge_probe = observed_hex(51.128, 71.430, edge_m)
+    expected_edge = edge_probe["hex_edge_m"] if edge_probe else None
 
-    rows = await fetch("""
-        SELECT id, url FROM rental_listings
+    try:
+        rows = await fetch("""
+        SELECT id, url, lat, lon, complex_name, complex_url, address, title,
+               complex_id, hex_id, hex_edge_m, rent_period, rent_period_conflict FROM rental_listings
         WHERE (lat IS NULL OR complex_name IS NULL OR btrim(complex_name) = ''
-               OR complex_url IS NULL OR btrim(complex_url) = '')
+               OR complex_url IS NULL OR btrim(complex_url) = '' OR complex_id IS NULL
+               OR hex_id IS NULL OR hex_edge_m IS NULL
+               OR ($2::real IS NOT NULL AND hex_edge_m IS DISTINCT FROM $2))
           AND is_active IS NOT FALSE
           AND COALESCE(is_duplicate, FALSE) = FALSE
           AND COALESCE(dup_needs_review, FALSE) = FALSE
@@ -973,7 +1014,9 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
                OR coord_fetch_attempted_at < now() - interval '3 days')
         ORDER BY coord_fetch_attempted_at ASC NULLS FIRST, found_at DESC
         LIMIT $1
-    """, batch)
+        """, batch, expected_edge)
+    except asyncpg.UndefinedColumnError as exc:
+        raise RentalStage0MigrationRequired() from exc
     if not rows:
         return report
 
@@ -983,6 +1026,14 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
 
     got_geo = got_cx = 0
     for r in rows:
+        # Existing source coordinates can acquire their grid projection
+        # without another source request. This is never a complex guess.
+        known_hex = observed_hex(r.get("lat"), r.get("lon"), edge_m)
+        if known_hex and (r.get("hex_id") != known_hex["hex_id"] or r.get("hex_edge_m") != known_hex["hex_edge_m"]):
+            await execute("UPDATE rental_listings SET hex_id=$2,hex_edge_m=$3 WHERE id=$1",
+                          r["id"], known_hex["hex_id"], known_hex["hex_edge_m"])
+            if r.get("complex_name") and r.get("complex_url") and r.get("complex_id"):
+                continue
         if detail_fetch_cooldown_remaining():
             report["cooldown"] = True
             break
@@ -1034,15 +1085,21 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
                 cx = None  # ЖК-улица / мусорное имя — не привязываем
 
         sets, params, i = ["coord_fetch_attempted_at=now()"], [], 1
-        if details.get("lat") and details.get("lon"):
-            sets.append(f"lat=${i}"); params.append(details["lat"]); i += 1
-            sets.append(f"lon=${i}"); params.append(details["lon"]); i += 1
+        projected = observed_hex(details.get("lat"), details.get("lon"), edge_m)
+        if projected:
+            for field in ("lat", "lon", "hex_id", "hex_edge_m"):
+                sets.append(f"{field}=${i}"); params.append(projected[field]); i += 1
             got_geo += 1
+        cid = await resolve_rental_complex(
+            complex_url=details.get("complex_url") if cx else None, complex_name=cx,
+            address=details.get("address_full") or r.get("address"), title=r.get("title"))
+        sets.append(f"complex_id=${i}"); params.append(cid); i += 1
         if cx:
             sets.append(f"complex_name=${i}"); params.append(cx); i += 1
-            if details.get("complex_url"):
+            safe_url = source_complex_url(details.get("complex_url"))
+            if safe_url:
                 sets.append(f"complex_url=COALESCE(${i}, complex_url)")
-                params.append(details["complex_url"]); i += 1
+                params.append(safe_url); i += 1
             got_cx += 1
         if details.get("address_full"):
             sets.append(f"address=CASE WHEN address IS NULL OR btrim(address)='' "

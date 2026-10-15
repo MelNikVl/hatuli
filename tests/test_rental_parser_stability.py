@@ -468,6 +468,7 @@ async def test_lookup_refuses_stale_and_small_aggregate_via_database_predicate(m
 def test_renamed_catalog_paths_are_preserved():
     assert rentals.RENTAL_PATHS == {
         "/arenda/kvartiry/astana/": "apartment",
+        "/arenda/kvartiry-posutochno/astana/": "apartment",
         "/arenda/garazhi/astana/": "parking",
         "/arenda/kommercheskaya-nedvizhimost/astana/": "commercial",
     }
