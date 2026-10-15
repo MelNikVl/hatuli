@@ -60,7 +60,7 @@ def candidate(**overrides):
         "complex_id": 123, "complex_name": "Точный дом", "furnishing": "full", "has_photo": True,
         "lat": 51.13, "lon": 71.43, "monthly_index": index("monthly"), "daily_index": index(),
         "furnished_monthly_index": None, "contact": "private@example.com", "description": "SECRET TEXT",
-        "address": "PRIVATE ADDRESS", **overrides}
+        "address": "Туран, 12", **overrides}
 
 
 @pytest.mark.parametrize("change", [{"sample_count": 4}, {"rent_period": "unknown"}, {"policy_version": "2"},
@@ -186,7 +186,8 @@ async def test_paid_scanner_and_csv_project_only_allowed_fields(client, monkeypa
     item = response.json()["items"][0]
     assert item["economics"]["index_source"]["n"] == 6
     assert item["source_url"] == "https://krisha.kz/a/show/12345678"
-    for secret in ("private@example.com", "SECRET TEXT", "PRIVATE ADDRESS", "description", "contact"):
+    assert item["address"] == "Туран, 12"
+    for secret in ("private@example.com", "SECRET TEXT", "description", "contact"):
         assert secret not in response.text
     csv = await client.get("/api/rental/scanner.csv", params=query)
     assert csv.status_code == 200 and "'=HYPERLINK" in csv.text
@@ -212,6 +213,30 @@ def test_unvalidated_parser_full_label_cannot_zero_furniture_budget():
 
 
 @pytest.mark.asyncio
+async def test_manual_full_choice_cannot_autozero_unknown_scanner_candidate(client, monkeypatch):
+    async def paid(*args):
+        return "subscriber"
+    async def rows(*args, **kwargs):
+        return [candidate(furnishing="unknown")], False
+    monkeypatch.setattr(web, "get_user_tier", paid)
+    monkeypatch.setattr(market, "read_candidates", rows)
+    values = inputs() | {"rooms": 2, "furnishing": "full"}
+    values.pop("furnish_capex")  # disabled full-furniture browser control
+    response = await client.get("/api/rental/scanner", params=values)
+    assert response.status_code == 200 and response.json()["items"] == []
+    assert response.json()["unqualified_count"] == 1
+
+
+def test_scanner_template_initial_sections_hidden_and_percent_inputs():
+    template = (ROOT/"bot/templates/rental_scanner.html").read_text(encoding="utf-8")
+    assert 'id="sublease-calculation" class="sublease-panel" hidden' in template
+    assert 'id="sublease-segment" class="sublease-panel" hidden' in template
+    for name in ("occupancy", "tax_pct", "platform_fee_pct", "vacancy_fraction"):
+        assert f'name="{name}" data-percent' in template
+    assert 'доля 0–1' not in template
+
+
+@pytest.mark.asyncio
 async def test_unknown_index_is_hidden_not_replaced_with_monthly_multiplier(client, monkeypatch):
     async def paid(*args):
         return "admin"
@@ -232,6 +257,7 @@ async def test_single_listing_free_calculation_does_not_expose_row(client, monke
     response = await client.post("/api/rental/calc", json=inputs() | {"rooms": 2, "listing_id": "12345678"})
     assert response.status_code == 200 and response.json()["index_source"]["rent_period"] == "daily"
     assert "PRIVATE" not in response.text and "description" not in response.text
+    assert "Туран" not in response.text and "address" not in response.json()
 
 
 def test_candidate_sql_has_fresh_monthly_identity_and_noncity_index_gates():
@@ -266,7 +292,8 @@ async def test_actual_app_registers_routes_once_and_keeps_paid_rows_closed(monke
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         page = await client.get("/rental/scanner")
         assert page.status_code == 200 and page.text.count('id="main-content"') == 1
-        assert 'href="/rental/scanner"' in page.text
+        assert 'href="/rent"' in page.text
+        assert '>Субаренда</a>' not in page.text
         assert (await client.get("/api/rental/scanner.csv", cookies={"admin_auth": "1"})).status_code == 403
 
 
@@ -298,12 +325,12 @@ async def test_candidate_pagination_and_export_keep_same_bounded_filter_pool(cli
     calls = []
     async def rows(filters, config):
         calls.append(filters)
-        return [candidate(id=str(10000000+i), price=200000+i) for i in range(30)], True
+        return [candidate(id=str(10000000+i), price=200000+i) for i in range(30)], False
     monkeypatch.setattr(web, "get_user_tier", paid)
     monkeypatch.setattr(market, "read_candidates", rows)
     query = inputs() | {"rooms": 2, "page": 2, "district": "Есильский", "max_rent": 250000}
     result = (await client.get("/api/rental/scanner", params=query)).json()
-    assert result["page"] == 2 and len(result["items"]) == 5 and result["pool_truncated"] is True
+    assert result["page"] == 2 and len(result["items"]) == 5 and result["pool_truncated"] is False
     csv = await client.get("/api/rental/scanner.csv", params=query)
     assert len(csv.text.splitlines()) == 31 and calls[-1] == calls[-2]
 
@@ -318,7 +345,8 @@ async def test_competition_risk_uses_observed_p75_without_claiming_noise(client,
     monkeypatch.setattr(market, "read_candidates", rows)
     result = (await client.get("/api/rental/scanner", params=inputs() | {"rooms": 2})).json()["items"][0]
     assert "high_daily_competition" in result["risk_flags"]
-    assert "noise_not_assessed" in result["risk_flags"] and result["risk_assessment_complete"] is False
+    assert "noise" in result["unassessed_factors"] and "noise_not_assessed" not in result["risk_flags"]
+    assert result["risk_assessment_complete"] is False
 
 
 @pytest.mark.asyncio
@@ -331,3 +359,72 @@ async def test_candidate_reader_limits_projection_and_uses_500_plus_sentinel(mon
     rows, truncated = await market.read_candidates({"rooms": 2}, {})
     assert len(rows) == 500 and truncated is True
     assert captured[0][1][-1] is True and captured[0][1][-2] == Decimal(".95")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sort", ["breakeven", "margin", "startup"])
+async def test_best_breakeven_outside_first_501_requires_narrowing_without_partial_csv(client, monkeypatch, sort):
+    async def paid(*args):
+        return "subscriber"
+    poor_daily = index(median_price=5000, p25_price=4000, p75_price=6000)
+    first_501 = [candidate(id=str(10000000+i), price=100000, daily_index=poor_daily) for i in range(501)]
+    best = candidate(id="99999999", price=250000, complex_id=999,
+        monthly_index=index("monthly", complex_id=999),
+        daily_index=index(complex_id=999, median_price=50000, p25_price=40000, p75_price=60000))
+    values = inputs() | {"rooms": 2, "sort": sort}
+    assert (web._economics(best, values, web._settings())["breakeven_occupancy"]
+            < web._economics(first_501[0], values, web._settings())["breakeven_occupancy"])
+    async def fetch(sql, *args):
+        # SQL's cheap-rent ordering would put this better financial candidate
+        # after its LIMIT501. Only a sufficiently narrow scope enumerates it.
+        return [best] if args[2] == 999 else first_501
+    monkeypatch.setattr(web, "get_user_tier", paid)
+    monkeypatch.setattr(market, "fetch", fetch)
+    for path in ("/api/rental/scanner", "/api/rental/scanner.csv"):
+        response = await client.get(path, params=values)
+        assert response.status_code == 422 and response.json()["error"] == "narrower_filters_required"
+        assert "items" not in response.json() and "source_url" not in response.text
+        assert response.headers["content-type"].startswith("application/json")
+        assert "Уточните район" in response.text
+    narrowed = await client.get("/api/rental/scanner", params=values | {"complex_id": 999})
+    assert narrowed.status_code == 200 and narrowed.json()["items"][0]["id"] == best["id"]
+    assert narrowed.json()["ranking_scope"] == "all_qualified_candidates_matching_filters"
+
+
+@pytest.mark.parametrize("raw,expected", [(None, None), ("", None),
+    ("<b>Туран</b>, 12\nтел. +7 777 123-45-67 owner@example.com", "Туран , 12"),
+    ("Туран, 12 owner@example.com https://example.com @owner_user", "Туран, 12"),
+    ("Туран, 12 +44 20 1234 5678", "Туран, 12"),
+    ("Туран, 12 +77771234567", "Туран, 12")])
+def test_paid_source_address_is_plain_bounded_without_contacts(raw, expected):
+    assert market.source_address(raw) == expected
+    assert len(market.source_address("а"*400)) == 300
+
+
+@pytest.mark.asyncio
+async def test_paid_table_and_csv_receive_sanitized_address_only(client, monkeypatch):
+    async def paid(*args):
+        return "subscriber"
+    async def rows(*args, **kwargs):
+        return [candidate(address="Туран, 12 телефон +77771234567 owner@example.com")], False
+    monkeypatch.setattr(web, "get_user_tier", paid)
+    monkeypatch.setattr(market, "read_candidates", rows)
+    response = await client.get("/api/rental/scanner", params=inputs() | {"rooms": 2})
+    assert response.json()["items"][0]["address"] == "Туран, 12"
+    response = await client.get("/api/rental/scanner.csv", params=inputs() | {"rooms": 2})
+    assert '"Туран, 12"' in response.text and "7771234567" not in response.text
+    assert "owner@example.com" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_rent_page_offers_scanner_without_extra_main_menu_item():
+    from bot.admin_web import create_admin_app
+    class NoPrivateDB:
+        def __getattr__(self, name):
+            raise AssertionError("Public rental page may not read main database: " + name)
+    app = create_admin_app(NoPrivateDB(), "isolated-placeholder", "stage3-test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/rent")
+    assert response.status_code == 200 and 'href="/rental/scanner"' in response.text
+    assert "Рассчитать субаренду" in response.text
+    assert '>Субаренда</a>' not in response.text

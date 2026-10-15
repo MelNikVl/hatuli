@@ -101,7 +101,8 @@ def test_tax_requires_user_value_or_complete_operator_receipt():
         params_from_inputs(supplied, {"SUBLEASE_TAX_PCT": "0", "SUBLEASE_TAX_VERIFIED": "1"})
     assert "tax_pct" in error.value.errors
     settings = {"SUBLEASE_TAX_PCT": "0.04", "SUBLEASE_TAX_VERIFIED": "1",
-                "SUBLEASE_TAX_CHECKED_AT": "2026-01-01T00:00:00+00:00", "SUBLEASE_TAX_REFERENCE_HASH": "a"*64}
+                "SUBLEASE_TAX_CHECKED_AT": (datetime.now(timezone.utc)-timedelta(days=1)).isoformat(),
+                "SUBLEASE_TAX_REFERENCE_HASH": "a"*64}
     p, sources = params_from_inputs(supplied, settings)
     assert p.tax_pct == .04 and sources["tax_pct"] == "operator_setting"
     explicit, _ = params_from_inputs(supplied | {"tax_pct": 0}, settings)
@@ -109,6 +110,23 @@ def test_tax_requires_user_value_or_complete_operator_receipt():
     for field in ("SUBLEASE_TAX_CHECKED_AT", "SUBLEASE_TAX_REFERENCE_HASH", "SUBLEASE_TAX_PCT"):
         with pytest.raises(SubleaseError):
             params_from_inputs(supplied, settings | {field: ""})
+
+
+@pytest.mark.parametrize("age,ready", [(timedelta(days=30), True),
+    (timedelta(days=30, seconds=1), False), (timedelta(days=3650), False), (timedelta(seconds=-1), False)])
+def test_operator_tax_receipt_expires_after_30_days_without_hiding_explicit_user_value(age, ready):
+    now = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+    values = inputs()
+    values.pop("tax_pct")
+    config = {"SUBLEASE_TAX_PCT": ".04", "SUBLEASE_TAX_VERIFIED": "1",
+              "SUBLEASE_TAX_CHECKED_AT": (now-age).isoformat(), "SUBLEASE_TAX_REFERENCE_HASH": "b"*64}
+    if ready:
+        assert params_from_inputs(values, config, now=now)[0].tax_pct == .04
+    else:
+        with pytest.raises(SubleaseError) as exc:
+            params_from_inputs(values, config, now=now)
+        assert "tax_pct" in exc.value.errors
+    assert params_from_inputs(values | {"tax_pct": 0}, config, now=now)[0].tax_pct == 0
 
 
 def test_missing_costs_are_not_invented_and_full_capex_is_a_rule():

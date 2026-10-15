@@ -20,14 +20,14 @@
     <label>Аренда у собственника, ₸/мес <input required name="rent_month" inputmode="numeric" type="number" min="1" max="20000000"></label>
     <label>Цена за ночь, ₸ <input required name="nightly" inputmode="numeric" type="number" min="1" max="20000000"></label>
     <p class="sublease-help">Введите ставку самостоятельно или используйте цены выбранного сегмента ниже.</p>
-    <label>Сценарий загрузки, доля 0–1 <input required name="occupancy" type="number" min="0" max="1" step="0.01" value="0.60"></label>
+    <label>Сценарий загрузки, % <input required name="occupancy" data-percent type="number" min="0" max="100" step="1" value="60"></label>
     <details open><summary>Мои расходы и стартовый капитал</summary>
       <label>Среднее проживание, ночей <input required name="avg_stay_nights" type="number" min="0.25" max="365" step="0.25" value="2.5"></label>
       <label>Уборка при смене гостя, ₸ <input required name="cleaning_per_turn" type="number" min="0" max="2000000"></label>
       <label>Расходники за занятую ночь, ₸ <input required name="consumables_per_night" type="number" min="0" max="2000000"></label>
       <label>Коммуналка и интернет, ₸/мес <input required name="utilities_month" type="number" min="0" max="20000000"></label>
-      <div class="sublease-pair"><label>Комиссия, доля 0–1 <input required name="platform_fee_pct" type="number" min="0" max="1" step="0.001"></label>
-      <label>Налог, доля 0–1 <input required name="tax_pct" type="number" min="0" max="1" step="0.001"></label></div>
+      <div class="sublease-pair"><label>Комиссия, % <input required name="platform_fee_pct" data-percent type="number" min="0" max="100" step="0.1"></label>
+      <label>Налог, % <input required name="tax_pct" data-percent type="number" min="0" max="100" step="0.1"></label></div>
       <p class="sublease-help">Укажите свою применимую ставку. Калькулятор не определяет налоговый режим.</p>
       <label>Мебель и оснащение, ₸ <input required name="furnish_capex" type="number" min="0" max="500000000"></label>
       <label>Распределить оснащение на месяцев <input required name="capex_months" type="number" min="1" max="240" value="24"></label>
@@ -41,7 +41,7 @@
       <label>Максимальная аренда, ₸ <input name="max_rent" type="number" min="50000" max="2000000"></label>
       <label>Порядок <select name="sort"><option value="breakeven">Меньше загрузка для безубыточности</option><option value="margin">Больше сценарная маржа</option><option value="startup">Меньше стартовый капитал</option></select></label>
       <label>Стратегия <select name="strategy"><option value="daily">Посуточно</option><option value="mid_term">Меблировать и сдать помесячно</option></select></label>
-      <label>Планируемый простой помесячно, доля 0–1 <input name="vacancy_fraction" type="number" min="0" max="1" step="0.01"></label>
+      <label>Планируемый простой помесячно, % <input name="vacancy_fraction" data-percent type="number" min="0" max="100" step="1"></label>
       <label>Смен арендатора в год, сценарий <input name="turnovers_per_year" type="number" min="0" max="365" step="0.5"></label>
       <p class="sublease-help">Помесячный сценарий доступен только при достаточной проверенной выборке меблированных квартир.</p>
     </details><button id="sublease-scan-button" type="button">Найти варианты</button>
@@ -49,12 +49,12 @@
   </form>
   <section class="sublease-results" aria-label="Результаты">
     <div id="sublease-status" role="status" aria-live="polite"></div>
-    <section id="sublease-calculation" class="sublease-panel"><h2>Сначала — ваши вводные</h2><p>Порог загрузки учитывает аренду, уборку, расходники, комиссии, налог, КУ и оснащение.</p></section>
-    <section id="sublease-segment" class="sublease-panel"><h2>Цены сегмента</h2><p>Выберите район и комнатность. При недостаточной выборке оценки не появляются.</p></section>
+    <section id="sublease-calculation" class="sublease-panel" hidden></section>
+    <section id="sublease-segment" class="sublease-panel" hidden></section>
     {% if access_locked %}<section class="sublease-panel sublease-locked"><h2>Квартиры для субаренды</h2><p>Таблица, карта кандидатов и CSV доступны с расширенным доступом. Бесплатный калькулятор и цены сегмента работают без входа.</p><a href="/rental/scanner?section=candidates">Как получить доступ</a></section>
-    {% else %}<section class="sublease-panel"><h2>Кандидаты</h2><p id="sublease-candidate-note">Свежая помесячная аренда дешевле медианы своего сегмента. До 500 кандидатов; это ограниченный пул для сравнения.</p><div class="sublease-table-scroll"><table><thead><tr><th>Квартира</th><th>Аренда</th><th>Безубыточность</th><th>Маржа сценария</th><th>Старт</th></tr></thead><tbody id="sublease-candidates"></tbody></table></div><div class="sublease-actions"><button id="sublease-previous" type="button" disabled>Назад</button><span id="sublease-page"></span><button id="sublease-next" type="button" disabled>Далее</button><button id="sublease-csv" type="button" disabled>Скачать CSV</button></div><div id="sublease-map" aria-label="Карта тех же кандидатов"></div><p class="sublease-help">На карте только координаты, известные из источника; расположение само по себе не подтверждает точный корпус.</p></section>{% endif %}
+    {% else %}<section id="sublease-inventory" class="sublease-panel" hidden><h2>Кандидаты</h2><p id="sublease-candidate-note">Свежая помесячная аренда дешевле медианы своего сегмента. Если вариантов больше 500, уточните район, комнатность или максимальную аренду.</p><div class="sublease-table-scroll"><table><thead><tr><th>Квартира</th><th>Аренда</th><th>Безубыточность</th><th>Маржа сценария</th><th>Старт</th></tr></thead><tbody id="sublease-candidates"></tbody></table></div><div class="sublease-actions"><button id="sublease-previous" type="button" disabled>Назад</button><span id="sublease-page"></span><button id="sublease-next" type="button" disabled>Далее</button><button id="sublease-csv" type="button" disabled>Скачать CSV</button></div><div id="sublease-map" aria-label="Карта тех же кандидатов"></div><p class="sublease-help">На карте только координаты, известные из источника; расположение само по себе не подтверждает точный корпус.</p></section>{% endif %}
     <details class="sublease-panel"><summary>Как читать расчёт</summary><p>Месяц — 30,4 дня. Выручка = ставка за ночь × 30,4 × сценарная загрузка. Если вклад занятой ночи после переменных расходов не положителен, загрузка для безубыточности не определяется. Порог выше 100% означает, что расходы не покрываются даже при полной загрузке.</p><p>Маржа и расчётный срок возврата стартового капитала верны только при сохранении введённых условий. Они не являются прогнозом сделок или гарантией дохода. Цены индекса — запрашиваемые цены объявлений. Снятие объявления не подтверждает сдачу.</p></details>
-    <noscript><p class="sublease-notice">Форма отправляет вводные в бесплатный API и покажет расчёт в JSON. Для таблицы и карты включите JavaScript.</p></noscript>
+    <noscript><p class="sublease-notice">Для калькулятора, таблицы и карты включите JavaScript.</p></noscript>
   </section></div>
 </div>
 {% endblock %}

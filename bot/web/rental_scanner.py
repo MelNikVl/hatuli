@@ -26,6 +26,13 @@ EXTRA_FIELDS = {"vacancy_fraction", "turnovers_per_year", "listing_id", "rent_mo
 ALL_FIELDS = PARAM_FIELDS | FILTER_FIELDS | EXTRA_FIELDS
 
 
+class _SearchTooBroad(SubleaseError):
+    code = "narrower_filters_required"
+
+    def __init__(self):
+        super().__init__("filters", "Слишком широкий поиск. Уточните район, комнатность или максимальную аренду.")
+
+
 def _settings():
     return {key: settings.get(key) for key in settings.DEFAULTS}
 
@@ -104,7 +111,10 @@ async def _paid(request):
 
 
 def _error(exc, status=422):
-    return JSONResponse({"errors": exc.errors}, status_code=status, headers=HEADERS)
+    result = {"errors": exc.errors}
+    if getattr(exc, "code", None):
+        result["error"] = exc.code
+    return JSONResponse(result, status_code=status, headers=HEADERS)
 
 
 def _locked():
@@ -166,6 +176,10 @@ async def _scanner(values):
         number(values.get("vacancy_fraction"), "vacancy_fraction", 0, 1)
         number(values.get("turnovers_per_year"), "turnovers_per_year", 0, 365)
     rows, truncated = await market.read_candidates(filters, config)
+    if truncated:
+        # A cheaper-rent preselection cannot establish the global optimum for
+        # any financial sort. Reject before calculating or exporting a subset.
+        raise _SearchTooBroad()
     items, missing = [], 0
     for row in rows:
         public = market.public_candidate(row)
@@ -181,7 +195,7 @@ async def _scanner(values):
             continue
         monthly = market.ready_index(_mapping(row.get("monthly_index")),
                                      minimum_complex=market.thresholds(config)[0], minimum_area=market.thresholds(config)[1])
-        flags = ["noise_not_assessed"]
+        flags, unassessed = [], ["noise"]
         if row.get("has_photo") is not True:
             flags.append("no_photo")
         if result["furnishing"] not in ("none", "partial", "full"):
@@ -195,10 +209,11 @@ async def _scanner(values):
             if supply > competition:
                 flags.append("high_daily_competition")
         else:
-            flags.append("competition_not_assessed")
+            unassessed.append("competition")
         # No external OSM request on a financial/API read. Noise stays unknown
         # until a coordinate-specific, evidenced saved measurement exists.
-        public.update(economics=result, furnishing=result["furnishing"], risk_flags=flags, risk_assessment_complete=False)
+        public.update(economics=result, furnishing=result["furnishing"], risk_flags=flags,
+                      unassessed_factors=unassessed, risk_assessment_complete=False)
         items.append(public)
     sort = filters["sort"]
     items.sort(key=lambda row: ((row["economics"]["breakeven_occupancy"]
@@ -296,7 +311,7 @@ def make_rental_scanner_router(templates):
             offset = (filters["page"] - 1) * 25
             return JSONResponse({"items": items[offset:offset+25], "page": filters["page"], "page_size": 25,
                                  "total": len(items), "pool_truncated": truncated, "unqualified_count": missing,
-                                 "ranking_scope": "at_most_500_discounted_candidates", "access_locked": False}, headers=HEADERS)
+                                 "ranking_scope": "all_qualified_candidates_matching_filters", "access_locked": False}, headers=HEADERS)
         except SubleaseError as exc:
             return _error(exc)
         except Exception as exc:
@@ -311,7 +326,7 @@ def make_rental_scanner_router(templates):
             items, _, truncated, _ = await _scanner(_query(request))
             output = io.StringIO(newline="")
             writer = csv.writer(output)
-            writer.writerow(["id", "source_url", "district", "rooms", "rent_month_kzt", "breakeven_occupancy",
+            writer.writerow(["id", "source_url", "district", "address", "rooms", "rent_month_kzt", "breakeven_occupancy",
                              "scenario_margin_kzt", "startup_capital_kzt", "index_n", "index_updated_at", "scenario_only",
                              *SubleaseParams.__dataclass_fields__, "index_level", "index_window_days", "index_source_oldest_at",
                              "index_source_newest_at", "index_policy_version"])
@@ -322,7 +337,7 @@ def make_rental_scanner_router(templates):
                 return "'"+value if value[:1] in ("=", "+", "-", "@", "\t", "\r", "\n") else value
             for item in items:
                 e = item["economics"]
-                writer.writerow([cell(value) for value in (item["id"], item["source_url"], item["district"], item["rooms"],
+                writer.writerow([cell(value) for value in (item["id"], item["source_url"], item["district"], item["address"], item["rooms"],
                     item["price"], e["breakeven_occupancy"], e["margin"], e["startup_capital"],
                     e["index_source"]["n"], e["index_source"]["updated_at"], True,
                     *(e["params_used"].get(key) for key in SubleaseParams.__dataclass_fields__),

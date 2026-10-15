@@ -6,7 +6,7 @@ Rates are fractions (0.10 means 10%); money is KZT. A month is 30.4 nights.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
 import re
@@ -200,7 +200,7 @@ def params_from_inputs(fields, settings, *, rooms=None, furnishing="unknown", no
             digest = settings.get("SUBLEASE_TAX_REFERENCE_HASH", "")
             try:
                 date = datetime.fromisoformat(str(checked).replace("Z", "+00:00"))
-                dated = date.tzinfo is not None and date <= now
+                dated = date.tzinfo is not None and now-timedelta(days=30) <= date <= now
             except (ValueError, TypeError):
                 dated = False
             operator = (settings.get("SUBLEASE_TAX_VERIFIED", "") == "1" and dated

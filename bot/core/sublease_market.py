@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import math
 import re
+import unicodedata
 
 import asyncpg
 
@@ -220,7 +221,7 @@ CANDIDATES_SQL = rental_identity_ctes_sql() + f""", qualified_indices AS (
       AND ($11::text IS NULL OR r.id=$11)
       AND $1::text='astana'
 )
-SELECT r.id,r.price,r.rooms,r.area,r.district,r.resolved_complex_name AS complex_name,r.resolved_complex_id AS complex_id,
+SELECT r.id,r.price,r.rooms,r.area,r.district,r.address,r.resolved_complex_name AS complex_name,r.resolved_complex_id AS complex_id,
        r.hex_id,r.hex_edge_m,r.lat,r.lon,r.furnishing,r.furnishing_version,r.last_seen,
        r.is_active,r.is_duplicate,r.dup_needs_review,r.rent_period,r.rent_period_conflict,
        (r.photo_url IS NOT NULL OR jsonb_array_length(CASE WHEN jsonb_typeof(r.photos)='array'
@@ -265,13 +266,26 @@ async def read_candidates(filters, settings, *, now=None, listing_id=None, requi
     return [dict(row) for row in rows[:500]], len(rows) > 500
 
 
+def source_address(value):
+    """A bounded source field for the paid table; never infer a missing house."""
+    if not isinstance(value, str):
+        return None
+    text = value[:2000]
+    text = re.sub(r"<[^>]*>", " ", text)
+    text = "".join(" " if unicodedata.category(c).startswith("C") else c for c in text)
+    text = re.split(r"(?i)\b(?:тел(?:ефон)?\.?|phone|whatsapp|telegram|контакт\w*|звоните)\b", text, maxsplit=1)[0]
+    text = re.sub(r"(?i)(?:https?://|www\.)\S+|[\w.+-]+@[\w.-]+\.[a-z]{2,}|(?<!\w)@[a-z0-9_]{3,}", " ", text)
+    text = re.sub(r"(?<!\d)(?:\+[\s().-]*)?(?:\d[\s().-]*){7,15}(?!\d)", " ", text)
+    return re.sub(r"\s+", " ", text).strip(" ,;|·-")[:300] or None
+
+
 def public_candidate(row):
     identifier = str(row.get("id") or "")
     if not re.fullmatch(r"[0-9]{5,20}", identifier):
         return None
     result = {key: row.get(key) for key in ("price", "rooms", "area", "district", "complex_id", "furnishing")}
     result.update(id=identifier, source_url="https://krisha.kz/a/show/"+identifier,
-                  complex_name=str(row.get("complex_name") or "")[:160])
+                  complex_name=str(row.get("complex_name") or "")[:160], address=source_address(row.get("address")))
     lat, lon = row.get("lat"), row.get("lon")
     def coordinate(value, low, high):
         return (isinstance(value, (float, int)) and not isinstance(value, bool)
