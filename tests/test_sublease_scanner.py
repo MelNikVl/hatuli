@@ -67,6 +67,7 @@ def candidate(**overrides):
     {"window_days": None}, {"source_oldest_at": None}, {"source_newest_at": None},
     {"median_price": True}, {"p25_price": 50000}, {"complex_id": None, "district": None},
     {"rooms": None}, {"updated_at": datetime.now(timezone.utc)+timedelta(days=1)},
+    {"rooms": 0}, {"rooms": 7}, {"p75_price": 2000001}, {"p25_price": 999},
     {"active_supply": 0}, {"active_supply": None}, {"active_supply": True},
     {"source_newest_at": datetime.now(timezone.utc)-timedelta(days=4)}])
 def test_index_gate_hides_missing_stale_and_unqualified(change):
@@ -358,7 +359,27 @@ async def test_candidate_reader_limits_projection_and_uses_500_plus_sentinel(mon
     monkeypatch.setattr(market, "fetch", fetch)
     rows, truncated = await market.read_candidates({"rooms": 2}, {})
     assert len(rows) == 500 and truncated is True
-    assert captured[0][1][-1] is True and captured[0][1][-2] == Decimal(".95")
+    assert captured[0][1][-2] is True and captured[0][1][-3] == Decimal(".95")
+    assert captured[0][1][-1] is None
+
+
+def test_removal_metrics_require_their_own_sample_and_are_not_lease_predictions():
+    sparse = market.ready_index(index("monthly", gone_30d=4, median_dom_days=8, months_of_supply=1.5))
+    assert sparse["removal_metrics"]["median_observed_days"] is None
+    enough = market.ready_index(index("monthly", gone_30d=5, median_dom_days=8, months_of_supply=1.5))
+    assert enough["removal_metrics"]["median_observed_days"] == 8
+    assert enough["removal_metrics"]["meaning"] == "confirmed_ad_removals_not_signed_leases"
+
+
+def test_source_removal_duration_never_changes_midterm_vacancy(monkeypatch):
+    monkeypatch.setattr(market, "furnished_row_ready", lambda row, config: True)
+    full = index("monthly", furnishing="full", policy_version="furnished_monthly_v1")
+    values = inputs() | {"strategy": "mid_term", "vacancy_fraction": .1, "turnovers_per_year": 2}
+    first = web._economics(candidate(furnished_monthly_index=full), values, {})
+    full = full | {"median_dom_days": 100, "gone_30d": 5, "months_of_supply": 10}
+    second = web._economics(candidate(furnished_monthly_index=full), values, {})
+    assert first["margin"] == second["margin"]
+    assert second["params_used"]["vacancy_fraction"] == .1
 
 
 @pytest.mark.asyncio
