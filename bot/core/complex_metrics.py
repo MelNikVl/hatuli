@@ -49,6 +49,7 @@ membership AS (
     FROM rental_listings r JOIN name_keys nk ON nk.n = complex_name_key(r.complex_name)
     JOIN complexes canonical ON canonical.id = nk.cid
     WHERE r.city = 'astana' AND r.prop_type = 'apartment'
+      AND r.rent_period = 'monthly' AND NOT COALESCE(r.rent_period_conflict, FALSE)
       AND r.is_active IS TRUE AND r.archived_at IS NULL
       AND COALESCE(r.is_duplicate, FALSE) = FALSE
       AND COALESCE(r.dup_needs_review, FALSE) = FALSE

@@ -33,7 +33,8 @@ def test_real_scope_excludes_old_archived_duplicate_disputed_and_other_type_rows
     db = sqlite3.connect(':memory:')
     db.create_function('btrim',1,lambda value: value.strip() if isinstance(value,str) else None)
     db.execute('''CREATE TABLE rental_listings(id text,prop_type text,city text,is_active bool,
-        archived_at text,last_seen text,is_duplicate bool,dup_needs_review bool,duplicate_of text,archive_reason text)''')
+        archived_at text,last_seen text,is_duplicate bool,dup_needs_review bool,duplicate_of text,archive_reason text,
+        rent_period text DEFAULT 'monthly',rent_period_conflict bool DEFAULT FALSE)''')
     base = ('apartment','astana',1,None,'2026-10-13 10:00:00',0,0,None,None)
     rows = [
         ('live',*base),
@@ -47,7 +48,7 @@ def test_real_scope_excludes_old_archived_duplicate_disputed_and_other_type_rows
         ('parking','parking',*base[1:]),
         ('other-city','apartment','almaty',*base[2:]),
     ]
-    db.executemany('INSERT INTO rental_listings VALUES (?,?,?,?,?,?,?,?,?,?)',rows)
+    db.executemany('INSERT INTO rental_listings(id,prop_type,city,is_active,archived_at,last_seen,is_duplicate,dup_needs_review,duplicate_of,archive_reason) VALUES (?,?,?,?,?,?,?,?,?,?)',rows)
     live_sql = rental_live_sql().replace("now() - interval '72 hours'","'2026-10-10 12:00:00'").replace('now()',"'2026-10-13 12:00:00'")
     assert [row[0] for row in db.execute('SELECT id FROM rental_listings WHERE '+live_sql)] == ['live']
     assert [row[0] for row in db.execute('SELECT id FROM rental_listings WHERE '+rental_confirmed_archive_sql())] == ['archived']

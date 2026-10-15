@@ -4991,10 +4991,13 @@ function renderRentalDetailHtml(data) {
   };
   const photos = Array.isArray(data.photos) ? data.photos : [];
   const history = Array.isArray(data.price_history) ? data.price_history : [];
+  const knownPeriod = data.prop_type === 'apartment' && ['monthly','daily'].includes(data.rent_period) ? data.rent_period : 'unknown';
+  const periodLabel = {monthly:'Помесячная аренда', daily:'Посуточная аренда', unknown:'Аренда · единица ставки не определена'}[knownPeriod];
+  const priceSuffix = {monthly:'/мес', daily:'/сутки', unknown:''}[knownPeriod];
   const room = data.rooms === 0 ? 'Студия' : (data.rooms != null ? data.rooms + '-комнатная' : 'Комнаты не указаны');
   const historyHtml = history.map(item => `<li style="margin:8px 0;">${escapeHtml(date(item.changed_at))}: ${money(item.old_price)} → ${money(item.new_price)}</li>`).join('');
-  return `<div style="padding-right:36px;"><p style="color:var(--muted);font-size:13px;">Аренда${data.monthly_category ? ' · категория помесячной аренды' : ''}</p><h2 id="rental-detail-title" style="font-size:clamp(20px,4vw,28px);margin:6px 0 14px;line-height:1.3;">${escapeHtml(data.title || 'Объявление об аренде')}</h2></div>
-    <p style="font-size:26px;font-weight:800;margin:10px 0;">${money(data.price)}${Number.isFinite(data.price) && data.price > 0 && data.monthly_category ? '/мес' : ''}</p>
+  return `<div style="padding-right:36px;"><p style="color:var(--muted);font-size:13px;">${periodLabel}</p><h2 id="rental-detail-title" style="font-size:clamp(20px,4vw,28px);margin:6px 0 14px;line-height:1.3;">${escapeHtml(data.title || 'Объявление об аренде')}</h2></div>
+    <p style="font-size:26px;font-weight:800;margin:10px 0;">${money(data.price)}${Number.isFinite(data.price) && data.price > 0 ? priceSuffix : ''}</p>
     <p>${escapeHtml(room)}${data.area ? ' · ' + data.area + ' м²' : ''}${data.floor ? ' · этаж ' + data.floor + (data.floors_total ? '/' + data.floors_total : '') : ''}</p>
     <p style="margin-top:10px;">Адрес из объявления: ${escapeHtml(data.address || 'не указан')}</p>
     ${data.complex ? `<p>ЖК: ${escapeHtml(data.complex)}</p>` : ''}

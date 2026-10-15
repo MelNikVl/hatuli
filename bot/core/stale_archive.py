@@ -205,14 +205,16 @@ async def archive_stale_rentals(*, dry_run: bool = False, now: datetime | None =
     health, days = rental_health({r['key']: r['value'] for r in rows}, now)
     cutoff = now - timedelta(days=days)
     candidates = await fetchval("""SELECT count(*) FROM rental_listings WHERE is_active IS NOT FALSE
-                                   AND prop_type = 'apartment' AND last_seen < $1""", cutoff)
+                                   AND prop_type = 'apartment' AND rent_period = 'monthly'
+                                   AND NOT COALESCE(rent_period_conflict, FALSE) AND last_seen < $1""", cutoff)
     result = {'healthy': health.healthy, 'health_reason': health.reason, 'stale_days': days,
               'cutoff': cutoff.isoformat(), 'candidates': int(candidates or 0), 'archived': 0, 'dry_run': dry_run}
     if not health.healthy or dry_run:
         return result
     status = await execute("""
         UPDATE rental_listings SET is_active = FALSE, archived_at = last_seen, archive_reason = $2
-         WHERE is_active IS NOT FALSE AND prop_type = 'apartment' AND last_seen < $1""", cutoff, ARCHIVE_REASON)
+         WHERE is_active IS NOT FALSE AND prop_type = 'apartment' AND rent_period = 'monthly'
+           AND NOT COALESCE(rent_period_conflict, FALSE) AND last_seen < $1""", cutoff, ARCHIVE_REASON)
     result['archived'] = int(status.split()[-1]) if status and status.startswith('UPDATE') else 0
     logger.info('stale archive аренды: %s (cutoff %s)', result['archived'], cutoff)
     return result

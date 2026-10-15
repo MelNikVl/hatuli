@@ -2,8 +2,8 @@
 
 Absence from an overdue scanner is not disappearance from the market. Source
 coverage remains unknown without an independently enumerated catalog. The DB
-currently has no per-row contract duration; apartment rows originate from
-Krisha's monthly apartment category, not from all short-term/house categories.
+stores an explicit observed rental period. Monthly consumers must exclude
+daily, unknown and conflicting periods even when they share one source table.
 """
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ def _prefix(alias: str) -> str:
 def rental_clean_sql(alias: str = '') -> str:
     prefix = _prefix(alias)
     return (f"{prefix}prop_type = 'apartment' AND {prefix}city = 'astana' "
+            f"AND {prefix}rent_period = 'monthly' "
+            f"AND COALESCE({prefix}rent_period_conflict, FALSE) = FALSE "
             f"AND COALESCE({prefix}is_duplicate, FALSE) = FALSE "
             f"AND COALESCE({prefix}dup_needs_review, FALSE) = FALSE "
             f"AND NULLIF(btrim({prefix}duplicate_of), '') IS NULL")
@@ -97,5 +99,5 @@ async def rental_consumer_health() -> dict:
         'RENTAL_CRAWL_V1_APARTMENT_COMPLETED_AT','RENTAL_CRAWL_V1_APARTMENT_DURATION_SEC',
         'RENTAL_CRAWL_V1_APARTMENT_COMPLETED_VERIFIED','RENTAL_CRAWL_V1_APARTMENT_LAST_PAGES',
         'RENTAL_CRAWL_V1_APARTMENT_UNIQUE_SEEN','RENTAL_CRAWL_V1_APARTMENT_TOTAL'])
-    observed = await fetchval("SELECT max(last_seen) FROM rental_listings WHERE prop_type='apartment' AND city='astana'")
+    observed = await fetchval(f"SELECT max(last_seen) FROM rental_listings WHERE {rental_clean_sql()} AND is_active IS TRUE AND archived_at IS NULL")
     return collection_health({row['key']:row['value'] for row in rows},observed)

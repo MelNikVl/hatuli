@@ -4429,6 +4429,7 @@ def make_extras_router(templates) -> APIRouter:
                   AND COALESCE(is_duplicate, FALSE) = FALSE
                   AND is_active IS TRUE AND archived_at IS NULL
                   AND prop_type = 'apartment' AND city = 'astana'
+                  AND rent_period = 'monthly' AND NOT COALESCE(rent_period_conflict, FALSE)
                   AND COALESCE(dup_needs_review, FALSE) = FALSE
                   AND NULLIF(btrim(duplicate_of), '') IS NULL
                 LIMIT 20000
