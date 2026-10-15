@@ -3,7 +3,7 @@
 {% block title %}Лучшие квартиры Астаны{% if snapshot and snapshot.is_today and not snapshot.is_stale and snapshot['items'] %} на сегодня{% endif %} — Hatuli{% endblock %}
 {% block description %}Квартиры в Астане до 100 млн ₸ с ценой за м² минимум на 3% ниже похожих предложений. Четыре подтверждённых фактора выбора, фотографии и история цен.{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="/static/hatuli-picks.css?v=20261016.1">
+<link rel="stylesheet" href="/static/hatuli-picks.css?v=20261016.2">
 <link rel="stylesheet" href="/static/hatuli-price-history.css?v=20261013">
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261013">
 <script src="/static/hatuli-picks.js?v=20261014" defer></script>
@@ -13,21 +13,18 @@
   {% with picks_kind='sale' %}{% include '_picks_kind_switch.html' %}{% endwith %}
   <section class="picks-hero" aria-labelledby="picks-title">
     <div class="picks-hero-copy">
-      <p class="picks-eyebrow"><span class="picks-dot" aria-hidden="true"></span> Астана · ежедневная подборка</p>
-      <h1 id="picks-title">Хорошие варианты.<br><span>Без долгого поиска.</span></h1>
-      <p class="picks-lead">Квартиры до 100 млн ₸ с ценой за м² минимум на 3% ниже похожих предложений. У каждой — четыре подтверждённых фактора, чтобы быстро понять, чем она интересна именно вам.</p>
-      <div class="picks-hero-actions"><a class="picks-button" href="#apartments">Выбрать квартиру <span aria-hidden="true">↓</span></a><a class="picks-method-link" href="#picks-method">Как выбираем →</a></div>
-      <p class="picks-open-note"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m4 10 4 4 8-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Открыто для всех. Регистрация не нужна.</p>
+      <p class="picks-eyebrow">Астана · продажа квартир</p>
+      <h1 id="picks-title">Лучшие квартиры в Астане</h1>
+      <p class="picks-lead">До 100 млн ₸. Цена за м² минимум на 3% ниже похожих предложений — и ещё три подтверждённых фактора выбора.</p>
+      <a class="picks-method-link" href="#picks-method">Как выбираем квартиры <span aria-hidden="true">↗</span></a>
     </div>
+    {% if snapshot and snapshot['items'] %}
     <aside class="picks-edition" aria-label="Сведения о подборке">
-      <div class="picks-edition-top"><span>Выбор Hatuli</span><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M5 15 16 6l11 9v12H8V15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="m13 19 3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-      {% set picks_count = snapshot['items']|length if snapshot else 0 %}
-      <p class="picks-edition-count">{{ picks_count if snapshot else '—' }}<span>{% if picks_count %}{{ 'квартира' if picks_count % 10 == 1 and picks_count % 100 != 11 else 'квартиры' if picks_count % 10 in [2, 3, 4] and picks_count % 100 not in [12, 13, 14] else 'квартир' }}{% else %}Квартиры{% endif %} в подборке</span></p>
-      <div class="picks-edition-bottom">
-        {% if snapshot %}<p><strong>{{ snapshot.date_label }}</strong><span>Дата подборки</span></p><p><strong>100 млн ₸</strong><span>Максимальная цена</span></p>
-        {% else %}<p><strong>Готовим первый выпуск</strong><span>Здесь появятся квартиры и причины выбора</span></p>{% endif %}
-      </div>
+      <p class="picks-edition-top">Проверенная подборка</p>
+      <p class="picks-edition-count">{{ snapshot['items']|length }} <span>в подборке</span></p>
+      <p class="picks-edition-date">{{ snapshot.date_label }}</p>
     </aside>
+    {% endif %}
   </section>
 
   {% if snapshot and snapshot.is_stale %}
@@ -39,7 +36,7 @@
   {% if snapshot and snapshot['items'] %}
   <section id="apartments" class="picks-selection" aria-labelledby="picks-selection-title">
     <div class="picks-section-heading">
-      <div><p class="picks-eyebrow">Четыре причины присмотреться</p><h2 id="picks-selection-title">Лучшие варианты <span>{{ snapshot.date_label }}</span></h2></div>
+      <div><h2 id="picks-selection-title">Квартиры в подборке</h2><p class="picks-section-note">Цены, адреса и четыре причины выбора</p></div>
       <p class="picks-result-count" role="status" aria-live="polite" data-picks-count>{{ snapshot['items']|length }} из {{ snapshot['items']|length }} вариантов</p>
     </div>
     <div class="picks-filters" role="group" aria-label="Количество комнат" hidden data-picks-filters>
