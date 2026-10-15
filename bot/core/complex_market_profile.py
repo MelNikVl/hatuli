@@ -115,9 +115,23 @@ async def get_complex_market_profile(complex_id: int, as_of: datetime | None = N
     if complex_row is None:
         return None
     complex_row = dict(complex_row)
+    if complex_row.get('canonical_id') is not None:
+        complex_id = complex_row['canonical_id']
+        complex_row = dict(await fetchrow('SELECT * FROM complexes WHERE id = $1', complex_id))
+    from bot.core.complex_membership import listing_complex_match_sql
+    membership = listing_complex_match_sql('$1', 'al', include_children=bool(complex_row.get('is_umbrella')))
+    # A legacy property ID can predate a listing correction. Prefer its current
+    # explicit listing membership; property IDs remain stable and deduplicate
+    # simultaneous ads in the existing aggregation below.
+    property_family = """SELECT cm.id FROM complexes cm WHERE
+        COALESCE(cm.is_garbage, FALSE) = FALSE AND COALESCE(cm.is_street, FALSE) = FALSE
+        AND COALESCE(cm.canonical_reason, '') <> 'junk_unmatched'
+        AND (COALESCE(cm.canonical_id, cm.id) = $1
+             OR ($3 AND cm.parent_complex_id IN (SELECT id FROM complexes
+                                                WHERE COALESCE(canonical_id, id) = $1)))"""
 
     base_rows = await fetch(
-        """
+        f"""
         SELECT
             p.property_id, al.id AS listing_id,
             CASE WHEN past.id IS NOT NULL THEN past.new_price
@@ -140,9 +154,13 @@ async def get_complex_market_profile(complex_id: int, as_of: datetime | None = N
             WHERE ph.listing_id = al.id AND ph.changed_at > $2
             ORDER BY ph.changed_at ASC, ph.id ASC LIMIT 1
         ) future ON TRUE
-        WHERE p.complex_id = $1 AND al.first_seen <= $2
+        WHERE al.first_seen <= $2 AND ({membership}
+            OR (al.complex_id IS NULL AND al.resolved_house_id IS NULL
+                AND al.complex_resolution IS DISTINCT FROM 'unbound'
+                AND NULLIF(btrim(al.complex_name), '') IS NULL
+                AND p.complex_id IN ({property_family})))
         """,
-        complex_id, as_of,
+        complex_id, as_of, bool(complex_row.get('is_umbrella')),
     )
     base = [dict(r) for r in base_rows]
     listing_ids = [r["listing_id"] for r in base]

@@ -54,40 +54,78 @@ async def save_enrichment(found: dict[str, dict], source_key: str,
     данными источника — НЕ считается изменением: diff идёт только когда у
     ЖК уже были данные этого источника).
     """
-    from bot.db.pg import fetchval, fetch, execute, fetchrow
-
-    ours = await fetch("SELECT id, name FROM complexes")
-    by_norm = {norm_name(r["name"]): r["id"] for r in ours if r["name"]}
+    from bot.db.pg import get_pool, execute
+    from bot.core.complex_ingest_identity import (
+        AmbiguousComplexIdentity, InvalidComplexIdentity, canonical_complex_id,
+        record_complex_observations, resolve_ingest_complex,
+    )
 
     matched = created = 0
     change_rows: list[tuple] = []  # (complex_id, complex_name, change_type, field, old, new)
 
     for key, data in found.items():
-        cid = by_norm.get(key)
+        name = data.get("name") or key
+        source_id = str(data.get("source_id") or data.get("id") or data.get("url") or key)
         is_new = False
-        if not cid:
-            # ЖК из каталога источника, которого у нас ещё нет — создаём:
-            # иначе весь каталог korter/homsters по ЖК без наших объявлений
-            # (новостройки без вторички, дорогие ЖК) просто отбрасывался.
-            try:
-                cid = await fetchval(
-                    "INSERT INTO complexes (name, district) VALUES ($1, $2) RETURNING id",
-                    data.get("name") or key, data.get("district"))
-                by_norm[key] = cid
-                created += 1
-                is_new = True
-            except Exception as e:
-                logger.warning("create complex %s failed: %s", key, e)
-                continue
+        try:
+            async with get_pool().acquire() as conn:
+                async with conn.transaction():
+                    name_key = await conn.fetchval("SELECT complex_name_key($1)", name)
+                    for lock_key in sorted({f"complex_ingest:source:{source_key}:{source_id}",
+                                            f"complex_ingest:name:{name_key}"}):
+                        await conn.fetchval("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
+                    cid = await resolve_ingest_complex(source_key, source_id, name, connection=conn)
+                    if cid is None:
+                        cid = await conn.fetchval("""
+                            INSERT INTO complexes (name, district) VALUES ($1, $2)
+                            ON CONFLICT (lower(name)) DO NOTHING RETURNING id
+                        """, name, data.get("district"))
+                        if cid is None:
+                            cid = await resolve_ingest_complex(source_key, source_id, name, connection=conn)
+                            if cid is None:
+                                raise InvalidComplexIdentity(f"Existing excluded complex blocks {name!r}")
+                        else:
+                            is_new = True
+                    evidence = {"url": data.get("url"), "name": name, "normalized_name": name_key,
+                                "identity_method": "source_id_or_unique_exact_or_verified_alias"}
+                    await conn.execute("""
+                        INSERT INTO complex_source_links
+                            (complex_id, source, source_id, url, match_method, confidence, matched_by, evidence)
+                        VALUES ($1, $2, $3, $4, $5, 1, 'auto', $6::jsonb)
+                        ON CONFLICT (source, source_id) DO NOTHING
+                    """, cid, source_key, source_id, data.get("url"),
+                        "seed_source" if is_new else "ingest_name_exact_or_verified",
+                        json.dumps(evidence, ensure_ascii=False, default=str))
+                    linked_id = await conn.fetchval(
+                        "SELECT complex_id FROM complex_source_links WHERE source=$1 AND source_id=$2",
+                        source_key, source_id)
+                    if await canonical_complex_id(linked_id, connection=conn) != cid:
+                        raise InvalidComplexIdentity(f"Source link changed during import: {source_key}/{source_id}")
+                    await record_complex_observations(cid, source_key, source_id, name, data.get("address"),
+                                                      evidence=evidence, connection=conn)
+                    row = await conn.fetchrow("SELECT source_info FROM complexes WHERE id=$1 FOR UPDATE", cid)
+                    existing = {}
+                    if row and row["source_info"]:
+                        existing = (row["source_info"] if isinstance(row["source_info"], dict)
+                                    else json.loads(row["source_info"]))
+                    old_data = existing.get(source_key) or {}
+                    had_old = source_key in existing
+                    existing[source_key] = data
+                    if set_housing_class and data.get("housing_class"):
+                        await conn.execute("""
+                            UPDATE complexes SET housing_class=COALESCE(housing_class,$2),
+                                korter_url=COALESCE(korter_url,$3), source_info=$4::jsonb, updated_at=now()
+                            WHERE id=$1
+                        """, cid, data.get("housing_class"), data.get("url"),
+                            json.dumps(existing, ensure_ascii=False, default=str))
+                    else:
+                        await conn.execute("UPDATE complexes SET source_info=$2::jsonb, updated_at=now() WHERE id=$1",
+                                           cid, json.dumps(existing, ensure_ascii=False, default=str))
+        except (AmbiguousComplexIdentity, InvalidComplexIdentity) as exc:
+            logger.warning("%s identity requires review for %r: %s", source_key, name, exc)
+            continue
         matched += 1
-
-        row = await fetchrow("SELECT source_info FROM complexes WHERE id=$1", cid)
-        existing = {}
-        if row and row["source_info"]:
-            existing = row["source_info"] if isinstance(row["source_info"], dict) else json.loads(row["source_info"])
-        old_data = existing.get(source_key) or {}
-        had_old = source_key in existing
-        existing[source_key] = data
+        created += int(is_new)
 
         if is_new:
             change_rows.append((cid, data.get("name") or key, "new", None, None, None))
@@ -98,24 +136,6 @@ async def save_enrichment(found: dict[str, dict], source_key: str,
                 if _fmt(old_data.get(f)) != _fmt(data.get(f)):
                     change_rows.append((cid, data.get("name") or key, "updated",
                                         f, _fmt(old_data.get(f)), _fmt(data.get(f))))
-
-        if set_housing_class and data.get("housing_class"):
-            await execute(
-                """UPDATE complexes SET
-                     housing_class = COALESCE(housing_class, $2),
-                     korter_url    = COALESCE(korter_url, $3),
-                     source_info   = $4::jsonb,
-                     updated_at    = now()
-                   WHERE id = $1""",
-                cid, data.get("housing_class"), data.get("url"),
-                json.dumps(existing, ensure_ascii=False, default=str),
-            )
-        else:
-            await execute(
-                """UPDATE complexes SET source_info = $2::jsonb, updated_at = now()
-                   WHERE id = $1""",
-                cid, json.dumps(existing, ensure_ascii=False, default=str),
-            )
 
     if change_rows:
         for cid, cname, ctype, field, old, new in change_rows:

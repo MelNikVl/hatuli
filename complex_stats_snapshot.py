@@ -67,14 +67,19 @@ SNAPSHOT_SQL = """
     -- legacy house/name используются только до его назначения. Алиасы
     -- нормализуются по canonical_id, родитель дома НЕ заменяет его id.
     WITH cx AS (
-        SELECT id, COALESCE(canonical_id, id) AS cid, lower(btrim(name)) AS n
+        SELECT id, COALESCE(canonical_id, id) AS cid, complex_name_key(name) AS n
         FROM complexes
         WHERE COALESCE(is_garbage, FALSE) = FALSE
           AND COALESCE(is_street, FALSE) = FALSE
           AND COALESCE(canonical_reason, '') <> 'junk_unmatched'
+    ), names AS (
+        SELECT n, cid FROM cx
+        UNION ALL
+        SELECT ca.normalized_name, cx.cid FROM complex_aliases ca JOIN cx ON cx.id = ca.complex_id
+        WHERE ca.status = 'verified'
     ), name_keys AS (
         SELECT n, min(cid) AS cid
-        FROM cx
+        FROM names
         WHERE n <> ''
         GROUP BY n
         HAVING count(DISTINCT cid) = 1
@@ -84,10 +89,12 @@ SNAPSHOT_SQL = """
         FROM apartment_listings al
         LEFT JOIN cx bound ON bound.id = al.complex_id
         LEFT JOIN cx house
-          ON al.complex_id IS NULL AND house.id = al.resolved_house_id
+          ON al.complex_id IS NULL AND al.complex_resolution IS DISTINCT FROM 'unbound'
+         AND house.id = al.resolved_house_id
         LEFT JOIN name_keys byname
-          ON al.complex_id IS NULL AND al.resolved_house_id IS NULL
-         AND byname.n = lower(btrim(al.complex_name))
+          ON al.complex_id IS NULL AND al.complex_resolution IS DISTINCT FROM 'unbound'
+         AND al.resolved_house_id IS NULL
+         AND byname.n = complex_name_key(al.complex_name)
         WHERE COALESCE(al.is_duplicate, FALSE) = FALSE
     ),
     -- Фаза L1 (миграция 072): у кого из listing_complex было снижение

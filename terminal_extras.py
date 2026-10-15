@@ -31,8 +31,32 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 
 from bot.db import settings as app_settings
 from bot.db.pg import fetch
+from bot.core.complex_metrics import IDENTITY_CTES
+from bot.core.complex_membership import listing_complex_column_match_sql, rental_complex_match_sql, unit_complex_match_sql
 
 logger = logging.getLogger(__name__)
+
+# Aggregate once by physical identity instead of matching display strings on
+# each map marker. UNION counts an umbrella listing only once in each family.
+_COMPLEX_MAP_METRICS_SQL = IDENTITY_CTES + """,
+map_membership AS (
+    SELECT l.id, l.cid FROM listings l WHERE l.cid IS NOT NULL
+    UNION
+    SELECT l.id, COALESCE(parent.canonical_id, parent.id)
+    FROM listings l JOIN complexes child ON child.id = l.cid
+    JOIN complexes parent ON parent.id = child.parent_complex_id
+    WHERE COALESCE(parent.is_garbage, FALSE) = FALSE
+      AND COALESCE(parent.is_street, FALSE) = FALSE
+      AND COALESCE(parent.canonical_reason, '') <> 'junk_unmatched'
+), map_stats AS (
+    SELECT m.cid, AVG(l.lat) AS lat, AVG(l.lon) AS lon,
+           AVG(l.effective_score) FILTER (WHERE l.is_active IS NOT FALSE) AS avg_score,
+           AVG(EXTRACT(EPOCH FROM (l.archived_at - l.first_seen))/86400)
+               FILTER (WHERE l.archived_at IS NOT NULL) AS avg_days_to_sell,
+           COUNT(*) FILTER (WHERE l.archived_at >= now() - interval '30 days') AS sold_30d
+    FROM map_membership m JOIN listings l ON l.id = m.id GROUP BY m.cid
+)
+"""
 
 # Сервисы, которыми управляет кнопка "Запустить проект".
 # Веб-терминал (krisha-web) сюда не входит — он всегда работает.
@@ -3582,9 +3606,10 @@ def make_extras_router(templates) -> APIRouter:
         total_active = await pg_fval(
             "SELECT COUNT(*) FROM apartment_listings WHERE is_active IS NOT FALSE "
             "AND COALESCE(is_duplicate, FALSE) = FALSE") or 0
-        missing_year = await pg_fval("""
+        missing_year = await pg_fval(IDENTITY_CTES + """
             SELECT COUNT(*) FROM apartment_listings a
-            LEFT JOIN complexes c ON lower(trim(c.name)) = lower(trim(a.complex_name))
+            LEFT JOIN listings identity ON identity.id = a.id
+            LEFT JOIN complexes c ON c.id = identity.cid
             WHERE a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
               AND COALESCE(a.year_built, c.year_built) IS NULL
         """) or 0
@@ -3851,13 +3876,9 @@ def make_extras_router(templates) -> APIRouter:
     @router.get("/admin/complex/find")
     async def complex_find(request: Request, name: str = ""):
         """Переход на карточку ЖК по имени (для ссылок из попапов карты).
-        Точное совпадение lower/trim; если ЖК нет — на список с поиском."""
-        from bot.db.pg import fetchval as pg_fv
-        cid = None
-        if name.strip():
-            cid = await pg_fv(
-                "SELECT id FROM complexes WHERE lower(trim(name)) = lower(trim($1)) LIMIT 1",
-                name)
+        Однозначное нормализованное имя/проверенный alias; иначе список с поиском."""
+        from bot.core.complex_ingest_identity import resolve_complex_name
+        cid = await resolve_complex_name(name)
         if cid:
             return RedirectResponse(url=f"/admin/complex/{cid}", status_code=302)
         from urllib.parse import quote
@@ -3869,7 +3890,7 @@ def make_extras_router(templates) -> APIRouter:
         Лёгкая версия complexes-map — без сортировки/coverage, только то,
         что нужно нарисовать на карте и показать в превью."""
         from bot.db.pg import fetch as pg_fetch
-        rows = await pg_fetch("""
+        rows = await pg_fetch(_COMPLEX_MAP_METRICS_SQL + """
             SELECT c.id, c.name, c.year_built, c.housing_class,
                    COALESCE(c.listings_count, 0) AS active_cnt,
                    COALESCE(d.name,
@@ -3879,13 +3900,7 @@ def make_extras_router(templates) -> APIRouter:
                    c.lat AS c_lat, c.lon AS c_lon, g.lat, g.lon, g.avg_score
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
-            LEFT JOIN LATERAL (
-                SELECT AVG(al.lat) AS lat, AVG(al.lon) AS lon,
-                       AVG(al.effective_score) FILTER (WHERE is_active IS NOT FALSE) AS avg_score
-                FROM apartment_listings al
-                WHERE lower(trim(regexp_replace(al.complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
-                      = lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
-            ) g ON TRUE
+            LEFT JOIN map_stats g ON g.cid = c.id
             WHERE COALESCE(c.lat, g.lat) IS NOT NULL
               AND COALESCE(c.is_street, FALSE) = FALSE
               AND COALESCE(c.is_garbage, FALSE) = FALSE
@@ -4128,20 +4143,29 @@ def make_extras_router(templates) -> APIRouter:
         )
         import json as _json_nbcu
         cx = await pg_fetchrow("""
-            SELECT c.id, c.name, c.completion_year, c.completion_quarter, c.district,
+            SELECT c.id, c.name, c.is_umbrella, c.completion_year, c.completion_quarter, c.district,
                    c.address, c.photos, d.id AS developer_id, d.name AS developer,
                    d.sales_phone, d.logo
-            FROM complexes c JOIN developers d ON d.id = c.developer_id
-            WHERE c.id = $1 AND c.is_newbuild
+            FROM complexes requested JOIN complexes c ON c.id = COALESCE(requested.canonical_id, requested.id)
+            JOIN developers d ON d.id = c.developer_id
+            WHERE requested.id = $1 AND c.is_newbuild
         """, complex_id)
         if not cx:
             return JSONResponse({"error": "not_found"}, status_code=404)
+        complex_id = cx["id"]
+        from bot.core.complex_membership import listing_complex_match_sql
+        include_children = bool(cx.get('is_umbrella')) or bool(await pg_fetchrow(
+            "SELECT id FROM complexes WHERE parent_complex_id=$1 AND canonical_id IS NULL "
+            "AND COALESCE(is_garbage,FALSE)=FALSE AND COALESCE(is_street,FALSE)=FALSE LIMIT 1", complex_id))
+        _unit_match = unit_complex_match_sql(include_children=include_children)
+        _unit_link_match = unit_complex_match_sql(unit_alias='nu', include_children=include_children)
+        _person_match = listing_complex_match_sql(include_children=include_children)
         room_list = [int(r) for r in rooms.split(",") if r.strip().isdigit()]
-        dev_units = await pg_fetch("""
+        dev_units = await pg_fetch(f"""
             SELECT id, rooms, area, floor, floors_total, price, price_per_m2, layout_photo_url, status
             FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved')
-              AND ($2::int[] = '{}' OR rooms = ANY($2::int[]))
+            WHERE {_unit_match} AND status IN ('available','reserved')
+              AND ($2::int[] = '{{}}' OR rooms = ANY($2::int[]))
             ORDER BY price ASC NULLS LAST LIMIT 30
         """, complex_id, room_list)
 
@@ -4150,26 +4174,26 @@ def make_extras_router(templates) -> APIRouter:
         # текущий фильтр комнатности), чтобы дельта у людских предложений
         # считалась честно, даже если сам фильтр комнатности урезал
         # видимую часть официального supply.
-        _dev_all_rows = await pg_fetch("""
+        _dev_all_rows = await pg_fetch(f"""
             SELECT id, rooms, price, area, price_per_m2 FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved')
+            WHERE {_unit_match} AND status IN ('available','reserved')
         """, complex_id)
         _price_index = build_developer_price_index([dict(r) for r in _dev_all_rows])
-        _unit_link_rows = await pg_fetch("""
+        _unit_link_rows = await pg_fetch(f"""
             SELECT usl.source_id AS listing_id, usl.unit_id
             FROM unit_source_links usl JOIN newbuild_units nu ON nu.id = usl.unit_id
-            WHERE nu.complex_id = $1 AND usl.source = 'krisha'
+            WHERE {_unit_link_match} AND usl.source = 'krisha'
         """, complex_id)
         _unit_id_by_listing = {r["listing_id"]: r["unit_id"] for r in _unit_link_rows}
 
-        person_rows = await pg_fetch("""
+        person_rows = await pg_fetch(f"""
             SELECT id, title, description, rooms, area, price, photos, floor, floors_total, first_seen
             FROM apartment_listings
-            WHERE (lower(trim(complex_name)) = lower(trim($1)) OR resolved_house_id = $2)
+            WHERE {_person_match}
               AND COALESCE(is_duplicate, FALSE) = FALSE AND is_active IS NOT FALSE
-              AND ($3::int[] = '{}' OR rooms = ANY($3::int[]))
+              AND ($2::int[] = '{{}}' OR rooms = ANY($2::int[]))
             ORDER BY score_total DESC NULLS LAST, first_seen DESC LIMIT 20
-        """, cx["name"], complex_id, room_list)
+        """, complex_id, room_list)
 
         # photos — jsonb, asyncpg отдаёт строкой (см. тот же паттерн в complex_detail)
         cx_photos = cx["photos"]
@@ -4266,7 +4290,7 @@ def make_extras_router(templates) -> APIRouter:
         ручка кормит карту на ней, раньше 401'ила анонимам, из-за чего карта
         оставалась пустой для любого незалогиненного посетителя."""
         from bot.db.pg import fetch as pg_fetch
-        rows = await pg_fetch("""
+        rows = await pg_fetch(_COMPLEX_MAP_METRICS_SQL + """
             SELECT c.id, c.name, c.year_built, c.housing_class,
                    COALESCE(c.listings_count, 0) AS active_cnt,
                    COALESCE(c.sold_count, 0) AS sold_cnt,
@@ -4279,17 +4303,7 @@ def make_extras_router(templates) -> APIRouter:
                    g.lat, g.lon, g.avg_score, g.avg_days_to_sell, g.sold_30d
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
-            LEFT JOIN LATERAL (
-                SELECT AVG(al.lat) AS lat, AVG(al.lon) AS lon,
-                       AVG(al.effective_score) FILTER (WHERE is_active IS NOT FALSE) AS avg_score,
-                       AVG(EXTRACT(EPOCH FROM (al.archived_at - al.first_seen))/86400)
-                         FILTER (WHERE al.archived_at IS NOT NULL) AS avg_days_to_sell,
-                       COUNT(*) FILTER (WHERE al.archived_at >= now() - interval '30 days')
-                         AS sold_30d
-                FROM apartment_listings al
-                WHERE lower(trim(regexp_replace(al.complex_name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
-                      = lower(trim(regexp_replace(c.name, '^\\s*(жк|кг)\\.?\\s+', '', 'i')))
-            ) g ON TRUE
+            LEFT JOIN map_stats g ON g.cid = c.id
             WHERE COALESCE(c.lat, g.lat) IS NOT NULL
               AND COALESCE(c.is_street, FALSE) = FALSE
               AND COALESCE(c.is_garbage, FALSE) = FALSE
@@ -4443,15 +4457,15 @@ def make_extras_router(templates) -> APIRouter:
             # таблицы) — это и было причиной долгой загрузки. Вместо этого считаем
             # центроиды всех ЖК ОДНИМ GROUP BY и джойним как обычную таблицу.
             complex_geo = {r2["cx"]: (float(r2["lat"]), float(r2["lon"]))
-                           for r2 in await pg_fetch("""
-                SELECT lower(trim(complex_name)) AS cx, AVG(lat) AS lat, AVG(lon) AS lon
-                FROM apartment_listings
-                WHERE lat IS NOT NULL AND complex_name IS NOT NULL AND btrim(complex_name) != ''
-                GROUP BY lower(trim(complex_name))""")}
+                           for r2 in await pg_fetch(IDENTITY_CTES + """
+                SELECT nk.n AS cx, AVG(l.lat) AS lat, AVG(l.lon) AS lon
+                FROM name_keys nk JOIN listings l ON l.cid = nk.cid
+                WHERE l.lat IS NOT NULL AND l.lon IS NOT NULL
+                GROUP BY nk.n""")}
             rows = await pg_fetch(f"""
                 SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.district, r.found_at,
                        r.lat AS own_lat, r.lon AS own_lon, r.area, r.floor, r.floors_total,
-                       r.address, r.photos,
+                       r.address, r.photos, complex_name_key(r.complex_name) AS complex_key,
                        ph.old_price AS prev_price, ph.changed_at AS price_changed_at
                 FROM rental_listings r
                 LEFT JOIN LATERAL (
@@ -4491,7 +4505,7 @@ def make_extras_router(templates) -> APIRouter:
 
             for r in rows:
                 d = dict(r)
-                cx_geo = complex_geo.get(str(d.get("complex_name") or "").strip().lower())
+                cx_geo = complex_geo.get(d["complex_key"])
                 if d.get("own_lat") is not None:
                     # свои координаты с детальной страницы — самая точная привязка
                     lat, lon, binding, jit = float(d["own_lat"]), float(d["own_lon"]), "точно", 0.0
@@ -4607,7 +4621,7 @@ def make_extras_router(templates) -> APIRouter:
         order_by = "a.price ASC" if cheapest_only else "eff_score DESC"
         limit_idx, offset_idx = i, i + 1
         params.append(limit); params.append(offset)
-        rows = await pg_fetch(f"""
+        rows = await pg_fetch(IDENTITY_CTES + f"""
             SELECT a.id, a.lat, a.lon, a.price, a.rooms, a.area, a.address,
                    a.complex_name, a.url, a.photos, a.market_type, a.geo_source,
                    a.is_owner, a.seller_name, a.seller_type, a.trust_score, a.year_built, a.views_count,
@@ -4622,7 +4636,7 @@ def make_extras_router(templates) -> APIRouter:
                    ph.changed_at AS price_changed_at,
                    dv.id AS developer_id, dv.name AS developer_name, dv.logo AS developer_logo,
                    cx.photos AS complex_photos
-            FROM apartment_listings a
+            FROM listings a
             LEFT JOIN LATERAL (
                 -- Исторический максимум, а не последнее изменение — просили
                 -- показывать "цена упала с максимума до текущей".
@@ -4630,7 +4644,7 @@ def make_extras_router(templates) -> APIRouter:
                 FROM price_history h
                 WHERE h.listing_id = a.id
             ) ph ON TRUE
-            LEFT JOIN complexes cx ON lower(trim(cx.name)) = lower(trim(a.complex_name))
+            LEFT JOIN complexes cx ON cx.id = a.cid
             LEFT JOIN developers dv ON dv.id = cx.developer_id
             WHERE a.lat IS NOT NULL AND a.lon IS NOT NULL
               AND a.is_active IS NOT FALSE
@@ -5076,24 +5090,26 @@ def make_extras_router(templates) -> APIRouter:
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         limit = max(50, min(limit, 5000))
-        rows = await fetch("""
+        _audit_membership = listing_complex_column_match_sql('identity_root.id', 'a')
+        rows = await fetch(f"""
             SELECT c.id, c.name, c.developer_id, d.name AS developer_name,
                    c.residents_notes, c.photo_url, c.photos, c.avg_price_m2,
                    c.housing_class, c.year_built, c.korter_url, c.source_info,
                    c.has_parking, c.has_closed_territory, c.has_security,
                    ts.construction_type, ts.facade_type, ts.lifts_brand,
                    ts.ceiling_height_min,
-                   COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE
-                       AND COALESCE(a.is_duplicate, FALSE) = FALSE) AS active_cnt,
-                   COUNT(a2.id) AS ever_cnt
+                   s.active_cnt, s.ever_cnt
             FROM complexes c
             LEFT JOIN developers d ON d.id = c.developer_id
             LEFT JOIN complex_tech_specs ts ON ts.complex_id = c.id
-            LEFT JOIN apartment_listings a ON lower(trim(a.complex_name)) = lower(trim(c.name))
-                AND a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
-            LEFT JOIN apartment_listings a2 ON lower(trim(a2.complex_name)) = lower(trim(c.name))
+            CROSS JOIN LATERAL (SELECT COALESCE(c.canonical_id, c.id) AS id) identity_root
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) FILTER (WHERE a.is_active IS NOT FALSE
+                           AND COALESCE(a.is_duplicate, FALSE) = FALSE) AS active_cnt,
+                       COUNT(*) AS ever_cnt
+                FROM apartment_listings a WHERE {_audit_membership}
+            ) s ON TRUE
             WHERE COALESCE(c.is_street, FALSE) = FALSE
-            GROUP BY c.id, d.name, ts.construction_type, ts.facade_type, ts.lifts_brand, ts.ceiling_height_min
             ORDER BY active_cnt DESC
             LIMIT $1
         """, limit)
@@ -5126,16 +5142,18 @@ def make_extras_router(templates) -> APIRouter:
                 "has_origin": bool(d["korter_url"] or d["source_info"]),
             })
         total_cx = await fetch("SELECT COUNT(*) AS n FROM complexes WHERE COALESCE(is_street, FALSE) = FALSE")
-        orphan_cx = await fetch("""
+        orphan_cx = await fetch(f"""
             SELECT COUNT(*) AS n FROM complexes c
+            CROSS JOIN LATERAL (SELECT COALESCE(c.canonical_id, c.id) AS id) identity_root
             WHERE COALESCE(c.is_street, FALSE) = FALSE
-              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE lower(trim(a.complex_name)) = lower(trim(c.name)))
+              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE {_audit_membership})
         """)
-        orphan_no_origin = await fetch("""
+        orphan_no_origin = await fetch(f"""
             SELECT COUNT(*) AS n FROM complexes c
+            CROSS JOIN LATERAL (SELECT COALESCE(c.canonical_id, c.id) AS id) identity_root
             WHERE COALESCE(c.is_street, FALSE) = FALSE
               AND c.korter_url IS NULL AND c.source_info IS NULL
-              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE lower(trim(a.complex_name)) = lower(trim(c.name)))
+              AND NOT EXISTS (SELECT 1 FROM apartment_listings a WHERE {_audit_membership})
         """)
         return templates.TemplateResponse("complexes_audit.html", {
             "request": request, "rows": out, "limit": limit,
@@ -5304,6 +5322,9 @@ def make_extras_router(templates) -> APIRouter:
             )
         """, complex_id))
         _listing_id_match = listing_complex_match_sql(include_children=include_children)
+        _rental_id_match = rental_complex_match_sql(include_children=include_children)
+        _unit_id_match = unit_complex_match_sql(include_children=include_children)
+        _unit_link_match = unit_complex_match_sql(unit_alias='nu', include_children=include_children)
         centroid = await resolve_complex_geo_centroid(complex_id, cname)
         addr_row = await fetchrow(f"""
             SELECT address, COUNT(*) AS cnt FROM apartment_listings
@@ -5420,12 +5441,12 @@ def make_extras_router(templates) -> APIRouter:
             if _attr_rows:
                 attribution_breakdown = [dict(r) for r in _attr_rows]
 
-        rentals = await fetch("""
+        rentals = await fetch(f"""
             SELECT rooms, price, area, found_at
             FROM rental_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1)) AND price > 0
+            WHERE {_rental_id_match} AND price > 0
             ORDER BY found_at DESC LIMIT 30
-        """, cname)
+        """, complex_id)
 
         # Блок «6 соседних гексагонов» убран со страницы ЖК (см. задачу
         # "убрать hex-блок") — hex_price_cells() больше НЕ вызывается здесь.
@@ -5483,7 +5504,7 @@ def make_extras_router(templates) -> APIRouter:
         """, complex_id) if include_children else None
 
         # Аренда: скорость ухода. "Ушло" = не видели парсером > 3 дней.
-        rental_stats = await fetch("""
+        rental_stats = await fetch(f"""
             SELECT rooms,
                    COUNT(*) AS cnt,
                    percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_rent,
@@ -5493,9 +5514,9 @@ def make_extras_router(templates) -> APIRouter:
                                AND last_seen IS NOT NULL AND last_seen > found_at)
                        AS avg_days_listed
             FROM rental_listings
-            WHERE lower(trim(complex_name)) = lower(trim($1)) AND price > 0
+            WHERE {_rental_id_match} AND price > 0
             GROUP BY rooms ORDER BY rooms
-        """, cname)
+        """, complex_id)
 
         # Карта ЖК убрана со страницы (задача "убери карту", 2026-08-12) —
         # cx_map_points/cx_total больше не нужны, geo остаётся (гейтит блок
@@ -5726,22 +5747,22 @@ def make_extras_router(templates) -> APIRouter:
         # "показать все" (nb_all=1), полный список никуда не делся.
         # Публичная ручка, is_authed не нужен — та же логика, что у
         # остальных newbuild-эндпоинтов.
-        newbuild_units_total = await fetchrow("""
+        newbuild_units_total = await fetchrow(f"""
             SELECT COUNT(*) AS cnt FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved')
+            WHERE {_unit_id_match} AND status IN ('available','reserved')
               AND ($2::int = -1 OR rooms = $2)
         """, complex_id, nb_rooms)
-        newbuild_units_list = await fetch("""
+        newbuild_units_list = await fetch(f"""
             SELECT id, rooms, area, floor, floors_total, price, layout_photo_url, status
             FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved')
+            WHERE {_unit_id_match} AND status IN ('available','reserved')
               AND ($2::int = -1 OR rooms = $2)
             ORDER BY rooms, price ASC NULLS LAST
-            {limit_clause}
-        """.format(limit_clause="" if nb_all else "LIMIT 5"), complex_id, nb_rooms)
-        newbuild_rooms_available = await fetch("""
+            {"" if nb_all else "LIMIT 5"}
+        """, complex_id, nb_rooms)
+        newbuild_rooms_available = await fetch(f"""
             SELECT DISTINCT rooms FROM newbuild_units
-            WHERE complex_id = $1 AND status IN ('available','reserved') AND rooms IS NOT NULL
+            WHERE {_unit_id_match} AND status IN ('available','reserved') AND rooms IS NOT NULL
             ORDER BY rooms
         """, complex_id)
 
@@ -5786,19 +5807,19 @@ def make_extras_router(templates) -> APIRouter:
             # каждое объявление) — все доступные/забронированные юниты, без
             # LIMIT/фильтра комнатности (в отличие от newbuild_units_list
             # выше, той для карточек хватает 5).
-            _dev_unit_rows = await fetch("""
+            _dev_unit_rows = await fetch(f"""
                 SELECT id, rooms, price, area, price_per_m2
                 FROM newbuild_units
-                WHERE complex_id = $1 AND status IN ('available','reserved')
+                WHERE {_unit_id_match} AND status IN ('available','reserved')
             """, complex_id)
             _price_index = build_developer_price_index([dict(r) for r in _dev_unit_rows])
             # unit_source_links (Фаза 2) — только для юнитов ЭТОГО ЖК, чтобы
             # не тянуть всю таблицу; source_id у неё TEXT = apartment_listings.id.
-            _unit_link_rows = await fetch("""
+            _unit_link_rows = await fetch(f"""
                 SELECT usl.source_id AS listing_id, usl.unit_id
                 FROM unit_source_links usl
                 JOIN newbuild_units nu ON nu.id = usl.unit_id
-                WHERE nu.complex_id = $1 AND usl.source = 'krisha'
+                WHERE {_unit_link_match} AND usl.source = 'krisha'
             """, complex_id)
             _unit_id_by_listing = {r["listing_id"]: r["unit_id"] for r in _unit_link_rows}
             for _po in _po_rows:
@@ -6049,7 +6070,7 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse(detail)
 
     async def _complex_listing_query_context(complex_id: int):
-        """Canonical identity and the same sale family as the detail page."""
+        """Canonical identity and the same sale/rental family as the detail page."""
         from bot.db.pg import fetchrow, fetchval
         from bot.core.complex_membership import listing_complex_match_sql
 
@@ -6074,7 +6095,8 @@ def make_extras_router(templates) -> APIRouter:
                   AND COALESCE(canonical_reason, '') <> 'junk_unmatched'
             )
         """, cx["id"]))
-        return cx, listing_complex_match_sql(include_children=include_children)
+        return (cx, listing_complex_match_sql(include_children=include_children),
+                rental_complex_match_sql(include_children=include_children))
 
     @router.get("/admin/api/complex/{complex_id}/price-dynamics")
     async def complex_price_dynamics(request: Request, complex_id: int,
@@ -6088,17 +6110,16 @@ def make_extras_router(templates) -> APIRouter:
         context = await _complex_listing_query_context(complex_id)
         if context is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        cx, sale_match = context
-        cname = cx["name"]
+        cx, sale_match, rental_match = context
         if kind == "rental":
             table, time_col = "rental_listings", "found_at"
-            membership = "lower(trim(complex_name)) = lower(trim($1))"
+            membership = rental_match
         else:
             table, time_col = "apartment_listings", "first_seen"
             membership = f"{sale_match} AND COALESCE(is_duplicate, FALSE) = FALSE"
         days = max(1, min(int(days), 365))
         room_cond = ""
-        params: list = [cname if kind == "rental" else cx["id"], str(days)]
+        params: list = [cx["id"], str(days)]
         if rooms == "4":
             room_cond = "AND rooms >= 4"
         elif rooms in ("1", "2", "3"):
@@ -6142,11 +6163,10 @@ def make_extras_router(templates) -> APIRouter:
         context = await _complex_listing_query_context(complex_id)
         if context is None:
             return JSONResponse({"error": "not_found"}, status_code=404)
-        cx, sale_match = context
-        cname = cx["name"]
+        cx, sale_match, rental_match = context
         days = max(7, min(int(days), 365))
         room_cond = ""
-        params: list = [cname if kind == "rental" else cx["id"], str(days)]
+        params: list = [cx["id"], str(days)]
         if rooms == "4":
             room_cond = "AND rooms >= 4"
         elif rooms in ("1", "2", "3"):
@@ -6160,7 +6180,7 @@ def make_extras_router(templates) -> APIRouter:
                        AVG(EXTRACT(EPOCH FROM (COALESCE(last_seen, found_at) - found_at))/86400) AS avg_days,
                        COUNT(*) AS n
                 FROM rental_listings
-                WHERE lower(trim(complex_name)) = lower(trim($1)) AND price > 0
+                WHERE {rental_match} AND price > 0
                   AND rooms IS NOT NULL
                   AND COALESCE(last_seen, found_at) < now() - interval '3 days'
                   AND last_seen IS NOT NULL AND last_seen > found_at
@@ -6497,7 +6517,8 @@ def make_extras_router(templates) -> APIRouter:
         dev = await fetchrow("SELECT * FROM developers WHERE id = $1", dev_id)
         if not dev:
             return HTMLResponse("<h2>Застройщик не найден</h2>", status_code=404)
-        complexes = await fetch("""
+        _developer_listing_match = listing_complex_column_match_sql('c.id', 'al', include_children=True)
+        complexes = await fetch(f"""
             SELECT c.id, c.name, c.district, c.year_built, c.housing_class,
                    c.photo_url, c.lat, c.lon,
                    COALESCE(c.listings_count, 0) AS active_cnt,
@@ -6509,18 +6530,21 @@ def make_extras_router(templates) -> APIRouter:
                 SELECT AVG(EXTRACT(EPOCH FROM (al.archived_at - al.first_seen))/86400)
                          FILTER (WHERE al.archived_at IS NOT NULL) AS avg_days_to_sell
                 FROM apartment_listings al
-                WHERE lower(trim(al.complex_name)) = lower(trim(c.name))
+                WHERE {_developer_listing_match}
                   AND COALESCE(al.is_duplicate, FALSE) = FALSE
             ) g ON TRUE
             LEFT JOIN LATERAL (
                 SELECT al.address, COUNT(*) AS cnt
                 FROM apartment_listings al
-                WHERE lower(trim(al.complex_name)) = lower(trim(c.name))
+                WHERE {_developer_listing_match}
                   AND al.address IS NOT NULL AND al.address != ''
                 GROUP BY al.address ORDER BY cnt DESC LIMIT 1
             ) a ON TRUE
             WHERE c.developer_id = $1
               AND COALESCE(c.is_street, FALSE) = FALSE
+              AND COALESCE(c.is_garbage, FALSE) = FALSE
+              AND c.canonical_id IS NULL
+              AND COALESCE(c.canonical_reason, '') <> 'junk_unmatched'
             ORDER BY active_cnt DESC, sold_cnt DESC
         """, dev_id)
         # Официальные данные homeportal.kz: контакты + проекты застройщика

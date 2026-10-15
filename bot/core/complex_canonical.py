@@ -116,7 +116,7 @@ def _prefix_match(junk: str, real: dict[str, set[int]]) -> int | None:
             if tail[0] not in " ,:;—–-":
                 continue
             description = tail.lstrip(" ,:;—–-")
-            if not (_JUNK_RE.match(description) or _LEADING_JUNK_RE.match(description)):
+            if not _JUNK_RE.match(description):
                 continue
         if len(rn) > best_len:
             best, best_len = set(ids), len(rn)
@@ -126,7 +126,8 @@ def _prefix_match(junk: str, real: dict[str, set[int]]) -> int | None:
 
 
 def compute_canonical(complexes: list[dict], listing_counts: dict[int, int],
-                      reviewed_relations: list[dict] | None = None) -> dict[int, tuple[int | None, str | None]]:
+                      reviewed_relations: list[dict] | None = None,
+                      manual_overrides: list[dict] | None = None) -> dict[int, tuple[int | None, str | None]]:
     """Чистая функция. complexes: [{id, name, krisha_url, parent_complex_id, is_umbrella,
     housing_class, is_newbuild}] (уже без мусора/улиц). Возвращает {id: (canonical_id, reason)}
     только для НЕканонических записей; канонические — (None, None).
@@ -137,6 +138,9 @@ def compute_canonical(complexes: list[dict], listing_counts: dict[int, int],
     out: dict[int, tuple[int | None, str | None]] = {c["id"]: (None, None) for c in complexes}
     roots = {cid: cid for cid in out}
     component_members = {cid: {cid} for cid in out}
+    by_id = {c['id']: c for c in complexes}
+    decisions = {r['complex_id']: r['canonical_id'] for r in manual_overrides or []}
+    pinned: set[int] = set()
     separate: dict[int, set[int]] = defaultdict(set)
     for relation in reviewed_relations or []:
         if relation["relation_type"] in _SEPARATE_RELATIONS:
@@ -149,10 +153,12 @@ def compute_canonical(complexes: list[dict], listing_counts: dict[int, int],
             roots[cid] = root(roots[cid])
         return roots[cid]
 
-    def assign(cid: int, target: int, reason: str) -> bool:
+    def assign(cid: int, target: int, reason: str, *, reviewed: bool = False) -> bool:
         source_root, target_root = root(cid), root(target)
         if source_root == target_root:
             return True
+        if not reviewed and source_root in pinned:
+            return False
         # Проверяем не только предлагаемую пару, но и уже присоединённые алиасы:
         # A→B, B→C также запрещено, если reviewer разделил A и C.
         if any(separate[mid] & component_members[target_root] for mid in component_members[source_root]):
@@ -162,11 +168,36 @@ def compute_canonical(complexes: list[dict], listing_counts: dict[int, int],
         out[cid] = (target_root, reason)
         return True
 
+    # Resolve explicit decisions first. Pin their final targets so a new scrape
+    # or a change in listing counts cannot choose a different canonical ID.
+    for cid in decisions:
+        if cid not in by_id:
+            raise ValueError(f'manual complex {cid} is not eligible')
+        seen = {cid}
+        target = decisions[cid]
+        while target is not None and target in decisions and decisions[target] is not None:
+            if target in seen:
+                raise ValueError('manual canonical mapping contains a cycle')
+            seen.add(target)
+            target = decisions[target]
+        if target is not None and (target in seen or target not in by_id):
+            raise ValueError(f'invalid manual canonical target for {cid}')
+        if target is None:
+            pinned.add(cid)
+            continue
+        source_parent = by_id[cid].get('parent_complex_id')
+        target_parent = by_id[target].get('parent_complex_id')
+        if source_parent != target_parent:
+            raise ValueError('manual mapping cannot merge a child with another project')
+        if not assign(cid, target, 'manual_review', reviewed=True):
+            raise ValueError('manual mapping conflicts with a reviewed separate relation')
+        pinned.add(target)
+
     def junk(c: dict) -> bool:
         return is_junk_name(c["name"], trusted=_trusted(c))
 
     def rank(c: dict):
-        return (junk(c), not c.get("is_umbrella"), not c.get("housing_class"),
+        return (root(c['id']) not in pinned, junk(c), not c.get("is_umbrella"), not c.get("housing_class"),
                 not c.get("is_newbuild"), -listing_counts.get(c["id"], 0), c["id"])
 
     # 1) Обрывки текста с именем реального ЖК в начале — по имени. Это сильнее ссылки
@@ -225,7 +256,7 @@ def compute_canonical(complexes: list[dict], listing_counts: dict[int, int],
 
     # 3) Обрывки, которые не удалось свести, — в аналитике не используются.
     for c in complexes:
-        if junk(c) and out[c["id"]][0] is None:
+        if junk(c) and out[c["id"]][0] is None and c['id'] not in pinned:
             out[c["id"]] = (None, "junk_unmatched")
     # цепочки (A→B, B→C) сворачиваем к конечному
     for cid, (tgt, reason) in list(out.items()):
@@ -238,25 +269,36 @@ def compute_canonical(complexes: list[dict], listing_counts: dict[int, int],
 
 
 async def apply_canonical() -> dict:
-    from bot.db.pg import execute, fetch
-    rows = [dict(r) for r in await fetch("""
+    from bot.db.pg import get_pool
+    # One transaction prevents pages/binding from observing a partial map and
+    # rolls back all changes if a reviewed decision is invalid.
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            await conn.fetchval('SELECT pg_advisory_xact_lock(728143)')
+            return await _apply_canonical(conn)
+
+
+async def _apply_canonical(conn) -> dict:
+    rows = [dict(r) for r in await conn.fetch("""
         SELECT id, name, krisha_url, parent_complex_id, is_umbrella, housing_class, is_newbuild,
                canonical_id, canonical_reason
           FROM complexes WHERE COALESCE(is_garbage, FALSE) = FALSE AND COALESCE(is_street, FALSE) = FALSE""")]
-    counts = {r["cid"]: r["n"] for r in await fetch("""
+    counts = {r["cid"]: r["n"] for r in await conn.fetch("""
         SELECT complex_id AS cid, count(*) AS n FROM apartment_listings
          WHERE complex_id IS NOT NULL GROUP BY 1""")}
-    relations = [dict(r) for r in await fetch("""
+    relations = [dict(r) for r in await conn.fetch("""
         SELECT complex_id_a, complex_id_b, relation_type FROM complex_relations""")]
-    res = compute_canonical(rows, counts, reviewed_relations=relations)
+    overrides = [dict(r) for r in await conn.fetch(
+        'SELECT complex_id, canonical_id FROM complex_canonical_overrides')]
+    res = compute_canonical(rows, counts, reviewed_relations=relations, manual_overrides=overrides)
     changed = 0
     stats = {"krisha_slug": 0, "name_prefix": 0, "junk_unmatched": 0}
     for r in rows:
         tgt, reason = res[r["id"]]
         if reason:
-            stats[reason] += 1
+            stats[reason] = stats.get(reason, 0) + 1
         if (tgt, reason) != (r["canonical_id"], r["canonical_reason"]):
-            await execute("UPDATE complexes SET canonical_id = $2, canonical_reason = $3 WHERE id = $1",
+            await conn.execute("UPDATE complexes SET canonical_id = $2, canonical_reason = $3 WHERE id = $1",
                           r["id"], tgt, reason)
             changed += 1
     stats["changed"] = changed

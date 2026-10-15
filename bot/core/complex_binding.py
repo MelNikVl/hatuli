@@ -31,20 +31,36 @@ logger = logging.getLogger(__name__)
 
 GEO_MAX_M = 60
 GEO_MARGIN_M = 15
-RESOLVER_VERSION = 'complex_binding_v3'
+RESOLVER_VERSION = 'complex_binding_v4'
 
 # Кандидат на каждое объявление; DISTINCT ON + ORDER BY приоритет правила.
 _PROPOSE_SQL = f"""
 WITH cx AS (
     -- cid — канонический ЖК (миграция 101, bot/core/complex_canonical.py);
     -- обрывки текста без реального ЖК (junk_unmatched) в привязке не участвуют.
-    SELECT id, COALESCE(canonical_id, id) AS cid, lower(btrim(name)) AS n, lat, lon,
+    SELECT id, COALESCE(canonical_id, id) AS cid, complex_name_key(name) AS n, lat, lon,
            lower(substring(krisha_url from '/complex/show/[^/]+/([^/?#]+)')) AS slug
       FROM complexes
      WHERE coalesce(is_garbage, false) = false AND coalesce(is_street, false) = false
        AND coalesce(canonical_reason, '') <> 'junk_unmatched'
 ),
-uniq AS (SELECT n, min(cid) AS id FROM cx WHERE n <> '' GROUP BY n HAVING count(DISTINCT cid) = 1),
+names AS (
+    SELECT n, cid FROM cx
+    UNION ALL
+    SELECT ca.normalized_name, cx.cid FROM complex_aliases ca JOIN cx ON cx.id = ca.complex_id
+     WHERE ca.status = 'verified'
+),
+blocked_names AS (
+    SELECT complex_name_key(name) AS n FROM complexes WHERE canonical_reason = 'junk_unmatched'
+),
+listing_keys AS MATERIALIZED (
+    -- Normalize each distinct spelling once, rather than every listing and
+    -- every comparison with a source slug.
+    SELECT complex_name, complex_name_key(complex_name) AS n
+      FROM (SELECT DISTINCT a.complex_name FROM apartment_listings a
+             WHERE nullif(btrim(a.complex_name), '') IS NOT NULL {{scope}}) raw
+),
+uniq AS (SELECT n, min(cid) AS id FROM names WHERE n <> '' GROUP BY n HAVING count(DISTINCT cid) = 1),
 -- без HAVING: планировщик оценивает HAVING в 1 строку и уходит в nested loop с
 -- полным сканом объявлений на каждый slug; условие k = 1 — в JOIN.
 slugs AS (SELECT slug, min(cid) AS id, count(DISTINCT cid) AS k FROM cx WHERE slug IS NOT NULL GROUP BY slug),
@@ -55,19 +71,26 @@ house AS (
      WHERE a.resolved_house_id IS NOT NULL {{scope}}
 ),
 lurl AS MATERIALIZED (
-    SELECT a.id, a.complex_url, lower(substring(a.complex_url from '/complex/show/[^/]+/([^/?#]+)')) AS slug
-      FROM apartment_listings a
+    SELECT a.id, a.complex_url, k.n,
+           lower(substring(a.complex_url from '/complex/show/[^/]+/([^/?#]+)')) AS slug
+      FROM apartment_listings a LEFT JOIN listing_keys k ON k.complex_name = a.complex_name
      WHERE nullif(a.complex_url, '') IS NOT NULL {{scope}}
 ),
 byurl AS (
     -- ссылка на ЖК из самого объявления Крыши — самый надёжный ключ после дома под зонтиком
     SELECT l.id, s.id, 'url', 2, jsonb_build_object('complex_url', l.complex_url)
       FROM lurl l JOIN slugs s ON s.k = 1 AND s.slug = l.slug
+     WHERE NOT EXISTS (SELECT 1 FROM names named WHERE named.n = l.n AND named.cid <> s.id)
+       AND NOT EXISTS (SELECT 1 FROM blocked_names blocked WHERE blocked.n = l.n)
 ),
 byname AS (
     SELECT a.id, u.id, 'name', 3, jsonb_build_object('complex_name', a.complex_name)
-      FROM apartment_listings a JOIN uniq u ON u.n = lower(btrim(a.complex_name))
+      FROM apartment_listings a JOIN listing_keys k ON k.complex_name = a.complex_name
+      JOIN uniq u ON u.n = k.n
+      LEFT JOIN lurl l ON l.id = a.id
+      LEFT JOIN slugs s ON s.slug = l.slug
      WHERE nullif(btrim(a.complex_name), '') IS NOT NULL {{scope}}
+       AND (s.k IS DISTINCT FROM 1 OR s.id = u.id)
 ),
 geo AS (
     SELECT a.id, g.c1, 'geo', 4, jsonb_build_object('dist_m', round(g.d1::numeric, 1), 'second_m', round(g.d2::numeric, 1))
@@ -88,11 +111,25 @@ prop AS (
       FROM (SELECT * FROM house UNION ALL SELECT * FROM byurl UNION ALL SELECT * FROM byname UNION ALL SELECT * FROM geo) u
      ORDER BY listing_id, prio
 ),
-target AS (
-    SELECT a.id AS listing_id, p.complex_id, p.method, p.evidence, a.complex_name,
+conflicted AS MATERIALIZED (
+    SELECT DISTINCT l.id FROM lurl l LEFT JOIN slugs s ON s.slug=l.slug
+    LEFT JOIN uniq u ON u.n=l.n LEFT JOIN blocked_names b ON b.n=l.n
+    WHERE b.n IS NOT NULL OR (s.k=1 AND u.id IS NOT NULL AND s.id<>u.id)
+),
+states AS (
+    SELECT a.id AS listing_id, p.complex_id,
+           CASE WHEN p.complex_id IS NULL AND (a.complex_id IS NOT NULL
+                     OR a.complex_resolution='unbound' OR conflict.id IS NOT NULL)
+                THEN 'unbound' ELSE p.method END AS method,
+           p.evidence, a.complex_name,
            a.complex_id AS previous_complex_id, a.complex_resolution AS previous_complex_resolution
       FROM apartment_listings a LEFT JOIN prop p ON p.listing_id = a.id
-     WHERE (a.complex_id IS DISTINCT FROM p.complex_id OR a.complex_resolution IS DISTINCT FROM p.method) {{scope}}
+      LEFT JOIN conflicted conflict ON conflict.id=a.id
+     WHERE TRUE {{scope}}
+),
+target AS (
+    SELECT * FROM states WHERE previous_complex_id IS DISTINCT FROM complex_id
+                              OR previous_complex_resolution IS DISTINCT FROM method
 )
 """
 
@@ -105,11 +142,15 @@ upd AS (
 logged AS (
     INSERT INTO listing_complex_resolution_log
         (listing_id, complex_id, resolution_method, confidence_tier, resolved_at,
-         complex_name_at_resolution, evidence, resolver_version)
-    SELECT t.listing_id, t.complex_id, t.method, CASE WHEN t.method = 'geo' THEN 'B' ELSE 'A' END, now(),
-           t.complex_name, t.evidence, '{ver}'
+         complex_name_at_resolution, evidence, resolver_version,
+         previous_complex_id, previous_resolution_method)
+    SELECT t.listing_id, t.complex_id, coalesce(t.method, 'unbound'),
+           CASE WHEN t.method = 'geo' THEN 'B' WHEN t.method IS NULL OR t.method='unbound' THEN 'C' ELSE 'A' END, now(),
+           t.complex_name, coalesce(t.evidence, '{}'::jsonb) || jsonb_build_object(
+               'previous_complex_id', t.previous_complex_id,
+               'previous_resolution_method', t.previous_complex_resolution), '{ver}',
+           t.previous_complex_id, t.previous_complex_resolution
       FROM target t JOIN upd ON upd.id = t.listing_id
-     WHERE t.complex_id IS NOT NULL
     RETURNING 1
 )
 SELECT (SELECT count(*) FROM upd) AS changed, (SELECT count(*) FROM logged) AS logged

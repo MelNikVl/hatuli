@@ -39,7 +39,18 @@ async def test_complex(db):
     try:
         yield cid
     finally:
+        await execute('DELETE FROM complex_source_rejections WHERE complex_id=$1',cid)
         await execute("DELETE FROM complexes WHERE id = $1", cid)
+
+
+@pytest.mark.asyncio
+async def test_reviewed_wrong_url_cannot_repopulate_metadata(test_complex):
+    from bot.db.pg import execute,fetchrow
+    wrong='https://krisha.kz/complex/show/astana/another-project/'
+    await execute("INSERT INTO complex_source_rejections(complex_id,source,source_id,evidence,reviewed_by) VALUES($1,'krisha',$2,'{\"reason\":\"different project\"}','test')",test_complex,wrong)
+    assert await save_to_db({test_complex:{'url':wrong,'address':'wrong address','lat':51.3,'lon':71.5}}) == 0
+    row=await fetchrow('SELECT address,lat,krisha_url FROM complexes WHERE id=$1',test_complex)
+    assert row['address'] is None and row['lat'] is None and row['krisha_url'] is None
 
 
 @pytest.mark.asyncio

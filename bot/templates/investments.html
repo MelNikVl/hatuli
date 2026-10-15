@@ -2,6 +2,12 @@
 {% block content %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/static/yield-heat.js?v=20261008"></script>
+<style>
+/* The shared chart sizing rules must not resize Leaflet's renderer or icons. */
+#inv-map canvas { max-width:none; max-height:none; }
+#inv-map svg { width:auto; height:auto; }
+</style>
 <div class="page-title">💰 Инвестиции</div>
 <div style="display:flex;gap:4px;margin-bottom:16px;">
   <a href="/info" style="padding:7px 16px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;text-decoration:none;">Общее</a>
@@ -10,8 +16,8 @@
 </div>
 
 <p style="font-size:13px;color:#888;max-width:900px;">
-  Тепловая карта доходности аренды (gross yield — годовая аренда / цена продажи) по гексагонам: где на карте зеленее —
-  там в среднем выгоднее сдавать квартиру относительно её цены, где краснее — доходность ниже среднего.
+  Тепловая карта доходности аренды (gross yield — годовая аренда / цена продажи) по гексагонам:
+  тёмно-зелёные гексы — лучшие по медианной расчётной доходности, красные — с более низкой доходностью.
   Не путать с картой цен: дорогой район необязательно менее выгодный, если аренда там тоже дорогая.
 </p>
 
@@ -39,7 +45,11 @@ document.getElementById('kepler-link').href =
 
 <div class="chart-block" style="flex:1 1 0;min-width:340px;">
   <b style="font-size:14px;">Доходность по гексагонам</b>
-  <div style="font-size:11.5px;color:#888;margin-bottom:8px;">зелёный — выше среднего, красный — ниже среднего (10-90 перцентиль)</div>
+  <div style="font-size:11.5px;color:#888;margin-bottom:8px;">Цвет — медианная доходность гекса; шкала по 10–90 перцентилю. Тёмно-зелёный — верх шкалы, лучшие варианты.</div>
+  <div style="display:flex;align-items:center;gap:8px;font-size:11.5px;margin-bottom:8px;">
+    <span>Ниже</span><span style="width:180px;height:9px;border-radius:4px;background:linear-gradient(90deg,#ef4444,#facc15,#86efac,#16a34a,#14532d);"></span><span>Выше</span>
+    <span style="width:10px;height:10px;background:#14532d;border-radius:2px;"></span><b>Лучшая доходность</b>
+  </div>
   <div class="chart-block-inner" id="inv-map"></div>
 </div>
 
@@ -74,21 +84,6 @@ function invMedian(arr) {
   const mid = Math.floor(s.length/2);
   return s.length % 2 ? s[mid] : (s[mid-1]+s[mid])/2;
 }
-function invPercentile(arr, p) {
-  const s = [...arr].sort((a,b) => a-b);
-  return s[Math.min(Math.floor(s.length * p), s.length - 1)];
-}
-function invYieldColor(t) {
-  // красный (низкая доходность) -> жёлтый -> зелёный (высокая)
-  t = Math.max(0, Math.min(1, t));
-  const stops = [[239,68,68],[250,204,21],[34,197,94]];
-  const pos = t * (stops.length - 1);
-  const i = Math.min(Math.floor(pos), stops.length - 2);
-  const frac = pos - i;
-  const from = stops[i], to = stops[i+1];
-  const c = from.map((f,k) => Math.round(f + (to[k]-f)*frac));
-  return `rgb(${c[0]},${c[1]},${c[2]})`;
-}
 fetch('/admin/api/heat-points').then(r => r.json()).then(d => {
   const pts = (d.points || []).filter(p => p.yield_pct != null && p.yield_pct > 0);
   const buckets = new Map();
@@ -101,12 +96,10 @@ fetch('/admin/api/heat-points').then(r => r.json()).then(d => {
   const medians = [];
   buckets.forEach(b => { b.value = invMedian(b.items); medians.push(b.value); });
   if (!medians.length) return;
-  const lo = invPercentile(medians, 0.10), hi = invPercentile(medians, 0.90);
+  const range = YieldHeat.scale(medians);
   buckets.forEach(b => {
-    const t = hi > lo ? (b.value - lo) / (hi - lo) : 0.5;
-    L.polygon(invHexCorners(b.q, b.r, INV_EDGE_M), {
-      color: '#fff', weight: 0.5, fillColor: invYieldColor(t), fillOpacity: 0.55,
-    }).bindTooltip(`медиана доходности: ${b.value.toFixed(1)}% · ${b.items.length} объявл.`, {sticky:true}).addTo(invHexLayer);
+    L.polygon(invHexCorners(b.q, b.r, INV_EDGE_M), YieldHeat.style(b.value, range))
+      .bindTooltip(YieldHeat.tooltip(b.value, b.items.length, range), {sticky:true}).addTo(invHexLayer);
   });
   setTimeout(() => invMap.invalidateSize(), 50);
 }).catch(() => {});

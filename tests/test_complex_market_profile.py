@@ -107,6 +107,7 @@ async def _cleanup(listing_ids, property_ids, complex_ids):
     await execute("DELETE FROM property_listings WHERE listing_id = ANY($1::text[])", lids)
     await execute("DELETE FROM properties WHERE property_id = ANY($1::int[])", pids)
     await execute("DELETE FROM apartment_listings WHERE id = ANY($1::text[])", lids)
+    await execute("DELETE FROM complex_aliases WHERE complex_id = ANY($1::int[])", cids)
     await execute("DELETE FROM complexes WHERE id = ANY($1::int[])", cids)
 
 
@@ -352,5 +353,103 @@ async def test_historical_exit_and_reactivation_reconstructed_from_database(db):
         assert later["supply"]["active_properties_now"] == 5
         assert later["liquidity"]["median_observed_dom_days"] == 20
         assert later["liquidity"]["true_relist_count"] == 0
+    finally:
+        await _cleanup(lids, pids, cids)
+
+
+@pytest.mark.asyncio
+async def test_canonical_alias_and_verified_name_share_one_market_profile(db):
+    from bot.core.complex_market_profile import get_complex_market_profile
+    from bot.db.pg import execute
+    lids, pids, cids = [], [], []
+    try:
+        root = await _make_complex("__test_cmp_identity_root__")
+        cids.append(root)
+        alias = await _make_complex("__test_cmp_identity_old_name__", canonical_id=root)
+        cids.append(alias)
+        verified_name = "__test_cmp_identity_verified_spelling__"
+        await execute("INSERT INTO complex_aliases (complex_id,name,normalized_name,source,source_id,status) "
+                      "VALUES ($1,$2,complex_name_key($2),'test',$2,'verified')", root, verified_name)
+        for i in range(2):
+            lid = f"__test_cmp_identity_alias_{i}__"
+            lids.append(lid)
+            await _insert_listing(lid, first_seen=_dt(0))
+            if i == 0:
+                await execute("UPDATE apartment_listings SET complex_id=$2,complex_name='stale unmatched name' "
+                              "WHERE id=$1", lid, alias)
+            else:
+                await execute("UPDATE apartment_listings SET complex_name=$2 WHERE id=$1", lid, verified_name)
+            pid = await _make_property(alias if i == 0 else None, f"__test_cmp_identity_alias_hash_{i}__")
+            pids.append(pid)
+            await _link(pid, lid)
+        canonical = await get_complex_market_profile(root, _dt(5))
+        redirected = await get_complex_market_profile(alias, _dt(5))
+        assert canonical == redirected
+        assert canonical["complex_id"] == root
+        assert canonical["identity"]["canonical_name"] == "__test_cmp_identity_root__"
+        assert canonical["supply"]["observed_unique_listings"] == 2
+        assert canonical["supply"]["observed_unique_properties"] == 2
+    finally:
+        await _cleanup(lids, pids, cids)
+
+
+@pytest.mark.asyncio
+async def test_explicit_listing_binding_overrules_conflicting_legacy_property_complex(db):
+    from bot.core.complex_market_profile import get_complex_market_profile
+    from bot.db.pg import execute
+    lids, pids, cids = [], [], []
+    try:
+        old = await _make_complex("__test_cmp_identity_old_property__")
+        current = await _make_complex("__test_cmp_identity_current_listing__")
+        cids.extend([old, current])
+        lid = "__test_cmp_identity_conflicting_listing__"
+        lids.append(lid)
+        await _insert_listing(lid, first_seen=_dt(0))
+        await execute("UPDATE apartment_listings SET complex_id=$2,complex_name=$3 WHERE id=$1",
+                      lid, current, "__test_cmp_identity_old_property__")
+        pid = await _make_property(old, "__test_cmp_identity_conflicting_hash__")
+        pids.append(pid)
+        await _link(pid, lid)
+        old_profile = await get_complex_market_profile(old, _dt(5))
+        current_profile = await get_complex_market_profile(current, _dt(5))
+        assert old_profile["supply"]["observed_unique_properties"] == 0
+        assert current_profile["supply"]["observed_unique_properties"] == 1
+        assert current_profile["supply"]["observed_unique_listings"] == 1
+    finally:
+        await _cleanup(lids, pids, cids)
+
+
+@pytest.mark.asyncio
+async def test_umbrella_aggregates_children_without_double_counting_a_property(db):
+    from bot.core.complex_market_profile import get_complex_market_profile
+    from bot.db.pg import execute
+    lids, pids, cids = [], [], []
+    try:
+        parent = await _make_complex("__test_cmp_identity_umbrella__", is_umbrella=True)
+        parent_alias = await _make_complex("__test_cmp_identity_umbrella_alias__", canonical_id=parent)
+        first = await _make_complex("__test_cmp_identity_child_first__", parent_complex_id=parent)
+        first_alias = await _make_complex("__test_cmp_identity_child_alias__", canonical_id=first,
+                                         parent_complex_id=parent)
+        second = await _make_complex("__test_cmp_identity_child_second__", parent_complex_id=parent_alias)
+        cids.extend([parent, parent_alias, first, first_alias, second])
+        same_unit = await _make_property(first_alias, "__test_cmp_identity_same_unit__")
+        other_unit = await _make_property(second, "__test_cmp_identity_other_unit__")
+        pids.extend([same_unit, other_unit])
+        for i, (cid, pid) in enumerate([(first, same_unit), (first_alias, same_unit), (second, other_unit)]):
+            lid = f"__test_cmp_identity_umbrella_listing_{i}__"
+            lids.append(lid)
+            await _insert_listing(lid, first_seen=_dt(0))
+            await execute("UPDATE apartment_listings SET complex_id=$2 WHERE id=$1", lid, cid)
+            await _link(pid, lid)
+        profile = await get_complex_market_profile(parent, _dt(5))
+        assert profile["supply"]["observed_unique_listings"] == 3
+        assert profile["supply"]["observed_unique_properties"] == 2
+        assert profile["supply"]["active_properties_now"] == 2
+        assert profile["price"]["sample_size"] == 2
+        child_profile = await get_complex_market_profile(first, _dt(5))
+        assert child_profile["supply"]["observed_unique_listings"] == 2
+        assert child_profile["supply"]["observed_unique_properties"] == 1
+        second_profile = await get_complex_market_profile(second, _dt(5))
+        assert second_profile["supply"]["observed_unique_properties"] == 1
     finally:
         await _cleanup(lids, pids, cids)

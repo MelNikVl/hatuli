@@ -2057,6 +2057,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                       AND COALESCE(alias.canonical_reason, '') <> 'junk_unmatched'
                       AND alias.name ILIKE '%' || ${i} || '%'
                 )
+                OR EXISTS (
+                    SELECT 1 FROM complex_aliases ca JOIN complexes owner ON owner.id = ca.complex_id
+                    WHERE COALESCE(owner.canonical_id, owner.id) = c.id
+                      AND COALESCE(owner.is_garbage, FALSE) = FALSE
+                      AND COALESCE(owner.is_street, FALSE) = FALSE
+                      AND COALESCE(owner.canonical_reason, '') <> 'junk_unmatched'
+                      AND ca.status = 'verified'
+                      AND ca.name ILIKE '%' || ${i} || '%'
+                )
             )""")
             params.append(search)
             i += 1
@@ -2083,8 +2092,6 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             *params,
         )
         total_all = await pg_fetch(f"SELECT COUNT(*) AS n FROM complexes c {where}", *params)
-        # TODO: cached listings_count/avg_price_m2 всё ещё вычисляются старым
-        # writer по именам; карточка уже использует каноническую принадлежность.
 
         def _serialize(r):
             d = dict(r)

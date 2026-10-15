@@ -13,3 +13,6 @@ hype_tracker/hype.db
 # Фаза C/D: артефакты моделей и данные исследования
 models/
 research/phase_c/data/
+
+# Live identity audit/rollout manifests contain private production records.
+/artifacts/

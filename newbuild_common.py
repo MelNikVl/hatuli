@@ -25,6 +25,17 @@ log = logging.getLogger("newbuild_common")
 
 _DISTRICT_RE = re.compile(r"район\s+([^,]+)", re.I)
 
+# Unit FKs preserve their original complex IDs. Read the canonical alias
+# family so importing a renamed/redirected project still finds its inventory
+# and price history. Children of an umbrella remain separate inventories.
+_UNIT_CANONICAL_FAMILY_SQL = """
+WITH RECURSIVE family(id) AS (
+    SELECT $1::integer
+    UNION
+    SELECT c.id FROM complexes c JOIN family f ON c.canonical_id = f.id
+)
+"""
+
 
 @dataclass
 class UnitData:
@@ -137,10 +148,16 @@ async def ensure_developer(name: str, website: str | None, phone: str | None) ->
 
 
 async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
-    """Upsert ЖК по нормализованному имени (единый матчинг с korter/homsters/
-    krisha-complex-scan — один ЖК, много источников, см. complexes.source_info
-    для тех обогащений и newbuild_source/_source_id для этого)."""
-    from bot.db.pg import fetchrow, fetchval, execute, fetch
+    """Reuse source identity, then an unambiguous exact name/reviewed alias.
+
+    Preserve each imported spelling/address as evidence without approving it.
+    Source claims and creation are atomic, including concurrent reimports.
+    """
+    from bot.db.pg import get_pool, execute, fetch
+    from bot.core.complex_ingest_identity import (
+        InvalidComplexIdentity, RESOLVER_VERSION, canonical_complex_id,
+        record_complex_observations, resolve_ingest_complex,
+    )
 
     deadlines = [u.deadline for u in cx.units if u.deadline]
     completion_year = min(deadlines).year if deadlines else None
@@ -153,36 +170,85 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
     dm = _DISTRICT_RE.search(cx.address or "")
     district = dm.group(1).strip() if dm else None
 
-    row = await fetchrow(
-        "SELECT id, lat, lon, developer_id, address FROM complexes WHERE lower(trim(name)) = lower(trim($1))", cx.name)
-    if row:
-        cid = row["id"]
-        # Entity resolution (фаза 1, docs/entity_resolution_plan.md): этот
-        # источник только что нашёлся по точному совпадению имени с уже
-        # существующим ЖК — записываем связь в spine (complex_source_links)
-        # с confidence по сигналам имя+гео+застройщик+адрес, а не молча
-        # теряем источник в одном из старых однослотовых полей ниже.
-        # name_a=name_b=cx.name — совпадение уже гарантировано WHERE выше
-        # (точный матч), пересчитывать через pg_trgm незачем.
-        from bot.core.entity_resolution import score_match, record_source_link, ensure_complex_code
-        conf, method = await score_match(
-            cx.name, cx.name,
-            existing_lat=row["lat"], existing_lon=row["lon"],
-            candidate_lat=cx.lat, candidate_lon=cx.lon,
-            developer_match=(row["developer_id"] is not None and row["developer_id"] == dev_id),
-            existing_address=row["address"], candidate_address=cx.address,
-        )
-        await record_source_link(cid, source, cx.source_id, confidence=conf, method=method)
-        await ensure_complex_code(cid)
-        await execute("""
+    is_created = False
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            # Lock both identity and spelling so two imports cannot create two
+            # rows before either has claimed the source ID. Consistent order
+            # also covers different sources importing one normalized name.
+            name_key = await conn.fetchval("SELECT complex_name_key($1)", cx.name)
+            lock_keys = {
+                f"complex_ingest:source:{source}:{cx.source_id}",
+                f"complex_ingest:name:{name_key}",
+            }
+            for lock_key in sorted(lock_keys):
+                await conn.fetchval("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", lock_key)
+            cid = await resolve_ingest_complex(source, cx.source_id, cx.name, connection=conn)
+            if cid is None:
+                cid = await conn.fetchval("""
+                    INSERT INTO complexes (name, developer_id, district, address, housing_class,
+                                           is_newbuild, newbuild_source, newbuild_source_id,
+                                           completion_year, completion_quarter, newbuild_last_scan_at,
+                                           photo_url, photos, description)
+                    VALUES ($1, $2, $3, $4, $5, $9, $10, $6, $7, $8, now(), $11, $12, $13)
+                    ON CONFLICT (lower(name)) DO NOTHING
+                    RETURNING id
+                """, cx.name, dev_id, district, cx.address, cx.housing_class, cx.source_id,
+                    completion_year, completion_quarter, is_newbuild, source,
+                    cx.photo_url, json.dumps([cx.photo_url]) if cx.photo_url else None, cx.description)
+                if cid is None:
+                    # A legacy writer may have raced without our advisory lock;
+                    # repeat the same conservative lookup, never update its row blindly.
+                    cid = await resolve_ingest_complex(source, cx.source_id, cx.name, connection=conn)
+                    if cid is None:
+                        raise InvalidComplexIdentity(f"Existing excluded complex blocks import {cx.name!r}")
+                else:
+                    is_created = True
+            evidence = {
+                "name": cx.name, "normalized_name": name_key,
+                "address": cx.address, "resolver_version": RESOLVER_VERSION,
+            }
+            legacy_origin = await conn.fetchval(
+                "SELECT id FROM complexes WHERE newbuild_source = $1 AND newbuild_source_id = $2",
+                source, str(cx.source_id))
+            # DO NOTHING preserves a source link to an original alias. A later
+            # canonical redirect changes the returned ID, never this provenance.
+            await conn.execute("""
+                INSERT INTO complex_source_links
+                    (complex_id, source, source_id, match_method, confidence, matched_by, evidence)
+                VALUES ($1, $2, $3, $4, 1.0, 'auto', $5::jsonb)
+                ON CONFLICT (source, source_id) DO NOTHING
+            """, legacy_origin if legacy_origin is not None else cid, source, str(cx.source_id),
+                "seed_source" if is_created else
+                "legacy_source_id" if legacy_origin is not None else "ingest_name_exact_or_verified",
+                json.dumps(evidence, ensure_ascii=False))
+            claimed = await conn.fetchval(
+                "SELECT complex_id FROM complex_source_links WHERE source = $1 AND source_id = $2",
+                source, str(cx.source_id))
+            if await canonical_complex_id(claimed, connection=conn) != cid:
+                raise InvalidComplexIdentity(f"Source identity changed during import: {source}/{cx.source_id}")
+            await record_complex_observations(
+                cid, source, cx.source_id, cx.name, cx.address, evidence=evidence, connection=conn)
+            row = await conn.fetchrow(
+                "SELECT id, lat, lon, developer_id, address FROM complexes WHERE id = $1", cid)
+
+    from bot.core.entity_resolution import record_source_link, ensure_complex_code, score_match
+    await ensure_complex_code(cid)
+    await execute("""
             UPDATE complexes SET
                 developer_id        = COALESCE(developer_id, $2),
                 district             = COALESCE(district, $3),
                 address               = COALESCE(address, $4),
                 housing_class          = COALESCE(housing_class, $5),
                 is_newbuild             = $9,
-                newbuild_source          = $10,
-                newbuild_source_id        = $6,
+                newbuild_source          = CASE WHEN NOT EXISTS (
+                    SELECT 1 FROM complexes origin WHERE origin.id <> $1
+                     AND origin.newbuild_source = $10 AND origin.newbuild_source_id = $6
+                ) THEN $10 ELSE newbuild_source END,
+                newbuild_source_id        = CASE WHEN NOT EXISTS (
+                    SELECT 1 FROM complexes origin WHERE origin.id <> $1
+                     AND origin.newbuild_source = $10 AND origin.newbuild_source_id = $6
+                ) THEN $6 ELSE newbuild_source_id END,
                 completion_year             = COALESCE($7, completion_year),
                 completion_quarter            = COALESCE($8, completion_quarter),
                 photo_url                       = COALESCE(photo_url, $11),
@@ -191,32 +257,9 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
                 newbuild_last_scan_at                 = now(),
                 updated_at                              = now()
             WHERE id = $1
-        """, cid, dev_id, district, cx.address, cx.housing_class, cx.source_id,
-            completion_year, completion_quarter, is_newbuild, source,
-            cx.photo_url, json.dumps([cx.photo_url]) if cx.photo_url else None, cx.description)
-        if row["lat"] is None or row["lon"] is None:
-            if cx.lat is not None and cx.lon is not None and in_astana_bbox(cx.lat, cx.lon):
-                await execute("UPDATE complexes SET lat = $2, lon = $3 WHERE id = $1", cid, cx.lat, cx.lon)
-            elif cx.address:
-                await geocode_complex(cid, cx.address)
-        return cid
-
-    cid = await fetchval("""
-        INSERT INTO complexes (name, developer_id, district, address, housing_class,
-                               is_newbuild, newbuild_source, newbuild_source_id,
-                               completion_year, completion_quarter, newbuild_last_scan_at,
-                               photo_url, photos, description)
-        VALUES ($1, $2, $3, $4, $5, $9, $10, $6, $7, $8, now(), $11, $12, $13)
-        ON CONFLICT (lower(name)) DO UPDATE SET updated_at = now()
-        RETURNING id
-    """, cx.name, dev_id, district, cx.address, cx.housing_class, cx.source_id,
+    """, cid, dev_id, district, cx.address, cx.housing_class, cx.source_id,
         completion_year, completion_quarter, is_newbuild, source,
         cx.photo_url, json.dumps([cx.photo_url]) if cx.photo_url else None, cx.description)
-    # Этот источник — первый, кто принёс этот ЖК (новый entity_id) —
-    # confidence максимальный, никакой неоднозначности нет (seed, а не match).
-    from bot.core.entity_resolution import record_source_link, ensure_complex_code, score_match
-    await record_source_link(cid, source, cx.source_id, confidence=1.0, method="seed_source")
-    await ensure_complex_code(cid)
 
     # Fuzzy-проверка на дубль (задача ревью 2026-08-13): раз тут заводится
     # СОВСЕМ НОВЫЙ ЖК — не спутали ли его с уже существующим под чуть
@@ -227,11 +270,16 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
     # review/conflict/skip по итоговому confidence) — НЕ трогаем cid,
     # только предлагаем на рассмотрение.
     try:
-        near = await fetch("""
-            SELECT id, name, lat, lon, developer_id, address
-            FROM complexes WHERE id != $1 AND similarity(name, $2) >= 0.55
-            ORDER BY similarity(name, $2) DESC LIMIT 3
-        """, cid, cx.name)
+        if not is_created:
+            # An existing source/verified identity is authoritative, not a new
+            # fuzzy candidate to be reconsidered on every reimport.
+            near = []
+        else:
+            near = await fetch("""
+                SELECT id, name, lat, lon, developer_id, address
+                FROM complexes WHERE id != $1 AND similarity(name, $2) >= 0.55
+                ORDER BY similarity(name, $2) DESC LIMIT 3
+            """, cid, cx.name)
         for n in near:
             conf2, method2 = await score_match(
                 cx.name, n["name"],
@@ -248,10 +296,11 @@ async def ensure_complex(source: str, dev_id: int, cx: ComplexData) -> int:
     # без Nominatim (тот всё равно менее точен, чем данные самого застройщика).
     # bbox-проверка (задача 2026-08-12, карантин координат) — источник тоже
     # может отдать битые данные, не доверяем вслепую.
-    if cx.lat is not None and cx.lon is not None and in_astana_bbox(cx.lat, cx.lon):
-        await execute("UPDATE complexes SET lat = $2, lon = $3 WHERE id = $1", cid, cx.lat, cx.lon)
-    elif cx.address:
-        await geocode_complex(cid, cx.address)
+    if row["lat"] is None or row["lon"] is None:
+        if cx.lat is not None and cx.lon is not None and in_astana_bbox(cx.lat, cx.lon):
+            await execute("UPDATE complexes SET lat = $2, lon = $3 WHERE id = $1", cid, cx.lat, cx.lon)
+        elif cx.address:
+            await geocode_complex(cid, cx.address)
     return cid
 
 
@@ -265,8 +314,9 @@ async def save_complex(source: str, dev_id: int, cx: ComplexData, stats: dict) -
     complex_id = await ensure_complex(source, dev_id, cx)
 
     existing = await fetch(
+        _UNIT_CANONICAL_FAMILY_SQL +
         "SELECT id, source_unit_id, price, status FROM newbuild_units "
-        "WHERE complex_id = $1 AND source = $2", complex_id, source)
+        "WHERE complex_id IN (SELECT id FROM family) AND source = $2", complex_id, source)
     existing_by_id = {r["source_unit_id"]: r for r in existing}
     fresh_ids: set[str] = set()
 
@@ -323,8 +373,9 @@ async def save_complex(source: str, dev_id: int, cx: ComplexData, stats: dict) -
     stats["units_sold"] = stats.get("units_sold", 0) + len(gone)
 
     counts = await fetch(
-        "SELECT status, COUNT(*) AS n FROM newbuild_units WHERE complex_id = $1 GROUP BY status",
-        complex_id)
+        _UNIT_CANONICAL_FAMILY_SQL +
+        "SELECT status, COUNT(*) AS n FROM newbuild_units "
+        "WHERE complex_id IN (SELECT id FROM family) GROUP BY status", complex_id)
     active = sum(r["n"] for r in counts if r["status"] in ("available", "reserved"))
     sold = sum(r["n"] for r in counts if r["status"] == "sold")
     await execute(

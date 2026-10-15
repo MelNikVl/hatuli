@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-08T17:54:17Z",
+  "generated_from": "read-only live DB audit plus primary source pages",
+  "reviewed_by": "codex_source_audit_2026_10_08",
+  "review_kind": "agent source review under user-authorized identity repair; no human review is claimed",
+  "execution_status": "not_applied",
+  "canonical_overrides": [
+    {
+      "complex_id": 3017,
+      "canonical_id": 854,
+      "evidence": {
+        "decision": "Russian spelling of Tumar Club; identity record redirect only",
+        "source_urls": ["https://korter.kz/жк-tumar-club-астана"],
+        "source_facts": {"latin_name": "Tumar Club", "russian_name": "Тумар Клаб", "address": "ул. Анет баба, 4"},
+        "database_facts": {"alias_name": "Тумар Клаб", "alias_lat": 51.132720947265625, "alias_lon": 71.3841552734375, "target_lat": 51.13261413574219, "target_lon": 71.38442993164062, "alias_external_source_links": 0, "shared_property_ids": 0},
+        "mandatory_listing_repair": "All 21 current bound listings have raw fragment #3679 and Turkestan addresses; do not move them to #854 by redirect alone. Reset #3679, run final v4 URL/name conflict preview, quarantine disagreements.",
+        "retains_source_spelling": true
+      }
+    },
+    {
+      "complex_id": 4230,
+      "canonical_id": 854,
+      "evidence": {
+        "decision": "Typo Clab -> Club, same project by exact observed address and close coordinates",
+        "source_urls": ["https://korter.kz/жк-tumar-club-астана"],
+        "source_facts": {"name": "Tumar Club", "address": "ул. Анет баба, 4"},
+        "database_facts": {"alias_name": "Tumar Clab", "listing_id": "1014250256", "listing_address": "Нура р-н, Анет Баба 4", "alias_lat": 51.132720947265625, "alias_lon": 71.3841552734375, "alias_external_source_links": 0, "shared_property_ids": 0},
+        "inference": "The one-character spelling variant and exact address/nearby point identify #854; spelling is not explicitly published by Korter."
+      }
+    },
+    {
+      "complex_id": 3153,
+      "canonical_id": 2135,
+      "evidence": {
+        "decision": "Two alphabets for Kokshebel at same address/external project URL",
+        "source_urls": ["https://krisha.kz/complex/show/nur-sultan/kokshebel/", "https://korter.kz/жк-кокшебель-астана"],
+        "source_facts": {"names": ["Кокшебель", "Kokshebel"], "address": "ул. Косшыгулулы, 15", "delivery_year": 2023},
+        "database_facts": {"names": ["Кокшебель", "Kokshebel"], "same_krisha_url": true, "same_address": true, "same_developer_id": 294, "distance_m": 8.6, "bound_listings_target": 192, "bound_listings_alias": 3},
+        "attribute_conflict": "#2135 year_built=2026 and #3153 year_built=2023; do not merge attributes blindly."
+      }
+    },
+    {
+      "complex_id": 33129,
+      "canonical_id": 2056,
+      "evidence": {
+        "decision": "Preserve full street-qualified project identity for truncated descriptive record",
+        "source_urls": ["https://krisha.kz/complex/show/nur-sultan/naryskulbekova/"],
+        "source_facts": {"name": "Nova City на Рыскулбекова"},
+        "database_facts": {"alias_name": "Nova City На Рыскулбекова От Од", "target_name": "Nova City на Рыскулбекова", "target_address": "ул. Рыскулбекова, 29А", "alias_lat": 51.16074752807617, "alias_lon": 71.50251770019531, "target_lat": 51.16028594970703, "target_lon": 71.50135803222656, "previous_canonical_id": 2056},
+        "rejected_target": {"id": 213, "name": "nova city", "address": "Аль-Фараби, 30 / Улы Дала, 84", "approx_distance_km": 8.6},
+        "not_a_general_prefix_rule": true
+      }
+    }
+  ],
+  "relations_for_import": [
+    {"complex_id_a": 854, "complex_id_b": 3017, "relation_type": "duplicate_same_complex", "confidence": 0.98, "reviewed_by": "codex_source_audit_2026_10_08", "reviewed_at": "2026-10-08T17:54:17Z", "methodology_version": "primary_source_name_address_audit_20261008", "evidence": {"source_urls": ["https://korter.kz/жк-tumar-club-астана"], "facts": "Source uses Tumar Club and Тумар Клаб at Анет баба4; alias record coordinates close to #854.", "listing_contamination": "All 21 currently assigned #3017 listings are raw #3679 Turkestan fragment; assignment repair required in same rollout.", "review_kind": "agent source review"}},
+    {"complex_id_a": 854, "complex_id_b": 4230, "relation_type": "duplicate_same_complex", "confidence": 0.96, "reviewed_by": "codex_source_audit_2026_10_08", "reviewed_at": "2026-10-08T17:54:17Z", "methodology_version": "primary_source_name_address_audit_20261008", "evidence": {"source_urls": ["https://korter.kz/жк-tumar-club-астана"], "facts": "Tumar Clab listing1014250256 has exact Анет Баба4 address and point close to #854.", "inference": "Typo supported by location, not a shared external link.", "review_kind": "agent source review"}},
+    {"complex_id_a": 2135, "complex_id_b": 3153, "relation_type": "duplicate_same_complex", "confidence": 0.99, "reviewed_by": "codex_source_audit_2026_10_08", "reviewed_at": "2026-10-08T17:54:17Z", "methodology_version": "primary_source_name_address_audit_20261008", "evidence": {"source_urls": ["https://krisha.kz/complex/show/nur-sultan/kokshebel/"], "facts": "Source uses both alphabets; both DB records same source URL, Косшыгулулы15, developer_id294, coordinates8.6m apart.", "review_kind": "agent source review"}},
+    {"complex_id_a": 2056, "complex_id_b": 33129, "relation_type": "duplicate_same_complex", "confidence": 0.97, "reviewed_by": "codex_source_audit_2026_10_08", "reviewed_at": "2026-10-08T17:54:17Z", "methodology_version": "primary_source_name_address_audit_20261008", "evidence": {"source_urls": ["https://krisha.kz/complex/show/nur-sultan/naryskulbekova/"], "facts": "Street-qualified exact source name is prefix of fragment; fragment coordinates adjacent #2056 and current mapping already2056.", "review_kind": "agent source review"}},
+    {"complex_id_a": 854, "complex_id_b": 3482, "relation_type": "separate_neighbor_complex", "confidence": 1.0, "reviewed_by": "codex_source_audit_2026_10_08", "reviewed_at": "2026-10-08T17:54:17Z", "methodology_version": "primary_source_name_address_audit_20261008", "evidence": {"source_urls": ["https://korter.kz/жк-tumar-club-астана", "https://krisha.kz/complex/show/astana/tumar/"], "facts": "Tumar Club at Анет баба4 versus Tumar2013 at Туркестан4/4а; approximately3.6km apart.", "enum_note": "Separate physical projects; enum name neighbor does not imply immediately adjacent.", "review_kind": "agent source review"}},
+    {"complex_id_a": 854, "complex_id_b": 33055, "relation_type": "sibling_phase", "confidence": 0.99, "reviewed_by": "codex_source_audit_2026_10_08", "reviewed_at": "2026-10-08T17:54:17Z", "methodology_version": "primary_source_name_address_audit_20261008", "evidence": {"source_urls": ["https://korter.kz/жк-tumar-club-астана"], "facts": "Source distinguishes1st and2nd phases; DB#33055 explicitly names2nd phase, has21 listings/20active around Анет баба4.", "scope": "Preserve separate phase ID; do not canonically merge into base project.", "review_kind": "agent source review"}},
+    {"complex_id_a": 213, "complex_id_b": 2056, "relation_type": "separate_neighbor_complex", "confidence": 1.0, "reviewed_by": "codex_source_audit_2026_10_08", "reviewed_at": "2026-10-08T17:54:17Z", "methodology_version": "primary_source_name_address_audit_20261008", "evidence": {"source_urls": ["https://krisha.kz/complex/show/astana/nova-city/", "https://krisha.kz/complex/show/nur-sultan/naryskulbekova/"], "facts": "Distinct street-qualified names, source slugs, addresses and coordinates approximately8.6km apart.", "review_kind": "agent source review"}}
+  ],
+  "verified_aliases": [
+    {"complex_id": 854, "name": "Tumar Club", "source": "source_review", "source_id": "korter_tumar_club_20261008", "status": "verified", "evidence": {"url": "https://korter.kz/жк-tumar-club-астана", "published_name": true}},
+    {"complex_id": 854, "name": "Тумар Клаб", "source": "source_review", "source_id": "korter_tumar_club_20261008", "status": "verified", "evidence": {"url": "https://korter.kz/жк-tumar-club-астана", "published_name": true}},
+    {"complex_id": 854, "name": "ЖК Тумар Клаб", "source": "source_review", "source_id": "korter_tumar_club_20261008", "status": "verified", "evidence": {"url": "https://korter.kz/жк-tumar-club-астана", "service_prefix_of_published_name": true}},
+    {"complex_id": 854, "name": "Tumar Clab", "source": "listing_review", "source_id": "1014250256", "status": "verified", "evidence": {"url": "https://korter.kz/жк-tumar-club-астана", "observed_address": "Анет Баба4", "inference": "typo supported by exact address and coordinates"}},
+    {"complex_id": 2135, "name": "Кокшебель", "source": "source_review", "source_id": "krisha_kokshebel_20261008", "status": "verified", "evidence": {"url": "https://krisha.kz/complex/show/nur-sultan/kokshebel/", "published_name": true}},
+    {"complex_id": 2135, "name": "Kokshebel", "source": "source_review", "source_id": "krisha_kokshebel_20261008", "status": "verified", "evidence": {"url": "https://krisha.kz/complex/show/nur-sultan/kokshebel/", "published_name": true}},
+    {"complex_id": 2056, "name": "Nova City на Рыскулбекова", "source": "source_review", "source_id": "krisha_naryskulbekova_20261008", "status": "verified", "evidence": {"url": "https://krisha.kz/complex/show/nur-sultan/naryskulbekova/", "published_name": true}}
+  ],
+  "verified_addresses": [
+    {"complex_id": 854, "address": "Астана, ул. Анет баба, 4", "city": "астана", "street_key": "анет баба", "house_number": "4", "source": "source_review", "source_id": "korter_tumar_club_20261008", "status": "verified", "evidence": {"url": "https://korter.kz/жк-tumar-club-астана", "source_role": "project_address", "not_all_building_addresses": true}},
+    {"complex_id": 2135, "address": "Астана, ул. Косшыгулулы, 15", "city": "астана", "street_key": "косшыгулулы", "house_number": "15", "source": "source_review", "source_id": "krisha_kokshebel_20261008", "status": "verified", "evidence": {"url": "https://krisha.kz/complex/show/nur-sultan/kokshebel/"}}
+  ],
+  "field_corrections": [
+    {"complex_id": 854, "field": "krisha_url", "before": "https://krisha.kz/complex/show/nur-sultan/greenlinevita/", "after": null, "evidence": {"source_urls": ["https://korter.kz/жк-tumar-club-астана", "https://krisha.kz/complex/show/nur-sultan/greenlinevita/"], "facts": "GreenLine.Vita is BI Group at Е305; this cache URL does not identify Tumar Club. Correct Krisha URL is not invented."}}
+  ],
+  "listing_anomalies": [
+    {"complex_id": 3017, "raw_complex_id": 3679, "raw_name": "Тумар Клаб 2 Очередь Ключи В Се", "currently_bound_count": 21, "active_count": 10, "url_present_count": 13, "url_null_count": 8, "addresses": "Туркестан4/4а", "observed_complex_url": "https://krisha.kz/complex/show/astana/tumar/", "action": "Do not rebind to #854 from current #3017. Raw name, address and URL disagree; v4 conflict rejection/quarantine is expected. Review per listing before assignment to #3482."},
+    {"complex_id": 3482, "raw_complex_id": 5547, "raw_name": "Tumar City — Современный Жилой", "currently_bound_raw_count": 6, "address": "Казыбек би34", "action": "Remove unsafe short-prefix canonical redirect; review as distinct project."},
+    {"complex_id": 3482, "raw_complex_id": 33048, "raw_name": "Tumar Residents От Застройщика", "observed_point_near": "Tumar Residence/Mангилик Ел", "action": "Remove unsafe short-prefix redirect; do not create reviewed Tumar Residence alias from incomplete text."}
+  ],
+  "excluded_phase_ids": [33055, 3903, 4303],
+  "ambiguous_reviewed": [
+    {"complex_id_a": 33055, "complex_id_b": 3903, "status": "requires_phase_geometry/source verification", "reason": "Both say second phase but #3903 has no point, source links or listing assignments. Keep own IDs until confirmed."},
+    {"complex_id_a": 3155, "complex_id_b": 4303, "status": "distinct phase/building unresolved", "reason": "Tumar Residence versus Residence2 and Мангилик Ел63/1 versus63/2; do not merge."}
+  ],
+  "attribute_conflicts_not_changed": [
+    {"complex_id": 3482, "field": "developer", "database_value": "Tumar Group", "source_value": "Азбука Жилья Новостройки", "source_url": "https://krisha.kz/complex/show/astana/tumar/", "action": "Preserve current value until source provenance review; do not use it as identity proof."},
+    {"complex_id": 2135, "field": "year_built", "database_value": 2026, "source_value": 2023, "source_url": "https://krisha.kz/complex/show/nur-sultan/kokshebel/", "action": "Review separately; not required for redirect."}
+  ],
+  "rollout_preconditions": [
+    "Verified full backup and restored isolated shadow database.",
+    "Apply migrations103-105 and final resolver only to shadow first.",
+    "Generate final full before/after manifest after overrides, aliases and field corrections.",
+    "Ensure #3017 current contaminated listings are not imported into #854.",
+    "Keep #33055/#3903/#4303 phases independent.",
+    "Pause all geobind/ingest/enrichment writers before production baseline comparison and apply.",
+    "Single transaction with transition provenance including NULL/unbind; no property/listing deletion.",
+    "Do not rewrite historical stats or resolution logs; retain IDs and old source spelling."
+  ]
+}
