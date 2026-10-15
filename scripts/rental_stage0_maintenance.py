@@ -281,7 +281,7 @@ async def settings_snapshot(connection):
 
 
 async def database_identity(connection):
-    row = await connection.fetchrow("SELECT current_database() AS database,inet_server_addr()::text AS server,inet_server_port() AS port")
+    row = await connection.fetchrow("SELECT current_database() AS database,current_schema() AS schema,inet_server_addr()::text AS server,inet_server_port() AS port")
     return digest(dict(row))
 
 
@@ -401,7 +401,7 @@ async def run(args, *, connect=None):
                       else await build_plan(connection, args.operation, limit=args.limit, after_id=args.after_id))
         try:
             private_json(args.output, result)
-        except (OSError, MaintenanceError):
+        except Exception:
             if args.apply:
                 raise MaintenanceError("The database batch committed, but its private report could not be saved; audit again before retrying") from None
             raise

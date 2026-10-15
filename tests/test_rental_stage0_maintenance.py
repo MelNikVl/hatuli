@@ -59,6 +59,7 @@ class Connection:
         self.missing = missing
         self.closed = False
         self.database_name = "isolated_test"
+        self.schema_name = "public"
 
     def transaction(self, **options):
         connection = self
@@ -91,7 +92,7 @@ class Connection:
     async def fetchrow(self, sql, *args):
         self.calls.append((sql, args))
         if "current_database()" in sql:
-            return {"database": self.database_name, "server": "127.0.0.1", "port": 1}
+            return {"database": self.database_name, "schema": self.schema_name, "server": "127.0.0.1", "port": 1}
         return deepcopy(self.rows.get(args[0]))
 
     async def execute(self, sql, *args):
@@ -253,6 +254,16 @@ async def test_plan_cannot_be_applied_to_another_database_even_with_identical_ro
 
 
 @pytest.mark.asyncio
+async def test_plan_cannot_be_applied_to_another_schema_even_with_identical_rows():
+    connection = Connection([rental()])
+    plan = await tool.build_plan(connection, "backfill")
+    connection.schema_name = "another_schema"
+    with pytest.raises(tool.MaintenanceError, match="different database"):
+        await tool.apply_plan(connection, plan, plan["plan_sha256"], "backfill")
+    assert not any(sql.startswith("UPDATE") for sql, _ in connection.calls)
+
+
+@pytest.mark.asyncio
 async def test_apply_updates_only_reviewed_columns_under_lock_and_reports_actual_count():
     connection = Connection([rental()])
     plan = await tool.build_plan(connection, "backfill")
@@ -371,6 +382,26 @@ async def test_wrong_database_readonly_state_is_refused_before_any_audit(tmp_pat
     with pytest.raises(tool.MaintenanceError, match="read-only"):
         await tool.run(args, connect=AsyncMock(return_value=connection))
     assert connection.closed and connection.calls == [] and not args.output.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [OSError("private-path"), ValueError("private-serialization")])
+async def test_report_failure_after_commit_explicitly_reports_applied_state(monkeypatch, tmp_path, error):
+    env = tmp_path/"explicit.env"
+    env.write_text("DATABASE_URL=postgresql://unused:unused@127.0.0.1:1/explicit_test\n", encoding="utf-8")
+    connection = Connection([rental()])
+    plan = await tool.build_plan(connection, "backfill")
+    plan_path = tmp_path/"plan.json"
+    tool.private_json(plan_path, plan)
+    def fail_report(*args):
+        raise error
+    monkeypatch.setattr(tool, "private_json", fail_report)
+    args = SimpleNamespace(operation="backfill", apply=True, plan=plan_path, expected_plan_sha=plan["plan_sha256"],
+                           env_file=env, output=tmp_path/"report.json", limit=500, after_id="")
+    with pytest.raises(tool.MaintenanceError, match="database batch committed") as caught:
+        await tool.run(args, connect=AsyncMock(return_value=connection))
+    assert "private-" not in str(caught.value)
+    assert connection.closed and connection.rows["10001"]["rent_period"] == "monthly"
 
 
 def test_cli_requires_explicit_env_file_and_never_prints_exception_contents(monkeypatch, capsys):
