@@ -160,13 +160,20 @@ def alert_candidate(**overrides):
         "active_supply": 5,
         "source_oldest_at": (now-timedelta(days=10)).isoformat(),
         "source_newest_at": now.isoformat(), "updated_at": now.isoformat()}
-    return {"id": "12345678", "property_id": 42, "price": 200000, "rooms": 2, "district": "Есильский",
+    return {"id": "12345678", "property_id": 42, "property_identity_status": "confirmed",
+        "price": 200000, "rooms": 2, "complex_id": 123, "district": "Есильский",
+        "archived_at": None, "duplicate_of": None,
         "is_active": True, "is_duplicate": False, "dup_needs_review": False,
         "rent_period": "monthly", "rent_period_conflict": False, "last_seen": now,
         "sublease_economics": economics, **overrides}
 
 
-def test_alert_requires_verified_identity_and_qualified_daily_source():
+@pytest.fixture
+def shared_alert_contract():
+    return pytest.importorskip("bot.core.buyer_alerts", reason="Stage1 shared alert contract not integrated")
+
+
+def test_alert_requires_verified_identity_and_qualified_daily_source(shared_alert_contract):
     candidate = alert_candidate()
     result = evaluate_sublease_alert(candidate, {"breakeven_occupancy_max": .6})
     assert result["listing_id"] == "12345678" and result["scenario_only"] is True
@@ -176,7 +183,35 @@ def test_alert_requires_verified_identity_and_qualified_daily_source():
     assert evaluate_sublease_alert(candidate, {"breakeven_occupancy_max": .6}) is None
 
 
-def test_alert_threshold_uses_exact_value_not_rounded_display():
+def test_alert_threshold_uses_exact_value_not_rounded_display(shared_alert_contract):
     candidate = alert_candidate()
     candidate["sublease_economics"].update(breakeven_occupancy=.5, breakeven_occupancy_exact=".5000001")
     assert evaluate_sublease_alert(candidate, {"breakeven_occupancy_max": .5}) is None
+
+
+def test_alert_accepts_shared_normalized_filters(shared_alert_contract):
+    params = shared_alert_contract.validate_params("sublease", {"breakeven_occupancy_max": ".6",
+        "rooms": [2, 2], "complex_ids": [123], "districts": [" Есильский "],
+        "budget_max": 200000, "max_rent": 200000})
+    assert params["rooms"] == [2]
+    assert shared_alert_contract.matches_filters(alert_candidate(), params)
+    assert evaluate_sublease_alert(alert_candidate(), params)["listing_id"] == "12345678"
+
+
+@pytest.mark.parametrize("change", [{"rooms": [1]}, {"complex_ids": [456]}, {"districts": ["Алматы"]},
+    {"budget_max": 199999}, {"max_rent": 199999}, {"breakeven_occupancy_max": .1}])
+def test_alert_applies_every_shared_filter(shared_alert_contract, change):
+    params = shared_alert_contract.validate_params("sublease", {"breakeven_occupancy_max": .6, **change})
+    assert evaluate_sublease_alert(alert_candidate(), params) is None
+
+
+@pytest.mark.parametrize("change", [{"archived_at": datetime.now(timezone.utc)}, {"duplicate_of": "87654321"},
+    {"property_identity_status": "pending"}, {"property_identity_status": None}, {"rooms": True}, {"duplicate_of": False}])
+def test_alert_rejects_ambiguous_or_archived_identity_even_if_boolean_flags_look_clean(shared_alert_contract, change):
+    assert evaluate_sublease_alert(alert_candidate(**change), {"breakeven_occupancy_max": .6}) is None
+
+
+def test_missing_stage1_contract_never_creates_fallback_alert(monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "bot.core.buyer_alerts", None)
+    assert evaluate_sublease_alert(alert_candidate(), {"breakeven_occupancy_max": .6}) is None

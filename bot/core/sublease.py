@@ -216,9 +216,16 @@ def params_from_inputs(fields, settings, *, rooms=None, furnishing="unknown", no
 def evaluate_sublease_alert(candidate, params):
     """Stage-1 queue handoff only. Does not deliver or mutate subscriptions."""
     try:
+        # One pure contract owns subscription filters. Until Stage 1 is
+        # integrated there is no independent, weaker sublease alert path.
+        from bot.core.buyer_alerts import validate_params, matches_filters
+        params = validate_params("sublease", params)
         threshold = number(params.get("breakeven_occupancy_max"), "threshold", 0, 1)
         economics = candidate.get("sublease_economics") or {}
         source = economics.get("index_source") or {}
+        if (type(candidate.get("rooms")) is not int or not 1 <= candidate["rooms"] <= 6
+                or candidate.get("duplicate_of") is not None and not isinstance(candidate["duplicate_of"], str)):
+            return None
         observed = candidate.get("last_seen")
         if isinstance(observed, str):
             observed = datetime.fromisoformat(observed.replace("Z", "+00:00"))
@@ -226,12 +233,15 @@ def evaluate_sublease_alert(candidate, params):
         if (candidate.get("rent_period") != "monthly" or candidate.get("rent_period_conflict") is not False
                 or candidate.get("is_active") is not True or candidate.get("is_duplicate") is not False
                 or candidate.get("dup_needs_review") is not False
+                or candidate.get("archived_at") is not None
+                or str(candidate.get("duplicate_of") or "").strip()
                 or not isinstance(observed, datetime) or observed.tzinfo is None
                 or not 0 <= (now - observed).total_seconds() <= 72 * 3600
                 or economics.get("strategy") != "daily" or source.get("confidence") not in ("high", "medium")
                 or source.get("rent_period") != "daily" or economics.get("breakeven_possible") is not True):
             return None
-        if type(candidate.get("property_id")) is not int or candidate["property_id"] <= 0:
+        if (type(candidate.get("property_id")) is not int or candidate["property_id"] <= 0
+                or candidate.get("property_identity_status") != "confirmed"):
             return None
         minimum = 5 if source.get("level") == "complex" else 10
         if (source.get("level") not in ("complex", "district") or type(source.get("n")) is not int
@@ -251,19 +261,16 @@ def evaluate_sublease_alert(candidate, params):
         breakeven = number(economics.get("breakeven_occupancy_exact"), "breakeven", 0, 1)
         if breakeven > threshold:
             return None
-        if params.get("districts") and candidate.get("district") not in params["districts"]:
-            return None
-        if params.get("rooms") is not None and candidate.get("rooms") != params["rooms"]:
-            return None
         rent = number(candidate.get("price"), "price", 1, 20_000_000, integer=True)
-        if params.get("max_rent") is not None and rent > number(params["max_rent"], "max_rent", 1, 20_000_000):
+        if not matches_filters({**candidate, "price": int(rent)}, params):
             return None
         identifier = str(candidate.get("id") or "")
         if not re.fullmatch(r"[0-9]{5,20}", identifier):
             return None
+        occupancy = number(economics.get("params_used", {}).get("occupancy"), "occupancy", 0, 1)
         return {"listing_id": identifier, "url": "/rental/scanner?listing_id=" + identifier,
                 "rent_month": int(rent), "breakeven_occupancy": float(breakeven),
                 "margin": int(number(economics.get("margin"), "margin", -100_000_000, 100_000_000, integer=True)),
-                "scenario_only": True, "occupancy_assumed": economics.get("params_used", {}).get("occupancy")}
-    except (SubleaseError, ValueError, TypeError, AttributeError):
+                "scenario_only": True, "occupancy_assumed": float(occupancy)}
+    except (ImportError, SubleaseError, ValueError, TypeError, AttributeError):
         return None

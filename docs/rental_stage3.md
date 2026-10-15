@@ -62,6 +62,8 @@ Stage 3 не заменяет и не пересобирает индекс. `su
 
 `evaluate_sublease_alert(candidate, params)` — чистый evaluator для единой очереди этапа 1. Нужны положительный доказанный `property_id`, свежая чистая помесячная запись, квалифицированный daily index и точный порог безубыточности. `params.breakeven_occupancy_max` — доля 0–1; поддержаны районы, комнаты и максимум аренды.
 
+Фильтры не имеют отдельной субарендной трактовки: evaluator использует pure `buyer_alerts.validate_params('sublease', ...)` и `matches_filters`. `rooms`, `complex_ids`, `districts` — списки; применяются оба `budget_max` и `max_rent`. До интеграции shared модуля Stage1 результат закрыт, без самостоятельного fallback. Требуются `property_identity_status='confirmed'`, отсутствие `archived_at` и `duplicate_of`; чистые boolean-флаги не отменяют эти запреты.
+
 У существующих rental rows нет доказанного property identity: `property_listings` ссылается только на объявления продажи. Поэтому настоящая отправка субарендных алертов остаётся закрыта до появления доказанной rental identity для дедупа перевыставлений. `listing_id` не подставляется вместо неё. Быстрый hook/ledger принадлежат этапу 1; второй отправитель, Telegram-вызовы или новые миграции в этапе 3 не добавлены.
 
 ## Проверка
