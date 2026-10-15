@@ -105,6 +105,29 @@ async def test_112_real_checks_unknown_period_and_furniture(rental_stage2_pg):
 
 
 @pytest.mark.asyncio
+async def test_112_latest_catalog_price_updates_index_without_rewriting_daily_ledger(rental_stage2_pg,monkeypatch):
+    from bot.core import rental_parser as parser,rental_stage2_index as index
+    state=rental_stage2_pg
+    clock={'now':state.now.replace(hour=12,minute=0,second=0,microsecond=0)}
+    monkeypatch.setattr(parser,'datetime',SimpleNamespace(now=lambda tz:clock['now']))
+    def cards(price):
+        return [parser.RentalListing(state.prefix+str(i),'https://krisha.kz/a/show/123456','Квартира',
+            price,50,2,3,9,'Есиль',state.prefix+'district','','astana','apartment','',
+            rent_period='daily') for i in range(5)]
+    assert await parser.save_rental_listings(cards(20000))==5
+    await state.connection.execute("UPDATE rental_listings SET hex_id='0:0',hex_edge_m=126.5 WHERE id LIKE $1",state.prefix+'%')
+    clock['now']+=timedelta(minutes=1)
+    assert await parser.save_rental_listings(cards(30000))==5
+    ledger=await state.connection.fetch('SELECT price FROM rental_observations WHERE listing_id LIKE $1',state.prefix+'%')
+    assert len(ledger)==5 and all(row['price']==20000 for row in ledger)
+    await index.rebuild_rental_stage2_index(state.connection,clock['now'])
+    value=await state.connection.fetchrow("SELECT * FROM rental_hex_index WHERE hex_id='0:0' AND hex_edge_m=126.5 "
+        "AND rooms=2 AND rent_period='daily' AND furnishing IS NULL")
+    assert value['median_price']==30000 and value['sample_count']==5 and value['active_supply']==5
+    assert value['source_newest_at']==clock['now']
+
+
+@pytest.mark.asyncio
 async def test_112_real_history_90_day_index_hex_window_and_lookup(rental_stage2_pg):
     from bot.core.rental_stage2_index import rebuild_rental_stage2_index,lookup_daily_rental_estimate,lookup_hex_rental_estimate
     state=rental_stage2_pg

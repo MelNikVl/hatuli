@@ -109,6 +109,13 @@ def build_stage2_records(observations, live_rows, removed_rows, now, *, min_comp
     groups=defaultdict(list)
     active=defaultdict(set)
     removals=defaultdict(dict)
+    daily_latest={}
+    for raw in observations:
+        row=dict(raw)
+        if row.get('rent_period')=='daily' and _valid(row,now,historical=True):
+            previous=daily_latest.get(row['id'])
+            if previous is None or utc(row['observed_at'])>utc(previous['observed_at']):
+                daily_latest[row['id']]=row
     for raw in live_rows:
         row=dict(raw)
         if _valid(row,now):
@@ -117,11 +124,24 @@ def build_stage2_records(observations, live_rows, removed_rows, now, *, min_comp
                 # Monthly prices retain the stage-0 fresh-source semantics.
                 if row['rent_period']=='monthly':
                     groups[key].append(row)
-    for raw in observations:
-        row=dict(raw)
-        if row.get('rent_period')=='daily' and _valid(row,now,historical=True):
-            for key in _scopes(row,furnishing_enabled,furnishing_version):
-                groups[key].append(row)
+            if row['rent_period']=='daily':
+                # The immutable ledger keeps the first daily price, while a
+                # later successful catalog observation can change today's price.
+                # Never substitute generic last_seen or an enrichment time for
+                # the source-proved timestamp of the current continuous episode.
+                episode=utc(row.get('rental_episode_started_at'))
+                observed=utc(row.get('rental_episode_last_seen_at'))
+                seen=utc(row.get('last_seen'))
+                if episode and observed and episode<=observed<=seen and now-timedelta(hours=72)<=observed<=now:
+                    current={**row,'observed_at':observed,'period_source_checked':True,'episode_started_at':episode}
+                    previous=daily_latest.get(row['id'])
+                    if previous is None or observed>=utc(previous['observed_at']):
+                        daily_latest[row['id']]=current
+    # Choose one actual latest observation per ID before assigning scope: an
+    # updated room/district must not leave the same ID in its former segment.
+    for row in daily_latest.values():
+        for key in _scopes(row,furnishing_enabled,furnishing_version):
+            groups[key].append(row)
     for raw in removed_rows:
         row=dict(raw)
         first,gone=utc(row.get('first_verified_monthly_at')),utc(row.get('archived_at'))

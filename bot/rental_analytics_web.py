@@ -1,4 +1,4 @@
-"""An existing analytics tab; aggregate data only, no source contacts or IDs."""
+"""Ready rental aggregates for the analytics tab and public daily index."""
 from __future__ import annotations
 
 from datetime import datetime,timezone
@@ -10,6 +10,14 @@ from fastapi.responses import JSONResponse
 from bot.core.rental_stage2_index import index_ready,DAILY_POLICY,HEX_MONTHLY_POLICY
 
 HEADERS={'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow'}
+PUBLIC_HEADERS={'Cache-Control':'no-store','Referrer-Policy':'same-origin'}
+
+SEGMENT_SQL="""SELECT i.* FROM rental_index i WHERE i.city='astana' AND i.district IS NOT NULL
+  AND i.complex_id IS NULL AND i.complex_name IS NULL AND i.rooms BETWEEN 1 AND 6
+  AND i.prop_type='apartment' AND i.rent_period IN ('monthly','daily') AND i.furnishing IS NULL"""
+
+PUBLIC_INDEX_FIELDS=('median_price','p25_price','p75_price','sample_count','active_supply',
+                     'window_days','updated_at_label','source_newest_label','source_range_label')
 
 
 def _date(value):
@@ -73,9 +81,7 @@ async def rental_analytics_data(rooms=2):
         edge,minimum_hex=50.,5
     _,minimum_area=_rental_index_thresholds()
     try:
-        rows=await fetch("""SELECT i.* FROM rental_index i WHERE i.city='astana' AND i.district IS NOT NULL
-          AND i.complex_id IS NULL AND i.complex_name IS NULL AND i.rooms BETWEEN 1 AND 6
-          AND i.prop_type='apartment' AND i.rent_period IN ('monthly','daily') AND i.furnishing IS NULL""")
+        rows=await fetch(SEGMENT_SQL)
         hex_rows=await fetch("SELECT h.* FROM rental_hex_index h WHERE h.city='astana' AND h.rooms=$1 "
                              "AND h.hex_edge_m=$2 AND h.furnishing IS NULL",rooms,edge)
     except (asyncpg.UndefinedTableError,asyncpg.UndefinedColumnError):
@@ -92,6 +98,29 @@ async def rental_analytics_data(rooms=2):
             'has_removal':any(r.get('removal_days') is not None for r in segments)}
 
 
+async def daily_rental_data(*,now=None):
+    """Public projection: district/rooms only, with no raw IDs or map data."""
+    from bot.db.pg import fetch
+    from bot.core.rental_parser import _rental_index_thresholds
+    _,minimum=_rental_index_thresholds()
+    try:
+        rows=await fetch(SEGMENT_SQL)
+    except (asyncpg.UndefinedTableError,asyncpg.UndefinedColumnError):
+        rows=[]
+    segments=[]
+    for row in segment_table(rows,now or datetime.now(timezone.utc),minimum):
+        if 'daily' not in row:
+            continue
+        item={key:row[key] for key in ('district','rooms','price_ratio_pct')}
+        for period in ('daily','monthly'):
+            if period in row:
+                item[period]={key:row[period][key] for key in PUBLIC_INDEX_FIELDS}
+        segments.append(item)
+    return {'segments':segments,'minimum_area':minimum,
+            'has_monthly':any('monthly' in row for row in segments),
+            'has_ratio':any(row['price_ratio_pct'] is not None for row in segments)}
+
+
 async def render_rental_analytics(request,templates,rooms):
     try:
         selected=int(rooms or 2)
@@ -102,8 +131,14 @@ async def render_rental_analytics(request,templates,rooms):
     return templates.TemplateResponse('rental_analytics.html',{'request':request,'atab':'rental_market',**context},headers=HEADERS)
 
 
-def make_rental_analytics_router(is_authed):
+def make_rental_analytics_router(is_authed,templates=None):
     router=APIRouter()
+    if templates is not None:
+        @router.get('/rental/daily')
+        async def daily_rental_index(request:Request):
+            return templates.TemplateResponse(request=request,name='rental_daily.html',
+                context={'request':request,**(await daily_rental_data())},headers=PUBLIC_HEADERS)
+
     @router.get('/admin/api/rental-market')
     async def rental_market(request:Request,rooms:int=Query(2,ge=1,le=6)):
         if not is_authed(request):

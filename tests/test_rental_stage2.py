@@ -11,6 +11,7 @@ import asyncpg
 import httpx
 import pytest
 from fastapi import FastAPI
+from fastapi.templating import Jinja2Templates
 from jinja2 import Environment,FileSystemLoader,select_autoescape
 
 from bot.core import rental_furnishing as furniture,rental_stage2_index as index,rental_parser as parser
@@ -70,6 +71,35 @@ def test_daily_prefers_30_days_and_each_listing_has_one_vote():
     assert value['sample_count']==5 and value['window_days']==30
     assert value['median_price']==12000 and value['p25_price']==11000 and value['p75_price']==13000
     assert value['active_supply']==5
+
+
+def test_daily_current_catalog_price_replaces_first_day_snapshot_once_per_id():
+    history=[source(i,price=20000) for i in range(5)]
+    live=[source(i,price=30000,rental_episode_started_at=NOW-timedelta(hours=2),
+                 rental_episode_last_seen_at=NOW-timedelta(minutes=1),last_seen=NOW) for i in range(5)]
+    result=exact(records(history*3,live))
+    assert result['median_price']==30000 and result['sample_count']==5 and result['active_supply']==5
+    assert result['source_newest_at']==NOW-timedelta(minutes=1)
+    assert all(row['price']==20000 for row in history)
+
+
+@pytest.mark.parametrize('proof',[
+    {},{'rental_episode_started_at':NOW-timedelta(days=10),'rental_episode_last_seen_at':NOW-timedelta(hours=73)},
+    {'rental_episode_started_at':NOW,'rental_episode_last_seen_at':NOW-timedelta(hours=1)},
+    {'rental_episode_started_at':NOW,'rental_episode_last_seen_at':NOW+timedelta(seconds=1)},
+])
+def test_daily_generic_freshness_cannot_replace_catalog_proof(proof):
+    history=[source(i,price=20000) for i in range(5)]
+    live=[source(i,price=30000,last_seen=NOW,**proof) for i in range(5)]
+    assert exact(records(history,live))['median_price']==20000
+
+
+def test_daily_latest_catalog_scope_does_not_leave_old_room_group():
+    history=[source(i,rooms=1) for i in range(5)]
+    live=[source(i,rooms=2,rental_episode_started_at=NOW-timedelta(hours=2),
+                 rental_episode_last_seen_at=NOW-timedelta(minutes=1),last_seen=NOW) for i in range(5)]
+    result=records(history,live)
+    assert result and all(row['rooms']==2 for row in result)
 
 
 def test_daily_90_day_fallback_requires_actual_old_observations():
@@ -330,6 +360,64 @@ async def test_analytics_api_auth_before_database_and_actual_template(monkeypatc
     assert '20 000 ₸/сут' in html and '250 000 ₸/мес' in html and 'n=10' in html
     assert 'rental-market-map' not in html and 'До снятия с источника' not in html
     assert 'доходность' not in html.lower() or 'Доходность сдачи' not in html
+
+
+@pytest.mark.asyncio
+async def test_public_daily_projection_requires_ready_daily_and_hides_private_fields(monkeypatch):
+    rows=[aggregate(listing_id='private-id',contact='private-contact'),aggregate('monthly'),
+          aggregate(district='Мало',sample_count=9),aggregate(district='Старое',source_newest_at=NOW-timedelta(hours=73)),
+          aggregate(district='Без активных',active_supply=0),aggregate(district='Старый policy',policy_version='old'),
+          aggregate('monthly',district='Только месяц'),aggregate(district='Другой город',city='almaty'),
+          aggregate(district='Другой ЖК',complex_id=1),aggregate(district='Мебель',furnishing='full')]
+    monkeypatch.setattr(pg,'fetch',AsyncMock(return_value=rows))
+    context=await web.daily_rental_data(now=NOW)
+    assert len(context['segments'])==1 and context['has_monthly'] and context['has_ratio']
+    assert context['segments'][0]['price_ratio_pct']==8
+    text=json.dumps(context,ensure_ascii=False)
+    assert 'private-id' not in text and 'private-contact' not in text and 'hex_id' not in text
+    assert 'source_newest_label' in text and 'updated_at_label' in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('monthly_ready',[True,False])
+async def test_public_daily_route_renders_actual_base_template_without_auth(monkeypatch,monthly_ready):
+    now=datetime.now(timezone.utc)
+    times={'updated_at':now-timedelta(minutes=1),'source_newest_at':now-timedelta(hours=1),'source_oldest_at':now-timedelta(hours=3)}
+    rows=[aggregate(**times),aggregate('monthly',sample_count=10 if monthly_ready else 9,**times)]
+    fetch=AsyncMock(return_value=rows)
+    monkeypatch.setattr(pg,'fetch',fetch)
+    templates=Jinja2Templates(directory=Path(__file__).resolve().parents[1]/'bot/templates')
+    templates.env.globals['is_admin']=lambda request:False
+    app=FastAPI()
+    app.include_router(web.make_rental_analytics_router(lambda request:False,templates))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://unit.test') as client:
+        response=await client.get('/rental/daily')
+    assert response.status_code==200 and response.headers['Cache-Control']=='no-store'
+    assert response.text.count('data-daily-segment')==1 and '20 000' in response.text and '₸/сут' in response.text
+    assert 'n=10' in response.text and 'активно 7' in response.text and 'Окно 30 дн.' in response.text
+    assert 'Источник:' in response.text and 'Индекс:' in response.text and 'наблюдения' in response.text
+    assert ('250 000' in response.text)==monthly_ready
+    assert ('<strong>8.0%</strong>' in response.text)==monthly_ready
+    assert 'href="/rental/scanner#sublease-form"' in response.text and 'href="/rent"' in response.text
+    assert '/admin/api/rental-market' not in response.text and 'rental-market-map' not in response.text
+    assert fetch.await_count==1 and 'rental_hex_index' not in fetch.await_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('migration_missing',[False,True])
+async def test_public_daily_empty_or_missing_migration_has_only_intro_and_working_tool(monkeypatch,migration_missing):
+    fetch=AsyncMock(side_effect=asyncpg.UndefinedColumnError('112 missing')) if migration_missing else AsyncMock(return_value=[aggregate('monthly')])
+    monkeypatch.setattr(pg,'fetch',fetch)
+    templates=Jinja2Templates(directory=Path(__file__).resolve().parents[1]/'bot/templates')
+    templates.env.globals['is_admin']=lambda request:False
+    app=FastAPI()
+    app.include_router(web.make_rental_analytics_router(lambda request:False,templates))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='https://unit.test') as client:
+        response=await client.get('/rental/daily')
+    assert response.status_code==200 and 'Рассчитать субаренду' in response.text
+    assert 'rental-daily-results' not in response.text and '<table' not in response.text
+    assert 'Как читать индекс' not in response.text and 'недостаточно данных' not in response.text
+    assert '250 000' not in response.text
 
 
 @pytest.mark.asyncio
