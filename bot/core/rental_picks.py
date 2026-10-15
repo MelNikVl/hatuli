@@ -90,7 +90,7 @@ def _photos(row):
 
 def _facts(check):
     raw=check.get('facts',{})
-    if not isinstance(raw,dict) or any(key not in ('is_owner','fully_furnished') or type(value) is not bool for key,value in raw.items()):
+    if not isinstance(raw,dict) or any(key not in ('is_owner','furniture_present','washer_and_fridge') or type(value) is not bool for key,value in raw.items()):
         raise ValueError('Invalid checked rental facts')
     return {key:value for key,value in raw.items() if value is True}
 
@@ -132,8 +132,10 @@ def rental_factors(item):
     facts=item.get('selection_facts') or {}
     if facts.get('is_owner') is True:
         reasons.append('В источнике арендодатель указан как хозяин.')
-    if facts.get('fully_furnished') is True:
-        reasons.append('Квартира полностью меблирована — указано в источнике.')
+    if facts.get('furniture_present') is True:
+        reasons.append('В объявлении указана мебель — часть обустройства уже есть.')
+    if facts.get('washer_and_fridge') is True:
+        reasons.append('Холодильник и стиральная машина указаны в объявлении.')
     if item['area']>=20*item['rooms']+20:
         reasons.append(f"Просторная квартира: {item['area']:g} м² на {item['rooms']} {'комнату' if item['rooms']==1 else 'комнаты' if item['rooms']<5 else 'комнат'}.")
     if 1<item['floor']<item['floors_total']:
@@ -150,9 +152,14 @@ def rental_factors(item):
 
 def source_check_matches(row,check,now):
     try:
+        address,note=sanitized_listing_address(row.get('address'),row['price'],now)
+        checked_address,checked_note=sanitized_listing_address(check.get('address'),row['price'],now) if isinstance(check,dict) else (None,None)
         return (isinstance(check,dict) and check.get('status')=='active'
             and str(check.get('id'))==str(row['id']) and check.get('source_url')==row['url']
             and check.get('rent_astana') is True and check.get('rent_period')=='monthly'
+            and address is not None and checked_address is not None
+            and note==checked_note=='Адрес из объявления.'
+            and address.casefold().replace('ё','е')==checked_address.casefold().replace('ё','е')
             and now-CHECK_AGE<=utc(check['checked_at'])<=now
             and all(type(check.get(key)) in (int,float) and not isinstance(check.get(key),bool)
                 and number(check[key])==number(row[key]) for key in ('price','rooms','floor','floors_total'))

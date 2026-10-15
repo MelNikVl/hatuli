@@ -30,6 +30,7 @@ def row(index=1,**changes):
 
 def checked(value,**changes):
     return {'id':value['id'],'source_url':value['url'],'status':'active','rent_astana':True,
+            'address':value['address'],
             'rent_period':'monthly','checked_at':NOW.isoformat(),
             **{key:value[key] for key in ('price','rooms','area','floor','floors_total')},
             'facts':{'is_owner':True,'furniture_present':True},**changes}
@@ -102,6 +103,7 @@ def test_ineligible_or_conflicting_source_offer_is_never_selected(changes):
     {'checked_at':(NOW+timedelta(seconds=1)).isoformat()},
     {'price':250001},{'rooms':3},{'floor':7},{'floors_total':12},{'area':55.051},
     {'area':True},{'price':True},{'area':float('inf')},
+    {'address':'Туран, 99'},{'address':None},
 ])
 def test_browser_confirmation_must_match_identity_price_shape_and_freshness(changes):
     value=row()

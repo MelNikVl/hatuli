@@ -72,6 +72,25 @@ def source_checks(path):
     return result
 
 
+async def verified_photos(edition):
+    """Verify allowlisted image availability; never request source listing HTML."""
+    import httpx
+    items=[]
+    async with httpx.AsyncClient(timeout=5,follow_redirects=False) as client:
+        for item in edition['items']:
+            photos=[]
+            for url in item['photo_urls']:
+                try:
+                    response=await client.head(url)
+                    if response.status_code==200 and response.headers.get('content-type','').lower().startswith('image/'):
+                        photos.append(url)
+                except httpx.HTTPError:
+                    continue
+            if photos:
+                items.append({**item,'photo_urls':photos,'rank':len(items)+1})
+    return {**edition,'items':items}
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root',type=Path,default=ROOT,help='Existing configuration directory; no pool/startup')
@@ -93,6 +112,7 @@ def main():
         print(json.dumps({'read_rows':len(rows),'candidates':len(edition['items']),'database_writes':0}))
     else:
         # A failed or incomplete release leaves the previous file untouched.
+        edition=asyncio.run(verified_photos(edition))
         publish_snapshot(edition,args.output or snapshot_path())
         print(json.dumps({'published':len(edition['items']),'selection_date':edition['selection_date'],'database_writes':0}))
 
