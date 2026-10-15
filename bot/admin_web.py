@@ -2278,6 +2278,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.include_router(make_seller_review_router(templates))
     from bot.web.rental_tools import make_rental_tools_router
     app.include_router(make_rental_tools_router(templates))
+    from bot.web.rental_scanner import make_rental_scanner_router
+    app.include_router(make_rental_scanner_router(templates))
     from bot.rental_health_web import register_rental_health_routes
     register_rental_health_routes(app, templates)
     from bot.rental_detail_web import register_rental_detail_routes
