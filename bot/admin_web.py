@@ -805,9 +805,12 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             SELECT rooms, median_price, sample_count
             FROM rental_index
             WHERE city = 'astana' AND prop_type = 'apartment' AND rooms IN (1, 2)
-              AND district IS NULL AND complex_name IS NULL AND sample_count >= 5
+              AND district IS NULL AND complex_name IS NULL AND complex_id IS NULL AND sample_count >= 10
+              AND rent_period='monthly' AND furnishing IS NULL AND policy_version='3'
               AND updated_at BETWEEN now() - interval '72 hours' AND now()
-              AND EXISTS (SELECT 1 FROM app_settings WHERE key='RENTAL_INDEX_POLICY_VERSION' AND value='2')
+              AND source_oldest_at BETWEEN now() - interval '72 hours' AND now()
+              AND source_newest_at BETWEEN source_oldest_at AND updated_at
+              AND EXISTS (SELECT 1 FROM app_settings WHERE key='RENTAL_INDEX_POLICY_VERSION' AND value='3')
             ORDER BY rooms, sample_count DESC
         """)
         rental_summary = {}

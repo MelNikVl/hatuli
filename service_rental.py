@@ -81,6 +81,11 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
                         sleep_seconds: float = 120.0, clock=time.monotonic) -> dict:
     """One list step and bounded maintenance; callers always rotate types."""
     state.cycle += 1
+    # Monthly and daily apartments have independent durable cursors and timing.
+    # Preserve legacy monthly metric names used by collection-health consumers.
+    from bot.core.rental_period import catalog_cursor_key, catalog_period
+    cursor_prefix = catalog_cursor_key(prop_type, path)
+    scope_key = cursor_prefix.removeprefix('RENTAL_CRAWL_V1_').lower()
     started = clock()
     list_started = clock()
     step = {}
@@ -94,7 +99,7 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
         durable_pages = step.get("durable_pages", 1)
         state.pages_since_index += durable_pages
         if step["completed"]:
-            state.completed_types.add(prop_type)
+            state.completed_types.add(scope_key)
         counters.update({
             "pages": durable_pages, "head_pages": step.get("head_pages", 0),
             "saved_observations": step["saved"],
@@ -117,17 +122,17 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
     list_seconds = max(0.0, clock() - list_started)
     estimated_circle_hours = None
     if list_status == "ok" and counters.get("pages", 0):
-        previous_success = state.last_success.get(prop_type)
+        previous_success = state.last_success.get(scope_key)
         successful_at = clock()
         if previous_success is not None and successful_at > previous_success:
             observed = successful_at - previous_success
-            old = state.page_intervals.get(prop_type, observed)
-            state.page_intervals[prop_type] = round(0.25 * observed + 0.75 * old, 3)
-            state.interval_samples[prop_type] = state.interval_samples.get(prop_type, 0) + 1
-        state.last_success[prop_type] = successful_at
+            old = state.page_intervals.get(scope_key, observed)
+            state.page_intervals[scope_key] = round(0.25 * observed + 0.75 * old, 3)
+            state.interval_samples[scope_key] = state.interval_samples.get(scope_key, 0) + 1
+        state.last_success[scope_key] = successful_at
         last_page = step.get("expected_last_page")
-        if last_page and prop_type in state.page_intervals:
-            estimated_circle_hours = round(last_page * state.page_intervals[prop_type] / 3600, 2)
+        if last_page and scope_key in state.page_intervals:
+            estimated_circle_hours = round(last_page * state.page_intervals[scope_key] / 3600, 2)
     # A blocked list is not a reason to send detail traffic in the same cycle.
     budget = MaintenanceBudget(plan.maintenance_seconds if list_status == "ok" else 0.0,
                                clock=clock)
@@ -185,12 +190,13 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
                      "maintenance_ms": round(maintenance_seconds * 1000),
                      "sleep_ms": round(sleep_seconds * 1000)})
     cycle = {"at": datetime.now(timezone.utc).isoformat(), "type": prop_type,
+             "rent_period": catalog_period(path), "scope": scope_key,
              "cycle": state.cycle, "list_status": list_status,
              "page": step.get("page"), "saved": step.get("saved", 0),
              "head_pages": counters.get("head_pages", 0),
              "durable_pages": counters.get("pages", 0),
-             "page_interval_seconds": state.page_intervals.get(prop_type),
-             "page_interval_samples": state.interval_samples.get(prop_type, 0),
+             "page_interval_seconds": state.page_intervals.get(scope_key),
+             "page_interval_samples": state.interval_samples.get(scope_key, 0),
              "estimated_circle_hours": estimated_circle_hours,
              "list_seconds": round(list_seconds, 3), "stages": budget.stages,
              "maintenance_seconds": round(maintenance_seconds, 3),
@@ -200,12 +206,12 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
     try:
         async def persist_metrics():
             await record_rental_cycle(cycle, counters)
-            if list_status == "ok" and prop_type in state.page_intervals:
-                prefix = f"RENTAL_CRAWL_V1_{prop_type.upper()}"
+            if list_status == "ok" and scope_key in state.page_intervals:
+                prefix = cursor_prefix
                 await operations.set_setting(f"{prefix}_PAGE_INTERVAL_SEC",
-                                             str(state.page_intervals[prop_type]))
+                                             str(state.page_intervals[scope_key]))
                 await operations.set_setting(f"{prefix}_PAGE_INTERVAL_SAMPLES",
-                                             str(state.interval_samples[prop_type]))
+                                             str(state.interval_samples[scope_key]))
                 if estimated_circle_hours is not None:
                     await operations.set_setting(f"{prefix}_ESTIMATED_HOURS", str(estimated_circle_hours))
         await asyncio.wait_for(persist_metrics(), timeout=5)

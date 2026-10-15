@@ -73,6 +73,11 @@ SLIDER_SETTINGS = {
     "MORTGAGE_YEARS":    ("Срок ипотеки", 5, 30, 1, "лет", "💰 Финансовые допущения"),
     "MORTGAGE_DOWN_PCT": ("Первоначальный взнос", 10, 50, 5, "%", "💰 Финансовые допущения"),
     "REALTOR_FEE_PCT":   ("Комиссия риелтора", 0, 5, 0.5, "%", "💰 Финансовые допущения"),
+    "RENT_MIN_SAMPLE_COMPLEX": ("Минимум аналогов аренды в ЖК", 5, 50, 1, "шт.", "Аренда: качество данных"),
+    "RENT_MIN_SAMPLE_AREA": ("Минимум аналогов в районе / городе", 10, 100, 1, "шт.", "Аренда: качество данных"),
+    "NET_YIELD_VACANCY": ("Доля года с арендой: сценарий", 0, 1, .01, "доля", "Аренда: допущения доходности"),
+    "NET_YIELD_OPEX_SHARE": ("Расходы от годовой аренды: сценарий", 0, 1, .01, "доля", "Аренда: допущения доходности"),
+    "NET_YIELD_PURCHASE_COST": ("Множитель затрат на покупку: сценарий", 1, 2, .01, "×", "Аренда: допущения доходности"),
     "ALERT_THRESHOLD":   ("Порог скора для алертов", 50, 90, 1, "баллов", "🎯 Скоринг"),
     "POPUP_WIDTH_PX":    ("Ширина превью объявления на карте", 280, 600, 10, "px", "👁 Настройки вида"),
     "HEX_EDGE_M":        ("Гексагон-сетка: ребро (м)", 30, 200, 10, "м", "⬡ Гексагоны"),
@@ -4424,6 +4429,7 @@ def make_extras_router(templates) -> APIRouter:
                   AND COALESCE(is_duplicate, FALSE) = FALSE
                   AND is_active IS TRUE AND archived_at IS NULL
                   AND prop_type = 'apartment' AND city = 'astana'
+                  AND rent_period = 'monthly' AND NOT COALESCE(rent_period_conflict, FALSE)
                   AND COALESCE(dup_needs_review, FALSE) = FALSE
                   AND NULLIF(btrim(duplicate_of), '') IS NULL
                 LIMIT 20000

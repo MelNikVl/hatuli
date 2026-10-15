@@ -185,7 +185,8 @@ async def main() -> None:
         dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types()),
         _run_admin_web(compat_db, cfg.admin_password, cfg.bot_version, cfg.db_path),
         # parser_loop(bot, compat_db, cfg),
-        _rental_loop(),
+        # Rental collection has a single owner: service_rental.py/systemd.
+        # Starting the Telegram bot must never start a second crawler.
         investment_loop(bot, compat_db, cfg),
         apartment_loop(bot, compat_db, cfg),
     )

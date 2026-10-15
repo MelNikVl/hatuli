@@ -165,7 +165,15 @@ async def test_listing_analysis_unknown_listing(db):
 
 # ── listing_risks passthrough ─────────────────────────────────────────────
 
-async def test_listing_risks_passthrough_matches_build_listing_detail(scenario):
+async def test_listing_risks_passthrough_matches_build_listing_detail(scenario, monkeypatch):
+    from datetime import datetime, timezone
+    import bot.core.listing_risks as risks
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 15, 12, tzinfo=timezone.utc).astimezone(tz)
+    # Two independent calls must use the same clock for a passthrough equality.
+    monkeypatch.setattr(risks, 'datetime', FixedDatetime)
     from bot.ai_tools.core import get_listing_risks
     from bot.core.listing_detail import build_listing_detail
 

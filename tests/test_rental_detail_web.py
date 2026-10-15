@@ -14,7 +14,7 @@ COVER = 'https://astps-photos-kr.kcdn.kz/webp/56/56e36366-f634-480b-be27-f81efd8
 
 
 def rental(**changes):
-    return {'id':'1234567','title':'2-комнатная квартира','prop_type':'apartment',
+    return {'id':'1234567','title':'2-комнатная квартира','prop_type':'apartment','rent_period':'monthly',
             'price':None,'area':60,'rooms':2,'floor':3,'floors_total':10,
             'address':'Адрес из источника','complex_name':'QA','last_seen':NOW-timedelta(minutes=4),
             'found_at':NOW-timedelta(days=4),'is_active':True,'archived_at':None,
