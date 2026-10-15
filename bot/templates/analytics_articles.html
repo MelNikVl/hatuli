@@ -1,0 +1,35 @@
+{% extends "buyer_public_base.html" %}
+{% from '_analytics_chart.html' import render_analytics_chart %}
+{% block title %}{% if category == 'market' %}Аналитика продажи жилья{% elif category == 'rent' %}Аналитика аренды{% else %}Аналитика жилой недвижимости{% endif %} в Астане — Hatuli{% endblock %}
+{% block description %}Аналитика рынка жилья Астаны: цены продажи и аренды, различия районов, графики и понятные выводы. Официальные источники и наблюдения Hatuli.{% endblock %}
+{% block footer_note %}Hatuli · Астана. Источники, даты данных и методика указаны в каждом материале. Цены предложений и цены сделок различаются.{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/hatuli-articles.css?v=20261016.2">{% endblock %}
+{% block content %}
+<div class="ha-archive">
+  <header class="ha-archive-header">
+    <p class="ha-eyebrow">Hatuli / Исследования рынка</p>
+    <h1>Что происходит с жильём в Астане</h1>
+    <p class="ha-archive-lead">Цены продажи и аренды, отличия районов и выводы, которые помогают принять решение. С цифрами, графиками и понятным объяснением.</p>
+  </header>
+  <nav class="ha-filters" aria-label="Темы аналитики">
+    <a href="/analytics" {% if not category %}aria-current="page"{% endif %}>Все статьи</a>
+    <a href="/analytics?category=market" {% if category == 'market' %}aria-current="page"{% endif %}>Рынок жилья</a>
+    <a href="/analytics?category=rent" {% if category == 'rent' %}aria-current="page"{% endif %}>Аренда</a>
+  </nav>
+  {% if articles %}
+  <section class="ha-editions" aria-label="Статьи о рынке жилья">
+    {% for article in articles %}
+    <article class="ha-story-card" data-analytics-card>
+      <div class="ha-story-meta"><span class="ha-category{% if article.kind == 'rent' %} ha-category-rent{% endif %}">{{ article.category_label }}</span><time datetime="{{ article.edition_date }}">{{ article.date_label }}</time></div>
+      <h2><a href="{{ article.url }}">{{ article.title }}</a></h2>
+      <p class="ha-story-summary">{{ article.summary }}</p>
+      {% if article.charts %}<div class="ha-story-preview">{{ render_analytics_chart(article.charts[0], compact=true, id_prefix=article.slug ~ '-') }}</div>{% elif article.key_points %}<ul class="ha-story-points">{% for point in article.key_points[:2] %}<li>{{ point }}</li>{% endfor %}</ul>{% endif %}
+      <div class="ha-story-bottom"><span>{{ article.reading_minutes }} мин. чтения</span><a href="{{ article.url }}" aria-label="Читать: {{ article.title }}">Читать разбор <span aria-hidden="true">→</span></a></div>
+    </article>
+    {% endfor %}
+  </section>
+  {% if page_count > 1 %}<nav class="ha-pagination" aria-label="Страницы статей">{% if previous_url %}<a href="{{ previous_url }}" rel="prev">← Новее</a>{% endif %}<span>Страница {{ page }} из {{ page_count }}</span>{% if next_url %}<a href="{{ next_url }}" rel="next">Раньше →</a>{% endif %}</nav>{% endif %}
+  {% endif %}
+  <aside class="ha-archive-footnote"><h2>Объявления становятся понятнее в контексте.</h2><p>Сопоставляйте рыночный разбор с конкретными квартирами и их историей цены.</p><div><a href="/best-apartments">Лучшие предложения продажи →</a><a href="/best-rentals">Лучшие предложения аренды →</a></div></aside>
+</div>
+{% endblock %}

@@ -119,6 +119,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "> Проверка квартиры в Астане перед покупкой: история заявленной цены, "
             "похожие предложения и признаки повторной публикации. Разбор и доступ согласуются вручную.\n\n"
             "## Ключевые страницы\n"
+            "- [Аналитика недвижимости Астаны](https://hatuli.ai-groundtruth.com/analytics): обзоры рынка жилья и аренды с графиками, периодами данных и первичными источниками\n"
             "- [Пример разбора](https://hatuli.ai-groundtruth.com/example): проверенный обезличенный снимок реального объекта\n"
             "- [ЖК и карта](https://hatuli.ai-groundtruth.com/map): публичные новостройки; частные объявления доступны после входа и ручного одобрения\n"
             "- [Жилые комплексы](https://hatuli.ai-groundtruth.com/complexes): каталог ЖК Астаны\n"
@@ -137,6 +138,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             ("https://hatuli.ai-groundtruth.com/example", "monthly", "0.9"),
             ("https://hatuli.ai-groundtruth.com/best-apartments", "daily", "0.9"),
             ("https://hatuli.ai-groundtruth.com/best-rentals", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/analytics", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/compare", "daily", "0.9"),
             ("https://hatuli.ai-groundtruth.com/rent", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/improve-listing", "monthly", "0.7"),
@@ -164,6 +166,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
         for loc, freq, prio in urls:
             body.append(f"<url><loc>{loc}</loc><changefreq>{freq}</changefreq><priority>{prio}</priority></url>")
+        from bot.core.analytics_articles import list_articles
+        for article in list_articles():
+            body.append(
+                f"<url><loc>https://hatuli.ai-groundtruth.com{article['url']}</loc>"
+                f"<lastmod>{article['edition_date']}</lastmod>"
+                "<changefreq>monthly</changefreq><priority>0.7</priority></url>"
+            )
         for r in rows:
             lastmod = r["updated_at"].strftime("%Y-%m-%d") if r["updated_at"] else ""
             body.append(
@@ -2289,6 +2298,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.include_router(make_rental_tools_router(templates))
     from bot.web.rental_picks import make_rental_picks_router
     app.include_router(make_rental_picks_router(templates))
+    from bot.web.analytics_articles import make_analytics_articles_router
+    app.include_router(make_analytics_articles_router(templates))
     from bot.web.rental_scanner import make_rental_scanner_router
     app.include_router(make_rental_scanner_router(templates))
     from bot.web.rental_economics import router as rental_economics_router
