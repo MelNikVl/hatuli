@@ -83,15 +83,32 @@ def test_daily_90_day_history_is_allowed_with_fresh_observations_not_fake_monthl
 
 @pytest.mark.asyncio
 async def test_segment_falls_from_sparse_complex_to_district_without_city(monkeypatch):
+    now = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+    observed = {"updated_at": now, "source_oldest_at": now-timedelta(hours=24), "source_newest_at": now}
+    rows = [index(sample_count=4, **observed),
+            index(complex_id=None, complex_name=None, sample_count=10, **observed)]
     captured = []
     async def fetch(sql, *args):
         captured.append((sql, args))
-        return [index(sample_count=4), index(complex_id=None, complex_name=None, sample_count=10)]
+        return rows
     monkeypatch.setattr(market, "fetch", fetch)
-    result = await market.read_segment(district="Есильский", complex_id=123, rooms=2, settings={})
+    result = await market.read_segment(district="Есильский", complex_id=123, rooms=2, settings={}, now=now)
     assert result["daily"]["level"] == "district" and result["daily"]["n"] == 10
+    assert captured[0][1][4] == now
     assert "i.sample_count" in captured[0][0] and "i.source_oldest_at" in captured[0][0]
     assert "NULLIF(btrim(i.district),'') IS NOT NULL" in captured[0][0]
+
+
+@pytest.mark.asyncio
+async def test_segment_rejects_observation_one_microsecond_after_query_clock(monkeypatch):
+    now = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
+    future = now+timedelta(microseconds=1)
+    async def fetch(sql, *args):
+        return [index(updated_at=future, source_newest_at=future,
+                      source_oldest_at=now-timedelta(hours=24))]
+    monkeypatch.setattr(market, "fetch", fetch)
+    result = await market.read_segment(district="Есильский", complex_id=123, rooms=2, settings={}, now=now)
+    assert result == {"monthly": None, "daily": None, "furnished_monthly": None}
 
 
 @pytest.mark.asyncio
