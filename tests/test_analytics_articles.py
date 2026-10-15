@@ -262,6 +262,12 @@ def rental(identifier, **changes):
             **changes}
 
 
+@pytest.mark.parametrize("label,key", [("Алматинский район", "almaty"), ("Сарыаркинский район", "saryarka"),
+                                      ("Сарайшық", "saraishyk"), ("Байқоңыр ауданы", "baikonur")])
+def test_known_district_aliases_are_not_lost_from_observation_counts(label, key):
+    assert articles.district_key(label)[0] == key
+
+
 def test_observation_digest_uses_clean_unique_fresh_separate_periods_without_public_ids():
     sales = [sale(str(10000 + index)) for index in range(12)]
     sales += [sale("20001", property_id=1), sale("20002", property_id=1),
