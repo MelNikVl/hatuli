@@ -11,6 +11,8 @@ import pytest
 from bot.admin_web import create_admin_app
 from bot.core.comparison_offer_details import build_offer_details
 from bot.core.daily_picks_display import prepare_daily_picks
+from bot.core.apartment_selection_reasons import best_apartment_reasons
+from bot.public_comparison_routes import comparison_context
 from tests.test_daily_picks_public_page import snapshot as daily_snapshot
 from tests.test_public_comparison_routes import NoPrivateDB, market_snapshot, deposit_catalog, daily_picks
 
@@ -25,6 +27,8 @@ def no_private_database_or_forecast_io(monkeypatch):
     monkeypatch.setattr("asyncpg.connect", reject)
     monkeypatch.setattr("asyncpg.create_pool", reject)
     monkeypatch.setattr("bot.core.daily_picks_display.forecast_for_offer",
+                        lambda *args, **kwargs: {"status": "insufficient_history"})
+    monkeypatch.setattr("bot.public_comparison_routes.forecast_for_offer",
                         lambda *args, **kwargs: {"status": "insufficient_history"})
 
 
@@ -45,6 +49,105 @@ def full_deposits(now):
     catalog["offers"].append({**annual, "id": "freedom-strategy-3", "name": "Стратегия", "term_months": 3,
                              "effective_pct": 19.5, "nominal_pct": 18.09})
     return catalog
+
+
+@pytest.fixture
+def checked_daily_comparison(monkeypatch):
+    edition = daily_snapshot(NOW)
+    item = edition["items"][0]
+    item["price_comparison"].update(discount_pct=0, reference_price_per_m2=item["price_per_m2"])
+    item["selection_facts"].update(is_owner=True, owner_source_verified=True)
+    item["source_facts"] = {"is_pledged": True, "contact": "PRIVATE-PLEDGE-CONTACT"}
+    item["cautions"] = ["Уточните, есть ли комиссия посредника.", "Состояние и ремонт уточните у продавца."]
+    item["reasons"] = best_apartment_reasons(item, NOW)
+    assert len(item["reasons"]) == 3
+    market = detailed_market(NOW, item["id"], item["price"], item["area"])
+    detail = market["listing_details"][0]
+    detail["selection_facts"] = {"ceiling_height": None, "kitchen_area": None,
+        "finish_level": "finished", "is_owner": False, "owner_source_verified": False}
+    detail["price_history"] = build_offer_details({"price": item["price"], "price_events": []},
+                                                 "secondary", now=NOW)["price_history"]
+    monkeypatch.setattr("bot.public_comparison_routes.load_daily_picks", lambda: edition)
+    monkeypatch.setattr("bot.public_comparison_routes.load_market_snapshot", lambda: market)
+    monkeypatch.setattr("bot.public_comparison_routes.load_deposit_catalog", lambda: full_deposits(NOW))
+    return edition, market, item
+
+
+@pytest.mark.asyncio
+async def test_checked_daily_offer_keeps_three_factors_floor_and_dated_pledge_on_compare(checked_daily_comparison):
+    edition, market, item = checked_daily_comparison
+    frozen = copy.deepcopy(edition)
+    selected = comparison_context(listing=item["id"])["selected_offer"]
+    assert selected["is_daily_pick"] is True
+    assert selected["reasons"] == item["reasons"]
+    assert any("хозяин" in reason for reason in selected["reasons"])
+    assert any("этаж" in reason for reason in selected["reasons"])
+    assert selected["floor"] == item["floor"] and selected["floors_total"] == item["floors_total"]
+    assert selected["selection_facts"] == item["selection_facts"]
+    assert selected["complex_identity"] == item["complex_identity"]
+    assert selected["source_checked_at"] == item["source_checked_at"]
+    assert selected["source_facts"] == {"is_pledged": True}
+    assert selected["cautions"] == []
+    assert "Krisha.kz" in selected["evidence_notices"][0]
+    assert selected["observed_at_label"] in selected["evidence_notices"][0]
+    app = create_admin_app(NoPrivateDB(), "test-form-secret", "test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/compare?listing={item['id']}")
+    assert response.status_code == 200
+    assert response.text.count("data-daily-picks-factor") == 3
+    assert 'data-mc-daily-floor>4 из 12 этаж</p>' in response.text
+    assert "В залоге — указано на Krisha.kz при проверке" in response.text
+    assert "Уточните, есть ли комиссия посредника." not in response.text
+    assert "Состояние и ремонт уточните у продавца." not in response.text
+    assert "PRIVATE-PLEDGE-CONTACT" not in response.text
+    assert edition == frozen
+
+
+@pytest.mark.parametrize("change", ["price", "area"])
+def test_changed_daily_offer_is_not_redeclared_as_three_supported_recommendations(checked_daily_comparison, change):
+    edition, market, item = checked_daily_comparison
+    frozen = copy.deepcopy(edition)
+    detail = market["listing_details"][0]
+    detail["current_price" if change == "price" else "area"] += 1_000_000 if change == "price" else 10
+    selected = comparison_context(listing=item["id"])["selected_offer"]
+    assert selected["from_daily_picks"] is True and selected["is_daily_pick"] is False
+    assert len(selected["reasons"]) < 3
+    assert not any("ниже похожих" in reason for reason in selected["reasons"])
+    assert selected["floor"] is None
+    assert selected["cautions"] == []
+    assert selected["source_facts"] == {"is_pledged": True}
+    assert len(selected["evidence_notices"]) == 2
+    assert any("отличается" in notice or "изменились" in notice for notice in selected["evidence_notices"])
+    assert edition == frozen
+
+
+@pytest.mark.asyncio
+async def test_daily_compare_retains_specific_history_gap_and_never_promotes_it_to_a_benefit(checked_daily_comparison):
+    edition, market, item = checked_daily_comparison
+    price = item["price"]
+    market["listing_details"][0]["price_history"] = build_offer_details({"price": price, "price_events": [
+        {"old_price": price+2_000_000, "new_price": price+1_000_000, "changed_at": NOW-timedelta(days=2)},
+        {"old_price": price+500_000, "new_price": price, "changed_at": NOW-timedelta(days=1)},
+    ]}, "secondary", now=NOW)["price_history"]
+    selected = comparison_context(listing=item["id"])["selected_offer"]
+    assert selected["reasons"] == item["reasons"]
+    assert selected["price_history"]["status"] == "incomplete"
+    app = create_admin_app(NoPrivateDB(), "test-form-secret", "test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/compare?listing={item['id']}")
+    assert response.status_code == 200
+    assert response.text.count("data-daily-picks-factor") == 3
+    assert 'data-history-status="incomplete"' in response.text
+    assert "Между записанными изменениями цены есть пропуски" in response.text
+    assert "В залоге — указано на Krisha.kz при проверке" in response.text
+
+
+def test_daily_compare_cannot_turn_truthy_unconfirmed_pledge_into_legal_fact(checked_daily_comparison):
+    edition, market, item = checked_daily_comparison
+    item["source_facts"] = {"is_pledged": "true"}
+    selected = comparison_context(listing=item["id"])["selected_offer"]
+    assert selected["source_facts"] == {}
+    assert not any("залоге" in notice for notice in selected["evidence_notices"])
 
 
 @pytest.fixture

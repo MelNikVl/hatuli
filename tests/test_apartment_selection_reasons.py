@@ -181,7 +181,7 @@ def test_best_factors_are_independent_ordered_and_reasons_take_exactly_first_thr
     assert data == original
 
 
-@pytest.mark.parametrize("discount", [-5, -1, 0, .9, .999])
+@pytest.mark.parametrize("discount", [-5, -1, 0, .9, .999, 1, 1.1, 2.9])
 def test_market_or_premium_price_never_pads_best_reasons_with_a_nonpositive_factor(discount):
     data = offer(price_comparison={"discount_pct": discount, "reference_price_per_m2": 500_000,
                                   "scope": "в том же ЖК"}, floor=1,
@@ -190,8 +190,8 @@ def test_market_or_premium_price_never_pads_best_reasons_with_a_nonpositive_fact
     assert best_apartment_reasons(data, NOW) == []
 
 
-def test_one_percent_discount_is_one_factor_even_when_copy_contains_cash_and_percent():
-    data = offer(price=29_700_000, floor=1, price_comparison={"discount_pct": 1,
+def test_material_discount_is_one_factor_even_when_copy_contains_cash_and_percent():
+    data = offer(price=29_100_000, floor=1, price_comparison={"discount_pct": 3,
                  "reference_price_per_m2": 500_000, "scope": "в том же ЖК"})
     factors = best_apartment_factors(data, NOW)
     assert [factor["key"] for factor in factors] == ["price"]

@@ -149,6 +149,108 @@ def test_cli_forbids_ambiguous_combination_with_legacy_partial_flag(monkeypatch)
     assert error.value.code == 2
 
 
+def checked_measurement_row():
+    row = edition_rows()[0]
+    row.update(is_owner=False, kitchen_area=None, ceiling_height=None)
+    record = {"id": row["id"], "source_url": row["url"], "status": "active", "sale_astana": True,
+              **{field: row[field] for field in ("price", "rooms", "area", "floor", "floors_total")}}
+    return row, record
+
+
+def test_matching_browser_measurements_enrich_the_edition_independently_of_owner_without_mutation():
+    row, record = checked_measurement_row()
+    before = copy.deepcopy(row)
+    record.update(kitchen_area=14.4, ceiling_height=3, description="PRIVATE", seller_phone="PRIVATE")
+    result = publisher.owner_evidence_rows([row], {row["id"]: record})[0]
+    assert result["kitchen_area"] == 14.4 and result["ceiling_height"] == 3
+    assert result["owner_source_verified"] is False
+    assert "description" not in result and "seller_phone" not in result
+    assert row == before
+
+
+@pytest.mark.parametrize("field,value", [("kitchen_area", True), ("kitchen_area", "14.4"),
+    ("kitchen_area", float("nan")), ("kitchen_area", float("inf")), ("kitchen_area", 2),
+    ("kitchen_area", 36.2), ("ceiling_height", False), ("ceiling_height", 1.9),
+    ("ceiling_height", 5.1), ("ceiling_height", float("nan"))])
+def test_browser_measurements_reject_wrong_types_nonfinite_and_out_of_bounds(field, value):
+    row, record = checked_measurement_row()
+    record[field] = value
+    with pytest.raises(ValueError):
+        publisher.owner_evidence_rows([row], {row["id"]: record})
+
+
+def test_missing_null_or_mismatched_source_measurements_never_erase_or_replace_recorded_facts():
+    row, record = checked_measurement_row()
+    row.update(kitchen_area=12, ceiling_height=2.8)
+    record.update(kitchen_area=None)
+    result = publisher.owner_evidence_rows([row], {row["id"]: record})[0]
+    assert result["kitchen_area"] == 12 and result["ceiling_height"] == 2.8
+    record.update(price=row["price"] + 1, kitchen_area=14.4, ceiling_height=3)
+    mismatch = publisher.owner_evidence_rows([row], {row["id"]: record})[0]
+    assert mismatch["kitchen_area"] == 12 and mismatch["ceiling_height"] == 2.8
+
+
+@pytest.mark.parametrize("change", [{"price": 31_000_000}, {"source_checked_at": "2020-01-01T00:00:00+00:00"},
+                                      {"source_status": "archived"}])
+def test_private_discovery_never_reuses_changed_or_old_source_measurements(change):
+    now = datetime.now(timezone.utc)
+    source, record = checked_measurement_row()
+    previous = {**record, "source_status": "active", "source_checked_at": now.isoformat(),
+                "selection_facts": {"kitchen_area": 12, "ceiling_height": 3}, **change}
+    result = publisher.preview_with_recent_measurements([source], {"items": [previous]}, now)[0]
+    assert result["kitchen_area"] is None and result["ceiling_height"] is None
+
+
+def test_private_discovery_fills_only_missing_values_from_a_recent_exactly_matched_edition():
+    now = datetime.now(timezone.utc)
+    source, record = checked_measurement_row()
+    source["ceiling_height"] = 2.7
+    previous = {**record, "source_status": "active", "source_checked_at": now.isoformat(),
+                "selection_facts": {"kitchen_area": 12, "ceiling_height": 3}}
+    result = publisher.preview_with_recent_measurements([source], {"items": [previous]}, now)[0]
+    assert result["kitchen_area"] == 12
+    assert result["ceiling_height"] == 2.7
+    assert source["kitchen_area"] is None
+
+
+@pytest.mark.asyncio
+async def test_preview_discovers_previously_checked_kitchen_but_generate_requires_new_browser_measurement(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    target = row(0, price=30_000_000, floor=12, floors_total=12, kitchen_area=None, ceiling_height=3,
+                 is_owner=True, last_seen=now)
+    peers = [row(index, price=30_000_000, floor=1, ceiling_height=None, kitchen_area=None,
+                 is_owner=False, last_seen=now) for index in range(1, 8)]
+    rows = [target, *peers]
+    previous = dp.build_daily_picks([{**target, "kitchen_area": 12, "owner_source_verified": True}, *peers], now)
+    assert len(previous["items"]) == 1
+    previous["items"][0].update(source_status="active", source_checked_at=now.isoformat())
+    loaded = []
+    def load_previous(*args):
+        loaded.append(True)
+        return dp.validate_snapshot(previous)
+    async def read(*args):
+        return rows
+    async def photos(snapshot, deadline):
+        return snapshot, len(snapshot["items"])
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused:unused@127.0.0.1:1/daily_discovery_test")
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setattr(publisher, "read_candidates", read)
+    monkeypatch.setattr(publisher, "verify_photos", photos)
+    monkeypatch.setattr(publisher, "load_daily_picks", load_previous)
+    exported = await publisher.export_candidate_pool(str(tmp_path / "unverified-candidates.json"), now)
+    assert exported["kind"] == "unverified_review_candidates"
+    assert exported["items"][0]["selection_facts"]["kitchen_area"] == 12
+    assert target["kitchen_area"] is None
+    record = {"id": target["id"], "source_url": target["url"], "status": "active", "sale_astana": True,
+              "is_owner": True, "checked_at": now.isoformat(),
+              **{field: target[field] for field in ("price", "rooms", "area", "floor", "floors_total")}}
+    path = tmp_path / "new-browser-confirmation.json"
+    path.write_text(json.dumps({"method": "normal_browser", "items": [record]}), encoding="utf-8")
+    generated = await publisher.generate(SimpleNamespace(skip_photo_check=False, source_checks=str(path)), now)
+    assert generated["snapshot"]["items"] == []
+    assert loaded == [True]  # Only the private discovery step reads the old edition.
+
+
 @pytest.mark.asyncio
 async def test_source_facts_survive_real_generation_and_its_final_rebuild(tmp_path, monkeypatch):
     now = datetime.now(timezone.utc)
@@ -160,6 +262,12 @@ async def test_source_facts_survive_real_generation_and_its_final_rebuild(tmp_pa
                 "rooms": item["rooms"], "area": item["area"], "floor": item["floor"],
                 "floors_total": item["floors_total"], "is_pledged": item["id"] == pledge_id}
                for item in confirmed["items"]]
+    for source_row in rows:
+        if source_row["id"] == pledge_id:
+            source_row.update(kitchen_area=None, ceiling_height=None)
+    for record in records:
+        if record["id"] == pledge_id:
+            record.update(kitchen_area=14.4, ceiling_height=3)
     path = tmp_path / "source-checks.json"
     path.write_text(json.dumps({"method": "normal_browser", "items": records}), encoding="utf-8")
     async def read(*args):
@@ -175,6 +283,10 @@ async def test_source_facts_survive_real_generation_and_its_final_rebuild(tmp_pa
     prepared = publisher.prepare_publication(result["snapshot"], "three_factors")
     pledged = next(item for item in prepared["items"] if item["id"] == pledge_id)
     assert pledged["source_facts"] == {"is_pledged": True}
+    assert pledged["selection_facts"]["kitchen_area"] == 14.4
+    assert pledged["selection_facts"]["ceiling_height"] == 3
+    assert any("Кухня 14,4" in reason for reason in pledged["reasons"])
+    assert any("потолки 3" in reason for reason in pledged["reasons"])
     assert all(item["source_facts"] == {} for item in prepared["items"] if item["id"] != pledge_id)
 
 

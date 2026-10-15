@@ -27,6 +27,7 @@ from bot.core.daily_picks import (
     publish_snapshot, safe_photo_url, snapshot_path, validate_snapshot,
 )
 from bot.core.daily_pick_identity import annotate_daily_pick_identity_rows
+from bot.core.apartment_selection_reasons import validate_selection_facts
 
 # Restricted input fields. The source address is sanitized to street/house by
 # the public projection. Seller contacts, documents, descriptions,
@@ -278,8 +279,40 @@ def apply_source_checks(snapshot: dict, checks: dict[str, dict]) -> tuple[dict, 
     return {**snapshot, "items": confirmed}, 0, invalid
 
 
+def matching_browser_offer(row: dict, record) -> bool:
+    """Match current basic source facts before accepting optional attributes."""
+    if not isinstance(record, dict):
+        return False
+    lid = str(row.get("id"))
+    expected_url = f"https://krisha.kz/a/show/{lid}"
+    area = record.get("area")
+    try:
+        area_matches = (type(area) in {int, float} and math.isfinite(area)
+                        and abs(float(row["area"]) - area) <= .2)
+    except (ValueError, TypeError, KeyError, OverflowError):
+        area_matches = False
+    return bool(
+        record.get("id") == lid and record.get("source_url") == expected_url
+        and row.get("url") == expected_url and record.get("status") == "active"
+        and record.get("sale_astana") is True
+        and type(record.get("price")) is int and record["price"] == row.get("price")
+        and type(record.get("rooms")) is int and record["rooms"] == row.get("rooms")
+        and area_matches
+        and all(type(record.get(field)) is int and record[field] == row.get(field)
+                for field in ("floor", "floors_total"))
+    )
+
+
+def browser_measurements(record: dict, area) -> dict:
+    """Only two optional numeric facts; missing/null remains unknown."""
+    measurements = {field: record[field] for field in ("kitchen_area", "ceiling_height")
+                    if record.get(field) is not None}
+    safe = validate_selection_facts(measurements, area)
+    return {field: safe[field] for field in measurements}
+
+
 def owner_evidence_rows(rows: list[dict], checks: dict[str, dict] | None = None, *, review_preview: bool = False) -> list[dict]:
-    """Owner is a benefit only after a matching normal-browser observation.
+    """Owner/measurements require a matching normal-browser observation.
 
     Private candidate export may show the provisional benefit so an owner can
     inspect it. That export is explicitly unverified and cannot be published.
@@ -287,31 +320,37 @@ def owner_evidence_rows(rows: list[dict], checks: dict[str, dict] | None = None,
     """
     result = []
     for row in rows:
-        verified = False
-        if row.get("is_owner") is True:
-            record = (checks or {}).get(str(row.get("id")))
-            if review_preview:
-                verified = True
-            elif isinstance(record, dict):
-                lid = str(row.get("id"))
-                expected_url = f"https://krisha.kz/a/show/{lid}"
-                area = record.get("area")
-                try:
-                    area_matches = (type(area) in {int, float} and math.isfinite(area)
-                                    and abs(float(row["area"]) - area) <= .2)
-                except (ValueError, TypeError, KeyError, OverflowError):
-                    area_matches = False
-                verified = bool(
-                    record.get("id") == lid and record.get("source_url") == expected_url
-                    and row.get("url") == expected_url and record.get("status") == "active"
-                    and record.get("sale_astana") is True and record.get("is_owner") is True
-                    and type(record.get("price")) is int and record["price"] == row.get("price")
-                    and type(record.get("rooms")) is int and record["rooms"] == row.get("rooms")
-                    and area_matches
-                    and all(type(record.get(field)) is int and record[field] == row.get(field)
-                            for field in ("floor", "floors_total"))
-                )
-        result.append({**row, "owner_source_verified": verified})
+        record = (checks or {}).get(str(row.get("id")))
+        matches = matching_browser_offer(row, record)
+        verified = row.get("is_owner") is True and (review_preview or matches and record.get("is_owner") is True)
+        measurements = browser_measurements(record, row.get("area")) if matches and not review_preview else {}
+        result.append({**row, **measurements, "owner_source_verified": verified})
+    return result
+
+
+def preview_with_recent_measurements(rows: list[dict], snapshot: dict | None, now: datetime) -> list[dict]:
+    """Private discovery hints only; real generation never calls this helper.
+
+    A previously verified number may fill a missing DB field so the browser
+    opens the offer again. The old number is never a new source confirmation.
+    """
+    from datetime import timedelta
+    previous = {item["id"]: item for item in (snapshot or {}).get("items", [])}
+    result = []
+    for row in rows:
+        safe = dict(row)
+        item = previous.get(str(row.get("id")))
+        if isinstance(item, dict) and item.get("source_status") == "active":
+            try:
+                checked = datetime.fromisoformat(item["source_checked_at"].replace("Z", "+00:00"))
+                recent = checked.tzinfo is not None and now - timedelta(hours=72) <= checked <= now
+            except (ValueError, TypeError, KeyError, AttributeError):
+                recent = False
+            record = {**item, "status": "active", "sale_astana": True}
+            if recent and matching_browser_offer(row, record):
+                measurements = browser_measurements(item.get("selection_facts") or {}, row.get("area"))
+                safe.update({field: value for field, value in measurements.items() if row.get(field) is None})
+        result.append(safe)
     return result
 
 
@@ -324,6 +363,7 @@ async def export_candidate_pool(target: str, now: datetime) -> dict:
     if not dsn:
         raise RuntimeError("DATABASE_URL is required")
     rows = owner_evidence_rows(await read_candidates(dsn, now), review_preview=True)
+    rows = preview_with_recent_measurements(rows, load_daily_picks(), now)
     excluded = set()
     items = []
     for _ in range(3):

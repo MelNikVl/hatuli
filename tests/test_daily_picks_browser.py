@@ -127,6 +127,22 @@ def test_only_a_positive_visible_pledge_badge_is_persisted(pledged):
     assert record.get("is_pledged") is (True if pledged is True else None)
 
 
+def test_browser_source_record_retains_only_valid_optional_numeric_measurements():
+    record = worker.source_record(item(), observation(kitchen_area=14.4, ceiling_height=3,
+        description="PRIVATE-DESCRIPTION", seller_phone="PRIVATE-CONTACT"), NOW)
+    assert record["kitchen_area"] == 14.4 and record["ceiling_height"] == 3
+    assert "PRIVATE" not in json.dumps(record)
+    missing = worker.source_record(item(), observation(kitchen_area=None), NOW)
+    assert "kitchen_area" not in missing and "ceiling_height" not in missing
+
+
+@pytest.mark.parametrize("field,value", [("kitchen_area", True), ("kitchen_area", float("inf")),
+    ("kitchen_area", 100), ("ceiling_height", "3"), ("ceiling_height", float("nan")), ("ceiling_height", 1)])
+def test_browser_source_record_rejects_invalid_optional_measurements(field, value):
+    with pytest.raises(ValueError):
+        worker.source_record(item(), observation(**{field: value}), NOW)
+
+
 @pytest.mark.parametrize("visible,expected", [(True, ["Хозяин недвижимости"]), (False, [])])
 def test_dom_reader_extracts_author_and_pledge_from_visible_fields_only(visible, expected):
     node = shutil.which("node")
@@ -141,13 +157,16 @@ function element(text, displayed = true) {
 }
 const author = element('Автор объявления —\nХозяин недвижимости\nPRIVATE-CONTACT', shown);
 const pledge = element('В залоге', shown);
+const kitchen = element('Площадь\n73 м², Площадь кухни — 14.4 м²', shown);
+const ceiling = element('Высота потолков\n3 м', shown);
+ceiling.tagName = 'DL';
 const title = element('2-комнатная квартира · 60,4 м² · 5/12 этаж');
 const price = element('30 000 000 ₸');
 const offer = element('Квартира в продаже');
 offer.querySelectorAll = selector => {
-  if (selector.includes('.offer__info-item')) return [author];
+  if (selector.includes('.offer__info-item')) return [author, kitchen, ceiling];
   if (selector === '.offer__parameters-mortgaged') return [pledge];
-  if (selector === '*') return [author];
+  if (selector === '*') return [author, kitchen, ceiling];
   if (selector.startsWith('h1')) return [title];
   if (selector === '.offer__price') return [price];
   return [];
@@ -163,6 +182,8 @@ process.stdout.write(JSON.stringify(read()));
     observed = json.loads(completed.stdout)
     assert observed["author_labels"] == expected
     assert observed["is_pledged"] is (True if visible else None)
+    assert observed.get("kitchen_area") == (14.4 if visible else None)
+    assert observed.get("ceiling_height") == (3 if visible else None)
     assert "PRIVATE" not in json.dumps(observed["author_labels"])
 
 

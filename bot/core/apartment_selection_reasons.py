@@ -193,7 +193,7 @@ def best_apartment_factors(offer: dict, now=None) -> list[dict]:
     now = _utc(now or datetime.now(timezone.utc))
     factors = []
     comparison = offer.get("price_comparison")
-    if isinstance(comparison, dict) and (_number(comparison.get("discount_pct")) or 0) >= 1:
+    if isinstance(comparison, dict) and (_number(comparison.get("discount_pct")) or 0) >= 3:
         price_reason = next((text for text in apartment_selection_reasons(offer, now)
                              if text.startswith("Цена за м²") and " ниже " in text), None)
         if price_reason:

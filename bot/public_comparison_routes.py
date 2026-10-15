@@ -18,22 +18,28 @@ from bot.core.market_comparison import (
 from bot.core.web_pages import not_found_page
 from bot.core.price_forecast_runtime import forecast_for_offer
 from bot.core.comparison_offer_details import DETAIL_FIELDS, details_for_selected_offer, source_characteristics_changed
-from bot.core.apartment_selection_reasons import apartment_selection_reasons
+from bot.core.apartment_selection_reasons import (
+    apartment_selection_reasons, best_apartment_reasons, validate_selection_facts,
+)
+from bot.core.daily_pick_identity import validate_public_daily_identity
 from bot.core.comparison_rental_estimate import validate_rental_estimate
 
 
-def _public_offer(offer: dict) -> dict:
+def _public_offer(offer: dict, *, daily_identity: dict | None = None,
+                  daily_mismatch_notices: tuple | list = ()) -> dict:
     primary = offer.get("market_type") == "primary"
     wait = 0 if not primary or offer.get("build_status") == "commissioned" else 12
     identifier = offer["id"]
     params = {"unit": identifier.removeprefix("newbuild:")} if primary else {"listing": identifier}
     title = f"{offer['rooms']}-комнатная · {offer['area']:g} м²".replace(".", ",")
-    cautions = list(offer.get("cautions", []))
+    cautions = [] if daily_identity is not None else list(offer.get("cautions", []))
     if primary and wait:
         cautions.append("Для неподтверждённой готовности выбран сценарий ожидания 12 месяцев. Уточните срок ключей и измените его в расчёте.")
     observed = offer.get("source_checked_at") or offer.get("observed_at")
     observed_label = datetime.fromisoformat(observed.replace("Z", "+00:00")).astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y, %H:%M") if observed else None
-    return {
+    reasons = (best_apartment_reasons(offer) if daily_identity is not None and not daily_mismatch_notices
+               else apartment_selection_reasons(offer))
+    result = {
         "id": identifier, "market_type": "primary" if primary else "secondary", "title": title,
         "complex_name": offer.get("complex_name"), "rooms": offer["rooms"], "area": offer["area"],
         "price": offer["price"], "url": f"/listing/nb-{identifier.removeprefix('newbuild:')}" if primary else offer.get("url") or offer.get("source_url"),
@@ -43,10 +49,27 @@ def _public_offer(offer: dict) -> dict:
         "observed_at_label": observed_label,
         "build_status_label": offer.get("build_status_label") if offer.get("build_status") in {"under_construction", "commissioned"} else None,
         "cautions": cautions,
-        "reasons": apartment_selection_reasons(offer),
+        "reasons": reasons,
         **{field: offer.get(field) for field in DETAIL_FIELDS},
         "rental_estimate": validate_rental_estimate(offer.get("rental_estimate")),
     }
+    if daily_identity is not None:
+        source_facts = offer.get("source_facts") or {}
+        pledged = isinstance(source_facts, dict) and source_facts.get("is_pledged") is True
+        notices = ([f"В залоге — указано на Krisha.kz при проверке {observed_label}."
+                    if observed_label else "В залоге — указано в исходном объявлении Krisha.kz."]
+                   if pledged else [])
+        result.update(
+            from_daily_picks=True, is_daily_pick=not daily_mismatch_notices and len(reasons) == 3,
+            complex_identity=daily_identity, complex_name=daily_identity["canonical_name"] or "",
+            floor=offer.get("floor") if not daily_mismatch_notices else None,
+            floors_total=offer.get("floors_total") if not daily_mismatch_notices else None,
+            selection_facts=validate_selection_facts(offer.get("selection_facts"), offer["area"]),
+            source_facts={"is_pledged": True} if pledged else {},
+            source_checked_at=offer.get("source_checked_at"), source_status=offer.get("source_status"),
+            evidence_notices=[*notices, *daily_mismatch_notices],
+        )
+    return result
 
 
 def _primary_selection_offer(offer, market):
@@ -128,19 +151,43 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
     details_by_id.update({row["id"]: row for row in market.get("listing_details", [])})
     secondary = []
     for item in (picks or {}).get("items", []):
+        try:
+            daily_identity = validate_public_daily_identity(item.get("complex_identity"))
+        except (ValueError, TypeError):
+            daily_identity = None
         detail = details_by_id.get(item["id"])
         enriched = {**item, "market_type": "secondary"}
+        mismatch_notices = []
         if detail:
             enriched.update(details_for_selected_offer(detail, item["price"], item["area"], item["rooms"]))
-            if detail.get("current_price", item["price"]) != item["price"] or source_characteristics_changed(detail, item):
+            price_changed = detail.get("current_price", item["price"]) != item["price"]
+            characteristics_changed = source_characteristics_changed(detail, item)
+            if price_changed or characteristics_changed:
                 enriched["price_comparison"] = None
+            if daily_identity is not None:
+                if price_changed:
+                    mismatch_notices.append("Цена проверенной карточки отличается от цены последнего обновления базы.")
+                if characteristics_changed:
+                    mismatch_notices.append("Характеристики объявления изменились после проверки карточки.")
+                if not mismatch_notices:
+                    # The selected edition owns its browser-checked benefits.
+                    # A market cache may add later price events, never replace
+                    # the checked owner, measurements or canonical identity.
+                    enriched["selection_facts"] = item.get("selection_facts")
+                    own_history = item.get("price_history") or {}
+                    merged_history = enriched.get("price_history") or {}
+                    own_last = max((event["at"] for event in own_history.get("events", [])), default="")
+                    merged_last = max((event["at"] for event in merged_history.get("events", [])), default="")
+                    if own_last >= merged_last:
+                        enriched["price_history"] = item.get("price_history")
         # An older market edition may have no usable address. Preserve the
         # selected edition's street/house after sanitizing both sources.
         address, address_note = sanitized_listing_address(enriched.get("address"), item["price"], datetime.now(timezone.utc))
         if address is None:
             address, address_note = sanitized_listing_address(item.get("address"), item["price"], datetime.now(timezone.utc))
         enriched["address"], enriched["address_note"] = address, address_note
-        secondary.append(_public_offer(enriched))
+        secondary.append(_public_offer(enriched, daily_identity=daily_identity,
+                                       daily_mismatch_notices=mismatch_notices))
     selected = next((offer for offer in secondary if offer["id"] == listing), None) if listing else None
     primary = public_primary_offer(market, unit) if unit else None
     if primary:

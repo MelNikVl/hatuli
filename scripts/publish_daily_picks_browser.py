@@ -60,27 +60,37 @@ READ_OFFER_DOM = r"""() => {
   const title = offer && firstVisible(offer, 'h1, .offer__title');
   const price = offer && firstVisible(offer, '.offer__price');
   const authorLabels = [];
+  const measurements = {};
+  const measurementValues = {kitchen_area: [], ceiling_height: []};
   if (offer) {
-    const authorRows = [...offer.querySelectorAll(
-      '.offer__info-item, .offer__advert-short-info, .offer__parameters dt, .offer__seller-type, .owner-label'
+    const visibleFactRows = [...offer.querySelectorAll(
+      '.offer__info-item, .offer__advert-short-info, .offer__parameters dl, .offer__parameters dt, .offer__seller-type, .owner-label'
     )].filter(visible);
     [...offer.querySelectorAll('*')].filter(element => visible(element) && element.children.length === 0 &&
-      /^Автор объявления\s*[:—–-]?$/i.test(element.innerText.trim()) &&
+      /^(?:Автор объявления|Площадь кухни|Высота потолков)\s*[:—–-]?$/i.test(element.innerText.trim()) &&
       !element.closest('.offer__description, .offer__text, .offer__description-text')
     ).forEach(label => {
       let row = label.parentElement;
       for (let depth = 0; row && row !== offer && depth < 3; depth++, row = row.parentElement) {
-        if (visible(row) && row.innerText.length <= 500) authorRows.push(row);
+        if (visible(row) && row.innerText.length <= 500) visibleFactRows.push(row);
       }
     });
-    authorRows.forEach(element => {
+    visibleFactRows.forEach(element => {
       let text = element.innerText.replace(/\s+/g, ' ').trim();
-      if (element.tagName === 'DT' && /^Автор объявления\s*[:—–-]?$/i.test(text)) {
+      if (element.tagName === 'DT' && /^(?:Автор объявления|Площадь кухни|Высота потолков)\s*[:—–-]?$/i.test(text)) {
         const value = element.nextElementSibling;
         if (value && value.tagName === 'DD' && visible(value)) text += ' ' + value.innerText.replace(/\s+/g, ' ').trim();
       }
       const match = text.match(/^Автор объявления\s*[:—–-]?\s*(Хозяин недвижимости|Риелтор|Агентство недвижимости|Застройщик)(?=\s|$|[.,;:])/i);
       if (match) authorLabels.push(match[1]);
+      const kitchen = text.match(/^(?:Площадь\s*[:—–-]?\s*\d+(?:[.,]\d+)?\s*м(?:²|2)\s*,\s*)?Площадь кухни\s*[:—–-]?\s*(\d+(?:[.,]\d+)?)\s*м(?:²|2)(?=\s|$|[.,;:])/i);
+      const ceiling = text.match(/^Высота потолков\s*[:—–-]?\s*(\d+(?:[.,]\d+)?)\s*м(?:етра|етров)?(?=\s|$|[.,;:])/i);
+      if (kitchen) measurementValues.kitchen_area.push(Number(kitchen[1].replace(',', '.')));
+      if (ceiling) measurementValues.ceiling_height.push(Number(ceiling[1].replace(',', '.')));
+    });
+    Object.entries(measurementValues).forEach(([key, values]) => {
+      const unique = [...new Set(values)].filter(Number.isFinite);
+      if (unique.length === 1) measurements[key] = unique[0];
     });
   }
   const pledged = offer && [...offer.querySelectorAll('.offer__parameters-mortgaged')]
@@ -96,6 +106,7 @@ READ_OFFER_DOM = r"""() => {
     main_visible: !!offer,
     author_labels: [...new Set(authorLabels)],
     is_pledged: pledged ? true : null,
+    ...measurements,
     title: title ? title.innerText.slice(0, 1000) : '',
     price_text: price ? price.innerText.slice(0, 300) : '',
     main_text: offer ? offer.innerText.slice(0, 100000) : '',
@@ -246,6 +257,7 @@ def source_record(item: dict, observation: dict, checked_at: datetime) -> dict:
             result["is_owner"] = False
     if observation.get("is_pledged") is True:
         result["is_pledged"] = True
+    result.update(publisher.browser_measurements(observation, values["area"]))
     return result
 
 

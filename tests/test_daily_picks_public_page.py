@@ -43,7 +43,7 @@ def snapshot(now):
             "selection_facts": {"ceiling_height": 3.0},
             "cautions": ["GENERIC-CHECKLIST-MUST-NOT-RENDER"], "observed_at": now.isoformat(),
             "source_status": "active", "source_checked_at": now.isoformat(),
-            "price_comparison": {"discount_pct": 2.9, "reference_price_per_m2": 700_000, "scope": "в том же ЖК", "comparable_count": 8},
+            "price_comparison": {"discount_pct": 5.6, "reference_price_per_m2": 720_000, "scope": "в том же ЖК", "comparable_count": 8},
             "seller_phone": "PRIVATE-PHONE", "private_note": "PRIVATE-NOTE",
         }
         item["reasons"] = best_apartment_reasons(item, now)
