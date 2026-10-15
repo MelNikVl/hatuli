@@ -205,7 +205,12 @@ def build_rental_picks(rows,*,now=None,checks=None,limit=MAX_PICKS,require_check
         address,note=sanitized_listing_address(row.get('address'),row['price'],now)
         if not address or note!='Адрес из объявления.':
             continue
-        photos=_photos(row)
+        if 'photo_urls' in check:
+            photos=_photos({'photos':check['photo_urls']})
+            if not photos or photos!=check['photo_urls']:
+                raise ValueError('Invalid source-checked rental photos')
+        else:
+            photos=_photos(row)
         if not photos:
             continue
         item={'id':str(row['id']),'rank':0,'source_url':row['url'],

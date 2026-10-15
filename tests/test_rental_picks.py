@@ -83,6 +83,38 @@ def test_ready_offer_uses_exact_monthly_rooms_area_local_peers_and_four_facts():
     assert all('между первым' not in reason for reason in item['reasons'])
 
 
+def test_actual_browser_photo_can_replace_outdated_cached_cover():
+    value=row(photo_url=None,photos=[])
+    photo='https://astps-photos-kr.kcdn.kz/webp/53/53a2b935-0b39-4f66-a35b-c51a5965a3b1/72-750x470.webp'
+    result=select(value,check=checked(value,photo_urls=[photo]))
+    assert result['items'][0]['photo_urls']==[photo]
+
+
+def test_source_checked_photo_never_expands_allowed_cdn_or_follows_private_urls():
+    value=row()
+    with pytest.raises(ValueError,match='source-checked rental photos'):
+        select(value,check=checked(value,photo_urls=['http://127.0.0.1/private']))
+
+
+@pytest.mark.asyncio
+async def test_photo_preflight_drops_failed_images_and_empty_cards_without_mutating_input(monkeypatch):
+    from unittest.mock import AsyncMock
+    import httpx
+    good=PHOTO
+    bad=PHOTO.replace('1-full','2-full')
+    client=AsyncMock()
+    client.head.side_effect=[httpx.Response(200,headers={'content-type':'image/webp'}),httpx.Response(404)]
+    context=SimpleNamespace(__aenter__=AsyncMock(return_value=client),__aexit__=AsyncMock())
+    class Context:
+        async def __aenter__(self): return client
+        async def __aexit__(self,*args): return None
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kwargs:Context())
+    edition={'items':[{'id':'1','photo_urls':[good],'rank':1},{'id':'2','photo_urls':[bad],'rank':2}]}
+    output=await publisher.verified_photos(edition)
+    assert [item['id'] for item in output['items']]==['1']
+    assert len(edition['items'])==2
+
+
 @pytest.mark.parametrize('changes',[
     {'rent_period':'daily'},{'rent_period':'unknown'},{'rent_period_conflict':True},
     {'title':'Квартира посуточно'},{'title':'Квартира на ночь, почасовая аренда'},
