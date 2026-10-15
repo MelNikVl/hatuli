@@ -28,6 +28,7 @@ FIELDS = ('id','rank','source_url','title','price','currency','price_per_m2','ar
           'floor','floors_total','address','district','complex_name','photo_urls','reasons',
           'observed_at','source_checked_at','price_comparison','price_history','selection_facts',
           'rent_period','rental_episode_started_at','rental_episode_last_seen_at')
+FIELDS += ('complex_id','hex_id','hex_edge_m')
 METHODOLOGY = {
     'summary': 'Помесячная аренда до 500 000 ₸. Ставка за м² минимум на 5% ниже сопоставимых предложений. У каждой квартиры четыре подтверждённых основания выбора.',
     'details': ['Сравниваем ту же комнатность и площадь ±15%; для проверенного ЖК — от пяти объявлений, для района — от десяти. Из выборки исключаем саму квартиру и известные дубли.',
@@ -70,8 +71,6 @@ def _eligible(row,now):
             and 50_000<=price<=2_000_000 and 20<=area<=300 and rooms.is_integer() and 1<=rooms<=6
             and 12<=area/rooms<=100 and 1000<=price/area<=50000
             and now-MAX_SOURCE_AGE<=utc(row['last_seen'])<=now
-            and now-MAX_SOURCE_AGE<=utc(row['rental_episode_last_seen_at'])<=utc(row['last_seen'])
-            and utc(row['rental_episode_started_at'])<=utc(row['rental_episode_last_seen_at'])
             and (row.get('complex_id') is None or row.get('complex_binding_verified') is True))
     except (ValueError,TypeError,KeyError):
         return False
@@ -97,6 +96,8 @@ def _facts(check):
 def _history(row,now):
     # Legacy rental_price_history lacks a proven period at each old event.
     # Only same-episode monthly source observations can form the public graph.
+    if not row.get('rental_episode_started_at') or not row.get('rental_episode_last_seen_at'):
+        return None
     observations=row.get('observations') or []
     if isinstance(observations,str):
         observations=json.loads(observations)
@@ -206,8 +207,9 @@ def build_rental_picks(rows,*,now=None,checks=None,limit=MAX_PICKS,require_check
             'source_checked_at':check.get('checked_at'),'price_comparison':{
                 'discount_pct':discount,'reference_price_per_m2':reference,'comparable_count':len(local),'scope':scope},
             'selection_facts':_facts(check),'price_history':_history(row,now),
-            'rental_episode_started_at':utc(row['rental_episode_started_at']).isoformat(),
-            'rental_episode_last_seen_at':utc(row['rental_episode_last_seen_at']).isoformat()}
+            'rental_episode_started_at':utc(row['rental_episode_started_at']).isoformat() if row.get('rental_episode_started_at') else None,
+            'rental_episode_last_seen_at':utc(row['rental_episode_last_seen_at']).isoformat() if row.get('rental_episode_last_seen_at') else None,
+            'complex_id':complex_id,'hex_id':row.get('hex_id'),'hex_edge_m':row.get('hex_edge_m')}
         item['reasons']=rental_factors(item)
         if require_checks and len(item['reasons'])!=4:
             continue
@@ -221,7 +223,8 @@ def build_rental_picks(rows,*,now=None,checks=None,limit=MAX_PICKS,require_check
 
 
 def validate_snapshot(snapshot):
-    if not isinstance(snapshot,dict) or snapshot.get('schema_version')!=1 or not isinstance(snapshot.get('items'),list):
+    if (not isinstance(snapshot,dict) or snapshot.get('schema_version')!=1 or not isinstance(snapshot.get('items'),list)
+        or set(snapshot)-{'schema_version','selection_date','generated_at','source_observed_at','total_candidates','items','methodology'}):
         raise ValueError('Invalid rental snapshot')
     generated=utc(snapshot['generated_at'])
     if snapshot.get('selection_date')!=generated.astimezone(LOCAL_TIMEZONE).date().isoformat():
@@ -234,7 +237,7 @@ def validate_snapshot(snapshot):
             raise ValueError('Invalid rental item shape')
         seen.add(item['id'])
         row={**item,'url':item.get('source_url'),'city':'astana','prop_type':'apartment','is_active':True,
-             'last_seen':item.get('observed_at')}
+             'last_seen':item.get('observed_at'),'complex_binding_verified':item.get('complex_id') is not None}
         if not _eligible(row,generated) or item.get('price',MAX_RENT+1)>MAX_RENT:
             raise ValueError('Invalid public rental')
         if not generated-CHECK_AGE<=utc(item['source_checked_at'])<=generated:
@@ -244,7 +247,8 @@ def validate_snapshot(snapshot):
             raise ValueError('Exact sanitized source address required')
         if _facts({'facts':item.get('selection_facts')})!=item.get('selection_facts'):
             raise ValueError('Invalid source facts')
-        if item.get('photo_urls')!=_photos({'photos':item.get('photo_urls')}):
+        if (not isinstance(item.get('photo_urls'),list) or not 1<=len(item['photo_urls'])<=3
+            or item.get('photo_urls')!=_photos({'photos':item.get('photo_urls')})):
             raise ValueError('Invalid rental photos')
         floor,total=number(item.get('floor')),number(item.get('floors_total'))
         if floor is None or total is None or not floor.is_integer() or not total.is_integer() or not 1<=floor<=total<=60:
@@ -309,7 +313,10 @@ def prepare_rental_picks(snapshot,now=None):
     for original in snapshot['items']:
         item={**original,'source_checked_at_label':label(original['source_checked_at']),
               'observed_at_label':label(original['observed_at'])}
-        item['rental_forecast']=rental_forecast_for_offer(item,now=now)
+        forecast_input={**item,'city':'astana','prop_type':'apartment','is_active':True,
+            'last_seen':original['observed_at'],'is_duplicate':False,'dup_needs_review':False,
+            'rent_period_conflict':False,'archived_at':None,'duplicate_of':None}
+        item['rental_forecast']=rental_forecast_for_offer(forecast_input,now=now)
         items.append(item)
     return {**snapshot,'items':items,'date_label':generated.astimezone(LOCAL_TIMEZONE).strftime('%d.%m.%Y'),
             'generated_at_label':label(snapshot['generated_at']),'as_of_label':label(snapshot['source_observed_at']),

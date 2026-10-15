@@ -21,7 +21,7 @@ async def read_candidates(dsn,now):
     query=ctes+"""SELECT r.id,r.url,r.price,r.area,r.rooms,r.floor,r.floors_total,
         r.address,r.district,r.city,r.prop_type,r.rent_period,r.rent_period_conflict,
         r.is_active,r.archived_at,r.is_duplicate,r.dup_needs_review,r.duplicate_of,
-        r.last_seen,r.complex_id,r.photo_url,r.photos,r.rental_episode_started_at,r.rental_episode_last_seen_at,
+        r.last_seen,r.complex_id,r.photo_url,r.photos,r.rental_episode_started_at,r.rental_episode_last_seen_at,r.hex_id,r.hex_edge_m,
         identity.id AS index_complex_id,identity.name AS index_complex_name,
         (identity.id IS NOT NULL) AS complex_binding_verified,
         coalesce(proof.observations,'[]'::jsonb) AS observations
@@ -39,7 +39,6 @@ async def read_candidates(dsn,now):
           AND NOT coalesce(r.is_duplicate,FALSE) AND NOT coalesce(r.dup_needs_review,FALSE)
           AND nullif(btrim(r.duplicate_of),'') IS NULL
           AND r.last_seen BETWEEN $1::timestamptz-interval '72 hours' AND $1
-          AND r.rental_episode_last_seen_at BETWEEN $1::timestamptz-interval '72 hours' AND $1
         ORDER BY r.id LIMIT 20001"""
     conn=await asyncpg.connect(dsn,command_timeout=60,server_settings={
         'default_transaction_read_only':'on','application_name':'hatuli_rental_picks_readonly'})
