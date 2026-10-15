@@ -32,11 +32,13 @@ def operations(collect=None):
 @pytest.mark.asyncio
 async def test_failed_sheet_upload_cannot_refresh_success_timestamp(monkeypatch):
     monkeypatch.setattr(service, 'record_rental_cycle', AsyncMock())
-    state = service.RentalServiceState(pages_since_index=14,index_refreshes=2)
+    state = service.RentalServiceState(pages_since_index=14,
+        apartment_pages_since_index=14, pages_since_sheets=44, index_refreshes=2)
     ops = operations()
     ops.sync_sheets.return_value = False
     cycle = await service.run_one_cycle(None,'/arenda/kvartiry/astana/','apartment',state,ops,RentalCyclePlan())
     assert cycle['stages']['sheets']['status']=='error'
+    assert state.pages_since_sheets == 45
     assert all(call.args[0]!='SHEETS_RENTAL_SYNCED_AT' for call in ops.set_setting.await_args_list)
 
 
@@ -122,15 +124,20 @@ async def test_timeout_preserves_archive_observations_and_next_list_cycle(monkey
 @pytest.mark.asyncio
 async def test_index_refresh_only_resets_after_success_and_geoguess_off(monkeypatch):
     monkeypatch.setattr(service, "record_rental_cycle", AsyncMock())
-    state = service.RentalServiceState(cycle=4, pages_since_index=14)
+    state = service.RentalServiceState(cycle=4, pages_since_index=14,
+        apartment_pages_since_index=14)
+    now = [100.0]
     ops = operations()
     ops.rebuild_index.side_effect = RuntimeError("index unavailable")
-    await service.run_one_cycle(None, "/rental/", "apartment", state, ops, RentalCyclePlan())
+    await service.run_one_cycle(None, "/rental/", "apartment", state, ops,
+                               RentalCyclePlan(), clock=lambda: now[0])
     assert state.pages_since_index == 15 and state.index_refreshes == 0
     ops.bind_address.assert_awaited_once_with("rental_listings")
     ops.bind_geo.assert_not_awaited()
     ops.rebuild_index.side_effect = None
-    await service.run_one_cycle(None, "/rental/", "parking", state, ops, RentalCyclePlan())
+    now[0] += 60
+    await service.run_one_cycle(None, "/rental/", "parking", state, ops,
+                               RentalCyclePlan(), clock=lambda: now[0])
     assert state.pages_since_index == 0 and state.index_refreshes == 1
 
 

@@ -21,6 +21,7 @@ from bot.core.rental_service_metrics import (
 load_dotenv()
 log = logging.getLogger("rental_service")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
+RENTAL_SHEETS_SYNC_PAGES = 45
 
 
 def configure_logging() -> None:
@@ -55,11 +56,51 @@ def service_revision() -> str:
 class RentalServiceState:
     cycle: int = 0
     pages_since_index: int = 0
+    pages_since_sheets: int = 0
     index_refreshes: int = 0
     completed_types: set[str] = field(default_factory=set)
     last_success: dict[str, float] = field(default_factory=dict)
     page_intervals: dict[str, float] = field(default_factory=dict)
     interval_samples: dict[str, int] = field(default_factory=dict)
+    # Keep the original all-category page counter for diagnostics. Only
+    # apartment saves/pages determine apartment-index freshness.
+    apartment_pages_since_index: int = 0
+    pending_index_observations: int = 0
+    index_dirty_since: float | None = None
+    index_last_attempt: float | None = None
+    index_last_success: float | None = None
+    index_failures: int = 0
+    index_refresh_required: bool = False
+
+    def note_apartment_saves(self, saved: int, pages: int, now: float) -> None:
+        if saved <= 0:
+            return
+        if self.index_dirty_since is None:
+            self.index_dirty_since = now
+        self.pending_index_observations += saved
+        self.apartment_pages_since_index += pages
+
+    def index_retry_after(self, now: float) -> float:
+        if self.index_last_attempt is None:
+            return 0.0
+        # Successes cannot cause a hot-loop rebuild; failures back off to at
+        # most five minutes. Budget exhaustion does not count as an attempt.
+        delay = min(300.0, 60.0 * 2 ** min(max(self.index_failures - 1, 0), 3))
+        return max(0.0, self.index_last_attempt + delay - now)
+
+    def index_due_reason(self, now: float, *, pages: int, seconds: float,
+                         full_pass: bool) -> str | None:
+        if self.index_retry_after(now):
+            return None
+        if self.index_refresh_required:
+            return "startup"
+        if self.pending_index_observations <= 0:
+            return None
+        if self.apartment_pages_since_index >= pages:
+            return "apartment_pages"
+        if self.index_dirty_since is not None and now - self.index_dirty_since >= seconds:
+            return "saved_observations_age"
+        return "full_pass" if full_pass else None
 
 
 @dataclass
@@ -98,6 +139,7 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
                  step.get("head_pages", 0), step.get("durable_pages", 1))
         durable_pages = step.get("durable_pages", 1)
         state.pages_since_index += durable_pages
+        state.pages_since_sheets += durable_pages
         if step["completed"]:
             state.completed_types.add(scope_key)
         counters.update({
@@ -120,6 +162,12 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
         log.error("[%s] rental list step %s: %s", prop_type, list_status, exc,
                   exc_info=list_status != "blocked")
     list_seconds = max(0.0, clock() - list_started)
+    if prop_type == "apartment":
+        # A saved head or partially persisted page still changes the market
+        # even when the following request fails. Keep it pending while the
+        # existing source-block gate prevents maintenance in this cycle.
+        state.note_apartment_saves(counters.get("saved_observations", 0),
+                                   counters.get("pages", 0), clock())
     estimated_circle_hours = None
     if list_status == "ok" and counters.get("pages", 0):
         previous_success = state.last_success.get(scope_key)
@@ -137,21 +185,38 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
     budget = MaintenanceBudget(plan.maintenance_seconds if list_status == "ok" else 0.0,
                                clock=clock)
     full_pass = len(state.completed_types) >= type_count
-    if full_pass or state.pages_since_index >= index_refresh_pages:
-        await budget.run("index", lambda _: operations.rebuild_index(), cap=15)
+    index_reason = state.index_due_reason(clock(), pages=index_refresh_pages,
+        seconds=plan.index_refresh_seconds, full_pass=full_pass)
+    if index_reason:
+        async def refresh_index(_):
+            state.index_last_attempt = clock()
+            return await operations.rebuild_index()
+        await budget.run("index", refresh_index, cap=15)
         if budget.stages["index"]["status"] == "ok":
             state.pages_since_index = 0
+            state.apartment_pages_since_index = 0
+            state.pending_index_observations = 0
+            state.index_dirty_since = None
+            state.index_refresh_required = False
+            state.index_last_success = clock()
+            state.index_failures = 0
             state.index_refreshes += 1
             if full_pass:
                 log.info("--- Full rental pass complete ---")
                 state.completed_types.clear()
-            if state.index_refreshes % 3 == 0:
+            # A timed database refresh must not multiply external exports.
+            # Preserve the previous 3 * 15 durable-page cadence independently
+            # of the shorter index deadline, retaining due work on failure.
+            if state.pages_since_sheets >= RENTAL_SHEETS_SYNC_PAGES:
                 synced = await budget.run("sheets", lambda _: operations.sync_sheets(), cap=10)
                 if synced is False and budget.stages["sheets"]["status"] == "ok":
                     budget.stages["sheets"]["status"] = "error"
                 if synced is True and budget.stages["sheets"]["status"] == "ok":
+                    state.pages_since_sheets = 0
                     await operations.set_setting("SHEETS_RENTAL_SYNCED_AT",
                         datetime.now(timezone.utc).isoformat())
+        elif budget.stages["index"]["status"] in ("error", "timeout"):
+            state.index_failures += 1
 
     if state.cycle % plan.db_every == 0:
         await budget.run("dedup", lambda _: operations.dedup(), cap=8)
@@ -200,6 +265,19 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
              "estimated_circle_hours": estimated_circle_hours,
              "list_seconds": round(list_seconds, 3), "stages": budget.stages,
              "maintenance_seconds": round(maintenance_seconds, 3),
+             "index": {
+                 "due_reason": index_reason,
+                 "refresh_interval_seconds": plan.index_refresh_seconds,
+                 "pending_observations": state.pending_index_observations,
+                 "apartment_pages_since_refresh": state.apartment_pages_since_index,
+                 "dirty_age_seconds": (round(max(0.0, clock() - state.index_dirty_since), 3)
+                     if state.index_dirty_since is not None else None),
+                 "last_success_age_seconds": (round(max(0.0, clock() - state.index_last_success), 3)
+                     if state.index_last_success is not None else None),
+                 "retry_after_seconds": round(state.index_retry_after(clock()), 3),
+                 "failures": state.index_failures,
+                 "pages_since_sheets": state.pages_since_sheets,
+             },
              "geo_complex_guess_enabled": plan.allow_geo_complex_guess,
              "work_seconds": round(max(0.0, clock() - started), 3),
              "sleep_seconds": round(sleep_seconds, 3)}
@@ -264,7 +342,7 @@ async def main() -> None:
         check_archived_rentals, bind_by_address, bind_rental_geo, settings.set)
     # Rebuild the legacy index on the first healthy list step after startup.
     # Old aggregates must not remain eligible until the fifteenth new page.
-    state = RentalServiceState(pages_since_index=RENTAL_INDEX_REFRESH_PAGES)
+    state = RentalServiceState(index_refresh_required=True)
     paths = list(RENTAL_PATHS.items())
     path_idx = 0
     while True:
