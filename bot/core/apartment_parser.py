@@ -238,6 +238,20 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
     sales = await parse_apartments_for_sale(city, max_pages=max_pages, start_page=start_page,
                                              max_price=max_price, stats=stats)
 
+    # One read supplies both authoritative stored identity and detail-fetch
+    # eligibility. A card's stale text must not replace an already resolved FK.
+    known_sales = {}
+    ids_on_page = [r['id'] for r in sales if r.get('id')]
+    if ids_on_page:
+        try:
+            from bot.db.pg import fetch as _pg_fetch
+            known_rows = await _pg_fetch(
+                'SELECT id,price,lat,complex_id,complex_resolution,house_attribution '
+                'FROM apartment_listings WHERE id=ANY($1::text[])', ids_on_page)
+            known_sales = {row['id']: dict(row) for row in known_rows}
+        except Exception:
+            logger.warning('apt_parser: stored sale identity unavailable; rental identity remains unassigned')
+
     # 3. Build price-per-m2 index by district
     district_prices = defaultdict(list)
     for s in sales:
@@ -279,13 +293,18 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
 
         # Lookup реальной аренды из PostgreSQL rental_index
         complex_name = s.get("complex_name") or s.get("address", "").split(",")[0].strip()
+        stored = known_sales.get(s.get('id'), {})
+        complex_id = stored.get('complex_id') or s.get('complex_id')
+        if (stored.get('complex_resolution') in ('geo', 'unbound')
+                or stored.get('house_attribution') in ('geo', 'address_geo')):
+            complex_id, complex_name = None, None
         rent_data = await lookup_rental_estimate(
             city=city,
             district=d or None,
             complex_name=complex_name or None,
             rooms=rooms,
             prop_type="apartment",
-            complex_id=s.get("complex_id"),
+            complex_id=complex_id,
         )
         # Предпочитаем ₸/м² × площадь этой конкретной квартиры вместо голого
         # median_price группы — на широких фолбэках (район/город) комнатность
@@ -302,15 +321,8 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
         if rent and s["price"] > 0:
             annual_rent = rent * 12
             s["yield_pct"] = round((annual_rent / s["price"]) * 100, 1)
-            # Net-доходность (см. Notion "Расчет доходности"): gross сам по
-            # себе занижает картину для карты, но переоценивает её для
-            # инвестора — не учитывает простой между жильцами, налог+мелкий
-            # ремонт и расходы на саму покупку. Те же допущения, что в
-            # методичке: 0.95 — вакантность (~2-3 недели простоя/год при
-            # высоком спросе в Астане), 0.10 — налог+косметика (~10% годовой
-            # аренды), 1.02 — расходы на покупку (нотариус/риелтор ~2%).
-            # net ≈ gross * 0.83 — держим формулу явной (не константой),
-            # чтобы менять допущения по отдельности было легко.
+            # Configurable asking-price scenario, not achieved rent or a
+            # confirmed tax regime. Missing/invalid assumptions hide net.
             from bot.core.rental_yield import NetYieldParams, monthly_yield_scenario
             from bot.db import settings as rental_settings
             try:
@@ -322,11 +334,11 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
             s["payback_years"] = round(s["price"] / (rent * 12), 1)
             s["rent_source"] = f"{rent_data.get('level','?')}, n={rent_data.get('sample_count',0)}"
         else:
-            s["yield_pct"] = 0
-            s["net_yield_pct"] = 0
-            s["est_rent"] = 0
+            s["yield_pct"] = None
+            s["net_yield_pct"] = None
+            s["est_rent"] = None
             s["payback_years"] = None
-            s["rent_source"] = "нет данных" 
+            s["rent_source"] = None
 
         cname = s.get("address", "").split(",")[0].strip().lower()
         same_count = complex_counter.get(cname, 1)
@@ -387,18 +399,7 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
     # Иначе (цена та же, координаты уже есть) — пропускаем, объявление и так
     # видно на карте с прошлого раза. По прикидке из задачи — это должно
     # сократить число detail-запросов в десятки раз на устоявшемся ядре базы.
-    known_by_id: dict[str, tuple] = {}
-    ids_on_page = [r["id"] for r in results if r.get("id")]
-    if ids_on_page:
-        try:
-            from bot.db.pg import fetch as _pg_fetch
-            known_rows = await _pg_fetch(
-                "SELECT id, price, lat FROM apartment_listings WHERE id = ANY($1::text[])",
-                ids_on_page)
-            known_by_id = {row["id"]: (row["price"], row["lat"]) for row in known_rows}
-        except Exception as e:
-            logger.warning("apt_parser: не удалось прочитать известные цены из БД (%s) — "
-                            "работаем как раньше, без фильтра по изменению цены", e)
+    known_by_id = {identifier: (row['price'], row['lat']) for identifier, row in known_sales.items()}
 
     def _needs_detail_fetch(r: dict) -> bool:
         if r.get("details_fetched"):

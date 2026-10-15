@@ -68,3 +68,28 @@ def test_stage_zero_schema_is_additive_and_does_not_invent_historical_periods():
     assert 'UNIQUE NULLS NOT DISTINCT' in second and 'source_oldest_at' in second
     assert 'UPDATE rental_listings' not in first and 'DELETE FROM rental_listings' not in first
     assert 'hex_id IS NOT NULL AND hex_edge_m IS NOT NULL' in first
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('resolution,expected_id,expected_name', [
+    ('source', 17, 'Stale raw name'), ('geo', None, None), ('unbound', None, None)])
+async def test_sale_collector_reuses_stored_fk_and_does_not_turn_missing_rent_into_zero(
+        monkeypatch, resolution, expected_id, expected_name):
+    from bot.core import apartment_parser as parser
+    from bot.db import pg, settings
+    sale = dict(id='test-rental-sale', price=40000000, area=50, rooms=2, district='Есиль',
+                address='Stale raw name', complex_name='Stale raw name', details_fetched=True)
+    monkeypatch.setattr(parser, 'parse_apartments_for_sale', AsyncMock(return_value=[sale]))
+    read = AsyncMock(return_value=[dict(id=sale['id'],price=sale['price'],lat=51.1,
+        complex_id=17,complex_resolution=resolution,house_attribution=None)])
+    monkeypatch.setattr(pg, 'fetch', read)
+    lookup = AsyncMock(return_value=None)
+    monkeypatch.setattr(parser, 'lookup_rental_estimate', lookup)
+    monkeypatch.setattr(parser, 'get_comparables', AsyncMock(return_value=([],{})))
+    monkeypatch.setattr(parser, 'analyze_bargain', lambda *a,**k:{})
+    monkeypatch.setattr(settings, 'get_int', lambda key,default:default)
+    result = await parser.analyze_apartments()
+    assert lookup.await_args.kwargs['complex_id'] == expected_id
+    assert lookup.await_args.kwargs['complex_name'] == expected_name
+    assert all(result[0][field] is None for field in ('yield_pct','net_yield_pct','est_rent','rent_source'))
+    assert read.await_count == 1
