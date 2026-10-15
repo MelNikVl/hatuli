@@ -1119,6 +1119,13 @@ async def run_cycle():
     except Exception as e:
         log.warning("Sheets sync failed: %s", e)
 
+    try:
+        from bot.core.rental_economics_refresh import refresh_all, rebuild_benchmarks
+        snapshot_result = await refresh_all()
+        log.info("Rental scenario snapshots: %s", snapshot_result)
+        await rebuild_benchmarks()
+    except Exception as exc:
+        log.warning("Rental scenario refresh unavailable (%s)", type(exc).__name__)
     log.info("=== Apartment cycle done ===\n")
 
 
