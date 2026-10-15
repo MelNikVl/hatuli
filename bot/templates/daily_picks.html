@@ -3,13 +3,14 @@
 {% block title %}Лучшие квартиры Астаны{% if snapshot and snapshot.is_today and not snapshot.is_stale and snapshot['items'] %} на сегодня{% endif %} — Hatuli{% endblock %}
 {% block description %}Квартиры в Астане до 100 млн ₸ с ценой за м² минимум на 3% ниже похожих предложений. Четыре подтверждённых фактора выбора, фотографии и история цен.{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="/static/hatuli-picks.css?v=20261015.1">
+<link rel="stylesheet" href="/static/hatuli-picks.css?v=20261016.1">
 <link rel="stylesheet" href="/static/hatuli-price-history.css?v=20261013">
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261013">
 <script src="/static/hatuli-picks.js?v=20261014" defer></script>
 {% endblock %}
 {% block content %}
 <div class="picks-page">
+  {% with picks_kind='sale' %}{% include '_picks_kind_switch.html' %}{% endwith %}
   <section class="picks-hero" aria-labelledby="picks-title">
     <div class="picks-hero-copy">
       <p class="picks-eyebrow"><span class="picks-dot" aria-hidden="true"></span> Астана · ежедневная подборка</p>

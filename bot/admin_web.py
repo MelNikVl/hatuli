@@ -2286,6 +2286,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.include_router(make_seller_review_router(templates))
     from bot.web.rental_tools import make_rental_tools_router
     app.include_router(make_rental_tools_router(templates))
+    from bot.web.rental_picks import make_rental_picks_router
+    app.include_router(make_rental_picks_router(templates))
     from bot.web.rental_scanner import make_rental_scanner_router
     app.include_router(make_rental_scanner_router(templates))
     from bot.web.rental_economics import router as rental_economics_router
