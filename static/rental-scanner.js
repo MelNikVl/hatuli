@@ -5,7 +5,15 @@
   const byId = id => document.getElementById(id), form = byId('sublease-form');
   const money = value => new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 0}).format(value) + ' ₸';
   const pct = value => value === null ? 'Не определяется' : new Intl.NumberFormat('ru-RU', {maximumFractionDigits: 1}).format(value * 100) + '%';
-  let generation = 0, controller, lastQuery = null, page = 1, total = 0, map, markers;
+  let generation = 0, controller, lastQuery = null, page = 1, total = 0, map, markers, invalidField;
+  const fieldNames = {district: 'Район', rooms: 'Комнатность', furnishing: 'Мебель',
+    rent_month: 'Аренда у собственника', nightly: 'Цена за ночь', occupancy: 'Сценарий загрузки',
+    avg_stay_nights: 'Среднее проживание', cleaning_per_turn: 'Уборка при смене гостя',
+    consumables_per_night: 'Расходники за занятую ночь', utilities_month: 'Коммуналка и интернет',
+    platform_fee_pct: 'Комиссия', tax_pct: 'Налог', furnish_capex: 'Мебель и оснащение',
+    capex_months: 'Срок распределения оснащения', deposit_months: 'Возвратный депозит',
+    max_rent: 'Максимальная аренда', strategy: 'Стратегия', vacancy_fraction: 'Планируемый простой',
+    turnovers_per_year: 'Смен арендатора в год'};
 
   function element(tag, text, className) {
     const node = document.createElement(tag);
@@ -31,10 +39,17 @@
     if (byId('sublease-inventory')) byId('sublease-inventory').hidden = true;
     markers?.clearLayers();
   }
-  function invalidate() {
+  function clearFieldError() {
+    invalidField?.removeAttribute('aria-invalid');
+    invalidField?.removeAttribute('aria-errormessage');
+    invalidField = null;
+  }
+  function invalidate({preserveSegment = false} = {}) {
     generation += 1;
     controller?.abort();
+    clearFieldError();
     for (const id of ['sublease-calculation', 'sublease-segment']) {
+      if (preserveSegment && id === 'sublease-segment') continue;
       byId(id).hidden = true;
       byId(id).replaceChildren();
     }
@@ -53,15 +68,53 @@
   function sourceText(source) {
     if (!source || source.kind === 'manual') return 'Ставки введены вручную.';
     const level = {complex: 'ЖК', district: 'район', hex: 'гекс', гекс: 'гекс'}[source.level] || 'сегмент';
-    return `Цены объявлений · ${level} · ${source.n ?? source.sample_count} объявлений за ${source.window_days} дней · обновлено ${new Date(source.updated_at).toLocaleString('ru-RU')}`;
+    const parts = ['Цены объявлений', level], count = source.n ?? source.sample_count;
+    if (Number.isInteger(count) && count > 0) parts.push(`${count} объявлений`);
+    const timestamp = value => {
+      if (typeof value !== 'string' || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+      const date = new Date(value);
+      return Number.isFinite(date.getTime()) ? date : null;
+    };
+    const oldest = timestamp(source.source_oldest_at), newest = timestamp(source.source_newest_at);
+    const day = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Asia/Almaty', day: '2-digit', month: '2-digit', year: 'numeric'});
+    if (oldest && newest && oldest <= newest) {
+      const first = day.format(oldest), last = day.format(newest);
+      parts.push(`наблюдения ${first === last ? first : first + '–' + last}`);
+    }
+    // The lookback window is not the age or duration of collected evidence.
+    if (Number.isInteger(source.window_days) && source.window_days > 0) parts.push(`окно ${source.window_days} дней`);
+    const updated = timestamp(source.updated_at);
+    if (updated) parts.push(`обновлено ${updated.toLocaleString('ru-RU', {timeZone: 'Asia/Almaty',
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'})} (Астана, UTC+5)`);
+    return parts.join(' · ');
   }
   function errorMessage(data) {
-    return data.errors ? Object.values(data.errors).join(' ') : data.message || 'Не удалось получить расчёт. Проверьте вводные и попробуйте снова.';
+    return data.errors ? Object.entries(data.errors).map(([name, message]) => {
+      const input = form.elements[name];
+      // API fractions are displayed as percentages in this form.
+      if (input?.dataset.percent !== undefined && /^Допустимо от /.test(message)) message = 'Укажите значение от 0 до 100%.';
+      return fieldNames[name] ? `${fieldNames[name]}: ${message}` : message;
+    }).join(' ') : data.message || 'Не удалось получить расчёт. Проверьте вводные и попробуйте снова.';
+  }
+  function reportError(data) {
+    clearFieldError();
+    status(errorMessage(data));
+    const input = Object.keys(data.errors || {}).map(name => form.elements[name]).find(field => field && !field.disabled);
+    if (input) {
+      invalidField = input;
+      input.setAttribute('aria-invalid', 'true');
+      input.setAttribute('aria-errormessage', 'sublease-status');
+      // Scanner controls can be inside a collapsed details element.
+      const details = input.closest('details');
+      if (details) details.open = true;
+      input.focus();
+    }
   }
   async function api(url, options = {}) {
     controller?.abort();
     controller = new AbortController();
     const own = ++generation;
+    clearFieldError();
     status('Считаем…');
     try {
       const response = await fetch(url, {...options, signal: controller.signal, headers: {'Content-Type': 'application/json', ...(options.headers || {})}});
@@ -69,7 +122,8 @@
       if (own !== generation) return null;
       if (!response.ok) {
         if (data.error === 'narrower_filters_required') clearScanner();
-        throw Error(errorMessage(data));
+        reportError(data);
+        return null;
       }
       status('');
       return data;
@@ -120,6 +174,19 @@
     box.hidden = !present;
     if (!present) return;
     box.append(element('h2', 'Цены сегмента'));
+    function usePrices(prices) {
+      // Only the explicitly accepted prices change. Keep this ready segment
+      // available so the other rate can be copied without another request.
+      invalidate({preserveSegment: true});
+      for (const [name, price] of Object.entries(prices)) form.elements[name].value = price;
+      status('Цены перенесены в расчёт. Проверьте свои расходы и нажмите «Рассчитать безубыточность».');
+    }
+    if (result.indices.monthly && result.indices.daily) {
+      const both = element('button', 'Использовать обе ставки');
+      both.type = 'button';
+      both.onclick = () => usePrices({rent_month: result.indices.monthly.median_price, nightly: result.indices.daily.median_price});
+      box.append(both);
+    }
     for (const [kind, title] of [['monthly', 'Помесячно'], ['daily', 'За сутки'], ['furnished_monthly', 'Помесячно с полной мебелью']]) {
       const index = result.indices[kind];
       if (!index) continue;
@@ -127,10 +194,7 @@
       if (kind === 'monthly' || kind === 'daily') {
         const button = element('button', kind === 'monthly' ? 'Использовать аренду в расчёте' : 'Использовать цену за ночь');
         button.type = 'button';
-        button.onclick = () => {
-          invalidate();
-          form.elements[kind === 'monthly' ? 'rent_month' : 'nightly'].value = index.median_price;
-        };
+        button.onclick = () => usePrices({[kind === 'monthly' ? 'rent_month' : 'nightly']: index.median_price});
         box.append(button);
       }
     }
@@ -208,7 +272,8 @@
         try { data = await response.json(); } catch {}
         if (own !== generation) return;
         if (data.error === 'narrower_filters_required') clearScanner();
-        throw Error(errorMessage(data));
+        reportError(data);
+        return;
       }
       const blob = await response.blob();
       if (own !== generation) return;
