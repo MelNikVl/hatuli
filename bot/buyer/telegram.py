@@ -387,7 +387,7 @@ async def action(callback: CallbackQuery) -> None:
     try:
         if command == 'save':
             ok = await save_favorite(callback.from_user.id, lid)
-            await callback.message.answer('⭐ Сохранено в избранном Clearly.' if ok else 'Объявление не найдено.')
+            await callback.message.answer('⭐ Сохранено в избранном Hatuli.' if ok else 'Объявление не найдено.')
             return
         result = recalled(callback.from_user.id, lid)
         if not result:
@@ -557,7 +557,7 @@ async def location_mode(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(location_kind=kind, location_choices=[])
     await state.set_state(Profile.location_query)
     instructions = {
-        'complex': 'Напишите название ЖК. Предложу варианты из справочника Clearly.',
+        'complex': 'Напишите название ЖК. Предложу варианты из справочника Hatuli.',
         'address': 'Напишите улицу и номер дома или перекрёсток в Астане. '
                    'У длинной улицы важно выбрать конкретный участок. Найденную точку покажу на карте.',
         'pin': 'Нажмите скрепку → «Геопозиция» и выберите желаемое место на карте. '

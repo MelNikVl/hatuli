@@ -1,34 +1,21 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<!-- Yandex.Metrika counter -->
-<script type="text/javascript">
-    (function(m,e,t,r,i,k,a){
-        m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
-        m[i].l=1*new Date();
-        for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
-        k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)
-    })(window, document,'script','https://mc.yandex.ru/metrika/tag.js?id=111603221', 'ym');
-
-    ym(111603221, 'init', {ssr:true, webvisor:true, clickmap:true, ecommerce:"dataLayer", referrer: document.referrer, url: location.href, accurateTrackBounce:true, trackLinks:true});
-</script>
-<noscript><div><img src="https://mc.yandex.ru/watch/111603221" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
-<!-- /Yandex.Metrika counter -->
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>{% block title %}Clearly — карта квартир Астаны{% endblock %}</title>
-  <meta name="description" content="{% block meta_description %}Clearly — карта квартир Астаны: продажа и аренда, тепловые карты цен, шума и транспортной доступности, рейтинг жилых комплексов Астаны.{% endblock %}"/>
+  <title>{% block title %}Hatuli — карта квартир Астаны{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}Hatuli — карта квартир Астаны: продажа и аренда, тепловые карты цен, шума и транспортной доступности, рейтинг жилых комплексов Астаны.{% endblock %}"/>
   <link rel="canonical" href="{% block canonical %}https://hatuli.ai-groundtruth.com{{ request.url.path }}{% endblock %}"/>
   <!-- OpenGraph — генерические дефолты, страницы переопределяют через
        og_title/og_description/og_image (см. /listing/{id} — карточка
        объявления должна нормально разворачиваться превью при шаринге ссылки). -->
   <meta property="og:type" content="website"/>
-  <meta property="og:site_name" content="Clearly"/>
-  <meta property="og:title" content="{% block og_title %}Clearly — карта квартир Астаны{% endblock %}"/>
-  <meta property="og:description" content="{% block og_description %}Clearly — карта квартир Астаны: продажа и аренда, тепловые карты цен, рейтинг жилых комплексов.{% endblock %}"/>
+  <meta property="og:site_name" content="Hatuli"/>
+  <meta property="og:title" content="{% block og_title %}Hatuli — карта квартир Астаны{% endblock %}"/>
+  <meta property="og:description" content="{% block og_description %}Hatuli — карта квартир Астаны: продажа и аренда, тепловые карты цен, рейтинг жилых комплексов.{% endblock %}"/>
   <meta property="og:url" content="https://hatuli.ai-groundtruth.com{{ request.url.path }}"/>
   {% block og_image %}{% endblock %}
-  <link rel="icon" type="image/png" href="/static/branding/favicon.png"/>
+  <link rel="icon" type="image/svg+xml" href="/static/branding/hatuli.svg"/>
   <!-- Kepler.gl попап (ЖК-карточка/попап объявления) грузит внешний
        kepler.gl/demo в iframe — preconnect срезает DNS/TLS-хэндшейк ещё до
        того, как пользователь откроет попап, часть заметной задержки
@@ -36,7 +23,7 @@
   <link rel="preconnect" href="https://kepler.gl" crossorigin>
   <link rel="dns-prefetch" href="https://kepler.gl">
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"WebSite","name":"Clearly","url":"https://hatuli.ai-groundtruth.com","description":"Карта квартир Астаны: продажа, аренда, тепловые карты, рейтинг жилых комплексов."}
+  {"@context":"https://schema.org","@type":"WebSite","name":"Hatuli","url":"https://hatuli.ai-groundtruth.com","description":"Карта квартир Астаны: продажа, аренда, тепловые карты, рейтинг жилых комплексов."}
   </script>
   <script>
   (function() {
@@ -165,13 +152,11 @@
     or request.url.path == '/admin-panel') %}
 <header class="pub-header">
   <div class="pub-row1">
-    <a href="/" class="pub-logo" style="text-transform:none;"><span style="color:#0E93A6;">Clearly</span></a>
+    <a href="/" class="pub-logo" style="text-transform:none;"><span style="color:#0E93A6;">Hatuli</span></a>
     <nav class="pub-nav">
-      <a href="/complexes" class="{% if 'complexes' in request.url.path %}active{% endif %}">Жилые комплексы</a>
-      <a href="/developers" class="{% if 'developer' in request.url.path %}active{% endif %}">Застройщики</a>
-      <a href="/banks" class="{% if 'banks' in request.url.path %}active{% endif %}">Банки</a>
-      <a href="/mortgage-calculator" class="{% if 'mortgage-calculator' in request.url.path %}active{% endif %}">Калькулятор ипотеки</a>
-      <a href="/news" class="{% if 'news' in request.url.path %}active{% endif %}">Новости</a>
+      <a href="/example">Пример разбора</a>
+      <a href="/map" class="{% if request.url.path in ('/map', '/admin') or 'complex' in request.url.path %}active{% endif %}">ЖК и карта</a>
+      <a href="/how-it-works">Как считаем</a>
       {% if admin %}
       <a href="/info" class="{% if 'info' in request.url.path or 'score-explained' in request.url.path or 'investments' in request.url.path %}active{% endif %}">Аналитика</a>
       <a href="/admin-panel" class="admin-panel-link {% if panel_family %}active{% endif %}">Админка</a>
@@ -179,7 +164,7 @@
     </nav>
     <div class="pub-row1-right">
       <button class="pub-theme-btn" id="pub-theme-toggle" onclick="togglePubTheme()" type="button" title="Переключить тему">🌓</button>
-      <a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;justify-content:center;background:rgba(37,99,235,.1);border-radius:8px;width:32px;height:32px;"><span style="font-size:18px;line-height:1;">♡</span></a>
+      {% if site_user or admin %}<a href="/favorites" class="pub-fav-icon" title="Избранное" style="display:inline-flex;align-items:center;justify-content:center;background:rgba(37,99,235,.1);border-radius:8px;width:32px;height:32px;"><span style="font-size:18px;line-height:1;">♡</span></a>{% endif %}
       {% if site_user %}
       <a href="/cabinet" class="pub-user-chip">{{ site_user.full_name or ('@' + (site_user.username or site_user.user_id|string)) }}</a>
       {% if admin %}<a href="/admin/logout" class="pub-fav-icon" title="Выйти" style="font-size:13px;font-weight:600;">Выйти</a>{% endif %}

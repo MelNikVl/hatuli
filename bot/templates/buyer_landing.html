@@ -1,0 +1,47 @@
+{% extends "buyer_public_base.html" %}
+{% block content %}
+<section class="hp-hero" aria-labelledby="hero-title">
+  <div>
+    <p class="hp-kicker">Для покупателя квартиры в Астане</p>
+    <h1 id="hero-title">Проверь квартиру в Астане перед покупкой</h1>
+    <p class="hp-lead">История цены, похожие предложения и признаки повторной публикации — в одном разборе.</p>
+    <div class="hp-actions">
+      <a class="hp-button" href="/example">Посмотреть пример разбора <span aria-hidden="true">↗</span></a>
+      <a class="hp-button hp-button-secondary" href="/request-analysis">Запросить разбор своей квартиры</a>
+    </div>
+    <p class="hp-help">Свой разбор готовим вручную. Сначала отправьте ссылку — возможность разбора и доступ согласуем отдельно.</p>
+  </div>
+  <article class="hp-report-preview" aria-label="Короткий фрагмент реального примера">
+    <img class="hp-preview-photo" src="{{ example.property.photo_url }}" alt="Интерьер квартиры из обезличенного примера" width="700" height="420" fetchpriority="high">
+    <div class="hp-preview-caption"><div><h2>{{ example.property.rooms }}-комнатная · {{ example.property.area|fmt_num }} м²</h2><p>{{ example.property.complex_name }} · {{ example.property.district }}</p></div><span class="hp-tag">Реальный пример</span></div>
+    <p class="hp-preview-price">{{ example.property.price|fmt_tenge }}</p>
+    <p class="hp-preview-label">Цена предложения · проверка {{ example.reviewed_label }}</p>
+    <svg class="hp-mini-chart" viewBox="0 0 640 185" role="img" aria-label="{{ example.chart.accessible_label }}">
+      <path d="{{ example.chart.path }}" transform="translate(0,-4)" stroke="#1e6353" stroke-width="3" stroke-dasharray="5 5" fill="none"/>
+      {% for p in example.chart.points %}<circle cx="{{ p.x }}" cy="{{ p.y - 4 }}" r="5" fill="#1e6353"/>{% endfor %}
+      <text x="72" y="180" fill="#65766f" font-size="14">{{ example.chart.first_label }}</text><text x="620" y="180" text-anchor="end" fill="#65766f" font-size="14">{{ example.chart.last_label }}</text>
+    </svg>
+    <p class="hp-preview-note">{{ example.preview_note }} <a href="/example">Посмотреть весь разбор →</a></p>
+  </article>
+</section>
+<section class="hp-section" aria-labelledby="benefit-title">
+  <h2 id="benefit-title">Что узнаёт покупатель</h2>
+  <p class="hp-section-intro">Меньше догадок — больше конкретных вопросов продавцу.</p>
+  <div class="hp-benefits">
+    <article class="hp-benefit"><span class="hp-number">01</span><h3>Как менялась заявленная цена</h3><p>Покажем зафиксированные цены и даты. Пропуски в наблюдениях обозначим.</p></article>
+    <article class="hp-benefit"><span class="hp-number">02</span><h3>Встречалась ли квартира раньше</h3><p>Отделим подтверждённую историю от вероятного совпадения с другим объявлением.</p></article>
+    <article class="hp-benefit"><span class="hp-number">03</span><h3>Чем отличаются похожие предложения</h3><p>Сравним площадь, цену и известные характеристики. Объясним выбор аналогов.</p></article>
+    <article class="hp-benefit"><span class="hp-number">04</span><h3>Что уточнить перед просмотром и торгом</h3><p>Соберём расхождения и вопросы, на которые объявление не даёт ответа.</p></article>
+  </div>
+  <aside class="hp-flip"><div class="hp-eyebrow">Для флипперов</div><div><h3>Сначала проверь исходные данные, затем считай ремонт и прибыль.</h3><p>Начните с истории объекта и похожих предложений.</p></div></aside>
+</section>
+<section class="hp-section hp-trust" aria-labelledby="trust-title">
+  <div><h2 id="trust-title">Понятно, откуда взялся каждый вывод</h2><p class="hp-section-intro">У примера есть источник и дата проверки. У сравнения — критерии. У неизвестного — честная отметка.</p><a href="/how-it-works">Источники и ограничения →</a></div>
+  <div class="hp-trust-list">
+    <div class="hp-trust-item"><strong>Фактические наблюдения</strong><p>История и цены из объявлений. Фото примера проверено: контакты продавца не публикуем.</p></div>
+    <div class="hp-trust-item"><strong>Сравнение с объяснением</strong><p>Аналоги подбираем по известным характеристикам и убираем повторные публикации одного объекта.</p></div>
+    <div class="hp-note"><p>Цены объявлений не равны ценам сделок.</p><p>Снятие объявления не означает продажу. Вероятное совпадение не становится подтверждённым только из-за похожего текста.</p></div>
+  </div>
+</section>
+<section class="hp-bottom-cta"><div><h2>Есть квартира на примете?</h2><p>Отправьте ссылку и контакт для ответа. Заявку рассмотрим вручную.</p></div><a class="hp-button" href="/request-analysis">Запросить разбор →</a></section>
+{% endblock %}

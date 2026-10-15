@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 
-from bot.db.pg import execute, fetch, fetchrow
+from bot.db.pg import execute, fetch, fetchrow, get_pool
 
 _ITERATIONS = 200_000
 
@@ -25,10 +25,11 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, stored: str) -> bool:
     try:
         salt, digest = stored.split("$", 1)
-    except ValueError:
+        salt_bytes = bytes.fromhex(salt)
+    except (ValueError, TypeError, AttributeError):
         return False
     check = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), bytes.fromhex(salt), _ITERATIONS
+        "sha256", password.encode("utf-8"), salt_bytes, _ITERATIONS
     ).hex()
     return secrets.compare_digest(check, digest)
 
@@ -69,7 +70,8 @@ async def create_user(username: str, password: str) -> bool:
 
 async def set_password(user_id: int, new_password: str) -> None:
     await execute(
-        "UPDATE admin_users SET password_hash = $2 WHERE id = $1",
+        "WITH changed AS (UPDATE admin_users SET password_hash=$2 WHERE id=$1 RETURNING id) "
+        "DELETE FROM admin_sessions s USING changed c WHERE s.user_id=c.id",
         user_id, hash_password(new_password),
     )
 
@@ -78,8 +80,10 @@ async def delete_user(user_id: int) -> bool:
     """True, если удалён. Не даёт удалить последнего админа — иначе доступ
     к /admin/settings и всей админке потерялся бы без способа его вернуть
     (кроме прямого доступа к БД)."""
-    count = await fetchrow("SELECT COUNT(*) AS n FROM admin_users")
-    if count and count["n"] <= 1:
-        return False
-    await execute("DELETE FROM admin_users WHERE id = $1", user_id)
-    return True
+    async with get_pool().acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("LOCK TABLE admin_users IN SHARE ROW EXCLUSIVE MODE")
+            if await conn.fetchval("SELECT COUNT(*) FROM admin_users") <= 1:
+                return False
+            # admin_sessions has ON DELETE CASCADE, so access is revoked here.
+            return bool(await conn.fetchval("DELETE FROM admin_users WHERE id=$1 RETURNING id", user_id))

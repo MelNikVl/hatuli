@@ -33,7 +33,7 @@ async def get_user_tier(request: Request) -> str:
     (/, /admin, /listing/{id}) и terminal_extras.py (map-points и т.д.),
     раньше была задублирована в terminal_extras.py как локальная функция.
 
-    admin — admin_auth cookie (пароль в /admin/login, отдельная система от
+    admin — проверенная серверная admin_session (пароль в /admin/login, отдельная система от
     этой). subscriber — залогинен через Telegram И вручную выдан
     full_access администратором (/admin/site-users) — весь сайт открыт,
     кроме админки. public — аноним ИЛИ залогинен через Telegram, но
@@ -41,14 +41,11 @@ async def get_user_tier(request: Request) -> str:
     видит только новостройки (market_type='primary') + тепловые карты +
     разделы главного меню (ЖК/застройщики/банки/новости) как каталог —
     но не карточки отдельных объявлений вторички."""
-    global _full_access_col_ready
-    if request.cookies.get("admin_auth") == "1":
+    from bot.core.admin_sessions import is_admin
+    if is_admin(request):
         return "admin"
     session = request.cookies.get("site_session")
     if session:
-        if not _full_access_col_ready:
-            await _ensure_full_access_column()
-            _full_access_col_ready = True
         user = await get_user_by_session(session)
         if user and user.get("full_access"):
             return "subscriber"
@@ -63,23 +60,48 @@ async def create_login_token() -> str:
 
 
 async def get_token_status(token: str) -> dict | None:
+    if not token or len(token) > 100:
+        return None
     row = await fetchrow(
-        "SELECT token, telegram_id, status, created_at FROM login_tokens WHERE token = $1",
+        "SELECT token, telegram_id, status, created_at, consumed_at FROM login_tokens WHERE token = $1",
         token)
     if not row:
         return None
-    age = datetime.now(timezone.utc) - row["created_at"]
-    if age > timedelta(minutes=TOKEN_TTL_MIN) and row["status"] == "pending":
+    age = datetime.now(timezone.utc) - row["created_at"] if row["created_at"] else timedelta.max
+    if age > timedelta(minutes=TOKEN_TTL_MIN) or row.get("consumed_at") is not None:
         return {"status": "expired"}
     return dict(row)
 
 
 async def create_session(user_id: int) -> str:
     session_id = secrets.token_urlsafe(32)
-    await execute(
-        "INSERT INTO site_sessions (session_id, user_id) VALUES ($1, $2)",
-        session_id, user_id)
+    row = await fetchrow(
+        "INSERT INTO site_sessions (session_id, user_id) "
+        "SELECT $1, user_id FROM users WHERE user_id=$2 AND COALESCE(is_blocked,0)=0 "
+        "RETURNING session_id", session_id, user_id)
+    if not row:
+        raise ValueError("Site user is unavailable")
     return session_id
+
+
+async def consume_login_token(token: str) -> str | None:
+    """Atomically exchange a fresh verified token once, including concurrent polls."""
+    if not token or len(token) > 100:
+        return None
+    session_id = secrets.token_urlsafe(32)
+    row = await fetchrow("""
+        WITH consumed AS (
+            UPDATE login_tokens t SET consumed_at=now(), status='consumed'
+            FROM users u WHERE t.token=$1 AND t.telegram_id=u.user_id
+              AND t.status='verified' AND t.consumed_at IS NULL
+              AND t.created_at > now() - $3::int * interval '1 minute'
+              AND COALESCE(u.is_blocked,0)=0
+            RETURNING t.telegram_id
+        )
+        INSERT INTO site_sessions (session_id,user_id)
+        SELECT $2,telegram_id FROM consumed RETURNING session_id
+    """, token, session_id, TOKEN_TTL_MIN)
+    return row["session_id"] if row else None
 
 
 async def get_user_by_session(session_id: str | None) -> dict | None:
@@ -88,7 +110,8 @@ async def get_user_by_session(session_id: str | None) -> dict | None:
     row = await fetchrow("""
         SELECT u.* FROM site_sessions s
         JOIN users u ON u.user_id = s.user_id
-        WHERE s.session_id = $1
+        WHERE s.session_id = $1 AND COALESCE(u.is_blocked,0)=0
+          AND s.created_at > now() - interval '180 days'
     """, session_id)
     return dict(row) if row else None
 
@@ -299,6 +322,8 @@ async def list_site_users() -> list[dict]:
 
 async def set_user_blocked(user_id: int, blocked: bool) -> None:
     await execute("UPDATE users SET is_blocked = $2 WHERE user_id = $1", user_id, 1 if blocked else 0)
+    if blocked:
+        await execute("DELETE FROM site_sessions WHERE user_id=$1", user_id)
 
 
 async def set_user_full_access(user_id: int, full_access: bool) -> None:

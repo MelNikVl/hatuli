@@ -121,6 +121,9 @@ html, body { overflow: hidden !important; }
 .filterbar #load-progress-pct { font-size:11px; color:#888; flex-shrink:0; min-width:2.5em; text-align:right; }
 .year-chip.active { background:#2563eb !important; color:#fff !important; border-color:#2563eb !important; }
 </style>
+<nav aria-label="Каталог и справочники" style="display:flex;gap:18px;flex-wrap:wrap;padding:0 0 10px;font-size:13px;">
+  <a href="/complexes">Каталог ЖК</a><a href="/developers">Застройщики</a>
+</nav>
 <div class="filterbar">
 <div class="filterbar-inner">
   <!-- "Новостройки" физически убраны из этого select (см. задачу) — теперь
@@ -3159,7 +3162,7 @@ function renderRiskAnalysisBody(ra, uid) {
   return `
 <div style="font-size:16px;font-weight:800;">${state.icon} ${state.label}</div>
 <div style="font-size:12px;color:#999;margin-top:4px;line-height:1.5;">
-  Это не означает, что объект полностью проверен. Ниже указано, каких данных у Clearly нет.
+  Это не означает, что объект полностью проверен. Ниже указано, каких данных у Hatuli нет.
 </div>
 <div style="font-size:11.5px;color:#888;margin-top:6px;">${escapeHtml(ra.summary || '')}</div>
 ${items.length ? `<div style="margin-top:12px;">${topHtml}<div id="risk-more-${uid}" style="display:none;">${restHtml}</div>${showAllBtn}</div>` : ''}
@@ -5258,7 +5261,7 @@ function toggleShareMenu(ev, id) {
   if (!menu) return;
   if (menu.style.display === 'block') { menu.style.display = 'none'; return; }
   const url = shareListingUrl(id);
-  const text = 'Смотри квартиру на Clearly';
+  const text = 'Смотри квартиру на Hatuli';
   const itemStyle = 'display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;border:none;background:none;color:var(--text);font-size:14px;text-align:left;cursor:pointer;border-radius:6px;white-space:nowrap;';
   const items = [];
   items.push(`<button type="button" style="${itemStyle}" onclick="shareCopyLink('${id}', this)">🔗 Скопировать ссылку</button>`);
@@ -5269,7 +5272,7 @@ function toggleShareMenu(ev, id) {
   // (системный шэринг умеет "отправить в Instagram"), на десктопе даём
   // скопировать ссылку и открыть Instagram, чтобы вставить в сообщение/бно.
   if (navigator.share) {
-    items.push(`<button type="button" style="${itemStyle}" onclick="navigator.share({title:'Clearly',text:'${text}',url:'${url}'}).catch(()=>{}); document.getElementById('share-menu').style.display='none';">📱 Ещё (Instagram и др.)</button>`);
+    items.push(`<button type="button" style="${itemStyle}" onclick="navigator.share({title:'Hatuli',text:'${text}',url:'${url}'}).catch(()=>{}); document.getElementById('share-menu').style.display='none';">📱 Ещё (Instagram и др.)</button>`);
   } else {
     items.push(`<a href="https://www.instagram.com/" target="_blank" style="${itemStyle}text-decoration:none;" onclick="shareCopyLink('${id}', null)">📷 Instagram (сначала скопируется ссылка)</a>`);
   }

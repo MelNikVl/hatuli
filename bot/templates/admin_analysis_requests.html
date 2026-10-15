@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Заявки на разбор — Hatuli</title>
+  <style>
+    :root{--border:#d5dce3;--surface:#fff}body{max-width:960px;margin:0 auto;padding:24px;font:16px/1.5 system-ui,sans-serif;background:#f5f7f9;color:#17232d}
+    button,select,textarea{font:inherit;padding:8px;border:1px solid var(--border);border-radius:6px}button{cursor:pointer}textarea{box-sizing:border-box}a{color:#176450}article{overflow-wrap:anywhere}
+  </style>
+</head>
+<body>
+<nav><a href="/admin-panel">Админка</a> · <a href="/admin/site-users">Доступ пользователей</a></nav>
+<h1>Заявки на разбор квартиры</h1>
+<p>Заявки принимаются для ручного разбора. Автоматическая отправка сообщений отключена.</p>
+<form method="get" action="/admin/analysis-requests">
+  <label>Статус <select name="status">
+    {% for value, label in [('new', 'Новые'), ('reviewing', 'В работе'), ('done', 'Завершённые'), ('rejected', 'Отклонённые'), ('all', 'Все')] %}
+    <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select></label>
+  <button type="submit">Показать</button>
+</form>
+{% for item in requests %}
+<article style="margin:20px 0;padding:20px;border:1px solid var(--border);border-radius:12px;background:var(--surface);">
+  <p><strong>Заявка {{ item.request_id }}</strong> · {{ item.created_at.strftime('%d.%m.%Y %H:%M') }}</p>
+  <p><a href="{{ item.listing_url }}" target="_blank" rel="noopener noreferrer">Объявление на Крыше</a></p>
+  <p><strong>Контакт:</strong> {{ item.contact }}</p>
+  {% if item.site_user_id %}<p>Пользователь кабинета: {{ item.site_user_id }}</p>{% endif %}
+  {% if item.comment %}<p style="white-space:pre-wrap;">{{ item.comment }}</p>{% endif %}
+  <form method="post" action="/admin/analysis-requests/{{ item.request_id }}/status">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="version" value="{{ item.version }}">
+    <label>Статус <select name="status">
+      {% for value, label in [('new', 'Новая'), ('reviewing', 'В работе'), ('done', 'Завершена'), ('rejected', 'Отклонена')] %}
+      <option value="{{ value }}" {% if item.status == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select></label>
+    <p><label>Заметка оператора<br><textarea name="private_note" maxlength="2000" rows="3" style="width:100%;">{{ item.private_note }}</textarea></label></p>
+    {% if item.reviewed_by %}<p>Последнее изменение: {{ item.reviewed_by }}, {{ item.updated_at.strftime('%d.%m.%Y %H:%M') }}</p>{% endif %}
+    <button type="submit">Сохранить</button>
+  </form>
+</article>
+{% else %}<p>В этой очереди пока нет заявок.</p>{% endfor %}
+<p>Показаны первые 100 заявок выбранного статуса, начиная с самых ранних.</p>
+</body>
+</html>

@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 import pytest_asyncio
+from tests.admin_auth_helpers import admin_cookies
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -524,7 +525,7 @@ async def client(db):
     app = create_admin_app(bdb, ADMIN_PASSWORD, "test", DB_PATH)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test",
-                                  cookies={"admin_auth": "1"}) as c:
+                                  cookies=await admin_cookies()) as c:
         yield c
 
 
@@ -561,7 +562,7 @@ async def test_api_graceful_fallback_does_not_break_listing_card(client, scenari
 
 @pytest.mark.asyncio
 async def test_dashboard_popup_shell_contains_risk_analysis_block(client, db):
-    r = await client.get("/")
+    r = await client.get("/map")
     assert r.status_code == 200
     html = r.text
     assert "Риски объекта" in html
@@ -638,7 +639,7 @@ async def test_risk_analysis_block_fits_on_mobile_width(mobile_live_server):
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page(viewport={"width": 360, "height": 720})
-        await page.goto(mobile_live_server + "/", wait_until="networkidle", timeout=25000)
+        await page.goto(mobile_live_server + "/map", wait_until="networkidle", timeout=25000)
         await page.wait_for_function("typeof renderRiskAnalysisBody === 'function'", timeout=10000)
 
         metrics = await page.evaluate(

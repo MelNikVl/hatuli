@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 import pytest_asyncio
+from tests.admin_auth_helpers import admin_cookies
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -56,9 +57,8 @@ async def test_liquidity_points_public_and_shaped(db):
         from httpx import AsyncClient, ASGITransport
         app = create_admin_app(BotDB("/tmp/__test_liq_admin.db"), admin_password="x", bot_version="test")
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # Без cookie admin_auth — эндпойнт публичный (карта на главной
-            # доступна без логина).
+        async with AsyncClient(transport=transport, base_url="http://test", cookies=await admin_cookies()) as client:
+            # Точные координаты отдельных объявлений доступны только с проверенной сессией.
             r = await client.get("/admin/api/liquidity-points")
             assert r.status_code == 200
             data = r.json()
@@ -99,7 +99,7 @@ async def test_liquidity_points_excludes_censored_active_listings(db):
         from httpx import AsyncClient, ASGITransport
         app = create_admin_app(BotDB("/tmp/__test_liq_admin2.db"), admin_password="x", bot_version="test")
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with AsyncClient(transport=transport, base_url="http://test", cookies=await admin_cookies()) as client:
             r = await client.get("/admin/api/liquidity-points")
             data = r.json()
             match = [p for p in data["points"] if abs(p["lat"] - 51.19) < 1e-3 and abs(p["lon"] - 71.52) < 1e-3]

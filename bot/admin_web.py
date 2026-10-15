@@ -15,6 +15,11 @@ from fastapi.templating import Jinja2Templates
 
 import bot.state as _state
 from bot.db.compat import BotDB
+from bot.core.admin_sessions import (
+    AdminSessionMiddleware, is_admin, admin_username, create_admin_session,
+    destroy_admin_session, set_admin_session_cookie, clear_admin_session_cookie,
+)
+from bot.core.public_buyer_example import load_public_example
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _LOG_FILE = "web.log"
@@ -27,7 +32,9 @@ os.makedirs(os.path.join(_UPLOADS_DIR, "developers"), exist_ok=True)
 
 
 def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: str = "") -> FastAPI:
-    app = FastAPI(title="Krisha Bot Admin")
+    app = FastAPI(title="Hatuli")
+    app.add_middleware(AdminSessionMiddleware)
+    app.state.analysis_form_secret = os.getenv("HATULI_FORM_SECRET") or admin_password
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=_TEMPLATES_DIR)
 
@@ -62,7 +69,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     templates.env.filters["fmt_tenge"] = _fmt_tenge
 
     def is_authed(request: Request) -> bool:
-        return request.cookies.get("admin_auth") == "1"
+        return is_admin(request)
+
+    templates.env.globals["is_admin"] = is_admin
 
     # ── SEO/AI-краулеры: robots.txt/sitemap.xml/llms.txt на самом ────────────
     # приложении. Cloudflare перед ним отдаёт свой собственный managed
@@ -89,6 +98,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "User-agent: Yandex\nAllow: /\n\n"
             "Disallow: /admin/login\n"
             "Disallow: /admin/api/\n"
+            "Disallow: /admin/analysis-requests\n"
+            "Disallow: /request-analysis\n"
             "Disallow: /cabinet\n\n"
             "Sitemap: https://hatuli.ai-groundtruth.com/sitemap.xml\n"
         )
@@ -96,25 +107,27 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     @app.get("/llms.txt", response_class=PlainTextResponse)
     async def llms_txt():
         return PlainTextResponse(
-            "# Clearly\n\n"
-            "> Карта квартир Астаны: продажа и аренда, тепловые карты цен/шума/"
-            "транспортной доступности, рейтинг жилых комплексов, оценка справедливой "
-            "цены и торга по объявлению.\n\n"
+            "# Hatuli\n\n"
+            "> Проверка квартиры в Астане перед покупкой: история заявленной цены, "
+            "похожие предложения и признаки повторной публикации. Разбор и доступ согласуются вручную.\n\n"
             "## Ключевые страницы\n"
-            "- [Карта квартир](https://hatuli.ai-groundtruth.com/admin): все активные объявления продажи и аренды в Астане с фильтрами и тепловыми картами\n"
-            "- [Жилые комплексы](https://hatuli.ai-groundtruth.com/admin/complexes): рейтинг ЖК Астаны по цене, застройщику, инфраструктуре\n"
-            "- [Застройщики](https://hatuli.ai-groundtruth.com/admin/developers): список застройщиков и их проектов\n"
-            "- [Инфо](https://hatuli.ai-groundtruth.com/admin/info): методология скоринга и расчётов\n"
+            "- [Пример разбора](https://hatuli.ai-groundtruth.com/example): проверенный обезличенный снимок реального объекта\n"
+            "- [ЖК и карта](https://hatuli.ai-groundtruth.com/map): публичные новостройки; частные объявления доступны после входа и ручного одобрения\n"
+            "- [Жилые комплексы](https://hatuli.ai-groundtruth.com/complexes): каталог ЖК Астаны\n"
+            "- [Как считаем](https://hatuli.ai-groundtruth.com/how-it-works): источники, подбор аналогов и ограничения\n"
         )
 
     @app.get("/sitemap.xml")
     async def sitemap_xml():
         from bot.db.pg import fetch as pg_fetch
         urls = [
-            ("https://hatuli.ai-groundtruth.com/admin", "hourly", "1.0"),
-            ("https://hatuli.ai-groundtruth.com/admin/complexes", "daily", "0.9"),
-            ("https://hatuli.ai-groundtruth.com/admin/developers", "weekly", "0.6"),
-            ("https://hatuli.ai-groundtruth.com/admin/info", "monthly", "0.4"),
+            ("https://hatuli.ai-groundtruth.com/", "weekly", "1.0"),
+            ("https://hatuli.ai-groundtruth.com/example", "monthly", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/map", "daily", "0.8"),
+            ("https://hatuli.ai-groundtruth.com/how-it-works", "monthly", "0.7"),
+            ("https://hatuli.ai-groundtruth.com/complexes", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/developers", "weekly", "0.6"),
+            ("https://hatuli.ai-groundtruth.com/info", "monthly", "0.4"),
         ]
         # Топ-2000 ЖК по активным объявлениям — полный список (2500+) в один
         # sitemap не кладём (мягкий лимит поисковиков — 50k URL, но страницы
@@ -136,7 +149,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         for r in rows:
             lastmod = r["updated_at"].strftime("%Y-%m-%d") if r["updated_at"] else ""
             body.append(
-                f"<url><loc>https://hatuli.ai-groundtruth.com/admin/complex/{r['id']}</loc>"
+                f"<url><loc>https://hatuli.ai-groundtruth.com/complex/{r['id']}</loc>"
                 f"{'<lastmod>' + lastmod + '</lastmod>' if lastmod else ''}"
                 f"<changefreq>weekly</changefreq><priority>0.7</priority></url>"
             )
@@ -154,16 +167,19 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         user = await get_user(username.strip() or "admin")
         if not user or not verify_password(password, user["password_hash"]):
             return templates.TemplateResponse("login.html", {"request": request, "error": "Неверный логин или пароль"})
-        response = RedirectResponse(url="/admin", status_code=302)
-        response.set_cookie("admin_auth", "1", httponly=True)
-        response.set_cookie("admin_user", user["username"], httponly=True)
+        try:
+            token = await create_admin_session(user["id"], password_hash=user["password_hash"])
+        except ValueError:
+            return templates.TemplateResponse("login.html", {"request": request, "error": "Учётные данные изменились. Повторите вход."}, status_code=401)
+        response = RedirectResponse(url="/map", status_code=302)
+        set_admin_session_cookie(response, request, token)
         return response
 
     @app.get("/admin/logout")
-    async def admin_logout():
+    async def admin_logout(request: Request):
+        await destroy_admin_session(request.cookies.get("admin_session"))
         response = RedirectResponse(url="/admin/login", status_code=302)
-        response.delete_cookie("admin_auth")
-        response.delete_cookie("admin_user")
+        clear_admin_session_cookie(response)
         return response
 
     async def _render_dashboard(request: Request, listing_id: str | None = None, listing_meta: dict | None = None):
@@ -202,14 +218,19 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         )
 
     @app.get("/", response_class=HTMLResponse)
-    async def root_dashboard(request: Request):
-        # Голый домен — самый обычный способ, которым реальный посетитель
-        # заходит на сайт. Раньше 302-редиректил на /admin — адресная строка
-        # у обычного посетителя тут же показывала "admin", хотя это
-        # публичная карта без логина (задача "все не должны работать под
-        # админом", 2026-08-12). Рендерим карту прямо тут, без редиректа.
-        # /admin остаётся рабочим URL (не ломаем расшаренные ссылки) —
-        # просто больше не единственный вход.
+    async def buyer_landing(request: Request):
+        return templates.TemplateResponse("buyer_landing.html", {"request": request, "example": load_public_example()})
+
+    @app.get("/example", response_class=HTMLResponse)
+    async def buyer_example(request: Request):
+        return templates.TemplateResponse("buyer_example.html", {"request": request, "example": load_public_example()})
+
+    @app.get("/how-it-works", response_class=HTMLResponse)
+    async def buyer_methodology(request: Request):
+        return templates.TemplateResponse("buyer_methodology.html", {"request": request, "example": load_public_example()})
+
+    @app.get("/map", response_class=HTMLResponse)
+    async def public_map(request: Request):
         return await _render_dashboard(request)
 
     @app.get("/admin", response_class=HTMLResponse)
@@ -249,18 +270,24 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             except ValueError:
                 unit_id_int = None
             unit_row = await pg_fetchrow("""
-                SELECT u.rooms, u.area, u.price, u.layout_photo_url, c.name AS complex_name
+                SELECT u.rooms, u.area, u.price, u.source, u.layout_photo_url, c.name AS complex_name
                 FROM newbuild_units u JOIN complexes c ON c.id = u.complex_id
                 WHERE u.id = $1
             """, unit_id_int) if unit_id_int is not None else None
             listing_meta = None
             if unit_row:
                 r = dict(unit_row)
+                from bot.core.site_auth import get_user_tier
+                if r.get("source") in ("person", "krisha", "krisha.kz") and await get_user_tier(request) == "public":
+                    return templates.TemplateResponse("access_locked.html", {
+                        "request": request, "title": "Объявление доступно по запросу",
+                        "message": "Это частное объявление. Войдите и запросите расширенный доступ; он выдаётся вручную.",
+                    })
                 price_txt = f"{r['price']/1e6:.1f} млн ₸" if r.get("price") else ""
                 title_bits = [f"{r.get('rooms') or '?'}-комн", f"{r.get('area') or '?'} м²", r["complex_name"]]
                 listing_meta = {
-                    "title": f"{price_txt} · {' · '.join(title_bits)} · Новостройка — Clearly".strip(" ·"),
-                    "description": f"{' · '.join(title_bits)} — цена {price_txt or 'по запросу'} на Clearly.",
+                    "title": f"{price_txt} · {' · '.join(title_bits)} · Новостройка — Hatuli".strip(" ·"),
+                    "description": f"{' · '.join(title_bits)} — цена {price_txt or 'по запросу'} на Hatuli.",
                     "image": r.get("layout_photo_url"),
                 }
             return await _render_dashboard(request, listing_id=listing_id, listing_meta=listing_meta)
@@ -297,8 +324,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             if r.get("complex_name"):
                 title_bits.append(r["complex_name"])
             listing_meta = {
-                "title": f"{price_txt} · {' · '.join(title_bits)} — Clearly".strip(" ·"),
-                "description": f"{' · '.join(title_bits)}{', ' + r['district'] if r.get('district') else ''} — цена {price_txt or 'по запросу'} на Clearly.",
+                "title": f"{price_txt} · {' · '.join(title_bits)} — Hatuli".strip(" ·"),
+                "description": f"{' · '.join(title_bits)}{', ' + r['district'] if r.get('district') else ''} — цена {price_txt or 'по запросу'} на Hatuli.",
                 "image": photos[0] if photos else None,
             }
         return await _render_dashboard(request, listing_id=listing_id, listing_meta=listing_meta)
@@ -453,7 +480,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
         from bot.identity.review_decisions import record_review_decision
-        reviewed_by = request.cookies.get("admin_user") or "admin"
+        reviewed_by = admin_username(request) or "admin"
         result = await record_review_decision(candidate_id, decision, reviewed_by, comment or None)
         if result is None:
             return RedirectResponse(url="/admin/property-match-review", status_code=302)
@@ -2211,5 +2238,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     from bot.buyer.map_web import router as buyer_map_router
     app.include_router(buyer_map_router)
+
+    from bot.web.analysis_requests import make_analysis_requests_router
+    app.include_router(make_analysis_requests_router(templates))
 
     return app

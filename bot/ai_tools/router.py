@@ -5,7 +5,7 @@ bot.ai_tools.data_quality / bot.ai_tools.tool_registry. Сам НИЧЕГО не
 Тот же паттерн, что terminal_extras.py::make_extras_router() — отдельная
 фабрика, подключается в bot/admin_web.py через app.include_router().
 
-Доступ: та же admin-cookie проверка (`admin_auth`), что и у остальных
+Доступ: та же проверенная сервером admin_session, что и у остальных
 `/admin/api/*` JSON-роутов в этом проекте (bot/admin_web.py::is_authed,
 terminal_extras.py::is_authed) — этот API предназначен для доверенных
 server-side вызовов (будущий orchestrator-агент HackAlem), не для
@@ -31,8 +31,7 @@ from bot.ai_tools.tool_registry import TOOLS
 def make_ai_tools_router() -> APIRouter:
     router = APIRouter()
 
-    def is_authed(request: Request) -> bool:
-        return request.cookies.get("admin_auth") == "1"
+    from bot.core.admin_sessions import is_admin as is_authed
 
     def _unauthorized() -> JSONResponse:
         return JSONResponse({"error": "unauthorized"}, status_code=401)

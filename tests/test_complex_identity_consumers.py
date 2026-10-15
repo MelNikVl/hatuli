@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from tests.admin_auth_helpers import admin_cookies
 
 
 @pytest_asyncio.fixture
@@ -23,7 +24,7 @@ async def client(tmp_path):
     await db.init()
     app = create_admin_app(db, "test", "test", sqlite_path)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
-                                cookies={"admin_auth": "1"}) as test_client:
+                                cookies=await admin_cookies()) as test_client:
         yield test_client
     await close_pool()
 

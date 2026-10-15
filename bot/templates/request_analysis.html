@@ -1,0 +1,27 @@
+{% extends "buyer_public_base.html" %}
+{% block title %}Запросить разбор квартиры — Hatuli{% endblock %}
+{% block head %}<meta name="robots" content="noindex">{% endblock %}
+{% block content %}
+<article class="hp-page">
+  <p class="hp-breadcrumb"><a href="/">Hatuli</a> / Свой разбор</p>
+  <h1 class="hp-page-title">Запросить разбор своей квартиры</h1>
+  <p class="hp-page-subtitle">Пришлите ссылку и контакт для ответа. Заявку рассмотрим вручную; возможность разбора и доступ согласуем отдельно.</p>
+  {% if accepted %}
+  <section class="hp-success" role="status"><h2>Заявка принята</h2><p>Свяжемся по указанному контакту, когда сможем взять квартиру в работу. Разбор не готовится автоматически; срок пока не обещаем.</p><p>Номер заявки: <span class="hp-reference">{{ reference }}</span></p><p>Заявка сохранена для ручного рассмотрения.</p><a class="hp-button hp-button-secondary" href="/example">Пока посмотреть пример</a></section>
+  {% else %}
+  <div class="hp-form-layout">
+    <form class="hp-form" action="/request-analysis" method="post">
+      {% if errors %}<div class="hp-error-summary" role="alert">{% for field, error in errors.items() %}<p>{{ error }}</p>{% endfor %}</div>{% endif %}
+      <input type="hidden" name="form_token" value="{{ form_token }}">
+      <div class="hp-honeypot" aria-hidden="true"><label for="website">Ваш сайт</label><input id="website" name="website" autocomplete="off" tabindex="-1" value=""></div>
+      <div class="hp-field"><label for="listing-url">Ссылка на объявление Крыши</label><input id="listing-url" name="listing_url" type="url" inputmode="url" required maxlength="512" placeholder="https://krisha.kz/a/show/…" value="{{ values.get('listing_url','') }}" aria-describedby="listing-hint" {% if errors.get('listing_url') %}aria-invalid="true"{% endif %}><small id="listing-hint">Сейчас принимаем объявления квартир в Астане на Krisha.kz.</small>{% if errors.get('listing_url') %}<p class="hp-error">{{ errors.listing_url }}</p>{% endif %}</div>
+      <div class="hp-field"><label for="contact">Telegram или email для ответа</label><input id="contact" name="contact" type="text" required maxlength="254" placeholder="@username или you@example.com" value="{{ values.get('contact','') }}" autocomplete="email" {% if errors.get('contact') %}aria-invalid="true"{% endif %}><small>Контакт нужен, чтобы обсудить разбор и вручную выдать доступ. Публично его не показываем.</small>{% if errors.get('contact') %}<p class="hp-error">{{ errors.contact }}</p>{% endif %}</div>
+      <div class="hp-field"><label for="comment">Что хотите уточнить <span style="font-weight:400;color:var(--hp-muted)">— необязательно</span></label><textarea id="comment" name="comment" maxlength="1000" placeholder="Например, интересует история цены и варианты для торга">{{ values.get('comment','') }}</textarea>{% if errors.get('comment') %}<p class="hp-error">{{ errors.comment }}</p>{% endif %}</div>
+      <button class="hp-button" type="submit">Отправить заявку на разбор</button>
+      <p class="hp-consent">Отправляя заявку, вы разрешаете использовать ссылку, комментарий и контакт только для рассмотрения заявки и ответа. Не отправляйте пароли, документы или контакты продавца.</p>
+    </form>
+    <aside><p class="hp-eyebrow">Что дальше</p><ol class="hp-questions"><li>Проверим, доступны ли данные по квартире.</li><li>Свяжемся с вами и согласуем возможность разбора.</li><li>Если согласуем разбор, подготовим его и выдадим доступ вручную.</li></ol><div class="hp-note"><p>Заявку рассмотрим вручную. Возможность разбора и срок согласуем после проверки доступных данных.</p></div><p style="font-size:14px"><a href="/example">Что будет в разборе →</a></p></aside>
+  </div>
+  {% endif %}
+</article>
+{% endblock %}

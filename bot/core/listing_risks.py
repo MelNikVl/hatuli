@@ -389,7 +389,7 @@ def _location_signals(layers: dict | None, demolition: dict | None) -> tuple[lis
                 "NOISE_MAJOR_ROAD", "location", "medium",
                 "Рядом крупная дорога / повышенный шум",
                 noise.get("reason") or "Рядом магистраль — возможен повышенный уличный шум.",
-                "Гео-слои Clearly (OSM)",
+                "Гео-слои Hatuli (OSM)",
                 "При просмотре оценить шум в разное время суток, особенно у окон на улицу.",
             ))
         elif isinstance(noise.get("adj"), (int, float)) and noise["adj"] <= -1:
@@ -397,7 +397,7 @@ def _location_signals(layers: dict | None, demolition: dict | None) -> tuple[lis
                 "NOISE_MAJOR_ROAD", "location", "low",
                 "Рядом дорога средней загруженности",
                 noise.get("reason") or "Рядом дорога — возможен шум.",
-                "Гео-слои Clearly (OSM)",
+                "Гео-слои Hatuli (OSM)",
             ))
 
         transit = layers.get("transit") or {}
@@ -552,7 +552,7 @@ _ALWAYS_UNKNOWN_GROUPS = [
     _unknown(
         "DOCUMENTS_UNKNOWN", "Документы не проверены",
         "Право собственности, обременения, залог, судебные споры и (если не "
-        "подтверждено отдельно выше) законность перепланировки — Clearly не "
+        "подтверждено отдельно выше) законность перепланировки — Hatuli не "
         "имеет доступа к этим данным и не проверяет их автоматически.",
     ),
     _unknown(
@@ -563,7 +563,7 @@ _ALWAYS_UNKNOWN_GROUPS = [
     _unknown(
         "DEAL_HISTORY_UNKNOWN", "История сделки неизвестна",
         "Фактическая причина продажи, окончательная цена сделки и долги по "
-        "коммунальным услугам не отражены в объявлении и не проверяются Clearly.",
+        "коммунальным услугам не отражены в объявлении и не проверяются Hatuli.",
     ),
 ]
 
