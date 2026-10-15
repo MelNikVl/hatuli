@@ -369,6 +369,7 @@ html, body { overflow: hidden !important; }
   #side-panel { width:100%; }
 }
 </style>
+<link rel="stylesheet" href="/static/buyer-map.css?v=20261016-zillow">
 <div id="map-wrap" style="background:var(--surface);margin:0 -24px -32px -24px;position:relative;display:flex;">
   <div id="objects-map"></div>
   <div id="split-map-pane" style="display:none;flex:1;min-width:0;border-left:2px solid var(--accent);position:relative;">
@@ -2002,7 +2003,7 @@ function newbuildComplexCardHtml(pt) {
     ${img}
     <span style="position:absolute;top:8px;right:8px;background:#16a34a;color:#fff;border-radius:9px;padding:2px 8px;font-size:11.5px;font-weight:800;">${pt.units_count} кв.</span>
   </div>
-  <div style="padding:5px 10px 10px;">
+  <div class="hatuli-side-body" style="padding:5px 10px 10px;">
     <div style="font-size:16px;font-weight:800;line-height:1.15;">${escapeHtml(pt.name)}</div>
     <div style="font-size:12.5px;color:#888;margin-top:4px;">${devHtml}</div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;">
@@ -2150,18 +2151,18 @@ function buildNewbuildUnitCardHtml(d, u) {
   return `
 <div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;position:relative;" onclick="openDetailModal('${cardId}', event)">
   <div style="position:relative;">${carHtml}${badgeHtml}</div>
-  <div style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
-    <div style="font-size:23px;font-weight:800;line-height:1.05;">${u.price ? (u.price/1e6).toFixed(1) + ' млн ₸' : 'цена по запросу'}</div>
+  <div class="hatuli-side-body" style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
+    <div class="hatuli-side-price" style="font-size:23px;font-weight:800;line-height:1.05;">${u.price ? (u.price/1e6).toFixed(1) + ' млн ₸' : 'цена по запросу'}</div>
     <div style="margin-top:4px;">
-      <span style="${pillStyle}">${u.rooms || '?'}-комн</span>
-      <span style="${pillStyle}">${u.area ? Math.round(u.area) : '?'} м²</span>
-      <span style="${pillStyle}">${u.floor || '?'}/${u.floors_total || '?'} эт.</span>
+      <span class="hatuli-side-fact" style="${pillStyle}">${u.rooms || '?'}-комн</span>
+      <span class="hatuli-side-fact" style="${pillStyle}">${u.area ? Math.round(u.area) : '?'} м²</span>
+      <span class="hatuli-side-fact" style="${pillStyle}">${u.floor || '?'}/${u.floors_total || '?'} эт.</span>
     </div>
     ${tagHtml}
     ${deltaHtml}
     ${d.address ? `<div style="font-size:12.5px;color:var(--text);margin-top:6px;">📍 Адрес: ${escapeHtml(d.address)}</div>` : ''}
     <div style="font-size:12.5px;color:var(--text);margin-top:2px;">Год сдачи: ${escapeHtml(String(sdача))}</div>
-    <div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/${d.id}" onclick="event.stopPropagation()" style="font-weight:600;">ЖК ${escapeHtml(d.name)}</a> · ${devHtml}</div>
+    <div class="hatuli-side-location" style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/${d.id}" onclick="event.stopPropagation()" style="font-weight:600;">ЖК ${escapeHtml(d.name)}</a> · ${devHtml}</div>
     ${(!isPerson && d.sales_phone) ? `<div onclick="event.stopPropagation()" style="margin-top:8px;">${contactDevBtnHtml(d, u.id)}</div>` : ''}
   </div>
 </div>`;
@@ -2271,21 +2272,21 @@ function buildRentalCardHtml(pt) {
   const ownerLabel = pt.is_owner === true ? 'собственник' : pt.is_owner === false ? 'риелтор' : 'Кто сдаёт — не указано';
   const ownerPillHtml = `<span style="${pillStyle}margin:0;background:${pt.is_owner === true ? '#dcfce7' : '#e5e7eb'};color:${pt.is_owner === true ? '#166534' : '#374151'};">${ownerLabel}</span>`;
   const cxLine = pt.complex
-    ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
+    ? `<div class="hatuli-side-location" style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
     : '';
   // Упрощённая карточка (см. B2 в задаче) — только фото/цена/пилюли/ЖК,
   // без банков/описания/кнопок отдельной строкой; вся карточка кликабельна.
   return `
 <div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openRentalDetailModal('${pt.id}', event)">
   ${carHtml ? `<div style="border-radius:11px 11px 0 0;overflow:hidden;">${carHtml}</div>` : `<div style="position:relative;">${favStarHtml}</div>`}
-  <div style="padding:10px 10px 0;">
-    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-      <div style="font-size:21px;font-weight:800;">${priceTxt}</div>${priceTrend}
-      <span style="${pillStyle}margin:0;">${pt.rooms === 0 ? 'Студия' : (pt.rooms || '?') + '-комн'}</span>
-      ${pt.area ? `<span style="${pillStyle}margin:0;">${Math.round(pt.area)} м²</span>` : ''}
-      ${pt.floor ? `<span style="${pillStyle}margin:0;">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : ''}
+  <div class="hatuli-side-body" style="padding:10px 10px 0;">
+    <div class="hatuli-side-facts" style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <div class="hatuli-side-price" style="font-size:21px;font-weight:800;">${priceTxt}</div>${priceTrend}
+      <span class="hatuli-side-fact" style="${pillStyle}margin:0;">${pt.rooms === 0 ? 'Студия' : (pt.rooms || '?') + '-комн'}</span>
+      ${pt.area ? `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">${Math.round(pt.area)} м²</span>` : ''}
+      ${pt.floor ? `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : ''}
       ${ownerPillHtml}
-      ${pt.ceiling_height ? `<span style="${pillStyle}margin:0;">Потолок ${pt.ceiling_height} м</span>` : ''}
+      ${pt.ceiling_height ? `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">Потолок ${pt.ceiling_height} м</span>` : ''}
     </div>
     ${cxLine}
   </div>
@@ -2943,8 +2944,8 @@ function renderSaleBatch(d, opts) {
             : ` · <span style="color:#888;font-weight:600;">${devLogoHtml}${escapeHtml(pt.developer_name)}</span>`)
         : '';
       const cxLine = pt.complex
-        ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
-        : (pt.address ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">📍 <span style="font-weight:600;">${escapeHtml(pt.address.replace(/\s*—.*$/, '').trim())}</span>${devTxt}</div>`
+        ? `<div class="hatuli-side-location" style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
+        : (pt.address ? `<div class="hatuli-side-location" style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">📍 <span style="font-weight:600;">${escapeHtml(pt.address.replace(/\s*—.*$/, '').trim())}</span>${devTxt}</div>`
            : (devTxt ? `<div style="font-size:1em;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : ''));
       const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
       // Скоринг доверия (задача 2026-08-13) — раньше пилюля знала только
@@ -2959,14 +2960,14 @@ function renderSaleBatch(d, opts) {
       };
       const sellerInfo = SELLER_PILL[pt.seller_type] || (isOwner ? SELLER_PILL.owner : SELLER_PILL.realtor);
       const ownerPillStyle = `display:inline-block;background:${sellerInfo.bg};color:${sellerInfo.color};border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;`;
-      const roomsPillHtml = `<span style="${pillStyle}margin:0;">${pt.rooms || '?'}-комн</span>`;
-      const areaPillHtml = `<span style="${pillStyle}margin:0;">${areaTxt} м²</span>`;
-      const floorPillHtml = pt.floor ? `<span style="${pillStyle}">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : '';
+      const roomsPillHtml = `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">${pt.rooms || '?'}-комн</span>`;
+      const areaPillHtml = `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">${areaTxt} м²</span>`;
+      const floorPillHtml = pt.floor ? `<span class="hatuli-side-fact" style="${pillStyle}">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : '';
       const ownerPillHtml = `<span style="${ownerPillStyle}" title="${pt.trust_score != null ? 'Скоринг доверия: ' + pt.trust_score : ''}">${sellerInfo.label}</span>`;
       // Высота потолка — теперь обязательная пилюля в общем ряду (раньше
       // была условной среди метража/кухни/отделки, см. задачу "упростить
       // карточку до фото/цены/комнатности/площади/этажа/продавца/потолка").
-      const ceilingPillHtml = pt.ceiling_height ? `<span style="${pillStyle}">Потолок ${pt.ceiling_height} м</span>` : '';
+      const ceilingPillHtml = pt.ceiling_height ? `<span class="hatuli-side-fact" style="${pillStyle}">Потолок ${pt.ceiling_height} м</span>` : '';
       // Упрощённая карточка (см. B2 в задаче): фото-карусель, цена, пилюли,
       // строка ЖК, строка "реальная цена" (#bg-, см. loadListingExtras) —
       // и больше ничего (без банков/описания/кнопок Подробнее+Крыша отдельной
@@ -2974,9 +2975,9 @@ function renderSaleBatch(d, opts) {
       CARD_HTML[pt.id] = (`
 <div class="side-card-inner" style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
   ${carHtml}
-  <div style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
-      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-        <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
+  <div class="hatuli-side-body" style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
+      <div class="hatuli-side-facts" style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+        <div class="hatuli-side-price" style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
         ${priceTrendBadge}
         ${roomsPillHtml}
         ${areaPillHtml}
