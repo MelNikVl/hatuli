@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 class Element {
-  constructor(tag = 'div') { this.tagName = tag; this.children = []; this.listeners = {}; this.dataset = {}; this.hidden = false; this.disabled = false; this.value = ''; this.ownText = ''; this.style = {setProperty(name, value) { this[name] = value; }}; }
+  constructor(tag = 'div') { this.tagName = tag; this.children = []; this.listeners = {}; this.dataset = {}; this.attributes = {}; this.hidden = false; this.disabled = false; this.value = ''; this.ownText = ''; this.style = {setProperty(name, value) { this[name] = value; }}; }
   set textContent(value) { this.ownText = String(value); this.children = []; }
   get textContent() { return this.ownText + this.children.map(node => node.textContent || '').join(''); }
   append(...nodes) { this.children.push(...nodes); }
@@ -14,8 +14,12 @@ class Element {
   click() { if (this.download) downloads.push(this.download); }
   getBoundingClientRect() { return {height: this.height || 0}; }
   scrollIntoView(options) { scrolls.push({element: this, options}); }
+  setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
+  closest(selector) { assert.equal(selector, 'details'); return this.details || null; }
+  focus() { focused.push(this); }
 }
-const ids = {}, requests = [], downloads = [], scrolls = [];
+const ids = {}, requests = [], downloads = [], scrolls = [], focused = [];
 let reducedMotion = false;
 for (const id of ['sublease-form', 'sublease-status', 'sublease-calculation', 'sublease-segment', 'sublease-inventory', 'sublease-map', 'sublease-candidates', 'sublease-page', 'sublease-candidate-note', 'sublease-csv', 'sublease-next', 'sublease-previous', 'sublease-scan-button', 'sublease-segment-button']) ids[id] = new Element();
 for (const id of ['sublease-calculation', 'sublease-segment', 'sublease-inventory']) ids[id].hidden = true;
@@ -77,6 +81,29 @@ const listingResult = {items: [item], page: 1, total: 1};
     requests.at(-1).resolve(response, code); await unsuccessful;
   }
   assert.equal(scrolls.length, beforeUnsuccessful, 'empty and error responses must not move the viewport');
+  assert.equal(ids['sublease-status'].textContent, 'Аренда у собственника: Проверьте аренду');
+  assert.equal(focused.at(-1), form.elements.rent_month, 'API validation must identify the input to correct');
+  assert.equal(form.elements.rent_month.attributes['aria-invalid'], 'true');
+  assert.equal(form.elements.rent_month.attributes['aria-errormessage'], 'sublease-status');
+  await form.emit('input');
+  assert.equal(form.elements.rent_month.attributes['aria-invalid'], undefined);
+  assert.equal(form.elements.rent_month.attributes['aria-errormessage'], undefined);
+  assert.equal(ids['sublease-status'].textContent, '');
+
+  // Percentage input errors use the form's 0..100 unit, never the API's
+  // 0..1 fraction. The focus target is revealed if its details is closed.
+  form.elements.tax_pct.details = {open: false};
+  const invalidPercent = form.emit('submit', {preventDefault() {}});
+  requests.at(-1).resolve({errors: {tax_pct: 'Допустимо от 0 до 1.'}}, 422); await invalidPercent;
+  assert.equal(ids['sublease-status'].textContent, 'Налог: Укажите значение от 0 до 100%.');
+  assert.equal(focused.at(-1), form.elements.tax_pct);
+  assert.equal(form.elements.tax_pct.details.open, true);
+  const lateError = form.emit('submit', {preventDefault() {}}), lateErrorRequest = requests.at(-1);
+  const focusCount = focused.length;
+  await form.emit('input');
+  lateErrorRequest.resolve({errors: {tax_pct: 'Допустимо от 0 до 1.'}}, 422); await lateError;
+  assert.equal(focused.length, focusCount, 'a stale error must not focus or mark an input');
+  assert.equal(form.elements.tax_pct.attributes['aria-invalid'], undefined);
 
   // Full furnishing omits capex; it neither writes 0 nor forgets the budget.
   for (const previous of ['600000', '']) {
@@ -116,8 +143,30 @@ const listingResult = {items: [item], page: 1, total: 1};
   requests.at(-1).resolve({indices: {monthly: null, daily: {...index, median_price: 20000, p25_price: 15000, p75_price: 25000}, furnished_monthly: null}}); await presentSegment;
   assert.equal(scrolls.length, beforeSegment + 1);
   assert.equal(scrolls.at(-1).element, ids['sublease-segment']);
+  const oneRate = ids['sublease-segment'].children.find(node => node.tagName === 'button');
+  assert.equal(oneRate.textContent, 'Использовать цену за ночь');
+  const beforeCopy = requests.length, existingRent = form.elements.rent_month.value;
+  oneRate.onclick();
+  assert.equal(form.elements.nightly.value, 20000);
+  assert.equal(form.elements.rent_month.value, existingRent, 'a single ready rate must not replace the other manual rate');
+  assert.equal(ids['sublease-segment'].hidden, false, 'a copied rate must not discard the ready segment');
+  assert.equal(requests.length, beforeCopy, 'copying a ready rate requires no additional lookup');
+  assert.equal(ids['sublease-calculation'].hidden, true);
+
+  const bothSegment = ids['sublease-segment-button'].onclick();
+  requests.at(-1).resolve({indices: {monthly: {...index, median_price: 310000, p25_price: 290000, p75_price: 330000}, daily: {...index, median_price: 23000, p25_price: 20000, p75_price: 25000}, furnished_monthly: null}}); await bothSegment;
+  const beforeBoth = requests.length;
+  const bothButton = ids['sublease-segment'].children.find(node => node.textContent === 'Использовать обе ставки');
+  assert.ok(bothButton, 'both qualified prices should be available in one action');
+  bothButton.onclick();
+  assert.equal(form.elements.rent_month.value, 310000); assert.equal(form.elements.nightly.value, 23000);
+  assert.equal(ids['sublease-segment'].hidden, false); assert.equal(requests.length, beforeBoth);
+  assert.equal(ids['sublease-csv'].disabled, true);
+  await form.emit('change');
+  assert.equal(ids['sublease-segment'].hidden, true, 'an independent edit invalidates the saved segment and its copying buttons');
+  const afterSegmentScrolls = scrolls.length;
   const emptyScan = ids['sublease-scan-button'].onclick(); requests.at(-1).resolve({items: [], page: 1, total: 0}); await emptyScan;
-  assert.equal(scrolls.length, beforeSegment + 1, 'an empty scanner response must not scroll');
+  assert.equal(scrolls.length, afterSegmentScrolls, 'an empty scanner response must not scroll');
 
   // A broad request cannot leave the old narrow table/CSV active.
   const freshScan = ids['sublease-scan-button'].onclick(); requests.at(-1).resolve(listingResult); await freshScan;
