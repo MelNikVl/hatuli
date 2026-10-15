@@ -67,3 +67,4 @@ def test_stage_zero_schema_is_additive_and_does_not_invent_historical_periods():
     assert "DEFAULT 'unknown'" in first and 'rent_period_conflict' in first
     assert 'UNIQUE NULLS NOT DISTINCT' in second and 'source_oldest_at' in second
     assert 'UPDATE rental_listings' not in first and 'DELETE FROM rental_listings' not in first
+    assert 'hex_id IS NOT NULL AND hex_edge_m IS NOT NULL' in first

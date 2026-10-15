@@ -12,7 +12,7 @@ DO $$ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='rental_listings'::regclass AND conname='rental_listings_hex_edge_check') THEN
         ALTER TABLE rental_listings ADD CONSTRAINT rental_listings_hex_edge_check
-            CHECK ((hex_id IS NULL AND hex_edge_m IS NULL) OR (hex_id ~ '^-?[0-9]+:-?[0-9]+$' AND hex_edge_m BETWEEN 10 AND 1000));
+            CHECK ((hex_id IS NULL AND hex_edge_m IS NULL) OR (hex_id IS NOT NULL AND hex_edge_m IS NOT NULL AND hex_id ~ '^-?[0-9]+:-?[0-9]+$' AND hex_edge_m BETWEEN 10 AND 1000));
     END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS idx_rental_period_active ON rental_listings(rent_period) WHERE is_active;

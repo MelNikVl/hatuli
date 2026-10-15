@@ -130,6 +130,7 @@ class Connection:
         self.fail_delete = fail_delete
         self.published = [
             {"city": "astana", "prop_type": "apartment", "rent_period": "monthly", "furnishing": None, "old": True},
+            {"city": "astana", "prop_type": "apartment", "rent_period": "unknown", "furnishing": None, "policy_version": None, "old": True},
             {"city": "astana", "prop_type": "apartment", "rent_period": "daily", "furnishing": None},
             {"city": "almaty", "prop_type": "apartment", "rent_period": "monthly", "furnishing": None},
             {"city": "astana", "prop_type": "parking", "rent_period": "monthly", "furnishing": None},
@@ -179,6 +180,7 @@ async def test_rebuild_removes_out_of_window_groups_in_same_transaction_without_
     assert [call[0] for call in connection.calls] == ["execute", "fetch", "execute", "execute"]
     assert "pg_advisory_xact_lock" in connection.calls[0][1]
     assert "policy_version IS DISTINCT FROM $2" in connection.calls[2][1]
+    assert "rent_period='unknown' AND policy_version IS NULL" in connection.calls[2][1]
     assert connection.calls[2][2][1] == "3"
 
 

@@ -811,6 +811,8 @@ async def rebuild_rental_index() -> None:
 
     Daily/furnished/other-city and other-property indexes belong to their own
     rebuilds and are untouched, including when this scope becomes empty.
+    Unverified legacy aggregates in this scope are retired after a successful
+    replacement. Their source listings remain available for evidence backfill.
     """
     from bot.db.pg import get_pool
     minimum_complex, minimum_area = _rental_index_thresholds()
@@ -838,8 +840,10 @@ async def rebuild_rental_index() -> None:
                 """, records)
             await connection.execute("""
                 DELETE FROM rental_index WHERE city='astana' AND prop_type='apartment'
-                  AND rent_period='monthly' AND furnishing IS NULL
-                  AND (updated_at IS NULL OR updated_at < $1 OR policy_version IS DISTINCT FROM $2)
+                  AND furnishing IS NULL AND (
+                    (rent_period='monthly' AND (updated_at IS NULL OR updated_at < $1 OR policy_version IS DISTINCT FROM $2))
+                    OR (rent_period='unknown' AND policy_version IS NULL)
+                  )
             """, rebuilt_at, RENTAL_INDEX_POLICY_VERSION)
             await connection.execute("""
                 INSERT INTO app_settings (key,value,updated_at)

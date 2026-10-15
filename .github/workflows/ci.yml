@@ -19,7 +19,7 @@ on:
   push:
     branches: [master]
   pull_request:
-    branches: [master]
+    branches: [master, codex/krisha-30-complex-review, 'feat/rental-module**']
 
 # ВАЖНО: TEST_DB_USER обязан остаться "krisha" (или совпадать с ним),
 # если его переопределять секретом — десятки migrations/*.sql
@@ -70,6 +70,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Install dependencies
         run: |
