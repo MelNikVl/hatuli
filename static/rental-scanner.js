@@ -68,7 +68,25 @@
   function sourceText(source) {
     if (!source || source.kind === 'manual') return 'Ставки введены вручную.';
     const level = {complex: 'ЖК', district: 'район', hex: 'гекс', гекс: 'гекс'}[source.level] || 'сегмент';
-    return `Цены объявлений · ${level} · ${source.n ?? source.sample_count} объявлений за ${source.window_days} дней · обновлено ${new Date(source.updated_at).toLocaleString('ru-RU')}`;
+    const parts = ['Цены объявлений', level], count = source.n ?? source.sample_count;
+    if (Number.isInteger(count) && count > 0) parts.push(`${count} объявлений`);
+    const timestamp = value => {
+      if (typeof value !== 'string' || !/(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+      const date = new Date(value);
+      return Number.isFinite(date.getTime()) ? date : null;
+    };
+    const oldest = timestamp(source.source_oldest_at), newest = timestamp(source.source_newest_at);
+    const day = new Intl.DateTimeFormat('ru-RU', {timeZone: 'Asia/Almaty', day: '2-digit', month: '2-digit', year: 'numeric'});
+    if (oldest && newest && oldest <= newest) {
+      const first = day.format(oldest), last = day.format(newest);
+      parts.push(`наблюдения ${first === last ? first : first + '–' + last}`);
+    }
+    // The lookback window is not the age or duration of collected evidence.
+    if (Number.isInteger(source.window_days) && source.window_days > 0) parts.push(`окно ${source.window_days} дней`);
+    const updated = timestamp(source.updated_at);
+    if (updated) parts.push(`обновлено ${updated.toLocaleString('ru-RU', {timeZone: 'Asia/Almaty',
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'})} (Астана, UTC+5)`);
+    return parts.join(' · ');
   }
   function errorMessage(data) {
     return data.errors ? Object.entries(data.errors).map(([name, message]) => {

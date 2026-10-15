@@ -2,6 +2,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+// Run outside Kazakhstan: UI evidence dates must still use Astana UTC+5.
+process.env.TZ = 'UTC';
 
 class Element {
   constructor(tag = 'div') { this.tagName = tag; this.children = []; this.listeners = {}; this.dataset = {}; this.attributes = {}; this.hidden = false; this.disabled = false; this.value = ''; this.ownText = ''; this.style = {setProperty(name, value) { this[name] = value; }}; }
@@ -40,7 +42,8 @@ const context = {document: {querySelector: selector => selector === '.pub-header
   URL: {createObjectURL: () => 'blob:test', revokeObjectURL() {}}, setTimeout: callback => callback(),
   fetch(url, options = {}) { return new Promise(resolve => { requests.push({url, options, resolve: (data, code = 200) => resolve({ok: code < 400, json: async () => data, blob: async () => ({})})}); }); }};
 vm.runInNewContext(fs.readFileSync(process.argv[2], 'utf8'), context);
-const index = {level: 'district', n: 10, updated_at: '2026-10-15T00:00:00Z', window_days: 30};
+const index = {level: 'district', n: 10, updated_at: '2026-10-15T19:35:00Z', window_days: 30,
+  source_oldest_at: '2026-10-15T19:14:00Z', source_newest_at: '2026-10-15T19:28:00Z'};
 const economics = {breakeven_occupancy: .5, breakeven_possible: true, startup_capital: 400000, refundable_deposit: 200000, margin: 50000, revenue: 300000, costs: 250000, params_used: {occupancy: .6}, index_source: index, scenarios: []};
 const item = {id: '12345678', rooms: 2, price: 200000, complex_name: 'ЖК', source_url: 'https://krisha.kz/a/show/12345678', economics, risk_flags: [], location: null};
 const listingResult = {items: [item], page: 1, total: 1};
@@ -69,10 +72,31 @@ const listingResult = {items: [item], page: 1, total: 1};
   assert.equal(scrolls[0].options.block, 'start');
   assert.equal(scrolls[0].options.behavior, 'smooth');
   assert.equal(ids['sublease-calculation'].style['--sublease-scroll-offset'], '104px');
+  const evidence = ids['sublease-calculation'].children.at(-1).textContent;
+  assert.ok(evidence.includes('10 объявлений · наблюдения 16.10.2026 · окно 30 дней'));
+  assert.ok(evidence.includes('обновлено 16.10.2026, 00:35 (Астана, UTC+5)'));
+  assert.equal(evidence.includes('объявлений за 30 дней'), false, 'a lookback window cannot stand in for the actual observation history');
+
+  // Different local dates form a range; missing metadata never becomes
+  // an invented date or an Invalid Date label.
+  for (const [source, expected, excluded] of [
+    [{...index, source_oldest_at: '2026-10-14T19:20:00Z'}, 'наблюдения 15.10.2026–16.10.2026', null],
+    [{...index, source_oldest_at: undefined, source_newest_at: undefined}, 'окно 30 дней', 'наблюдения'],
+    [{...index, updated_at: 'invalid', source_oldest_at: null, source_newest_at: null}, 'окно 30 дней', 'обновлено'],
+    [{...index, updated_at: undefined, source_oldest_at: null, source_newest_at: null}, 'окно 30 дней', 'Invalid Date'],
+  ]) {
+    const checkSource = form.emit('submit', {preventDefault() {}});
+    requests.at(-1).resolve({...economics, index_source: source}); await checkSource;
+    const text = ids['sublease-calculation'].children.at(-1).textContent;
+    assert.ok(text.includes(expected), text);
+    if (excluded) assert.equal(text.includes(excluded), false, text);
+  }
+  const beforeAccessible = scrolls.length;
   reducedMotion = true; header.height = 132;
   const accessible = form.emit('submit', {preventDefault() {}});
   requests.at(-1).resolve(economics); await accessible;
   assert.equal(scrolls.at(-1).options.behavior, 'instant');
+  assert.equal(scrolls.length, beforeAccessible + 1);
   assert.equal(ids['sublease-calculation'].style['--sublease-scroll-offset'], '148px');
   reducedMotion = false;
   const beforeUnsuccessful = scrolls.length;
