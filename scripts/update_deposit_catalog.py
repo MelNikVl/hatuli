@@ -23,13 +23,16 @@ from bs4 import BeautifulSoup
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bot.core.deposit_comparison import CATALOG_PATH, SCHEMA_VERSION, public_deposit_catalog, load_deposit_catalog
-from bot.core.deposit_sources import PRODUCT_SOURCES, INDEX_SOURCES, DOCUMENT_SOURCES, HOME_PLUS, parse_source
+from bot.core.deposit_sources import (PRODUCT_SOURCES, INDEX_SOURCES, DOCUMENT_SOURCES,
+                                     HOME_PLUS, HOME_PRODUCTS, document_products, parse_source)
 
 MAX_BODY = 2_000_000
 
 
-def validate_home_plus_documents(html: str) -> None:
+def validate_home_documents(product_url: str, html: str) -> None:
     """Reject changed linked documents even when the old PDF URL still works."""
+    if product_url not in HOME_PRODUCTS:
+        raise ValueError("Неизвестная программа Home Credit")
     soup = BeautifulSoup(html, "html.parser")
     script = soup.find("script", id="__NUXT_DATA__")
     try:
@@ -37,7 +40,7 @@ def validate_home_plus_documents(html: str) -> None:
     except (ValueError, TypeError):
         values = None
     if not isinstance(values, list):
-        raise ValueError("Не подтверждены ссылки документов Home+")
+        raise ValueError("Не подтверждены ссылки документов Home Credit")
 
     def resolve(value):
         if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < len(values):
@@ -52,9 +55,14 @@ def validate_home_plus_documents(html: str) -> None:
         name, path = resolve(value["name"]), resolve(value["url"])
         if isinstance(name, str) and name in found and isinstance(path, str):
             found[name].add(urljoin("https://home.kz/strapi/", path.lstrip("/")))
-    expected = {url for url, product in DOCUMENT_SOURCES.items() if product == HOME_PLUS}
+    expected = {url for url in DOCUMENT_SOURCES if product_url in document_products(url)}
     if any(len(urls) != 1 for urls in found.values()) or set().union(*found.values()) != expected:
-        raise ValueError("Изменились ссылки документов Home+; нужна проверка")
+        raise ValueError("Изменились ссылки документов Home Credit; нужна проверка")
+
+
+def validate_home_plus_documents(html: str) -> None:
+    """Compatibility wrapper for existing Home+ callers and review tests."""
+    validate_home_documents(HOME_PLUS, html)
 
 
 def discover_programs(url: str, html: str) -> list[str]:
@@ -89,20 +97,22 @@ def build_catalog(previous: dict, fetched: dict, now: datetime, accept_terms: bo
     old_sources = {item["url"]: item for item in previous.get("sources", []) if isinstance(item, dict) and "url" in item}
     sources, offers, events = [], [], []
     document_flags: dict[str, str] = {}
-    for url, product_url in DOCUMENT_SOURCES.items():
+    for url in DOCUMENT_SOURCES:
+        product_urls = document_products(url)
         response = fetched.get(url, {})
         content = response.get("content", b"")
         old = old_sources.get(url, {})
         if response.get("error") or not content.startswith(b"%PDF"):
             reason = response.get("error", "Документ банка не является PDF")
-            document_flags[product_url] = reason
+            document_flags.update({product_url: reason for product_url in product_urls})
             sources.append({**old, "url": url, "status": "unavailable", "attempted_at": now.isoformat(), "error": reason})
             continue
         digest = hashlib.sha256(content).hexdigest()
         changed = bool(old.get("source_hash") and old["source_hash"] != digest)
         needs_review = changed or old.get("review_required") or old.get("status") == "needs_review"
         if needs_review and not accept_terms:
-            document_flags[product_url] = "Изменён официальный документ условий; нужна проверка"
+            document_flags.update({product_url: "Изменён официальный документ условий; нужна проверка"
+                                   for product_url in product_urls})
             if changed and old.get("pending_source_hash") != digest:
                 events.append({"kind": "document_changed", "url": url, "at": now.isoformat()})
             # Keep the last accepted document and its verification timestamp.
@@ -118,8 +128,8 @@ def build_catalog(previous: dict, fetched: dict, now: datetime, accept_terms: bo
         try:
             if response.get("error"):
                 raise ValueError(response["error"])
-            if url == HOME_PLUS:
-                validate_home_plus_documents(response.get("text", ""))
+            if url in HOME_PRODUCTS:
+                validate_home_documents(url, response.get("text", ""))
             parsed = parse_source(url, response.get("text", ""), now)
             if not parsed:
                 raise ValueError("Нет подтверждённых программ")

@@ -21,6 +21,7 @@ BEREKE = "https://berekebank.kz/ru/personal/deposits/bereke"
 HOME_SIMPLE = "https://home.kz/deposits/depozity-v-tenge"
 HOME_SAVINGS = "https://home.kz/deposits/depozit-sberegatelnyj"
 HOME_PLUS = "https://home.kz/deposits/depozit-sberegatelnyj-plus"
+HOME_PRODUCTS = (HOME_SIMPLE, HOME_SAVINGS, HOME_PLUS)
 PRODUCT_SOURCES = (FREEDOM, FREEDOM_CAPITAL, FREEDOM_STRATEGY, FORTE, BEREKE, HOME_SIMPLE, HOME_SAVINGS, HOME_PLUS)
 INDEX_SOURCES = ("https://bankffin.kz/ru/deposits/physical",
                  "https://bank.forte.kz/ru/deposits", "https://berekebank.kz/ru/personal/deposits",
@@ -31,6 +32,19 @@ DOCUMENT_SOURCES = {"https://bankffin.kz/docs/moneybox_condition_ru.pdf": FREEDO
                     "https://home.kz/strapi/uploads/Dogovor_bankovskogo_obsluzhivaniya_fizicheskih_licz_v_AO_Home_Credit_Bank_versiya_3_ot_19_03_2020_goda_1ad3c0218d.pdf": HOME_PLUS,
                     "https://home.kz/strapi/uploads/Svod_Tipovyh_Tarifov_96_versiya_s_kazahskim_yazykom_1_251359ff81.pdf": HOME_PLUS,
                     "https://home.kz/strapi/uploads/Uvedomlenie_KFGD_d45821d81d.pdf": HOME_PLUS}
+
+
+def document_products(url: str) -> tuple[str, ...]:
+    """All products governed by a tracked document, fetched only once.
+
+    Keep DOCUMENT_SOURCES' original primary-product values compatible with
+    existing review evidence. Home's contract, tariffs and guarantee notice
+    are linked by all three retail product pages, not just Home+.
+    """
+    primary = DOCUMENT_SOURCES.get(url)
+    if primary == HOME_PLUS:
+        return HOME_PRODUCTS
+    return (primary,) if primary else ()
 
 
 def _text(value: str) -> str:
