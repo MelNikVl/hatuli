@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 # resolved child under a source umbrella. Names only identify unbound legacy
 # rows; both branches require an unambiguous structural source URL.
 RENTAL_COMPARISON_SQL = rental_identity_ctes_sql() + """
-SELECT r.id,r.price,r.area,r.rooms,r.floor,r.floors_total,r.last_seen,
+SELECT r.id,r.address,r.district,r.price,r.area,r.rooms,r.floor,r.floors_total,r.last_seen,
        r.city,r.prop_type,r.is_active,r.is_duplicate,r.dup_needs_review,r.duplicate_of,
        r.archived_at,r.title,canonical.id AS complex_id,r.rent_period,
        TRUE AS complex_binding_verified
