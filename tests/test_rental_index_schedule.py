@@ -189,6 +189,79 @@ async def test_due_sheet_export_survives_failure_and_resets_only_after_real_succ
 
 
 @pytest.mark.asyncio
+async def test_confirmed_archive_after_refresh_is_revalidated_without_new_apartment_saves(setup):
+    state, ops, now, run = setup
+    state.index_refresh_required = True
+    ops.archive.return_value = {"requests": 1, "archived": 1}
+    cycle = await run(plan=RentalCyclePlan(backfill_batch=0, archive_batch=1))
+    assert cycle["stages"]["index"]["status"] == "ok"
+    ops.archive.assert_awaited_once()
+    assert state.pending_index_observations == 0
+    now[0] += 899
+    await run("/arenda/garazhi/astana/", "parking")
+    assert ops.rebuild_index.await_count == 1
+    now[0] += 1
+    cycle = await run("/arenda/garazhi/astana/", "parking")
+    assert cycle["index"]["due_reason"] == "periodic_revalidation"
+    assert ops.rebuild_index.await_count == 2
+    assert ops.collect.await_count == 3
+    ops.sync_sheets.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_complete_pass_revalidates_even_without_pending_apartment_observations(setup):
+    state, ops, now, run = setup
+    state.completed_types = {"apartment", "apartment_daily", "parking", "commercial"}
+    ops.collect.return_value["saved"] = 0
+    cycle = await run("/arenda/garazhi/astana/", "parking", type_count=4)
+    assert cycle["index"]["due_reason"] == "full_pass"
+    ops.rebuild_index.assert_awaited_once()
+    assert state.completed_types == set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", [False, True])
+async def test_periodic_revalidation_respects_unhealthy_source_gate(setup, blocked):
+    state, ops, now, run = setup
+    state.index_refresh_required = True
+    await run()
+    now[0] += 900
+    exc = RuntimeError("list unavailable")
+    exc.source_blocked = blocked
+    ops.collect.side_effect = exc
+    cycle = await run("/arenda/garazhi/astana/", "parking")
+    assert cycle["list_status"] == ("blocked" if blocked else "error")
+    assert cycle["index"]["due_reason"] == "periodic_revalidation"
+    assert cycle["stages"]["index"]["status"] == "budget_exhausted"
+    assert state.index_last_attempt == 100 and state.index_failures == 0
+    assert state.pending_index_observations == 0
+    ops.collect.side_effect = None
+    await run("/arenda/garazhi/astana/", "parking")
+    assert ops.rebuild_index.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_periodic_revalidation_retains_due_state_and_respects_backoff(setup):
+    state, ops, now, run = setup
+    state.index_refresh_required = True
+    await run()
+    now[0] += 900
+    ops.rebuild_index.side_effect = RuntimeError("database unavailable")
+    cycle = await run("/arenda/garazhi/astana/", "parking")
+    assert cycle["stages"]["index"]["status"] == "error"
+    assert state.index_last_success == 100 and state.index_failures == 1
+    now[0] += 59
+    cycle = await run("/arenda/garazhi/astana/", "parking")
+    assert "index" not in cycle["stages"] and ops.rebuild_index.await_count == 2
+    now[0] += 1
+    ops.rebuild_index.side_effect = None
+    cycle = await run("/arenda/garazhi/astana/", "parking")
+    assert cycle["index"]["due_reason"] == "periodic_revalidation"
+    assert ops.rebuild_index.await_count == 3 and state.index_failures == 0
+    assert state.index_last_success == 1060
+
+
+@pytest.mark.asyncio
 async def test_cancelled_rebuild_does_not_acknowledge_unsuccessful_refresh(setup):
     state, ops, now, run = setup
     state.index_refresh_required = True

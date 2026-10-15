@@ -22,6 +22,7 @@ load_dotenv()
 log = logging.getLogger("rental_service")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://krisha:123@localhost/krisha_bot")
 RENTAL_SHEETS_SYNC_PAGES = 45
+RENTAL_INDEX_REVALIDATION_SECONDS = 900.0
 
 
 def configure_logging() -> None:
@@ -94,13 +95,21 @@ class RentalServiceState:
             return None
         if self.index_refresh_required:
             return "startup"
+        # A completed catalog pass and periodic revalidation also retire
+        # aggregates invalidated by archives, deduplication or admin changes.
+        # These source changes need not include a newly saved apartment card.
+        if full_pass:
+            return "full_pass"
+        if (self.index_last_success is not None
+                and now - self.index_last_success >= RENTAL_INDEX_REVALIDATION_SECONDS):
+            return "periodic_revalidation"
         if self.pending_index_observations <= 0:
             return None
         if self.apartment_pages_since_index >= pages:
             return "apartment_pages"
         if self.index_dirty_since is not None and now - self.index_dirty_since >= seconds:
             return "saved_observations_age"
-        return "full_pass" if full_pass else None
+        return None
 
 
 @dataclass
