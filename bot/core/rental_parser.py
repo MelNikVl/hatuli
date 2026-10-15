@@ -616,104 +616,204 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
     return RentalSaveCount(saved, new=new, updated=updated, reactivated=reactivated)
 
 
-async def rebuild_rental_index() -> None:
-    """Atomically replace rental aggregates with fresh, active monthly offers."""
-    from bot.db.pg import fetch, get_pool
-    from bot.core.comparison_rental_estimate import _NONMONTHLY, RENTAL_COMPARISON_SQL
+RENTAL_INDEX_POLICY_VERSION = "3"
+RENTAL_INDEX_WINDOW_DAYS = 30
+RENTAL_INDEX_TTL_HOURS = 72
 
-    logger.info("Rebuilding rental_index...")
+# A source URL may identify an umbrella, but cannot identify one of its houses
+# by proximity. An explicit house FK comes from the address/token resolver;
+# only that FK may inherit the parent's source link. A name-only fallback must
+# agree with the source identity of the exact non-umbrella canonical project.
+_RENTAL_INDEX_ROWS_SQL = """
+WITH cx AS (
+    SELECT id,coalesce(canonical_id,id) AS cid,complex_name_key(name) AS n
+    FROM complexes WHERE NOT coalesce(is_garbage,false)
+      AND NOT coalesce(is_street,false)
+      AND canonical_reason IS DISTINCT FROM 'junk_unmatched'
+), names AS (
+    SELECT n,cid FROM cx
+    UNION SELECT a.normalized_name,cx.cid FROM complex_aliases a
+      JOIN cx ON cx.id=a.complex_id WHERE a.status='verified'
+), unique_names AS (
+    SELECT n,min(cid) AS cid FROM names WHERE n<>''
+    GROUP BY n HAVING count(DISTINCT cid)=1
+), source_links AS (
+    SELECT rtrim(split_part(split_part(c.krisha_url,'?',1),'#',1),'/') AS url,cx.cid
+    FROM complexes c JOIN cx ON cx.id=c.id WHERE c.krisha_url IS NOT NULL
+    UNION SELECT rtrim(split_part(split_part(sl.url,'?',1),'#',1),'/'),cx.cid
+    FROM complex_source_links sl JOIN cx ON cx.id=sl.complex_id
+    WHERE sl.source='krisha' AND (sl.match_method='manual' OR sl.confidence>=0.85)
+), unique_sources AS (
+    SELECT url,min(cid) AS cid FROM source_links GROUP BY url
+    HAVING count(DISTINCT cid)=1
+)
+SELECT r.id,r.city,r.district,r.complex_name,r.complex_url,r.complex_id,
+       r.rooms,r.prop_type,r.rent_period,r.rent_period_conflict,r.price,r.area,r.title,r.last_seen,
+       r.is_active,r.archived_at,r.is_duplicate,r.dup_needs_review,r.duplicate_of,
+       identity.id AS index_complex_id,identity.name AS index_complex_name,
+       (identity.id IS NOT NULL) AS complex_binding_verified
+FROM rental_listings r
+LEFT JOIN cx bound ON bound.id=r.complex_id
+LEFT JOIN unique_names named ON r.complex_id IS NULL
+  AND named.n=complex_name_key(r.complex_name)
+LEFT JOIN unique_sources source ON r.complex_url ~ '^https://krisha[.]kz/complex/show/[^/?#]+(/[^/?#]+)?/?$'
+  AND source.url=rtrim(r.complex_url,'/')
+LEFT JOIN complexes identity ON identity.id=coalesce(bound.cid,named.cid)
+  AND NOT coalesce(identity.is_garbage,false) AND NOT coalesce(identity.is_street,false)
+  AND NOT coalesce(identity.is_umbrella,false)
+  AND identity.canonical_reason IS DISTINCT FROM 'junk_unmatched'
+  AND (source.cid=identity.id OR
+       (r.complex_id IS NOT NULL AND source.cid=identity.parent_complex_id))
+  AND NOT EXISTS (
+    SELECT 1 FROM names conflicting WHERE conflicting.n=complex_name_key(r.complex_name)
+      AND conflicting.cid<>identity.id
+      AND conflicting.cid IS DISTINCT FROM identity.parent_complex_id
+  )
+WHERE r.last_seen BETWEEN $1::timestamptz - INTERVAL '72 hours' AND $1
+  AND r.city = 'astana' AND r.prop_type = 'apartment' AND r.rent_period = 'monthly'
+  AND NOT coalesce(r.rent_period_conflict,false)
+  AND r.is_active IS TRUE AND r.archived_at IS NULL
+  AND NOT coalesce(r.is_duplicate,false) AND NOT coalesce(r.dup_needs_review,false)
+  AND nullif(btrim(r.duplicate_of),'') IS NULL
+  AND r.price BETWEEN 50000 AND 2000000 AND r.area BETWEEN 20 AND 300
+  AND r.rooms BETWEEN 1 AND 6
+ORDER BY r.last_seen DESC,r.id
+"""
 
-    rows = await fetch(
-        """
-        SELECT id, city, district, complex_name, complex_url, rooms, prop_type, price, area, title
-        FROM rental_listings
-        WHERE last_seen BETWEEN NOW() - INTERVAL '72 hours' AND NOW()
-          AND city = 'astana'
-          AND prop_type = 'apartment'
-          AND is_active IS TRUE
-          AND archived_at IS NULL
-          AND COALESCE(is_duplicate, FALSE) = FALSE
-          AND COALESCE(dup_needs_review, FALSE) = FALSE
-          AND NULLIF(btrim(duplicate_of), '') IS NULL
-          AND price > 0
-        """
-    )
-    # The legacy URL may have come from a related-project link. The same
-    # source-identity rule as public rent comparisons must approve its match
-    # to an unambiguous canonical JK; a nonempty URL alone proves nothing.
-    verified_ids = {
-        str(row["id"]) for row in await fetch(RENTAL_COMPARISON_SQL, datetime.now(timezone.utc))
-        if row.get("complex_binding_verified") is True
-    }
 
-    # key → prices list
-    groups: dict[tuple, list[int]] = defaultdict(list)
-    groups_sqm: dict[tuple, list[float]] = defaultdict(list)
+def _rental_index_thresholds() -> tuple[int, int]:
+    from bot.db import settings
+    def threshold(key, minimum):
+        try:
+            return max(minimum, min(10000, settings.get_int(key, minimum)))
+        except (ValueError, TypeError, OverflowError):
+            return minimum
+    return threshold("RENT_MIN_SAMPLE_COMPLEX", 5), threshold("RENT_MIN_SAMPLE_AREA", 10)
 
-    for row in rows:
-        if _NONMONTHLY.search(row["title"] or ""):
+
+def _rental_index_datetime(value):
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (ValueError, OverflowError):
+            return None
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        return None
+    try:
+        return value.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _rental_index_records(rows, rebuilt_at, min_complex=5, min_area=10):
+    """Fresh monthly asking aggregates, with distinct IDs and source boundaries.
+
+    Inclusive quartiles interpolate inside the observed endpoints (the same
+    empirical convention as the public rental estimator). The observed
+    sample is the distribution being described, not a population forecast.
+    The nominal 30-day window never relaxes the 72-hour source freshness gate.
+    """
+    import math
+    from datetime import timedelta
+    from bot.core.comparison_rental_estimate import _NONMONTHLY
+
+    groups = defaultdict(list)
+    seen = set()
+    # Newest observation wins if a source ID was accidentally repeated.
+    ordered = sorted(rows, key=lambda row: _rental_index_datetime(row.get("last_seen"))
+                     or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    for row in ordered:
+        identifier = row.get("id")
+        observed = _rental_index_datetime(row.get("last_seen"))
+        price, area, rooms = row.get("price"), row.get("area"), row.get("rooms")
+        if (not isinstance(identifier, str) or not identifier or identifier in seen
+                or row.get("city") != "astana" or row.get("prop_type") != "apartment"
+                or row.get("rent_period") != "monthly" or row.get("rent_period_conflict") not in (False, None)
+                or row.get("is_active") is not True
+                or row.get("archived_at") is not None or row.get("is_duplicate") not in (False, None)
+                or row.get("dup_needs_review") not in (False, None) or row.get("duplicate_of")
+                or observed is None or not rebuilt_at-timedelta(hours=72) <= observed <= rebuilt_at
+                or type(price) is not int or not 50000 <= price <= 2000000
+                or type(area) not in (int, float) or not math.isfinite(area) or not 20 <= area <= 300
+                or type(rooms) is not int or not 1 <= rooms <= 6
+                or _NONMONTHLY.search(row.get("title") or "")):
             continue
-        city = row["city"] or ""
-        district = row["district"] or ""
-        complex_name = (row["complex_name"] or "") if str(row["id"]) in verified_ids else ""
-        rooms = row["rooms"]
-        prop_type = row["prop_type"] or "apartment"
-        price = row["price"]
-        area = row["area"]
-        sqm = price / area if area and area > 0 else None
-
-        # Set semantics matter when district/complex are absent: city keys
-        # coincide with narrower keys and previously counted a row 2–6 times.
-        keys = {(city, district, complex_name, rooms, prop_type),
-                (city, district, complex_name, None, prop_type),
-                (city, district, "", rooms, prop_type),
-                (city, district, "", None, prop_type),
-                (city, "", "", rooms, prop_type),
-                (city, "", "", None, prop_type)}
+        seen.add(identifier)
+        district = (row.get("district") or "").strip() or None
+        cid, name = row.get("index_complex_id"), row.get("index_complex_name")
+        if (row.get("complex_binding_verified") is not True or type(cid) is not int or cid <= 0
+                or not isinstance(name, str) or not name.strip()):
+            cid, name = None, None
+        else:
+            name = name.strip()
+        keys = {("astana", None, None, None, rooms, "apartment"),
+                ("astana", None, None, None, None, "apartment")}
+        if district:
+            keys.update({("astana", district, None, None, rooms, "apartment"),
+                         ("astana", district, None, None, None, "apartment")})
+        if cid is not None:
+            # A canonical complex is independent of an advertiser's district spelling.
+            keys.update({("astana", None, name, cid, rooms, "apartment"),
+                         ("astana", None, name, cid, None, "apartment")})
         for key in keys:
-            groups[key].append(price)
-            if sqm is not None:
-                groups_sqm[key].append(sqm)
+            groups[key].append((price, price/area, observed))
 
     records = []
-    for (city, district, complex_name, rooms, prop_type), prices in groups.items():
-        if len(prices) < 5:
+    for (city, district, name, cid, rooms, prop_type), values in groups.items():
+        if len(values) < max(5 if cid is not None else 10, min_complex if cid is not None else min_area):
             continue
+        prices = [item[0] for item in values]
+        q25, _, q75 = statistics.quantiles(prices, n=4, method="inclusive")
+        source_times = [item[2] for item in values]
+        records.append((city, district, name, cid, rooms, prop_type, "monthly", None,
+                        int(statistics.median(prices)), int(statistics.mean(prices)),
+                        int(q25), int(q75), len(prices), int(statistics.median(item[1] for item in values)),
+                        rebuilt_at, RENTAL_INDEX_WINDOW_DAYS, len(prices),
+                        min(source_times), max(source_times), RENTAL_INDEX_POLICY_VERSION))
+    return records
 
-        ps = sorted(prices)
-        n = len(ps)
-        median_price = int(statistics.median(ps))
-        avg_price = int(statistics.mean(ps))
-        p25 = int(ps[max(0, n // 4 - 1)])
-        p75 = int(ps[min(n - 1, 3 * n // 4)])
 
-        sqm_list = groups_sqm.get((city, district, complex_name, rooms, prop_type), [])
-        price_per_sqm = int(statistics.median(sqm_list)) if sqm_list else None
+async def rebuild_rental_index() -> None:
+    """Replace only fresh monthly apartment aggregates, atomically and serialized.
 
-        cn = complex_name if complex_name else None
-        d = district if district else None
-
-        records.append((city or None, d, cn, rooms, prop_type,
-                        median_price, avg_price, p25, p75, n, price_per_sqm))
-
+    Daily/furnished/other-city and other-property indexes belong to their own
+    rebuilds and are untouched, including when this scope becomes empty.
+    """
+    from bot.db.pg import get_pool
+    minimum_complex, minimum_area = _rental_index_thresholds()
     async with get_pool().acquire() as connection:
         async with connection.transaction():
-            await connection.execute("DELETE FROM rental_index")
+            await connection.execute("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+                                     "rental_index:astana:apartment:monthly:all-furnishing")
+            rebuilt_at = datetime.now(timezone.utc)
+            rows = await connection.fetch(_RENTAL_INDEX_ROWS_SQL, rebuilt_at)
+            records = _rental_index_records(rows, rebuilt_at, minimum_complex, minimum_area)
             if records:
-                await connection.executemany(
-                    """
+                await connection.executemany("""
                     INSERT INTO rental_index
-                        (city, district, complex_name, rooms, prop_type,
-                         median_price, avg_price, p25_price, p75_price,
-                         sample_count, price_per_sqm, updated_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
-                    """, records)
+                        (city,district,complex_name,complex_id,rooms,prop_type,rent_period,furnishing,
+                         median_price,avg_price,p25_price,p75_price,sample_count,price_per_sqm,
+                         updated_at,window_days,active_supply,source_oldest_at,source_newest_at,policy_version)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+                    ON CONFLICT ON CONSTRAINT rental_index_key_v2 DO UPDATE SET
+                      median_price=EXCLUDED.median_price,avg_price=EXCLUDED.avg_price,
+                      p25_price=EXCLUDED.p25_price,p75_price=EXCLUDED.p75_price,
+                      sample_count=EXCLUDED.sample_count,price_per_sqm=EXCLUDED.price_per_sqm,
+                      updated_at=EXCLUDED.updated_at,window_days=EXCLUDED.window_days,
+                      active_supply=EXCLUDED.active_supply,source_oldest_at=EXCLUDED.source_oldest_at,
+                      source_newest_at=EXCLUDED.source_newest_at,policy_version=EXCLUDED.policy_version
+                """, records)
+            await connection.execute("""
+                DELETE FROM rental_index WHERE city='astana' AND prop_type='apartment'
+                  AND rent_period='monthly' AND furnishing IS NULL
+                  AND (updated_at IS NULL OR updated_at < $1 OR policy_version IS DISTINCT FROM $2)
+            """, rebuilt_at, RENTAL_INDEX_POLICY_VERSION)
             await connection.execute("""
                 INSERT INTO app_settings (key,value,updated_at)
-                VALUES ('RENTAL_INDEX_POLICY_VERSION','2',now())
+                VALUES ('RENTAL_INDEX_POLICY_VERSION',$1,now())
                 ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()
-            """)
-    logger.info("rental_index rebuilt: %d groups", len(records))
+            """, RENTAL_INDEX_POLICY_VERSION)
+    logger.info("rental_index rebuilt: %d monthly groups", len(records))
 
 
 async def lookup_rental_estimate(
@@ -722,10 +822,11 @@ async def lookup_rental_estimate(
     complex_name: str | None,
     rooms: int | None,
     prop_type: str = "apartment",
+    *, complex_id: int | None = None,
 ) -> dict | None:
     """
     Найти оценку аренды для объекта.
-    Приоритет: ЖК+комнаты → ЖК → район+комнаты → район → город.
+    Приоритет: ЖК+комнаты → район+комнаты → город+комнаты → район → город.
     """
     from bot.db.pg import fetchrow
     # The apartment category establishes monthly scope. Parking/commercial
@@ -733,42 +834,93 @@ async def lookup_rental_estimate(
     if prop_type != "apartment":
         return None
     district = _extract_district(district or "") or district
+    minimum_complex, minimum_area = _rental_index_thresholds()
+    now = datetime.now(timezone.utc)
+    if complex_id is not None and (type(complex_id) is not int or complex_id <= 0):
+        complex_id = None
+        complex_name = None
 
     # ВАЖНО: комнатность сохраняем как можно дольше — аренда однушки,
     # применённая к трёшке, даёт мусорный yield. Порядок:
     # ЖК+комнаты → район+комнаты → город+комнаты → район → город.
     attempts = []
-    if complex_name:
-        attempts.append((city, district, complex_name, rooms, "ЖК"))
+    if complex_id is not None or complex_name:
+        attempts.append((city, None, complex_name, rooms, "ЖК", complex_id))
     if district:
-        attempts.append((city, district, None, rooms, "район"))
-    attempts.append((city, None, None, rooms, "город"))
+        attempts.append((city, district, None, rooms, "район", None))
+    attempts.append((city, None, None, rooms, "город", None))
     if district:
-        attempts.append((city, district, None, None, "район (все комн.)"))
-    attempts.append((city, None, None, None, "город (все комн.)"))
+        attempts.append((city, district, None, None, "район (все комн.)", None))
+    attempts.append((city, None, None, None, "город (все комн.)", None))
 
-    for (c, d, jk, r, level) in attempts:
+    seen = set()
+    for (c, d, jk, r, level, cid) in attempts:
+        scope = (c, d, jk, r, cid)
+        if scope in seen:
+            continue
+        seen.add(scope)
+        minimum = minimum_complex if level == "ЖК" else minimum_area
         row = await fetchrow(
             """
-            SELECT median_price, avg_price, p25_price, p75_price, sample_count, price_per_sqm
-            FROM rental_index
-            WHERE city = $1
-              AND (district     = $2 OR ($2 IS NULL AND district IS NULL))
-              AND (complex_name = $3 OR ($3 IS NULL AND complex_name IS NULL))
-              AND (rooms        = $4 OR ($4 IS NULL AND rooms IS NULL))
-              AND prop_type = $5
-              AND updated_at BETWEEN NOW() - INTERVAL '72 hours' AND NOW()
-              AND sample_count >= 5
-              AND EXISTS (SELECT 1 FROM app_settings WHERE key='RENTAL_INDEX_POLICY_VERSION' AND value='2')
+            WITH names AS (
+                SELECT c.id,coalesce(c.canonical_id,c.id) AS cid,complex_name_key(c.name) AS n
+                FROM complexes c WHERE NOT coalesce(c.is_garbage,false)
+                  AND NOT coalesce(c.is_street,false) AND c.canonical_reason IS DISTINCT FROM 'junk_unmatched'
+                UNION SELECT c.id,coalesce(c.canonical_id,c.id),a.normalized_name
+                FROM complex_aliases a JOIN complexes c ON c.id=a.complex_id
+                WHERE a.status='verified' AND NOT coalesce(c.is_garbage,false)
+                  AND NOT coalesce(c.is_street,false) AND c.canonical_reason IS DISTINCT FROM 'junk_unmatched'
+            ), target AS (
+                SELECT min(names.cid) AS cid FROM names JOIN complexes canonical ON canonical.id=names.cid
+                WHERE (($6::integer IS NOT NULL AND names.id=$6)
+                       OR ($6::integer IS NULL AND $3::text IS NOT NULL AND names.n=complex_name_key($3)))
+                  AND NOT coalesce(canonical.is_umbrella,false) AND NOT coalesce(canonical.is_garbage,false)
+                  AND NOT coalesce(canonical.is_street,false)
+                  AND canonical.canonical_reason IS DISTINCT FROM 'junk_unmatched'
+                HAVING count(DISTINCT names.cid)=1
+            )
+            SELECT i.median_price,i.avg_price,i.p25_price,i.p75_price,i.sample_count,i.price_per_sqm,
+                   i.updated_at,i.source_oldest_at,i.source_newest_at,i.window_days,i.policy_version,
+                   i.complex_id,i.complex_name,i.rent_period,i.active_supply
+            FROM rental_index i
+            WHERE i.city=$1 AND i.district IS NOT DISTINCT FROM $2::text
+              AND (($6::integer IS NOT NULL OR $3::text IS NOT NULL) AND i.complex_id=(SELECT cid FROM target)
+                   OR $6::integer IS NULL AND $3::text IS NULL AND i.complex_id IS NULL AND i.complex_name IS NULL)
+              AND i.rooms IS NOT DISTINCT FROM $4::integer AND i.prop_type=$5
+              AND i.rent_period='monthly' AND i.furnishing IS NULL
+              AND i.updated_at BETWEEN $8::timestamptz - INTERVAL '72 hours' AND $8
+              AND i.source_oldest_at BETWEEN $8::timestamptz - INTERVAL '72 hours' AND i.source_newest_at
+              AND i.source_newest_at BETWEEN i.source_oldest_at AND i.updated_at
+              AND i.sample_count >= $7 AND i.window_days=30 AND i.policy_version=$9
+              AND i.p25_price>0 AND i.p25_price<=i.median_price AND i.median_price<=i.p75_price
+              AND EXISTS (SELECT 1 FROM app_settings WHERE key='RENTAL_INDEX_POLICY_VERSION' AND value=$9)
             LIMIT 1
             """,
-            c, d, jk, r, prop_type,
+            c, d, jk, r, prop_type, cid, minimum, now, RENTAL_INDEX_POLICY_VERSION,
         )
         if row:
             result = dict(row)
+            if not _rental_index_result_ready(result, now, minimum):
+                continue
             result["level"] = level
             return result
     return None
+
+
+def _rental_index_result_ready(row, now, minimum):
+    """Fail closed on old-policy rows or missing/stale source provenance."""
+    from datetime import timedelta
+    updated, oldest, newest = (_rental_index_datetime(row.get(field)) for field in
+                               ("updated_at", "source_oldest_at", "source_newest_at"))
+    count = row.get("sample_count")
+    prices = [row.get(field) for field in ("p25_price", "median_price", "p75_price")]
+    return (row.get("policy_version") == RENTAL_INDEX_POLICY_VERSION
+            and row.get("rent_period") == "monthly" and row.get("window_days") == RENTAL_INDEX_WINDOW_DAYS
+            and type(count) is int and count >= minimum
+            and all(type(price) is int and 50000 <= price <= 2000000 for price in prices)
+            and prices[0] <= prices[1] <= prices[2]
+            and None not in (updated, oldest, newest)
+            and now-timedelta(hours=RENTAL_INDEX_TTL_HOURS) <= oldest <= newest <= updated <= now)
 
 
 async def run_rental_cycle() -> None:
