@@ -1,6 +1,16 @@
 /* Daily public selection: shared Hatuli colours, independently scoped layout. */
 .picks-page { padding-block: 56px 64px; }
 .picks-page [hidden] { display: none !important; }
+.picks-kind-switch { display: inline-flex; gap: 4px; padding: 5px; margin-bottom: 28px; border: 1px solid var(--border); border-radius: 100px; background: var(--surface2); }
+.picks-kind-switch a { display: inline-flex; justify-content: center; align-items: center; min-height: 44px; padding: 10px 24px; border-radius: 100px; color: var(--muted); font-size: 14px; font-weight: 600; line-height: 1.4; text-decoration: none; }
+.picks-kind-switch a[aria-current="page"] { background: var(--accent-fill); color: #fff; }
+.picks-kind-switch a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.picks-kind-switch a:not([aria-current]):hover { color: var(--accent); background: var(--surface); }
+.picks-edition.picks-rental-tools { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
+.picks-rental-tools h2 { font-size: 30px; line-height: 1.2; letter-spacing: -.7px; }
+.picks-rental-tools > p:not(.picks-eyebrow) { color: var(--muted); font-size: 14px; line-height: 1.65; }
+.picks-rental-tools a { display: inline-flex; align-items: center; position: relative; z-index: 1; min-height: 44px; font-size: 14px; font-weight: 600; text-decoration: none; }
+.picks-rental-tools a:hover { text-decoration: underline; }
 .picks-page :is(h1,h2,h3,h4,p,ul) { margin: 0; }
 .picks-page :is(h1,h2,h3,h4) { color: var(--heading); }
 .picks-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }

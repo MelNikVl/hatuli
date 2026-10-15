@@ -241,7 +241,11 @@ def test_missing_fact_projection_defaults_owner_verification_to_false():
     (5, 12, True), (None, 12, False), (5, None, False), (13, 12, False),
     (True, 12, False), (5.5, 12, False)])
 def test_floor_factor_needs_known_integer_intermediate_floor(floor, total, expected):
-    assert ("floor" in factor_keys(offer(floor=floor, floors_total=total))) is expected
+    factors = best_apartment_factors(offer(floor=floor, floors_total=total), NOW)
+    floor_factors = [factor for factor in factors if factor["key"] == "floor"]
+    assert bool(floor_factors) is expected
+    if expected:
+        assert floor_factors[0]["text"] == f"{floor} этаж из {total}."
 
 
 @pytest.mark.parametrize("old,current", [(25_000_000, 24_000_000), (20_000_000, 19_400_000)])

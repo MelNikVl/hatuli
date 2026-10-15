@@ -1,0 +1,81 @@
+{% extends "buyer_public_base.html" %}
+{% from '_price_history_chart.html' import render_price_history %}
+{% block title %}Лучшие предложения аренды в Астане — Hatuli{% endblock %}
+{% block description %}Помесячная аренда в Астане до 500 тысяч ₸ с ценой за м² минимум на 5% ниже похожих квартир. Четыре подтверждённые причины выбора, адреса, фотографии и изменения цены.{% endblock %}
+{% block footer_note %}Hatuli · Астана. Указаны цены предложений помесячной аренды. Снятие объявления с публикации не подтверждает заключение договора.{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/hatuli-picks.css?v=20261016.1">
+<link rel="stylesheet" href="/static/hatuli-price-history.css?v=20261013">
+<link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261013">
+<script src="/static/hatuli-picks.js?v=20261014" defer></script>
+{% endblock %}
+{% block content %}
+<div class="picks-page">
+  {% with picks_kind='rental' %}{% include '_picks_kind_switch.html' %}{% endwith %}
+  <section class="picks-hero" aria-labelledby="picks-title">
+    <div class="picks-hero-copy">
+      <p class="picks-eyebrow"><span class="picks-dot" aria-hidden="true"></span> Астана · помесячная аренда</p>
+      <h1 id="picks-title">Хорошая квартира.<br><span>Разумная аренда.</span></h1>
+      <p class="picks-lead">Помесячная аренда до 500 тысяч ₸ с ценой за м² минимум на 5% ниже похожих предложений. В каждой карточке — адрес, фотографии и четыре проверяемые причины присмотреться.</p>
+      <div class="picks-hero-actions">{% if snapshot and snapshot['items'] %}<a class="picks-button" href="#apartments">Выбрать квартиру <span aria-hidden="true">↓</span></a>{% endif %}<a class="picks-method-link" href="#picks-method">Как выбираем →</a></div>
+      <p class="picks-open-note"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m4 10 4 4 8-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Открыто для всех. Регистрация не нужна.</p>
+    </div>
+    {% if snapshot and snapshot['items'] %}
+    <aside class="picks-edition" aria-label="Сведения о подборке">
+      <div class="picks-edition-top"><span>Выбор Hatuli · аренда</span><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M5 15 16 6l11 9v12H8V15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="m13 19 3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      {% set picks_count = snapshot['items']|length %}
+      <p class="picks-edition-count">{{ picks_count }}<span>{{ 'квартира' if picks_count % 10 == 1 and picks_count % 100 != 11 else 'квартиры' if picks_count % 10 in [2, 3, 4] and picks_count % 100 not in [12, 13, 14] else 'квартир' }} в подборке</span></p>
+      <div class="picks-edition-bottom"><p><strong>{{ snapshot.date_label }}</strong><span>Дата подборки</span></p><p><strong>Ниже аналогов</strong><span>Цена за м² в месяц</span></p></div>
+    </aside>
+    {% else %}
+    <aside class="picks-edition picks-rental-tools" aria-labelledby="rental-tools-title"><p class="picks-eyebrow">Инструменты аренды</p><h2 id="rental-tools-title">Цены. Расходы.<br>Ваши условия.</h2><p>Сравните две ставки с учётом ожидания и расходов или посмотрите посуточные цены по районам.</p><a href="/rent#rent-calculator">Сравнить ставки →</a><a href="/rental/daily">Посуточные цены →</a></aside>
+    {% endif %}
+  </section>
+
+  {% if snapshot and snapshot['items'] and snapshot.is_stale %}
+  <aside class="picks-status picks-status-stale" role="status"><strong>Последний выпуск — {{ snapshot.date_label }}.</strong>{% if snapshot.status_message %}<span>{{ snapshot.status_message }}</span>{% endif %}</aside>
+  {% elif snapshot and snapshot['items'] and snapshot.status_message %}
+  <p class="picks-status" role="status">{{ snapshot.status_message }}</p>
+  {% endif %}
+
+  {% if snapshot and snapshot['items'] %}
+  <section id="apartments" class="picks-selection" aria-labelledby="picks-selection-title">
+    <div class="picks-section-heading"><div><p class="picks-eyebrow">Четыре причины присмотреться</p><h2 id="picks-selection-title">Квартиры для жизни <span>{{ snapshot.date_label }}</span></h2></div><p class="picks-result-count" role="status" aria-live="polite" data-picks-count>{{ snapshot['items']|length }} из {{ snapshot['items']|length }} вариантов</p></div>
+    <div class="picks-filters" role="group" aria-label="Количество комнат" hidden data-picks-filters><button type="button" class="picks-filter" aria-pressed="true" data-picks-filter="all">Все квартиры</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="1">1-комнатные</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="2">2-комнатные</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="3">3-комнатные</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="4">4 комнаты и больше</button></div>
+    <div class="picks-grid">
+      {% for item in snapshot['items'] %}
+      <article class="picks-card" data-picks-card data-rooms="{{ item.rooms }}">
+        <div class="picks-photo" data-picks-gallery data-photos="{{ item.photo_urls|tojson|forceescape }}">
+          <a class="picks-photo-link" href="{{ item.source_url }}" target="_blank" rel="noopener noreferrer nofollow" aria-label="Открыть объявление: {{ item.title }}">
+            {% if item.photo_urls %}<img src="{{ item.photo_urls[0] }}" alt="{{ item.title }} — фото из объявления" width="640" height="400" {% if loop.index <= 3 %}fetchpriority="{% if loop.first %}high{% else %}auto{% endif %}"{% else %}loading="lazy"{% endif %} decoding="async" data-picks-image>{% endif %}
+            <div class="picks-photo-placeholder" {% if item.photo_urls %}hidden{% endif %} data-picks-placeholder><svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m8 23 16-13 16 13v17H12V23" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 40V27h9v13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg><span>{% if item.photo_urls %}Фото временно недоступно{% else %}Фото в исходном объявлении{% endif %}</span></div>
+          </a>
+          <span class="picks-rank" aria-label="Место {{ item.rank }} в подборке"><span>№</span>{{ item.rank }}</span>
+          <div class="picks-photo-controls" hidden data-picks-photo-controls><span class="picks-photo-counter" aria-live="polite" aria-atomic="true" data-picks-photo-counter>1 / {{ item.photo_urls|length }}</span><button type="button" aria-label="Предыдущее фото" data-picks-photo-prev><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m12 5-5 5 5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button type="button" aria-label="Следующее фото" data-picks-photo-next><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m8 5 5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+        </div>
+        <div class="picks-card-content">
+          <div class="picks-price-row"><p class="picks-price">{{ item.price|fmt_num }} ₸/мес</p><span class="picks-price-label">Ставка в объявлении</span></div>
+          <p class="picks-price-meter">{{ item.price_per_m2|fmt_num }} ₸ за м² в месяц</p>
+          <h3><a href="{{ item.source_url }}" target="_blank" rel="noopener noreferrer nofollow">{{ item.rooms }}-комнатная · {{ item.area|fmt_num(1)|replace(',0', '') }} м²</a></h3>
+          {% if item.address %}<p class="picks-address"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M15.5 8.5c0 4-5.5 8-5.5 8s-5.5-4-5.5-8a5.5 5.5 0 1 1 11 0Z" stroke="currentColor" stroke-width="1.4"/><circle cx="10" cy="8.5" r="1.8" stroke="currentColor" stroke-width="1.4"/></svg><span>{{ item.address }}</span></p>{% endif %}
+          {% if item.complex_name or item.district %}<p class="picks-location">{{ item.complex_name or '' }}{% if item.complex_name and item.district %} · {% endif %}{{ item.district or '' }}</p>{% endif %}
+          {% if item.floor %}<p class="picks-floor">{{ item.floor }} этаж{% if item.floors_total %} из {{ item.floors_total }}{% endif %}</p>{% endif %}
+          <div class="picks-reasons" data-picks-factors><h4>4 фактора выбора</h4><ol class="picks-factor-list" role="list">{% for reason in item.reasons[:4] %}<li data-picks-factor><span class="picks-factor-number" aria-hidden="true">{{ loop.index }}</span><span>{{ reason }}</span></li>{% endfor %}</ol></div>
+          {{ render_price_history(item.price_history) }}
+          {% with rental_forecast=item.rental_forecast %}{% include '_rental_forecast.html' %}{% endwith %}
+          <div class="picks-card-bottom"><p class="picks-observed">{% if item.source_checked_at_label %}Проверено на Krisha: {{ item.source_checked_at_label }}{% endif %}{% if item.observed_at_label %}<span>Данные сравнения: {{ item.observed_at_label }}</span>{% endif %}</p><a class="picks-button picks-card-button" href="{{ item.source_url }}" target="_blank" rel="noopener noreferrer nofollow">Посмотреть квартиру <span aria-hidden="true">↗</span></a></div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    <div class="picks-filter-empty" hidden data-picks-filter-empty><h3>В этом выпуске таких квартир нет</h3><p>Попробуйте другое количество комнат или посмотрите всю подборку.</p><button class="picks-button" type="button" data-picks-reset>Показать все варианты</button></div>
+  </section>
+  {% endif %}
+
+  <section id="picks-method" class="picks-method" aria-labelledby="picks-method-title">
+    <div class="picks-method-intro"><p class="picks-eyebrow">Сравниваем похожее</p><h2 id="picks-method-title">Почему именно эти квартиры?</h2><p>Цена за м² минимум на 5% ниже аналогов — обязательное условие. Добавляем ещё три подтверждённых фактора из объявления и истории наблюдений.</p></div>
+    <div class="picks-method-details"><details><summary>Что сравниваем <span aria-hidden="true">+</span></summary><div>{% if snapshot and snapshot.methodology and snapshot.methodology.summary %}<p>{{ snapshot.methodology.summary }}</p>{% else %}<p>Помесячную аренду сравниваем с помесячной: одинаковая комнатность, близкая площадь и сопоставимое расположение. Посуточные объявления в эту подборку не входят.</p>{% endif %}<p>Место в подборке отражает критерии Hatuli. Условия договора, депозит и коммунальные платежи нужно учитывать отдельно от указанной ставки.</p></div></details><details><summary>Как читать историю цены <span aria-hidden="true">+</span></summary><div><p>График появляется, когда зафиксировано изменение ставки. Он показывает даты наблюдений и цены предложения в месяц.</p></div></details></div>
+  </section>
+  <section class="picks-bottom-cta"><div><p class="picks-eyebrow">Сдаёте свою квартиру?</p><h2>Сравните две ставки аренды.</h2><p>Учитывайте ожидание арендатора и расходы в расчёте.</p></div><a class="picks-button" href="/rent#rent-calculator">Посчитать доход →</a></section>
+</div>
+{% endblock %}
