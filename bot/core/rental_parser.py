@@ -599,7 +599,7 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                             OR (rental_listings.rent_period IN ('daily','monthly')
                             AND EXCLUDED.rent_period IN ('daily','monthly')
                             AND rental_listings.rent_period <> EXCLUDED.rent_period),
-                        complex_id = EXCLUDED.complex_id,
+                        complex_id = COALESCE(rental_listings.complex_id, EXCLUDED.complex_id),
                         url = EXCLUDED.url,
                         title = EXCLUDED.title,
                         area = EXCLUDED.area,
@@ -1097,7 +1097,7 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
         cid = await resolve_rental_complex(
             complex_url=details.get("complex_url") if cx else None, complex_name=cx,
             address=details.get("address_full") or r.get("address"), title=r.get("title"))
-        sets.append(f"complex_id=${i}"); params.append(cid); i += 1
+        sets.append(f"complex_id=COALESCE(complex_id,${i})"); params.append(cid); i += 1
         if cx:
             sets.append(f"complex_name=${i}"); params.append(cx); i += 1
             safe_url = source_complex_url(details.get("complex_url"))
