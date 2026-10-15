@@ -5,6 +5,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import asyncio
 import json
+import shutil
+import subprocess
 import sys
 import time
 
@@ -101,6 +103,67 @@ def test_changed_offer_records_real_facts_instead_of_seed_values(change, field, 
 def test_archive_is_scoped_to_main_offer_not_global_navigation():
     assert worker.source_record(item(), observation(body_text="Мои объявления: В архиве"), NOW)["status"] == "active"
     assert worker.source_record(item(), observation(main_text="Объявление в архиве", price_text=""), NOW)["status"] == "archived"
+
+
+@pytest.mark.parametrize("labels,expected", [(["Хозяин недвижимости"], True), (["Риелтор"], False),
+    (["Агентство недвижимости"], False), (["Застройщик"], False), ([], None),
+    (["Хозяин недвижимости", "Риелтор"], None), (["Не хозяин недвижимости"], None)])
+def test_owner_evidence_requires_the_visible_main_author_field(labels, expected):
+    record = worker.source_record(item(), observation(author_labels=labels,
+        main_text="Квартира в продаже. PRIVATE-OWNER-CONTACT", body_text="Хозяин недвижимости PRIVATE-PHONE"), NOW)
+    assert record.get("is_owner") is expected
+    assert "PRIVATE" not in json.dumps(record)
+
+
+def test_owner_claim_in_description_or_global_text_never_qualifies_without_author_field():
+    record = worker.source_record(item(), observation(main_text="Автор объявления — Хозяин недвижимости",
+        body_text="Автор объявления — Хозяин недвижимости"), NOW)
+    assert "is_owner" not in record
+
+
+@pytest.mark.parametrize("pledged", [True, False, None])
+def test_only_a_positive_visible_pledge_badge_is_persisted(pledged):
+    record = worker.source_record(item(), observation(is_pledged=pledged), NOW)
+    assert record.get("is_pledged") is (True if pledged is True else None)
+
+
+@pytest.mark.parametrize("visible,expected", [(True, ["Хозяин недвижимости"]), (False, [])])
+def test_dom_reader_extracts_author_and_pledge_from_visible_fields_only(visible, expected):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed for the standalone fake-DOM unit test")
+    # A local object model, not a browser session or a request to the source.
+    script = r"""
+const shown = SHOWN;
+function element(text, displayed = true) {
+  return {innerText:text, children:[], tagName:'DIV', displayed,
+    getClientRects:() => displayed ? [{}] : [], closest:() => null};
+}
+const author = element('Автор объявления —\nХозяин недвижимости\nPRIVATE-CONTACT', shown);
+const pledge = element('В залоге', shown);
+const title = element('2-комнатная квартира · 60,4 м² · 5/12 этаж');
+const price = element('30 000 000 ₸');
+const offer = element('Квартира в продаже');
+offer.querySelectorAll = selector => {
+  if (selector.includes('.offer__info-item')) return [author];
+  if (selector === '.offer__parameters-mortgaged') return [pledge];
+  if (selector === '*') return [author];
+  if (selector.startsWith('h1')) return [title];
+  if (selector === '.offer__price') return [price];
+  return [];
+};
+global.getComputedStyle = element => ({display:element.displayed?'block':'none', visibility:'visible'});
+global.location = {href:'https://krisha.kz/a/show/1016000001'};
+global.document = {title:'Объявление №1016000001', body:element('PRIVATE-BODY'),
+  querySelectorAll: selector => selector === '.offer' ? [offer] : []};
+const read = READ_FUNCTION;
+process.stdout.write(JSON.stringify(read()));
+""".replace("SHOWN", json.dumps(visible)).replace("READ_FUNCTION", worker.READ_OFFER_DOM)
+    completed = subprocess.run([node, "-"], input=script, encoding="utf-8", capture_output=True, check=True, timeout=5)
+    observed = json.loads(completed.stdout)
+    assert observed["author_labels"] == expected
+    assert observed["is_pledged"] is (True if visible else None)
+    assert "PRIVATE" not in json.dumps(observed["author_labels"])
 
 
 @pytest.mark.parametrize("text", ["Проверка браузера — Kolesa Group", "Подтвердите, что вы не робот", "Checking your browser", "Verify you are human", "Access denied", "Too many requests"])
@@ -365,10 +428,18 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
     now = worker.utc_now()
     rows = [dict(id=row["id"], url=row["source_url"], property_id=index, is_active=True,
                  market_type="secondary", last_seen=now, complex_id=1, complex_resolution="name",
+                 canonical_complex_name="Тестовый ЖК",
                  price=row["price"], rooms=row["rooms"], area=row["area"], floor=row["floor"],
                  floors_total=row["floors_total"], finish_level="finished", ceiling_height=3.0,
+                 identity_checked=True, identity_complex_id=1, identity_complex_name="Тестовый ЖК",
+                 identity_complex_valid=True, identity_complex_is_umbrella=False, identity_complex_parent_id=None,
+                 resolved_house_id=None, identity_house_id=None, identity_house_name=None,
+                 identity_house_valid=False, identity_house_is_umbrella=False, identity_house_parent_id=None,
+                 identity_complex_review_pending=False, identity_property_match_pending=False,
+                 identity_name_ambiguous=False,
                  approved_photo_urls=["https://krisha-photos.kcdn.online/webp/c7/c70532b0-9310-4f48-bc2d-e59a83f9f345/1-full.jpg"])
-            for index, row in enumerate(item(i) for i in range(1, 31))]
+            for index, row in enumerate(item(i, price=30_000_000 if i <= 30 else 36_000_000)
+                                        for i in range(1, 91))]
     async def read(*args):
         return rows
     async def reject_get(*args):
@@ -378,13 +449,16 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
     path = tmp_path / "checks.json"
     worker.atomic_private_json(path, {"method": "normal_browser", "items": [
         worker.source_record(item(i), observation(item(i)), now) for i in range(1, 31)]})
-    monkeypatch.setenv("DATABASE_URL", "postgresql://unit_test/unused")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://unused:unused@127.0.0.1:1/hatuli_test_daily_picks")
     monkeypatch.setattr("dotenv.load_dotenv", lambda *args: False)
     monkeypatch.setattr(worker.publisher, "read_candidates", read)
     monkeypatch.setattr(worker.publisher, "verify_sources", reject_get)
     monkeypatch.setattr(worker.publisher, "verify_photos", photos)
     result = await worker.publisher.generate(SimpleNamespace(skip_photo_check=False, source_checks=str(path)), now)
     assert len(result["snapshot"]["items"]) == 30 and result["source_gets"] == 0
+    assert {card["id"] for card in result["snapshot"]["items"]} == {item(i)["id"] for i in range(1, 31)}
+    assert all(len(card["reasons"]) == 3 and card["floor"] == 5 and card["floors_total"] == 12
+               and card["source_checked_at"] == now.isoformat() for card in result["snapshot"]["items"])
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,13 @@ def verified_snapshot():
         area=60, rooms=2, floor=5, floors_total=12, is_active=True,
         market_type="secondary", last_seen=NOW, complex_id=1,
         complex_resolution="name", canonical_complex_name="Тестовый ЖК",
-        approved_photo_urls=[PHOTO], finish_level="finished") for index in range(8)]
+        approved_photo_urls=[PHOTO], finish_level="finished", ceiling_height=3.0,
+        identity_checked=True, identity_complex_id=1, identity_complex_name="Тестовый ЖК",
+        identity_complex_valid=True, identity_complex_is_umbrella=False, identity_complex_parent_id=None,
+        resolved_house_id=None, identity_house_id=None, identity_house_name=None,
+        identity_house_valid=False, identity_house_is_umbrella=False, identity_house_parent_id=None,
+        identity_complex_review_pending=False, identity_property_match_pending=False,
+        identity_name_ambiguous=False) for index in range(8)]
     snapshot = dp.build_daily_picks(rows, NOW)
     for item in snapshot["items"]:
         item.update(source_status="active", source_checked_at=NOW.isoformat())
@@ -71,6 +77,7 @@ def test_nearby_short_copy_retains_exact_radius_and_uncertainty_without_changing
     original = copy.deepcopy(snapshot)
     safe = dp.validate_snapshot(snapshot)
     card = safe["items"][0]
+    assert len(card["reasons"]) == 3
     assert "предложений рядом" in card["reasons"][0]
     assert any("800 м" in caution and "приблизительные" in caution for caution in card["cautions"])
     assert card["price_comparison"] == original["items"][0]["price_comparison"]

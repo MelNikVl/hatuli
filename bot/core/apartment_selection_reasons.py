@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from bot.core.price_history_integrity import inspect_price_history
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
-FACT_FIELDS = ("ceiling_height", "kitchen_area", "finish_level", "is_owner")
+FACT_FIELDS = ("ceiling_height", "kitchen_area", "finish_level", "is_owner", "owner_source_verified")
 FINISH_LEVELS = {"rough", "prefinish", "finished", "renovated", "furnished", "designer", "needs_repair"}
 
 
@@ -45,13 +45,14 @@ def selection_facts(row: dict) -> dict:
         "kitchen_area": round(kitchen, 1) if kitchen is not None and area is not None and 3 <= kitchen <= min(100, area * .6 + .1) else None,
         "finish_level": row.get("finish_level") if isinstance(row.get("finish_level"), str) and row.get("finish_level") in FINISH_LEVELS else None,
         "is_owner": row.get("is_owner") if isinstance(row.get("is_owner"), bool) else None,
+        "owner_source_verified": row.get("owner_source_verified") is True,
     }
 
 
 def validate_selection_facts(value, area=None) -> dict:
     """Strict optional public projection; recompute reasons rather than trusting text."""
     if value is None:
-        return dict.fromkeys(FACT_FIELDS)
+        return {**dict.fromkeys(FACT_FIELDS), "owner_source_verified": False}
     if not isinstance(value, dict):
         raise ValueError("Invalid public selection facts")
     for field in ("ceiling_height", "kitchen_area"):
@@ -62,6 +63,8 @@ def validate_selection_facts(value, area=None) -> dict:
         raise ValueError("Invalid public finish level")
     if value.get("is_owner") is not None and not isinstance(value.get("is_owner"), bool):
         raise ValueError("Invalid public seller type")
+    if "owner_source_verified" in value and not isinstance(value["owner_source_verified"], bool):
+        raise ValueError("Invalid public seller evidence")
     safe = selection_facts({**value, "area": area})
     for field in ("ceiling_height", "kitchen_area"):
         if value.get(field) is not None and safe[field] is None:
@@ -123,6 +126,11 @@ def _recent_price_cut(offer, now):
         # Two updates on the same date are one occasion for public copy. A
         # duplicate old/new event with a chain gap was already rejected above.
         cut_dates = {event["at"].astimezone(LOCAL_TIMEZONE).date() for event in cuts}
+        if any(event["new_price"] > event["old_price"] for event in recent):
+            continue
+        amount, pct = first-current, (first-current)/first*100
+        if not (amount >= 1_000_000 or pct >= 3 or len(cut_dates) >= 2 and pct >= 1):
+            continue
         return {"days": days, "count": len(cut_dates), "amount": first - current,
                 "pct": (first - current) / first * 100,
                 "date": cuts[-1]["at"].astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y")}
@@ -173,3 +181,42 @@ def apartment_selection_reasons(offer: dict, now=None) -> list[str]:
     if facts["finish_level"] == "furnished":
         reasons.append("В объявлении указана мебель — часть обустройства уже есть.")
     return reasons[:4]
+
+
+def best_apartment_factors(offer: dict, now=None) -> list[dict]:
+    """Independent positive evidence for the curated page, strongest first.
+
+    Market parity, a premium, generic repair labels and missing information
+    never fill one of the three positions. An owner label is a source claim,
+    not proof of title or freedom from intermediary fees.
+    """
+    now = _utc(now or datetime.now(timezone.utc))
+    factors = []
+    comparison = offer.get("price_comparison")
+    if isinstance(comparison, dict) and (_number(comparison.get("discount_pct")) or 0) >= 1:
+        price_reason = next((text for text in apartment_selection_reasons(offer, now)
+                             if text.startswith("Цена за м²") and " ниже " in text), None)
+        if price_reason:
+            factors.append({"key": "price", "text": price_reason})
+    cut = _recent_price_cut(offer, now)
+    if cut:
+        if cut["count"] >= 2:
+            text = f"{cut['count']} снижения цены на разных датах за {cut['days']} дней: −{_money(cut['amount'])} ({_label(cut['pct'])}%)."
+        else:
+            text = f"Цена снижена на {_money(cut['amount'])} ({_label(cut['pct'])}%) за {cut['days']} дней."
+        factors.append({"key": "price_history", "text": text})
+    facts = validate_selection_facts(offer.get("selection_facts"), offer.get("area"))
+    if facts["ceiling_height"] is not None and facts["ceiling_height"] >= 2.9:
+        factors.append({"key": "ceiling", "text": f"Высокие потолки {_label(facts['ceiling_height'], 2)} м — по данным объявления."})
+    if facts["kitchen_area"] is not None and facts["kitchen_area"] >= 12:
+        factors.append({"key": "kitchen", "text": f"Кухня {_label(facts['kitchen_area'])} м² — размер указан в объявлении."})
+    if facts["is_owner"] is True and facts["owner_source_verified"] is True:
+        factors.append({"key": "owner", "text": "В источнике продавец указан как хозяин."})
+    floor, floors = _number(offer.get("floor")), _number(offer.get("floors_total"))
+    if floor is not None and floors is not None and floor.is_integer() and floors.is_integer() and 1 < floor < floors <= 60:
+        factors.append({"key": "floor", "text": f"{int(floor)}-й этаж из {int(floors)} — между первым и последним."})
+    return factors
+
+
+def best_apartment_reasons(offer: dict, now=None) -> list[str]:
+    return [factor["text"] for factor in best_apartment_factors(offer, now)[:3]]

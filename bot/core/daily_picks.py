@@ -20,7 +20,10 @@ from zoneinfo import ZoneInfo
 
 from bot.core.apartment_selection_reasons import (
     apartment_selection_reasons, selection_facts, strong_selection_reason,
-    validate_selection_facts,
+    validate_selection_facts, best_apartment_reasons,
+)
+from bot.core.daily_pick_identity import (
+    normalize_daily_pick_identity, public_daily_pick_identity, validate_public_daily_identity,
 )
 from bot.core.comparison_offer_details import build_offer_details, price_history
 
@@ -41,16 +44,16 @@ _DISTRICTS = {
     "Есильский р-н": "Есильский район", "Нура р-н": "Нура", "Алматы р-н": "Алматы",
     "Сарайшык р-н": "Сарайшык", "Сарыарка р-н": "Сарыарка", "р-н Байконур": "Байконур",
 }
-_ITEM_FIELDS = ("id", "rank", "source_url", "title", "rooms", "area", "floor", "floors_total", "complex_name", "district", "address", "address_note", "price", "currency", "price_per_m2", "photo_urls", "reasons", "cautions", "observed_at", "source_checked_at", "source_status", "price_comparison", "selection_facts", "price_history")
+_ITEM_FIELDS = ("id", "rank", "source_url", "title", "rooms", "area", "floor", "floors_total", "complex_name", "complex_identity", "district", "address", "address_note", "price", "currency", "price_per_m2", "photo_urls", "reasons", "cautions", "observed_at", "source_checked_at", "source_status", "source_facts", "price_comparison", "selection_facts", "price_history")
 _COMPARISON_FIELDS = ("discount_pct", "reference_price_per_m2", "scope", "comparable_count")
 _COMPARISON_SCOPES = {"в том же доме", "в том же ЖК", "в радиусе 800 м по приблизительным координатам"}
 _NEARBY_SCOPE = "в радиусе 800 м по приблизительным координатам"
 _NEARBY_CAUTION = "Аналоги в радиусе 800 м; координаты приблизительные, расположение нужно уточнить."
-_SNAPSHOT_FIELDS = ("schema_version", "selection_date", "timezone", "generated_at", "source_observed_at", "total_candidates", "items", "methodology")
+_SNAPSHOT_FIELDS = ("schema_version", "selection_date", "timezone", "generated_at", "source_observed_at", "total_candidates", "items", "methodology", "publication_policy")
 METHODOLOGY = {
     "title": "Свежая цена и понятные основания",
-    "summary": "Сравниваем цену за м² минимум с пятью объявлениями: столько же комнат, площадь ±15%. Сначала ищем аналоги в том же ЖК или доме; если их мало — в радиусе 800 м по приблизительным координатам. Расстояние по прямой. Если отделка известна у обоих объектов, она должна совпадать. Сначала — цена ниже медианы. Для цены на уровне рынка нужны известные преимущества: высокие потолки, большая кухня, указанная мебель или недавнее снижение цены с непрерывной историей. Наличие ремонта само по себе не является преимуществом: его качество должно быть подтверждено отдельно.",
-    "exclusions": ["Только вторичная продажа до 100 млн ₸ включительно; наличие каждого выбранного объявления и его цену проверяем на странице источника перед публикацией.", "Аналоги — объявления, наблюдавшиеся за последние 72 часа. Убираем известные дубли, подтверждённый архив, неполные характеристики, будущий год постройки, большой разброс цен аналогов и скидки более 30%.", "Публикуем до 30 вариантов с распознанными фотографиями интерьера. Цена на уровне медианы или выше неё до 5% допустима только с дополнительным известным преимуществом; среднего этажа недостаточно."],
+    "summary": "У каждой квартиры ровно три независимых подтверждённых преимущества. Выбираем из цены ниже похожих предложений, существенного или последовательного снижения цены, высоких потолков, большой кухни, проверенной пометки хозяина и этажа между первым и последним. Процент скидки и разница в тенге — один фактор. Цена на уровне рынка или выше него преимуществом не считается. Качество ЖК, отзывы, локация и ремонт по фото станут основаниями только после отдельной проверки.",
+    "exclusions": ["Только вторичная продажа до 100 млн ₸ включительно; наличие каждого выбранного объявления и его цену проверяем на странице источника перед публикацией.", "До отбора и расчёта аналогов исключаем спорные привязки и дубли; у зонтика должен быть определён конкретный дом по адресу или обозначению корпуса. Точный адрес не придумываем.", "Публикуем до 30 вариантов с фотографиями интерьера и тремя преимуществами. Снижение цены должно иметь непротиворечивую историю без повышений в выбранном периоде: не менее 1 млн ₸ или 3%, либо не менее двух дат снижения и 1% суммарно. При недостатке подтверждённых факторов карточку не дополняем общими фразами."],
     "caveat": "Это цены объявлений, а не состоявшихся сделок. Сравнение использует недавние наблюдения аналогов; не каждый аналог проверяется повторно на источнике. Ремонт и условия продажи могут отличаться. После публикации объявление может измениться: наличие, итоговую цену, документы и долги уточните у продавца до задатка.",
 }
 
@@ -203,6 +206,9 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
     now = _utc(now or datetime.now(timezone.utc))
     unique = {}
     for row in rows:
+        row = normalize_daily_pick_identity(row)
+        if row is None:
+            continue
         if not _eligible(row, now):
             continue
         row = dict(row)
@@ -251,11 +257,13 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
             address, address_note = sanitized_listing_address(row.get("address"), price, now)
         except (ValueError, TypeError, KeyError):
             continue
-        evidence = {"price": price, "area": round(area, 1), "price_comparison": comparison,
+        evidence = {"price": price, "area": round(area, 1), "floor": int(floor), "floors_total": int(floors), "price_comparison": comparison,
                     "selection_facts": facts, "price_history": history}
         if discount < .01 and not strong_selection_reason(evidence, now):
             continue
-        reasons = apartment_selection_reasons(evidence, now)
+        reasons = best_apartment_reasons(evidence, now)
+        if len(reasons) != 3:
+            continue
         cautions = []
         recent_history = [event for event in history["events"] if _utc(event["at"]) >= now-timedelta(days=90)]
         first_price = recent_history[0]["old_price"] if recent_history else None
@@ -278,6 +286,7 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
             "id": str(row["id"]), "rank": 0, "source_url": f"https://krisha.kz/a/show/{row['id']}",
             "title": f"{row['rooms']}-комнатная квартира · {round(area, 1):g} м²", "rooms": row["rooms"], "area": round(area, 1),
             "floor": int(floor), "floors_total": int(floors), "complex_name": complex_name, "district": district,
+            "complex_identity": public_daily_pick_identity(row),
             "address": address, "address_note": address_note,
             "price": price, "currency": "KZT", "price_per_m2": round(price / area), "photo_urls": photos,
             "reasons": reasons, "cautions": cautions, "observed_at": _utc(row["last_seen"]).isoformat(),
@@ -363,6 +372,14 @@ def validate_snapshot(snapshot: dict) -> dict:
         safe_item["address"], safe_item["address_note"] = sanitized_listing_address(item.get("address"), int(asking_price), generated)
         safe_item["price_comparison"] = {key: comparison.get(key) for key in _COMPARISON_FIELDS}
         safe_item["selection_facts"] = validate_selection_facts(item.get("selection_facts"), public_area)
+        source_facts = item.get("source_facts")
+        if source_facts is None:
+            source_facts = {}
+        if not isinstance(source_facts, dict) or any(
+                key != "is_pledged" or type(value) is not bool
+                for key, value in source_facts.items()):
+            raise ValueError("Invalid confirmed source facts")
+        safe_item["source_facts"] = {"is_pledged": True} if source_facts.get("is_pledged") is True else {}
         raw_history = item.get("price_history")
         if raw_history is not None:
             if not isinstance(raw_history, dict) or raw_history.get("baseline_unknown") is not False:
@@ -372,7 +389,19 @@ def validate_snapshot(snapshot: dict) -> dict:
             safe_item["price_history"] = None
         # Refresh copy for already verified snapshots without reranking or
         # changing their source confirmations, observations, or publication date.
-        safe_item["reasons"] = apartment_selection_reasons(safe_item, generated)
+        if item.get("complex_identity") is not None:
+            safe_item["complex_identity"] = validate_public_daily_identity(item["complex_identity"])
+            safe_item["complex_name"] = safe_item["complex_identity"]["canonical_name"] or ""
+            if (scope == "в том же доме" and safe_item["complex_identity"]["house_id"] is None
+                    or scope == "в том же ЖК" and safe_item["complex_identity"]["canonical_id"] is None):
+                raise ValueError("Comparison scope contradicts catalog identity")
+        else:
+            # Older editions must not silently reassert an unreviewed catalog
+            # label. A controlled read-only identity refresh can enrich them.
+            continue
+        safe_item["reasons"] = best_apartment_reasons(safe_item, generated)
+        if len(safe_item["reasons"]) != 3:
+            continue
         safe_item["cautions"] = [_NEARBY_CAUTION if text == "Координаты приблизительные; расположение нужно уточнить." else text for text in item["cautions"]]
         if scope == _NEARBY_SCOPE and _NEARBY_CAUTION not in safe_item["cautions"]:
             if len(safe_item["cautions"]) >= 4:
@@ -381,6 +410,18 @@ def validate_snapshot(snapshot: dict) -> dict:
         safe_items.append(safe_item)
     safe = {key: snapshot.get(key) for key in _SNAPSHOT_FIELDS}
     safe["items"] = safe_items
+    policy = snapshot.get("publication_policy")
+    if policy is not None:
+        policy_fields = ("name", "target_count", "published_count", "required_strong_factors", "reason", "explicit", "evaluated_at")
+        if (not isinstance(policy, dict) or any(key not in policy for key in policy_fields)
+                or policy.get("name") != "three_factors" or policy.get("explicit") is not True
+                or type(policy.get("target_count")) is not int or policy["target_count"] != MAX_PICKS
+                or type(policy.get("published_count")) is not int or not 1 <= policy["published_count"] <= MAX_PICKS
+                or policy["published_count"] != len(safe_items) or len(safe_items) != len(items)
+                or type(policy.get("required_strong_factors")) is not int or policy["required_strong_factors"] != 3
+                or policy.get("reason") != "quality_before_quota" or _utc(policy.get("evaluated_at")) != generated):
+            raise ValueError("Invalid explicit daily publication policy")
+        safe["publication_policy"] = {key: policy[key] for key in policy_fields}
     if not isinstance(snapshot.get("methodology"), dict):
         raise ValueError("Invalid methodology shape")
     safe["methodology"] = dict(METHODOLOGY)

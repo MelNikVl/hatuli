@@ -19,9 +19,17 @@ def row(index=0, **changes):
                  area=60., rooms=2, floor=5, floors_total=12, district="Есильский р-н",
                  is_active=True, is_duplicate=False, dup_needs_review=False,
                  market_type="secondary", last_seen=NOW - timedelta(hours=2),
-                 year_built=2020, ceiling_height=3, complex_id=1, complex_resolution="url",
-                 canonical_complex_name="Тестовый ЖК", approved_photo_urls=[PHOTO])
-    return {**value, **changes}
+                 year_built=2020, ceiling_height=3, kitchen_area=14, complex_id=1, complex_resolution="url",
+                 address="ул. Анет баба 4", canonical_complex_name="Тестовый ЖК", approved_photo_urls=[PHOTO],
+                 identity_checked=True, identity_complex_id=1, identity_complex_name="Тестовый ЖК",
+                 identity_complex_valid=True, identity_complex_is_umbrella=False,
+                 identity_complex_parent_id=None, identity_complex_year_built=2020,
+                 identity_complex_review_pending=False, identity_property_match_pending=False,
+                 identity_name_ambiguous=False)
+    value.update(changes)
+    if "complex_id" in changes and "identity_complex_id" not in changes:
+        value["identity_complex_id"] = changes["complex_id"]
+    return value
 
 
 def rows():
@@ -84,7 +92,7 @@ def test_excluded_candidate_retained_as_comparable_for_refill():
 
 
 def test_nearby_fallback_exact_scope_and_rejects_distance_or_finish_mismatch():
-    sample = [row(0, price=24_000_000, complex_resolution="unbound", lat=51.1, lon=71.4, finish_level="finished")]
+    sample = [row(0, price=24_000_000, complex_id=None, complex_resolution=None, lat=51.1, lon=71.4, finish_level="finished")]
     sample += [row(i, complex_id=i+10, lat=51.1001, lon=71.4001, finish_level="finished") for i in range(1,6)]
     sample += [row(6, complex_id=20, lat=51.13, lon=71.4), row(7, complex_id=21, lat=51.1001, lon=71.4001, finish_level="shell")]
     item = first(dp.build_daily_picks(sample, NOW))
@@ -111,9 +119,12 @@ def test_invalid_or_outside_astana_coords_cannot_create_nearby_comparison():
     assert not dp.build_daily_picks(sample, NOW)["items"]
 
 
-def test_geo_house_attribution_does_not_claim_same_physical_house():
+def test_geo_house_attribution_is_excluded_before_comparison_or_publication():
     sample = [row(i, resolved_house_id=99, house_attribution="geo") for i in range(8)]
-    assert first(dp.build_daily_picks(sample, NOW))["price_comparison"]["scope"] == "в том же ЖК"
+    snapshot = dp.build_daily_picks(sample, NOW)
+    assert snapshot["items"] == []
+    assert "в том же доме" not in json.dumps(snapshot, ensure_ascii=False)
+    assert "в том же ЖК" not in json.dumps(snapshot["items"], ensure_ascii=False)
 
 
 def test_extreme_discount_excluded_not_celebrated():
@@ -130,7 +141,8 @@ def test_near_median_premium_requires_strong_fact_not_middle_floor():
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
     sample[0]["ceiling_height"] = 3
     result = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
-    assert "выше похожих предложений" in result["reasons"][0]
+    assert len(result["reasons"]) == 3
+    assert not any("выше похожих" in reason or "на уровне" in reason for reason in result["reasons"])
     assert result["price_comparison"]["discount_pct"] < 0
 
 
@@ -149,14 +161,68 @@ def test_price_cut_not_reported_if_history_outdated():
     assert not any("Снижение цены" in reason for reason in first(dp.build_daily_picks(sample, NOW))["reasons"])
 
 
-def test_recorded_recent_price_reduction_qualifies_market_price_without_other_strong_facts():
+def test_recorded_recent_price_reduction_combines_with_kitchen_and_floor_for_three_reasons():
     sample = rows()
     sample[0].update(price=30_000_000, ceiling_height=None,
         price_events=[{"old_price": 32_000_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=7)}])
     item = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
-    assert "на уровне" in item["reasons"][0]
+    assert len(item["reasons"]) == 3
+    assert not any("на уровне" in reason for reason in item["reasons"])
     assert item["price_history"]["net_change"] == -2_000_000
     assert item["price_history"]["changes_count"] == 1
+
+
+def test_every_published_pick_has_exactly_three_positive_independent_reasons():
+    original = rows()
+    snapshot = confirmed(dp.build_daily_picks(original, NOW))
+    assert len(snapshot["items"]) == 8
+    assert all(len(item["reasons"]) == 3 for item in snapshot["items"])
+    assert all(len(set(item["reasons"])) == 3 for item in snapshot["items"])
+    for item in snapshot["items"]:
+        text = " ".join(item["reasons"])
+        assert "на уровне" not in text and "выше похожих" not in text
+        assert "аналогов" not in text and "±15%" not in text
+    assert all(len(item["reasons"]) == 3 for item in dp.validate_snapshot(snapshot)["items"])
+
+
+@pytest.mark.parametrize("finish", [None, "furnished", "renovated", "designer", "finished"])
+def test_two_facts_never_gain_a_third_from_furniture_repair_or_raw_quality_claims(finish):
+    sample = rows()
+    sample[0].update(ceiling_height=None, kitchen_area=None, finish_level=finish,
+                     description="Качественный ЖК, тихо и хороший ремонт", photo_quality="excellent",
+                     reviews_rating=5, housing_class="premium", reasons=["Лучший ремонт"])
+    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
+
+
+def test_owner_only_completes_three_factors_after_source_verification():
+    sample = rows()
+    sample[0].update(ceiling_height=None, kitchen_area=None, is_owner=True)
+    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
+    sample[0]["owner_source_verified"] = True
+    selected = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
+    assert len(selected["reasons"]) == 3
+    assert selected["selection_facts"]["owner_source_verified"] is True
+
+
+def test_discount_percent_cash_gap_and_two_price_cuts_are_only_two_factors():
+    sample = rows()
+    sample[0].update(ceiling_height=None, kitchen_area=None, floor=1, price_events=[
+        {"old_price": 27_000_000, "new_price": 26_000_000, "changed_at": NOW-timedelta(days=20)},
+        {"old_price": 26_000_000, "new_price": 24_000_000, "changed_at": NOW-timedelta(days=5)}])
+    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
+
+
+@pytest.mark.parametrize("history", [
+    [{"old_price": 30_600_000, "new_price": 30_300_000, "changed_at": NOW-timedelta(days=5)},
+     {"old_price": 30_300_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=5)}],
+    [{"old_price": 30_600_000, "new_price": 30_300_000, "changed_at": NOW-timedelta(days=20)},
+     {"old_price": 30_300_000, "new_price": 30_400_000, "changed_at": NOW-timedelta(days=10)},
+     {"old_price": 30_400_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=5)}],
+])
+def test_fake_repeated_or_nonmonotone_price_history_cannot_complete_three_factors(history):
+    sample = rows()
+    sample[0].update(price=30_000_000, ceiling_height=None, price_events=history)
+    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
 
 
 def test_duplicate_or_broken_history_is_not_a_reason_to_select_market_price():
@@ -178,20 +244,15 @@ def test_repair_category_alone_cannot_qualify_a_market_priced_pick(finish):
     assert not any("ремонт" in reason.lower() or "отделк" in reason.lower() for reason in item["reasons"])
 
 
-def test_legacy_snapshot_remains_visible_but_unsupported_reasons_are_removed():
+def test_legacy_snapshot_without_three_recorded_facts_is_hidden_without_inventing_reasons():
     data = confirmed(dp.build_daily_picks(rows(), NOW))
     for item in data["items"]:
         item.pop("selection_facts")
         item.pop("price_history")
         item["reasons"] = ["Цена за м² ниже рынка.", "7 аналогов: столько же комнат, площадь ±15%.", "Квартира срочно продаётся, коммуналка низкая."]
     safe = dp.validate_snapshot(data)
-    assert len(safe["items"]) == len(data["items"])
+    assert safe["items"] == []
     assert safe["generated_at"] == data["generated_at"] and safe["selection_date"] == data["selection_date"]
-    for old, new in zip(data["items"], safe["items"]):
-        assert new["rank"] == old["rank"] and new["id"] == old["id"]
-        assert new["source_checked_at"] == old["source_checked_at"]
-        assert len(new["reasons"]) == 1
-        assert "срочно" not in new["reasons"][0] and "коммунал" not in new["reasons"][0]
 
 
 def test_personal_or_confidential_fields_not_projected():

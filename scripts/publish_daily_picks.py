@@ -24,8 +24,9 @@ sys.path.insert(0, str(ROOT))
 
 from bot.core.daily_picks import (
     LOCAL_TIMEZONE, MAX_PICKS, build_daily_picks, load_daily_picks,
-    publish_snapshot, safe_photo_url, snapshot_path,
+    publish_snapshot, safe_photo_url, snapshot_path, validate_snapshot,
 )
+from bot.core.daily_pick_identity import annotate_daily_pick_identity_rows
 
 # Restricted input fields. The source address is sanitized to street/house by
 # the public projection. Seller contacts, documents, descriptions,
@@ -53,10 +54,11 @@ SELECT a.id, a.url, a.price, a.area, a.rooms, a.floor, a.floors_total, a.distric
        a.complex_id, a.complex_resolution, a.lat, a.lon, a.finish_level,
        a.ceiling_height, a.kitchen_area, pl.property_id,
        c.name AS canonical_complex_name, c.year_built AS complex_year_built,
+       CASE WHEN a.complex_resolution='name' THEN complex_name_key(a.complex_name) END AS identity_raw_name_key,
        p.approved_photo_urls, coalesce(h.price_events,'[]'::jsonb) AS price_events
 FROM apartment_listings a
 LEFT JOIN property_listings pl ON pl.listing_id = a.id
-LEFT JOIN complexes c ON c.id = a.complex_id
+LEFT JOIN complexes c ON c.id=a.complex_id
 LEFT JOIN photos p ON p.listing_id = a.id
 LEFT JOIN history h ON h.listing_id = a.id
 WHERE a.is_active IS TRUE AND COALESCE(a.is_duplicate, FALSE) = FALSE
@@ -65,6 +67,36 @@ WHERE a.is_active IS TRUE AND COALESCE(a.is_duplicate, FALSE) = FALSE
   AND a.price > 0 AND a.area > 0
 ORDER BY a.id
 """
+
+# Separate bounded scans avoid PostgreSQL inlining catalog/EXISTS evidence
+# into the 20k-listing query. All six reads share the same read-only snapshot.
+IDENTITY_CATALOG_SQL = """
+SELECT id,name,complex_name_key(name) AS name_key,canonical_id,canonical_reason,
+       is_garbage,is_street,is_umbrella,parent_complex_id,year_built
+FROM complexes ORDER BY id LIMIT $1
+"""
+IDENTITY_ALIASES_SQL = """
+SELECT complex_id,normalized_name FROM complex_aliases WHERE status='verified' LIMIT $1
+"""
+IDENTITY_COMPLEX_REVIEWS_SQL = """
+SELECT complex_id_a,complex_id_b FROM complex_duplicate_candidates WHERE status='review' LIMIT $1
+"""
+IDENTITY_RELATIONS_SQL = """
+SELECT complex_id_a,complex_id_b FROM complex_relations
+WHERE relation_type IN ('sibling_phase','same_umbrella_project','separate_neighbor_complex') LIMIT $1
+"""
+IDENTITY_PROPERTY_REVIEWS_SQL = """
+SELECT review.listing_id,review.candidate_property_id,source.property_id AS source_property_id
+FROM property_match_candidates review LEFT JOIN property_listings source ON source.listing_id=review.listing_id
+WHERE review.status='pending' LIMIT $1
+"""
+IDENTITY_READS = (
+    ("complexes", IDENTITY_CATALOG_SQL, 20_000),
+    ("aliases", IDENTITY_ALIASES_SQL, 100_000),
+    ("complex_reviews", IDENTITY_COMPLEX_REVIEWS_SQL, 100_000),
+    ("relations", IDENTITY_RELATIONS_SQL, 100_000),
+    ("property_reviews", IDENTITY_PROPERTY_REVIEWS_SQL, 500_000),
+)
 
 
 async def read_candidates(dsn: str, now: datetime) -> list[dict]:
@@ -75,7 +107,14 @@ async def read_candidates(dsn: str, now: datetime) -> list[dict]:
     )
     try:
         async with connection.transaction(isolation="repeatable_read", readonly=True):
-            return [dict(row) for row in await connection.fetch(CANDIDATES_SQL, now)]
+            rows = [dict(row) for row in await connection.fetch(CANDIDATES_SQL, now)]
+            evidence = {}
+            for name, query, maximum in IDENTITY_READS:
+                records = [dict(row) for row in await connection.fetch(query, maximum + 1)]
+                if len(records) > maximum:
+                    raise ValueError(f"Identity evidence exceeds the bounded {name} scan")
+                evidence[name] = records
+            return annotate_daily_pick_identity_rows(rows, **evidence)
     finally:
         await connection.close()
 
@@ -231,8 +270,49 @@ def apply_source_checks(snapshot: dict, checks: dict[str, dict]) -> tuple[dict, 
             if any(field in record and record[field] != item[field] for field in ("floor", "floors_total")):
                 invalid.add(item["id"])
                 continue
-            confirmed.append({**item, "source_status": "active", "source_checked_at": record["checked_at"]})
+            if "is_pledged" in record and type(record["is_pledged"]) is not bool:
+                raise ValueError("Invalid browser pledge observation")
+            source_facts = {"is_pledged": True} if record.get("is_pledged") is True else {}
+            confirmed.append({**item, "source_status": "active", "source_checked_at": record["checked_at"],
+                              "source_facts": source_facts})
     return {**snapshot, "items": confirmed}, 0, invalid
+
+
+def owner_evidence_rows(rows: list[dict], checks: dict[str, dict] | None = None, *, review_preview: bool = False) -> list[dict]:
+    """Owner is a benefit only after a matching normal-browser observation.
+
+    Private candidate export may show the provisional benefit so an owner can
+    inspect it. That export is explicitly unverified and cannot be published.
+    The real publisher always overwrites any incoming marker with fresh proof.
+    """
+    result = []
+    for row in rows:
+        verified = False
+        if row.get("is_owner") is True:
+            record = (checks or {}).get(str(row.get("id")))
+            if review_preview:
+                verified = True
+            elif isinstance(record, dict):
+                lid = str(row.get("id"))
+                expected_url = f"https://krisha.kz/a/show/{lid}"
+                area = record.get("area")
+                try:
+                    area_matches = (type(area) in {int, float} and math.isfinite(area)
+                                    and abs(float(row["area"]) - area) <= .2)
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    area_matches = False
+                verified = bool(
+                    record.get("id") == lid and record.get("source_url") == expected_url
+                    and row.get("url") == expected_url and record.get("status") == "active"
+                    and record.get("sale_astana") is True and record.get("is_owner") is True
+                    and type(record.get("price")) is int and record["price"] == row.get("price")
+                    and type(record.get("rooms")) is int and record["rooms"] == row.get("rooms")
+                    and area_matches
+                    and all(type(record.get(field)) is int and record[field] == row.get(field)
+                            for field in ("floor", "floors_total"))
+                )
+        result.append({**row, "owner_source_verified": verified})
+    return result
 
 
 async def export_candidate_pool(target: str, now: datetime) -> dict:
@@ -243,7 +323,7 @@ async def export_candidate_pool(target: str, now: datetime) -> dict:
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         raise RuntimeError("DATABASE_URL is required")
-    rows = await read_candidates(dsn, now)
+    rows = owner_evidence_rows(await read_candidates(dsn, now), review_preview=True)
     excluded = set()
     items = []
     for _ in range(3):
@@ -298,11 +378,11 @@ async def generate(args, now: datetime) -> dict:
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         raise RuntimeError("DATABASE_URL is required")
-    rows = await read_candidates(dsn, now)
+    source_checks = load_source_checks(args.source_checks, now) if getattr(args, "source_checks", None) else None
+    rows = owner_evidence_rows(await read_candidates(dsn, now), source_checks)
     snapshot = build_daily_picks(rows, now)
     head_count = 0
     source_gets = 0
-    source_checks = load_source_checks(args.source_checks, now) if getattr(args, "source_checks", None) else None
     if not args.skip_photo_check:
         # A failed image removes its card. Refill from the next eligible item;
         # at most 90 candidates and three photos each, bounded sequential HEADs.
@@ -331,12 +411,50 @@ async def generate(args, now: datetime) -> dict:
                 break
             # Exclude attempted cards, retaining every row in the comparable pool.
         snapshot = refreshed
-        snapshot["items"] = [{**item, "photo_urls": accepted[item["id"]]["photo_urls"], "source_status": "active", "source_checked_at": accepted[item["id"]]["source_checked_at"]} for item in snapshot["items"]]
+        snapshot["items"] = [{**item, "photo_urls": accepted[item["id"]]["photo_urls"], "source_status": "active", "source_checked_at": accepted[item["id"]]["source_checked_at"],
+                              "source_facts": accepted[item["id"]].get("source_facts", {})} for item in snapshot["items"]]
         finished_at = datetime.now(timezone.utc)
         snapshot["generated_at"] = finished_at.isoformat()
         snapshot["selection_date"] = finished_at.astimezone(LOCAL_TIMEZONE).date().isoformat()
         snapshot["source_observed_at"] = max((item["observed_at"] for item in snapshot["items"]), default=now.isoformat())
     return {"snapshot": snapshot, "input_count": len(rows), "photo_heads": head_count, "source_gets": source_gets}
+
+
+def publication_satisfies_policy(snapshot: dict, quality_policy: str = "daily_30") -> bool:
+    """A short quality edition does not satisfy the default quota policy."""
+    count = len(snapshot.get("items", []))
+    if quality_policy == "daily_30":
+        return count == MAX_PICKS
+    policy = snapshot.get("publication_policy")
+    return bool(quality_policy == "three_factors" and 1 <= count <= MAX_PICKS
+                and isinstance(policy, dict) and policy.get("name") == "three_factors"
+                and policy.get("published_count") == count and policy.get("explicit") is True)
+
+
+def prepare_publication(snapshot: dict, quality_policy: str = "daily_30", *, allow_partial: bool = False) -> dict:
+    """Explicitly select quality over quota; no filler or weakening of checks."""
+    count = len(snapshot.get("items", []))
+    if quality_policy not in {"daily_30", "three_factors"}:
+        raise ValueError("Unknown daily quality policy")
+    if quality_policy == "three_factors" and allow_partial:
+        raise ValueError("Explicit quality policy cannot be combined with legacy partial publication")
+    if not 1 <= count <= MAX_PICKS:
+        raise RuntimeError("A positive bounded daily edition is required; previous snapshot retained")
+    if quality_policy == "daily_30":
+        if count != MAX_PICKS and not allow_partial:
+            raise RuntimeError(f"Only {count} qualifying cards; previous snapshot retained")
+        # Preserve the existing default/explicit legacy-partial contract. The
+        # atomic publisher still validates every card before writing it.
+        return snapshot
+    safe = validate_snapshot(snapshot)
+    if len(safe["items"]) != count or any(len(item["reasons"]) != 3 or item.get("complex_identity") is None for item in safe["items"]):
+        raise ValueError("Every quality-edition card requires identity and three proven factors")
+    safe["publication_policy"] = {
+        "name": "three_factors", "target_count": MAX_PICKS, "published_count": count,
+        "required_strong_factors": 3, "reason": "quality_before_quota", "explicit": True,
+        "evaluated_at": safe["generated_at"],
+    }
+    return validate_snapshot(safe)
 
 
 def main() -> int:
@@ -345,11 +463,15 @@ def main() -> int:
     parser.add_argument("--force", action="store_true", help="Explicitly republish today's snapshot")
     parser.add_argument("--skip-photo-check", action="store_true", help="Dry-run only; avoids CDN HEAD requests")
     parser.add_argument("--allow-partial", action="store_true", help="Explicitly publish fewer than 30 eligible listings")
+    parser.add_argument("--quality-policy", choices=("daily_30", "three_factors"), default="daily_30",
+                        help="Default: exactly 30; explicitly choose three_factors to publish 1-30 fully verified cards")
     parser.add_argument("--source-checks", help="Fresh owner-created normal-browser confirmation JSON; missing confirmations fail closed")
     parser.add_argument("--export-candidates", metavar="PATH", help="Read-only candidate export, no HTTP requests. Use '-' for JSON stdout.")
     args = parser.parse_args()
     if args.skip_photo_check and not args.dry_run:
         parser.error("--skip-photo-check is only permitted with --dry-run")
+    if args.quality_policy == "three_factors" and args.allow_partial:
+        parser.error("--quality-policy three_factors cannot be combined with --allow-partial")
     now = datetime.now(timezone.utc)
     path = snapshot_path()
     try:
@@ -363,20 +485,19 @@ def main() -> int:
         else:
             with publisher_lock(path):
                 existing = load_daily_picks(path)
-                if existing and existing["selection_date"] == now.astimezone(LOCAL_TIMEZONE).date().isoformat() and not args.force:
+                if existing and existing["selection_date"] == now.astimezone(LOCAL_TIMEZONE).date().isoformat() and publication_satisfies_policy(existing, args.quality_policy) and not args.force:
                     print(json.dumps({"status": "already_published", "selection_date": existing["selection_date"], "count": len(existing["items"])}))
                     return 0
                 result = asyncio.run(generate(args, now))
-                snapshot = result["snapshot"]
-                if len(snapshot["items"]) < MAX_PICKS and not args.allow_partial:
-                    raise RuntimeError(f"Only {len(snapshot['items'])} qualifying cards; previous snapshot retained")
+                snapshot = prepare_publication(result["snapshot"], args.quality_policy, allow_partial=args.allow_partial)
+                result["snapshot"] = snapshot
                 publish_snapshot(snapshot, path)
         snapshot = result["snapshot"]
-        print(json.dumps({"status": "dry_run" if args.dry_run else "published", "selection_date": snapshot["selection_date"], "input_count": result["input_count"], "eligible_count": snapshot["total_candidates"], "count": len(snapshot["items"]), "photo_heads": result["photo_heads"], "source_gets": result["source_gets"], "ids": [item["id"] for item in snapshot["items"]]}, ensure_ascii=False))
+        print(json.dumps({"status": "dry_run" if args.dry_run else "published", "selection_date": snapshot["selection_date"], "input_count": result["input_count"], "eligible_count": snapshot["total_candidates"], "count": len(snapshot["items"]), "photo_heads": result["photo_heads"], "source_gets": result["source_gets"], "quality_policy": args.quality_policy, "publication_policy": snapshot.get("publication_policy"), "ids": [item["id"] for item in snapshot["items"]]}, ensure_ascii=False))
         return 0
     except Exception as exc:
         # Do not log DSNs or raw rows; server logs retain only the error class.
-        print(json.dumps({"status": "failed", "error_type": type(exc).__name__, "previous_snapshot_retained": True}), file=sys.stderr)
+        print(json.dumps({"status": "failed", "error_type": type(exc).__name__, "quality_policy": args.quality_policy, "previous_snapshot_retained": True}), file=sys.stderr)
         return 1
 
 

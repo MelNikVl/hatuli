@@ -68,13 +68,16 @@
 .picks-location { font-size: 12px; line-height: 1.6; color: var(--muted); margin-top: 4px !important; overflow-wrap: anywhere; }
 .picks-address-note { font-size: 10px; line-height: 1.6; color: var(--muted); margin-top: 4px !important; }
 .picks-floor { font-size: 12px; color: var(--muted); margin-top: 5px !important; }
-.picks-reasons { margin-top: 20px; padding-top: 17px; border-top: 1px solid var(--border); }
-.picks-reasons h4 { font-size: 12px; font-weight: 650; margin-bottom: 10px; }
-.picks-reasons ul { display: grid; gap: 9px; padding: 0; list-style: none; }
-.picks-reasons li { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; color: var(--text); }
-.picks-reasons li svg { flex-shrink: 0; height: 16px; width: 16px; margin-top: 1px; color: var(--accent); }
-.picks-caution { margin-top: 17px !important; background: var(--surface2); color: var(--muted); border-radius: 8px; padding: 10px 11px; font-size: 11px; line-height: 1.55; }
-.picks-caution strong { font-weight: 600; color: var(--text); }
+.picks-evidence-notices { display: grid; gap: 7px; padding: 0; margin-top: 10px !important; list-style: none; }
+.picks-evidence-notices li { display: flex; align-items: flex-start; gap: 6px; color: var(--muted); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.picks-evidence-notices svg { flex: 0 0 15px; width: 15px; height: 15px; margin-top: 1px; color: var(--text); }
+.picks-evidence-notices span { min-width: 0; }
+.picks-reasons { margin-top: 18px; padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface2); }
+.picks-reasons h4 { font-size: 11px; font-weight: 700; color: var(--accent); margin-bottom: 12px; }
+.picks-reasons .picks-factor-list { display: grid; gap: 10px; padding: 0; margin: 0; list-style: none; }
+.picks-reasons li { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; line-height: 1.55; color: var(--text); }
+.picks-reasons .picks-factor-number { display: grid; place-items: center; flex: 0 0 20px; height: 20px; margin-top: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--accent); font-size: 10px; font-weight: 700; line-height: 1; }
+.picks-reasons li > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .picks-card-bottom { display: flex; flex-direction: column; justify-content: flex-end; flex: 1; padding-top: 18px; }
 .picks-observed { font-size: 10px; line-height: 1.6; color: var(--muted); }
 .picks-observed span { display: block; }
@@ -133,7 +136,7 @@
   .picks-card-content { padding: 20px; }
   .picks-photo-controls button { width: 44px; height: 44px; }
   .picks-reasons li { font-size: 13px; }
-  .picks-caution { font-size: 12px; }
+  .picks-evidence-notices li { font-size: 12px; }
   .picks-observed { font-size: 11px; }
   .picks-card h3 { font-size: 19px; }
   .picks-method { grid-template-columns: minmax(0,1fr); gap: 24px; padding-top: 31px; margin-top: 40px; }

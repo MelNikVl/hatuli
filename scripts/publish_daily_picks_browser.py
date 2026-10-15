@@ -59,6 +59,32 @@ READ_OFFER_DOM = r"""() => {
   const offer = firstVisible(document, '.offer') || firstVisible(document, 'main');
   const title = offer && firstVisible(offer, 'h1, .offer__title');
   const price = offer && firstVisible(offer, '.offer__price');
+  const authorLabels = [];
+  if (offer) {
+    const authorRows = [...offer.querySelectorAll(
+      '.offer__info-item, .offer__advert-short-info, .offer__parameters dt, .offer__seller-type, .owner-label'
+    )].filter(visible);
+    [...offer.querySelectorAll('*')].filter(element => visible(element) && element.children.length === 0 &&
+      /^Автор объявления\s*[:—–-]?$/i.test(element.innerText.trim()) &&
+      !element.closest('.offer__description, .offer__text, .offer__description-text')
+    ).forEach(label => {
+      let row = label.parentElement;
+      for (let depth = 0; row && row !== offer && depth < 3; depth++, row = row.parentElement) {
+        if (visible(row) && row.innerText.length <= 500) authorRows.push(row);
+      }
+    });
+    authorRows.forEach(element => {
+      let text = element.innerText.replace(/\s+/g, ' ').trim();
+      if (element.tagName === 'DT' && /^Автор объявления\s*[:—–-]?$/i.test(text)) {
+        const value = element.nextElementSibling;
+        if (value && value.tagName === 'DD' && visible(value)) text += ' ' + value.innerText.replace(/\s+/g, ' ').trim();
+      }
+      const match = text.match(/^Автор объявления\s*[:—–-]?\s*(Хозяин недвижимости|Риелтор|Агентство недвижимости|Застройщик)(?=\s|$|[.,;:])/i);
+      if (match) authorLabels.push(match[1]);
+    });
+  }
+  const pledged = offer && [...offer.querySelectorAll('.offer__parameters-mortgaged')]
+    .filter(visible).some(element => /^В залоге$/i.test(element.innerText.replace(/\s+/g, ' ').trim()));
   const challenge = [...document.querySelectorAll(
     'iframe[src*="captcha"], iframe[src*="challenge"], .g-recaptcha, .h-captcha, [data-sitekey]'
   )].some(visible);
@@ -68,6 +94,8 @@ READ_OFFER_DOM = r"""() => {
     identity_urls: [...document.querySelectorAll('link[rel="canonical"], meta[property="og:url"]')]
       .map(element => element.getAttribute(element.tagName === 'LINK' ? 'href' : 'content')),
     main_visible: !!offer,
+    author_labels: [...new Set(authorLabels)],
+    is_pledged: pledged ? true : null,
     title: title ? title.innerText.slice(0, 1000) : '',
     price_text: price ? price.innerText.slice(0, 300) : '',
     main_text: offer ? offer.innerText.slice(0, 100000) : '',
@@ -209,6 +237,15 @@ def source_record(item: dict, observation: dict, checked_at: datetime) -> dict:
     result["status"] = "active" if (values["price"] == item["price"]
         and values["rooms"] == item["rooms"] and abs(values["area"] - item["area"]) <= .2
         and values["floor"] == item["floor"] and values["floors_total"] == item["floors_total"]) else "mismatch"
+    labels = observation.get("author_labels")
+    if isinstance(labels, list) and labels and all(isinstance(label, str) for label in labels):
+        roles = {" ".join(label.casefold().split()) for label in labels}
+        if roles == {"хозяин недвижимости"}:
+            result["is_owner"] = True
+        elif len(roles) == 1 and roles <= {"риелтор", "агентство недвижимости", "застройщик"}:
+            result["is_owner"] = False
+    if observation.get("is_pledged") is True:
+        result["is_pledged"] = True
     return result
 
 
@@ -304,9 +341,9 @@ async def check_sources(items: list[dict], evidence_path: Path, deadline: float,
     return evidence
 
 
-def already_published(path: Path, now: datetime) -> bool:
+def already_published(path: Path, now: datetime, quality_policy: str = "daily_30") -> bool:
     existing = publisher.load_daily_picks(path)
-    return bool(existing and len(existing["items"]) == publisher.MAX_PICKS
+    return bool(existing and publisher.publication_satisfies_policy(existing, quality_policy)
         and existing["selection_date"] == now.astimezone(publisher.LOCAL_TIMEZONE).date().isoformat()
         and not snapshot_status(existing, now)["is_stale"])
 
@@ -329,17 +366,20 @@ async def pipeline(args, run_dir: Path, status: dict, snapshot: Path) -> dict:
     status["phase"] = "publish"
     atomic_private_json(run_dir / "status.json", status)
     with publisher.publisher_lock(snapshot):
-        if not args.force and already_published(snapshot, utc_now()):
+        quality_policy = getattr(args, "quality_policy", "daily_30")
+        if not args.force and already_published(snapshot, utc_now(), quality_policy):
             return {**status, "status": "already_published", "phase": "complete", "published": False}
         # A required source-checks argument makes ordinary source GET fallback impossible.
         result = await publisher.generate(SimpleNamespace(skip_photo_check=False, source_checks=str(evidence_path)), utc_now())
-        if len(result["snapshot"]["items"]) != publisher.MAX_PICKS:
+        if quality_policy == "daily_30" and len(result["snapshot"]["items"]) != publisher.MAX_PICKS:
             status["eligible_count"] = len(result["snapshot"]["items"])
             raise InsufficientConfirmedCardsError()
+        result["snapshot"] = publisher.prepare_publication(result["snapshot"], quality_policy)
         publisher.publish_snapshot(result["snapshot"], snapshot)
         # Preserve the publication boundary even if subsequent diagnostics fail.
         status.update(published=True, count=len(result["snapshot"]["items"]),
-                      selection_date=result["snapshot"]["selection_date"])
+                      selection_date=result["snapshot"]["selection_date"], quality_policy=quality_policy,
+                      publication_policy=result["snapshot"].get("publication_policy"))
         return {**status, "status": "published", "phase": "complete", "published": True,
                 "count": len(result["snapshot"]["items"]), "photo_heads": result["photo_heads"],
                 "source_gets": result["source_gets"], "selection_date": result["snapshot"]["selection_date"]}
@@ -426,6 +466,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true", help="Explicitly replace today's verified selection")
     parser.add_argument("--dry-run", action="store_true", help="Browser verification only; never publish")
+    parser.add_argument("--quality-policy", choices=("daily_30", "three_factors"), default="daily_30",
+                        help="Default: exactly 30; explicit three_factors publishes 1-30 fully verified cards")
     parser.add_argument("--check-limit", type=int, default=MAX_CHECKS, help="1-90 candidates; values below 90 are dry-run only")
     parser.add_argument("--budget-seconds", type=int, default=DEFAULT_BUDGET_SECONDS, help="Total bounded run budget, at most 1800 seconds")
     parser.add_argument("--profile-path", default=os.environ.get("HATULI_DAILY_PICKS_BROWSER_PROFILE"), help="Dedicated profile below var/browser-picks")
@@ -442,14 +484,14 @@ def main(argv: list[str] | None = None) -> int:
         args.profile_path = dedicated_profile(args.profile_path, snapshot)
         if args.open_browser:
             args.source_url = validated_source_url(args.source_url)
-            if args.force or args.dry_run or args.check_limit != MAX_CHECKS:
+            if args.force or args.dry_run or args.check_limit != MAX_CHECKS or args.quality_policy != "daily_30":
                 parser.error("--open-browser does not support publication or check-limit flags")
         elif args.source_url:
             parser.error("--source-url is only supported with --open-browser")
     except ValueError as error:
         parser.error(str(error))
     run_root = snapshot.parent / "daily-picks-browser"
-    status = {"status": "running", "started_at": utc_now().isoformat(), "published": False}
+    status = {"status": "running", "started_at": utc_now().isoformat(), "published": False, "quality_policy": args.quality_policy}
     run_dir = None
     try:
         with worker_lock(run_root):
@@ -462,7 +504,7 @@ def main(argv: list[str] | None = None) -> int:
                         timeout=args.budget_seconds))
                     print(json.dumps(status, ensure_ascii=False))
                     return 0
-                if not args.force and not args.dry_run and already_published(snapshot, utc_now()):
+                if not args.force and not args.dry_run and already_published(snapshot, utc_now(), args.quality_policy):
                     status.update(status="already_published", phase="complete")
                 else:
                     run_id = utc_now().strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:12]

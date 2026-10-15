@@ -6,7 +6,8 @@ import json
 import pytest
 
 from bot.core.apartment_selection_reasons import (
-    apartment_selection_reasons, selection_facts, strong_selection_reason,
+    apartment_selection_reasons, best_apartment_factors, best_apartment_reasons,
+    selection_facts, strong_selection_reason,
     validate_selection_facts,
 )
 from bot.core.comparison_offer_details import price_history
@@ -132,7 +133,8 @@ def test_bounded_projection_and_customer_copy_do_not_copy_raw_text_or_confidenti
     raw = {"area": 60, "ceiling_height": 3.05, "kitchen_area": 15, "finish_level": "designer", "is_owner": True,
            "description": "PRIVATE PHONE", "utilities_amount": "5", "location": "PRIVATE PHONE"}
     facts = selection_facts(raw)
-    assert facts == {"ceiling_height": 3.05, "kitchen_area": 15, "finish_level": "designer", "is_owner": True}
+    assert facts == {"ceiling_height": 3.05, "kitchen_area": 15, "finish_level": "designer", "is_owner": True,
+                     "owner_source_verified": False}
     safe = validate_selection_facts({**facts, "phone": "PRIVATE PHONE"}, 60)
     data = offer(selection_facts=safe)
     original = copy.deepcopy(data)
@@ -147,6 +149,8 @@ def test_bounded_projection_and_customer_copy_do_not_copy_raw_text_or_confidenti
     {"ceiling_height": True}, {"ceiling_height": "3"}, {"ceiling_height": 6},
     {"kitchen_area": float("nan")}, {"kitchen_area": 50},
     {"finish_level": []}, {"finish_level": "private contact"}, {"is_owner": "yes"},
+    {"owner_source_verified": "true"}, {"owner_source_verified": 1},
+    {"owner_source_verified": []}, {"owner_source_verified": None},
 ])
 def test_invalid_public_measurement_fails_closed(facts):
     with pytest.raises(ValueError):
@@ -155,4 +159,124 @@ def test_invalid_public_measurement_fails_closed(facts):
 
 def test_missing_or_bad_source_fields_are_omitted_without_guessing():
     assert selection_facts({"ceiling_height": 8, "kitchen_area": 900, "area": 60, "finish_level": [], "is_owner": "yes"}) == {
-        "ceiling_height": None, "kitchen_area": None, "finish_level": None, "is_owner": None}
+        "ceiling_height": None, "kitchen_area": None, "finish_level": None, "is_owner": None,
+        "owner_source_verified": False}
+
+
+def factor_keys(data):
+    return [factor["key"] for factor in best_apartment_factors(data, NOW)]
+
+
+def test_best_factors_are_independent_ordered_and_reasons_take_exactly_first_three():
+    data = offer(selection_facts={"ceiling_height": 3, "kitchen_area": 14, "is_owner": True,
+                                 "owner_source_verified": True},
+                 price_history=price_history([event(27_000_000, 26_000_000, 20),
+                                              event(26_000_000, 24_000_000, 5)], 24_000_000, now=NOW))
+    original = copy.deepcopy(data)
+    factors = best_apartment_factors(data, NOW)
+    assert [factor["key"] for factor in factors] == ["price", "price_history", "ceiling", "kitchen", "owner", "floor"]
+    assert all(set(factor) == {"key", "text"} and 0 < len(factor["text"]) <= 200 for factor in factors)
+    assert best_apartment_reasons(data, NOW) == [factor["text"] for factor in factors[:3]]
+    assert len(best_apartment_reasons(data, NOW)) == 3
+    assert data == original
+
+
+@pytest.mark.parametrize("discount", [-5, -1, 0, .9, .999])
+def test_market_or_premium_price_never_pads_best_reasons_with_a_nonpositive_factor(discount):
+    data = offer(price_comparison={"discount_pct": discount, "reference_price_per_m2": 500_000,
+                                  "scope": "в том же ЖК"}, floor=1,
+                 selection_facts={"finish_level": "designer"})
+    assert best_apartment_factors(data, NOW) == []
+    assert best_apartment_reasons(data, NOW) == []
+
+
+def test_one_percent_discount_is_one_factor_even_when_copy_contains_cash_and_percent():
+    data = offer(price=29_700_000, floor=1, price_comparison={"discount_pct": 1,
+                 "reference_price_per_m2": 500_000, "scope": "в том же ЖК"})
+    factors = best_apartment_factors(data, NOW)
+    assert [factor["key"] for factor in factors] == ["price"]
+    assert len(best_apartment_reasons(data, NOW)) == 1  # Never fill to three with generic praise.
+
+
+@pytest.mark.parametrize("finish", ["finished", "renovated", "designer", "furnished", "rough", None])
+def test_repair_or_furniture_does_not_become_third_important_best_factor(finish):
+    data = offer(selection_facts={"finish_level": finish}, photo_quality="excellent",
+                 reviews_rating=5, housing_class="premium", location="центр")
+    assert factor_keys(data) == ["price", "floor"]
+    assert len(best_apartment_reasons(data, NOW)) == 2
+    assert not any(word in " ".join(best_apartment_reasons(data, NOW)).lower()
+                   for word in ("ремонт", "мебель", "отзыв", "качеств", "локаци"))
+
+
+@pytest.mark.parametrize("owner,verified,expected", [(True, True, True), (True, False, False),
+    (True, None, False), (False, True, False), (None, True, False)])
+def test_owner_requires_both_source_owner_label_and_actual_verification(owner, verified, expected):
+    facts = {"is_owner": owner}
+    if verified is not None:
+        facts["owner_source_verified"] = verified
+    data = offer(selection_facts=facts)
+    assert ("owner" in factor_keys(data)) is expected
+    text = " ".join(factor["text"] for factor in best_apartment_factors(data, NOW) if factor["key"] == "owner")
+    assert not any(claim in text.lower() for claim in ("без комиссии", "проверенный собственник", "можно торговаться"))
+
+
+def test_missing_fact_projection_defaults_owner_verification_to_false():
+    assert validate_selection_facts(None, 60)["owner_source_verified"] is False
+    assert selection_facts({"is_owner": True})["owner_source_verified"] is False
+    assert selection_facts({"is_owner": True, "owner_source_verified": "true"})["owner_source_verified"] is False
+    assert selection_facts({"is_owner": True, "owner_source_verified": True})["owner_source_verified"] is True
+
+
+@pytest.mark.parametrize("floor,total,expected", [(1, 12, False), (12, 12, False),
+    (5, 12, True), (None, 12, False), (5, None, False), (13, 12, False),
+    (True, 12, False), (5.5, 12, False)])
+def test_floor_factor_needs_known_integer_intermediate_floor(floor, total, expected):
+    assert ("floor" in factor_keys(offer(floor=floor, floors_total=total))) is expected
+
+
+@pytest.mark.parametrize("old,current", [(25_000_000, 24_000_000), (20_000_000, 19_400_000)])
+def test_single_material_price_cut_qualifies_on_amount_or_percent_boundary(old, current):
+    data = offer(price=current, price_history=price_history([event(old, current)], current, now=NOW))
+    assert strong_selection_reason(data, NOW)
+    assert factor_keys(data).count("price_history") == 1
+
+
+def test_two_distinct_small_cut_dates_qualify_with_one_percent_net_but_remain_one_factor():
+    current = 29_400_000
+    history = price_history([event(30_000_000, 29_700_000, 20), event(29_700_000, current, 5)], current, now=NOW)
+    data = offer(price=current, price_history=history)
+    assert strong_selection_reason(data, NOW)
+    assert factor_keys(data).count("price_history") == 1
+
+
+@pytest.mark.parametrize("changes,current", [
+    ([event(30_000_000, 29_700_000, 1), event(29_700_000, 29_400_000, 1)], 29_400_000),
+    ([event(30_000_000, 29_900_000, 20), event(29_900_000, 29_800_000, 5)], 29_800_000),
+    ([event(30_000_000, 29_600_000, 20), event(29_600_000, 29_600_000, 5)], 29_600_000),
+    ([event(30_000_000, 29_600_000, 20), event(29_600_000, 29_600_000, 10),
+      event(29_600_000, 29_600_000, 5)], 29_600_000),
+])
+def test_same_day_tiny_or_noop_changes_do_not_invent_repeated_material_cuts(changes, current):
+    data = offer(price=current, price_history=price_history(changes, current, now=NOW))
+    assert not strong_selection_reason(data, NOW)
+    assert "price_history" not in factor_keys(data)
+
+
+def test_intervening_price_increase_disqualifies_even_a_large_net_cut():
+    changes = [event(30_000_000, 29_000_000, 25), event(29_000_000, 29_500_000, 20),
+               event(29_500_000, 24_000_000, 5)]
+    data = offer(price_history=price_history(changes, 24_000_000, now=NOW))
+    assert not strong_selection_reason(data, NOW)
+    assert "price_history" not in factor_keys(data)
+
+
+@pytest.mark.parametrize("changes", [
+    [event(27_000_000, 24_000_000, 20), event(27_000_000, 24_000_000, 5)],
+    [event(27_000_000, 26_000_000, 20), event(27_000_000, 24_000_000, 5)],
+])
+def test_duplicate_and_gap_events_stay_in_history_but_never_become_a_positive_factor(changes):
+    history = price_history(changes, 24_000_000, now=NOW)
+    data = offer(price_history=history)
+    assert len(history["events"]) == 2  # The chart keeps actual observations.
+    assert history["status"] == "incomplete"
+    assert "price_history" not in factor_keys(data)

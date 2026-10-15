@@ -18,6 +18,16 @@ from tests.test_public_comparison_routes import NoPrivateDB, market_snapshot, de
 NOW = datetime.now(timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def no_private_database_or_forecast_io(monkeypatch):
+    async def reject(*args, **kwargs):
+        raise AssertionError("Selection integration tests must not access PostgreSQL")
+    monkeypatch.setattr("asyncpg.connect", reject)
+    monkeypatch.setattr("asyncpg.create_pool", reject)
+    monkeypatch.setattr("bot.core.daily_picks_display.forecast_for_offer",
+                        lambda *args, **kwargs: {"status": "insufficient_history"})
+
+
 def detailed_market(now, identifier="1000000001", price=32_000_000, area=60):
     market = market_snapshot(now)
     detail = market["listing_details"][0]
@@ -84,48 +94,82 @@ async def test_no_js_rental_calculator_compares_income_to_short_maximum_without_
     assert "3 мес." in response.text
 
 
-def test_daily_enrichment_keeps_verified_publication_and_uses_current_recorded_facts(monkeypatch):
+def assert_checked_cards_preserved(original, displayed, excluded_ids=()):
+    expected = {item["id"]: item for item in original["items"] if item["id"] not in excluded_ids}
+    assert {item["id"] for item in displayed["items"]} == set(expected)
+    for field in ("generated_at", "selection_date", "source_observed_at"):
+        assert displayed[field] == original[field]
+    for item in displayed["items"]:
+        source = expected[item["id"]]
+        for field in ("source_checked_at", "observed_at", "price", "area", "rooms", "selection_facts", "complex_identity", "price_comparison"):
+            assert item[field] == source[field]
+        assert len(item["reasons"]) == 3
+    assert [item["rank"] for item in displayed["items"]] == list(range(1, len(expected)+1))
+
+
+def test_daily_enrichment_keeps_checked_facts_and_newer_own_history(monkeypatch):
     original = daily_snapshot(NOW)
-    frozen = copy.deepcopy(original)
     item = original["items"][0]
+    item["selection_facts"].update(kitchen_area=12, is_owner=True, owner_source_verified=True)
+    item["price_history"] = build_offer_details({"price": item["price"], "price_events": [
+        {"old_price": item["price"]+1_000_000, "new_price": item["price"],
+         "changed_at": NOW-timedelta(days=1)}]}, "secondary", now=NOW)["price_history"]
+    frozen = copy.deepcopy(original)
+    market = detailed_market(NOW, item["id"], item["price"], item["area"])
+    market["listing_details"][0]["selection_facts"].update(is_owner=False, owner_source_verified=False)
+    monkeypatch.setattr("bot.core.daily_picks_display.load_market_snapshot", lambda: market)
+    displayed = prepare_daily_picks(original, now=NOW)
+    assert original == frozen
+    assert_checked_cards_preserved(original, displayed)
+    actual = next(card for card in displayed["items"] if card["id"] == item["id"])
+    assert any("потолки" in reason for reason in actual["reasons"])
+    assert not any("Кухня 15" in reason for reason in actual["reasons"])
+    assert not any("2 раза" in reason for reason in actual["reasons"])
+    assert actual["price_history"] == item["price_history"]
+    assert not any("аналогов:" in reason or "±15" in reason for reason in actual["reasons"])
+
+
+def test_later_recorded_history_can_enrich_card_without_replacing_checked_facts(monkeypatch):
+    original = daily_snapshot(NOW)
+    item = original["items"][0]
+    item["price_history"] = build_offer_details({"price": item["price"], "price_events": [
+        {"old_price": item["price"]+1_000_000, "new_price": item["price"],
+         "changed_at": NOW-timedelta(days=10)}]}, "secondary", now=NOW)["price_history"]
+    frozen = copy.deepcopy(original)
     market = detailed_market(NOW, item["id"], item["price"], item["area"])
     monkeypatch.setattr("bot.core.daily_picks_display.load_market_snapshot", lambda: market)
     displayed = prepare_daily_picks(original, now=NOW)
     assert original == frozen
-    for field in ("generated_at", "selection_date", "source_observed_at"):
-        assert displayed[field] == original[field]
-    actual = displayed["items"][0]
-    assert actual["rank"] == item["rank"] and actual["source_checked_at"] == item["source_checked_at"]
-    assert any("потолки" in reason for reason in actual["reasons"])
-    assert any("Кухня" in reason for reason in actual["reasons"])
-    assert not any("2 раза" in reason for reason in actual["reasons"])
+    assert_checked_cards_preserved(original, displayed)
+    actual = next(card for card in displayed["items"] if card["id"] == item["id"])
     assert actual["price_history"]["changes_count"] == 2
-    assert not any("аналогов:" in reason or "±15" in reason for reason in actual["reasons"])
+    assert actual["price_history"]["events"][-1]["at"] > item["price_history"]["events"][-1]["at"]
 
 
-def test_newer_cache_price_mismatch_suppresses_discount_and_adds_caution(monkeypatch):
+def test_newer_cache_price_mismatch_excludes_only_the_changed_card(monkeypatch):
     original = daily_snapshot(NOW)
+    frozen = copy.deepcopy(original)
     item = original["items"][0]
     market = detailed_market(NOW, item["id"], item["price"]+1_000_000, item["area"])
     monkeypatch.setattr("bot.core.daily_picks_display.load_market_snapshot", lambda: market)
-    actual = prepare_daily_picks(original, now=NOW)["items"][0]
-    assert actual["price_comparison"] is None
-    assert not any("ниже похожих" in reason or "снижение" in reason.lower() for reason in actual["reasons"])
-    assert any("Цена в подборке отличается" in caution for caution in actual["cautions"])
+    displayed = prepare_daily_picks(original, now=NOW)
+    assert original == frozen
+    assert item["id"] not in {card["id"] for card in displayed["items"]}
+    assert_checked_cards_preserved(original, displayed, excluded_ids={item["id"]})
 
 
 def test_changed_area_and_large_kitchen_never_break_daily_page_or_promote_old_card(monkeypatch):
     original = daily_snapshot(NOW)
+    frozen = copy.deepcopy(original)
     item = original["items"][0]
     market = detailed_market(NOW, item["id"], item["price"], area=100)
     market["listing_details"][0]["selection_facts"]["kitchen_area"] = 50
     monkeypatch.setattr("bot.core.daily_picks_display.load_market_snapshot", lambda: market)
-    actual = prepare_daily_picks(original, now=NOW)["items"][0]
-    assert actual["area"] == 50 and actual["price_comparison"] is None
-    assert actual["selection_facts"]["kitchen_area"] is None
-    assert not actual["reasons"]
-    assert actual["price_history"]["status"] == "incomplete"
-    assert any("Характеристики объявления изменились" in caution for caution in actual["cautions"])
+    displayed = prepare_daily_picks(original, now=NOW)
+    assert original == frozen
+    assert item["id"] not in {card["id"] for card in displayed["items"]}
+    assert_checked_cards_preserved(original, displayed, excluded_ids={item["id"]})
+    assert all(card["selection_facts"]["kitchen_area"] is None for card in displayed["items"])
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,24 @@ from scripts import publish_daily_picks as publisher
 
 NOW = datetime(2026, 10, 13, 4, tzinfo=timezone.utc)
 PHOTO_ROOT = "https://krisha-photos.kcdn.online/webp/c7/c70532b0-9310-4f48-bc2d-e59a83f9f345/"
+TEST_DSN = "postgresql://unused:unused@127.0.0.1:1/hatuli_test_daily_picks"
+
+
+def candidate_rows():
+    # Sixty genuinely cheaper cards, plus one hundred higher-priced peers.
+    # Failed photos stay in this population; confirmed archives are removed.
+    return [dict(id=str(1016000000 + index), property_id=index,
+        url=f"https://krisha.kz/a/show/{1016000000 + index}",
+        is_active=True, market_type="secondary", price=24_000_000 if index < 60 else 30_000_000,
+        area=60, rooms=2, last_seen=NOW, complex_id=1, complex_resolution="name",
+        canonical_complex_name="Тестовый ЖК", floor=5, floors_total=12,
+        approved_photo_urls=[PHOTO_ROOT + "1-full.jpg"], finish_level="finished", ceiling_height=3.0,
+        identity_checked=True, identity_complex_id=1, identity_complex_name="Тестовый ЖК",
+        identity_complex_valid=True, identity_complex_is_umbrella=False, identity_complex_parent_id=None,
+        resolved_house_id=None, identity_house_id=None, identity_house_name=None,
+        identity_house_valid=False, identity_house_is_umbrella=False, identity_house_parent_id=None,
+        identity_complex_review_pending=False, identity_property_match_pending=False,
+        identity_name_ambiguous=False) for index in range(160)]
 
 
 @pytest.fixture(autouse=True)
@@ -49,10 +67,14 @@ class FakeConnection:
     async def fetch(self, query, observed_at):
         assert self.in_transaction, "Candidate reads must occur inside the transaction"
         assert self.transaction_options["readonly"] is True
-        assert observed_at == NOW
-        assert query == publisher.CANDIDATES_SQL
         if self.failure:
             raise self.failure
+        if query != publisher.CANDIDATES_SQL:
+            matching = [(name, maximum) for name, candidate, maximum in publisher.IDENTITY_READS if candidate == query]
+            assert len(matching) == 1
+            assert observed_at == matching[0][1] + 1
+            return []
+        assert observed_at == NOW
         return [{"id": "1016000001", "price": 30_000_000}]
 
     async def close(self):
@@ -69,8 +91,10 @@ async def test_reader_enforces_read_only_session_and_transaction_and_closes(monk
         return connection
 
     monkeypatch.setattr("asyncpg.connect", connect)
-    result = await publisher.read_candidates("postgresql://unit_test/unused", NOW)
-    assert result == [{"id": "1016000001", "price": 30_000_000}]
+    result = await publisher.read_candidates(TEST_DSN, NOW)
+    assert len(result) == 1 and result[0]["id"] == "1016000001" and result[0]["price"] == 30_000_000
+    assert result[0]["identity_checked"] is True
+    assert result[0]["identity_complex_valid"] is False
     assert calls[0][1]["server_settings"]["default_transaction_read_only"] == "on"
     assert calls[0][1]["command_timeout"] == 60
     assert connection.transaction_options == {"isolation": "repeatable_read", "readonly": True}
@@ -92,7 +116,7 @@ async def test_query_failure_exits_transaction_and_closes_connection(monkeypatch
 
     monkeypatch.setattr("asyncpg.connect", connect)
     with pytest.raises(RuntimeError, match="simulated database failure"):
-        await publisher.read_candidates("postgresql://unit_test/unused", NOW)
+        await publisher.read_candidates(TEST_DSN, NOW)
     assert connection.transaction_error is RuntimeError
     assert connection.closed and not connection.in_transaction
 
@@ -141,16 +165,11 @@ async def test_expired_photo_budget_fails_before_any_http_request(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_refill_replaces_failed_cards_without_changing_comparable_pool(monkeypatch):
-    rows = [dict(id=str(1016000000 + index), property_id=index,
-        url=f"https://krisha.kz/a/show/{1016000000 + index}",
-        is_active=True, market_type="secondary", price=30_000_000,
-        area=60, rooms=2, last_seen=NOW, complex_id=1, complex_resolution="name",
-        floor=5, floors_total=12, approved_photo_urls=[PHOTO_ROOT + "1-full.jpg"],
-        finish_level="finished", ceiling_height=3.0) for index in range(60)]
+    rows = candidate_rows()
     batches = []
 
     async def read(dsn, now):
-        assert dsn == "postgresql://unit_test/unused" and now == NOW
+        assert dsn == TEST_DSN and now == NOW
         return rows
 
     async def verify(snapshot, deadline):
@@ -163,7 +182,7 @@ async def test_refill_replaces_failed_cards_without_changing_comparable_pool(mon
         return {**snapshot, "items": [{**item, "source_status": "active", "source_checked_at": NOW.isoformat()} for item in snapshot["items"]]}, len(snapshot["items"]), set()
 
     monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: False)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://unit_test/unused")
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
     monkeypatch.setattr(publisher, "read_candidates", read)
     monkeypatch.setattr(publisher, "verify_sources", verify_sources)
     monkeypatch.setattr(publisher, "verify_photos", verify)
@@ -172,7 +191,8 @@ async def test_refill_replaces_failed_cards_without_changing_comparable_pool(mon
     assert len(batches) == 2 and len(items) == 30
     assert len({item["id"] for item in items}) == 30
     assert [item["rank"] for item in items] == list(range(1, 31))
-    assert all(item["price_comparison"]["comparable_count"] == 59 for item in items)
+    assert all(item["price_comparison"]["comparable_count"] == 159 for item in items)
+    assert all(len(item["reasons"]) == 3 for item in items)
     assert result["photo_heads"] == 60
 
 
@@ -307,12 +327,7 @@ async def test_source_verification_rejects_archived_deleted_changed_and_generic_
 
 @pytest.mark.asyncio
 async def test_confirmed_archived_sources_are_removed_from_final_comparison_pool(monkeypatch):
-    rows = [dict(id=str(1016000000 + index), property_id=index,
-        url=f"https://krisha.kz/a/show/{1016000000 + index}",
-        is_active=True, market_type="secondary", price=30_000_000,
-        area=60, rooms=2, last_seen=NOW, complex_id=1, complex_resolution="name",
-        floor=5, floors_total=12, approved_photo_urls=[PHOTO_ROOT + "1-full.jpg"],
-        finish_level="finished", ceiling_height=3.0) for index in range(60)]
+    rows = candidate_rows()
     source_batches = []
     archived = set()
 
@@ -330,7 +345,7 @@ async def test_confirmed_archived_sources_are_removed_from_final_comparison_pool
         return snapshot, len(snapshot["items"])
 
     monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: False)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://unit_test/unused")
+    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
     monkeypatch.setattr(publisher, "read_candidates", read)
     monkeypatch.setattr(publisher, "verify_sources", verify_sources)
     monkeypatch.setattr(publisher, "verify_photos", verify_photos)
@@ -338,7 +353,8 @@ async def test_confirmed_archived_sources_are_removed_from_final_comparison_pool
     items = result["snapshot"]["items"]
     assert len(items) == 30 and len(source_batches) == 2
     assert not archived.intersection(item["id"] for item in items)
-    assert all(item["price_comparison"]["comparable_count"] == 54 for item in items)
+    assert all(item["price_comparison"]["comparable_count"] == 154 for item in items)
+    assert all(len(item["reasons"]) == 3 for item in items)
     assert all(item["source_status"] == "active" for item in items)
 
 
