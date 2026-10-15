@@ -51,6 +51,8 @@ FROM rental_listings r
 JOIN name_keys nk ON nk.n=complex_name_key(r.complex_name)
 JOIN complexes canonical ON canonical.id=nk.cid
 WHERE r.city='astana' AND r.prop_type='apartment' AND r.is_active IS TRUE
+  AND r.rent_period='monthly'
+  AND NOT coalesce(r.rent_period_conflict,false)
   AND NOT coalesce(r.is_duplicate,false) AND NOT coalesce(r.dup_needs_review,false)
   AND nullif(btrim(r.duplicate_of),'') IS NULL AND r.archived_at IS NULL
   AND r.last_seen BETWEEN $1::timestamptz-interval '72 hours' AND $1

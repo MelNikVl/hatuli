@@ -285,6 +285,7 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
             complex_name=complex_name or None,
             rooms=rooms,
             prop_type="apartment",
+            complex_id=s.get("complex_id"),
         )
         # Предпочитаем ₸/м² × площадь этой конкретной квартиры вместо голого
         # median_price группы — на широких фолбэках (район/город) комнатность
@@ -310,9 +311,13 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
             # аренды), 1.02 — расходы на покупку (нотариус/риелтор ~2%).
             # net ≈ gross * 0.83 — держим формулу явной (не константой),
             # чтобы менять допущения по отдельности было легко.
-            net_annual = annual_rent * 0.95 - annual_rent * 0.10
-            purchase_cost = s["price"] * 1.02
-            s["net_yield_pct"] = round((net_annual / purchase_cost) * 100, 1) if purchase_cost > 0 else 0
+            from bot.core.rental_yield import NetYieldParams, monthly_yield_scenario
+            from bot.db import settings as rental_settings
+            try:
+                scenario = monthly_yield_scenario(s["price"], rent, NetYieldParams.from_settings(rental_settings.get))
+            except (ValueError, TypeError, OverflowError):
+                scenario = None
+            s["net_yield_pct"] = scenario["net_yield_pct"] if scenario else None
             s["est_rent"] = rent
             s["payback_years"] = round(s["price"] / (rent * 12), 1)
             s["rent_source"] = f"{rent_data.get('level','?')}, n={rent_data.get('sample_count',0)}"
