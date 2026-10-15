@@ -12,6 +12,12 @@ PATH = "/arenda/kvartiry/astana/"
 KEY = "RENTAL_CRAWL_V1_APARTMENT"
 
 
+@pytest.fixture(autouse=True)
+def isolate_stage2_index(monkeypatch):
+    # Stage-2 observations/cleanup have their own transactional contract suite.
+    monkeypatch.setattr('bot.core.rental_stage2_index.rebuild_rental_stage2_index', AsyncMock())
+
+
 def card(listing_id, *, price="200 000", extra="", has_id=True):
     ident = f'data-id="{listing_id}"' if has_id else ""
     return (f'<div class="a-card" {ident}><a class="a-card__title" '

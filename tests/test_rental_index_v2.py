@@ -21,6 +21,9 @@ def no_external_io(monkeypatch):
     monkeypatch.setattr("asyncpg.create_pool", reject)
     monkeypatch.setattr(pg, "init_pool", reject)
     monkeypatch.setattr(settings, "get_int", lambda key, default: default)
+    # This file tests the stage-0 monthly scope; stage-2 transaction/rebuild
+    # behavior has its own independently mocked contract tests.
+    monkeypatch.setattr('bot.core.rental_stage2_index.rebuild_rental_stage2_index', AsyncMock())
 
 
 def source(identifier=0, **changes):
