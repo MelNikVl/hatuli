@@ -75,7 +75,7 @@ def test_ready_offer_uses_exact_monthly_rooms_area_local_peers_and_four_facts():
     assert item['price_comparison']['comparable_count']==10
     assert item['price_comparison']['scope']=='в этом районе'
     assert len(item['reasons'])==4
-    assert any('16.7%' in reason for reason in item['reasons'])
+    assert any('16,7%' in reason for reason in item['reasons'])
     assert any('хозяин' in reason for reason in item['reasons'])
     assert any('указана мебель' in reason for reason in item['reasons'])
     assert all('полностью меблирована' not in reason for reason in item['reasons'])
@@ -104,7 +104,6 @@ async def test_photo_preflight_drops_failed_images_and_empty_cards_without_mutat
     bad=PHOTO.replace('1-full','2-full')
     client=AsyncMock()
     client.head.side_effect=[httpx.Response(200,headers={'content-type':'image/webp'}),httpx.Response(404)]
-    context=SimpleNamespace(__aenter__=AsyncMock(return_value=client),__aexit__=AsyncMock())
     class Context:
         async def __aenter__(self): return client
         async def __aexit__(self,*args): return None

@@ -128,7 +128,9 @@ def _history(row,now):
 
 def rental_factors(item):
     c=item['price_comparison']
-    reasons=[f"Ставка за м² на {c['discount_pct']:g}% ниже похожих квартир {c['scope']}. Для этой площади разница — около {round(c['reference_price_per_m2']*item['area']-item['price']):,} ₸/мес.".replace(',', ' ')]
+    discount_label=f"{c['discount_pct']:g}".replace('.',',')
+    difference=f"{round(c['reference_price_per_m2']*item['area']-item['price']):,}".replace(',',' ')
+    reasons=[f"Ставка за м² на {discount_label}% ниже похожих квартир {c['scope']}. Для этой площади разница — около {difference} ₸/мес."]
     facts=item.get('selection_facts') or {}
     if facts.get('is_owner') is True:
         reasons.append('В источнике арендодатель указан как хозяин.')
