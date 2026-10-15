@@ -60,11 +60,13 @@ def number(value):
 
 
 def _eligible(row,now):
+    from bot.core.comparison_rental_estimate import _NONMONTHLY
     try:
         price,area,rooms=[number(row.get(key)) for key in ('price','area','rooms')]
         return (re.fullmatch(r'\d{5,20}',str(row.get('id',''))) is not None and _valid_source(row)
             and row.get('city')=='astana' and row.get('prop_type')=='apartment'
             and row.get('rent_period')=='monthly' and row.get('rent_period_conflict') is not True
+            and not _NONMONTHLY.search(row.get('title') or '')
             and row.get('is_active') is True and row.get('archived_at') is None
             and row.get('is_duplicate') is not True and row.get('dup_needs_review') is not True
             and not row.get('duplicate_of') and None not in (price,area,rooms)
@@ -119,7 +121,7 @@ def _history(row,now):
     previous=None
     for at,value in sorted(values.items()):
         if previous is not None and previous!=value:
-            events.append({'old_price':previous,'new_price':value,'changed_at':at.isoformat()})
+            events.append({'old_price':previous,'new_price':value,'at':at.isoformat()})
         previous=value
     return price_history(events,int(row['price']),now=now)
 
@@ -153,7 +155,9 @@ def source_check_matches(row,check,now):
             and check.get('rent_astana') is True and check.get('rent_period')=='monthly'
             and now-CHECK_AGE<=utc(check['checked_at'])<=now
             and all(type(check.get(key)) in (int,float) and not isinstance(check.get(key),bool)
-                and number(check[key])==number(row[key]) for key in ('price','rooms','area','floor','floors_total')))
+                and number(check[key])==number(row[key]) for key in ('price','rooms','floor','floors_total'))
+            and type(check.get('area')) in (int,float) and number(check['area']) is not None
+            and abs(number(check['area'])-number(row['area']))<=.0500001)
     except (KeyError,TypeError,ValueError):
         return False
 
@@ -200,7 +204,7 @@ def build_rental_picks(rows,*,now=None,checks=None,limit=MAX_PICKS,require_check
         item={'id':str(row['id']),'rank':0,'source_url':row['url'],
             'title':f"{row['rooms']}-комнатная квартира · {area:g} м²",'price':int(row['price']),
             'currency':'KZT','rent_period':'monthly','price_per_m2':round(row['price']/area),
-            'area':area,'rooms':int(row['rooms']),'floor':int(floor),'floors_total':int(total),
+            'area':round(area,2),'rooms':int(row['rooms']),'floor':int(floor),'floors_total':int(total),
             'address':address,'district':row.get('district') or '',
             'complex_name':(row.get('index_complex_name') or '') if complex_id else '',
             'photo_urls':photos,'observed_at':utc(row['last_seen']).isoformat(),

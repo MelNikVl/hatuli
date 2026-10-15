@@ -18,7 +18,7 @@ async def read_candidates(dsn,now):
     import asyncpg
     from bot.core.rental_stage2_index import _identity_parts
     ctes,joins=_identity_parts()
-    query=ctes+"""SELECT r.id,r.url,r.price,r.area,r.rooms,r.floor,r.floors_total,
+    query=ctes+"""SELECT r.id,r.url,r.title,r.price,r.area,r.rooms,r.floor,r.floors_total,
         r.address,r.district,r.city,r.prop_type,r.rent_period,r.rent_period_conflict,
         r.is_active,r.archived_at,r.is_duplicate,r.dup_needs_review,r.duplicate_of,
         r.last_seen,r.complex_id,r.photo_url,r.photos,r.rental_episode_started_at,r.rental_episode_last_seen_at,r.hex_id,r.hex_edge_m,
