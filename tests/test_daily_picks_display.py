@@ -27,7 +27,7 @@ def snapshot():
                 floor=5, floors_total=12, price_per_m2=500_000,
                 price_comparison={"discount_pct": 16.7, "reference_price_per_m2": 600_000,
                                   "scope": "в том же ЖК", "comparable_count": 8},
-                selection_facts={"ceiling_height": 3.0},
+                selection_facts={"ceiling_height": 3.0, "kitchen_area": 14},
                 complex_name="Тестовый ЖК", complex_identity={"checked": True, "status": "catalog_bound",
                     "canonical_id": 1, "canonical_name": "Тестовый ЖК", "umbrella_id": None,
                     "umbrella_name": None, "house_id": None, "house_label": None, "binding_method": "name"},
@@ -39,7 +39,8 @@ def snapshot():
 
 
 def market_detail(**changes):
-    row = {"price": changes.get("current_price", 30_000_000), "area": 60, "address": None, "ceiling_height": 3.0}
+    row = {"price": changes.get("current_price", 30_000_000), "area": 60, "address": None,
+           "ceiling_height": 3.0, "kitchen_area": 14}
     return {"id": "1016000000", "current_price": 30_000_000, "area": 60, "rooms": 2,
             "floor": 5, "floors_total": 12,
             **build_offer_details(row, "secondary", now=NOW), **changes}
@@ -95,7 +96,7 @@ def test_changed_scanner_price_hides_card_even_when_still_within_budget(monkeypa
     assert data["items"][0]["price"] == 30_000_000
 
 
-def test_exact_budget_with_unchanged_source_and_three_factors_is_kept(monkeypatch):
+def test_exact_budget_with_unchanged_source_and_four_factors_is_kept(monkeypatch):
     data = snapshot()
     selected = data["items"][0]
     selected.update(price=100_000_000, price_per_m2=1_666_667,
@@ -105,14 +106,25 @@ def test_exact_budget_with_unchanged_source_and_three_factors_is_kept(monkeypatc
     monkeypatch.setattr(display, "load_market_snapshot", lambda: {"offers": [], "listing_details": [market_detail(current_price=100_000_000)]})
     item = display.prepare_daily_picks(data, NOW)["items"][0]
     assert item["price"] == 100_000_000
-    assert len(item["reasons"]) == 3
+    assert len(item["reasons"]) == 4
     assert item["source_checked_at"] == NOW.isoformat()
 
 
-def test_card_with_less_than_three_supported_factors_is_hidden():
+def test_card_with_less_than_four_supported_factors_is_hidden():
     data = snapshot()
     data["items"][0]["selection_facts"]["ceiling_height"] = None
     # The old rendered text must not supply a missing structured fact.
+    assert display.prepare_daily_picks(data, NOW)["items"] == []
+
+
+@pytest.mark.parametrize("discount", [0, -2, 1, 2.9])
+def test_display_hides_parity_premium_or_small_discount_despite_four_nonprice_facts(discount):
+    data = snapshot()
+    item = data["items"][0]
+    item["price_comparison"]["discount_pct"] = discount
+    item["selection_facts"].update(is_owner=True, owner_source_verified=True)
+    # Ceiling, kitchen, verified source owner and floor do not replace the
+    # admission requirement of a meaningful price advantage.
     assert display.prepare_daily_picks(data, NOW)["items"] == []
 
 
@@ -131,6 +143,6 @@ def test_actual_history_gap_stays_with_chart_without_promoting_generic_checklist
     data = snapshot()
     data["items"][0]["cautions"] = ["GENERIC-CHECKLIST-MUST-NOT-BECOME-A-NOTICE"]
     item = display.prepare_daily_picks(data, NOW)["items"][0]
-    assert len(item["reasons"]) == 3
+    assert len(item["reasons"]) == 4
     assert "пропуски" in item["price_history"]["warning"]
     assert item["evidence_notices"] == []

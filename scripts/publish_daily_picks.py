@@ -27,7 +27,10 @@ from bot.core.daily_picks import (
     publish_snapshot, safe_photo_url, snapshot_path, validate_snapshot,
 )
 from bot.core.daily_pick_identity import annotate_daily_pick_identity_rows
-from bot.core.apartment_selection_reasons import validate_selection_facts
+from bot.core.apartment_selection_reasons import best_apartment_factors, validate_selection_facts
+
+DEFAULT_QUALITY_POLICY = "discounted_four_factors"
+MINIMUM_PICKS = 10
 
 # Restricted input fields. The source address is sanitized to street/house by
 # the public projection. Seller contacts, documents, descriptions,
@@ -53,7 +56,7 @@ SELECT a.id, a.url, a.price, a.area, a.rooms, a.floor, a.floors_total, a.distric
        a.year_built, a.is_owner, a.is_active, a.is_duplicate, a.dup_needs_review,
        a.market_type, a.last_seen, a.resolved_house_id, a.house_attribution,
        a.complex_id, a.complex_resolution, a.lat, a.lon, a.finish_level,
-       a.ceiling_height, a.kitchen_area, pl.property_id,
+       a.ceiling_height, a.kitchen_area, pl.property_id,a.photos AS candidate_photo_urls,
        c.name AS canonical_complex_name, c.year_built AS complex_year_built,
        CASE WHEN a.complex_resolution='name' THEN complex_name_key(a.complex_name) END AS identity_raw_name_key,
        p.approved_photo_urls, coalesce(h.price_events,'[]'::jsonb) AS price_events
@@ -328,6 +331,55 @@ def owner_evidence_rows(rows: list[dict], checks: dict[str, dict] | None = None,
     return result
 
 
+def _safe_photo_list(value) -> list[str]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return []
+    if not isinstance(value, list):
+        return []
+    return list(dict.fromkeys(url for raw in value if (url := safe_photo_url(raw))))
+
+
+def photo_evidence_rows(rows: list[dict], checks: dict[str, dict] | None, now: datetime, *, review_preview: bool = False) -> list[dict]:
+    """Raw photos are discovery only; publication requires human visual proof.
+
+    Existing fingerprint-approved photos stay usable. Additional interiors
+    require an owner-created receipt tied to the same fresh source visit and
+    exact URLs in the current listing. Nothing is written back to PostgreSQL.
+    """
+    from datetime import timedelta
+    result = []
+    for row in rows:
+        current = _safe_photo_list(row.get("candidate_photo_urls"))
+        approved = _safe_photo_list(row.get("approved_photo_urls"))
+        if "candidate_photo_urls" in row:
+            approved = [url for url in approved if url in current]
+        if review_preview:
+            approved.extend(url for url in current if url not in approved)
+        else:
+            record = (checks or {}).get(str(row.get("id")))
+            if isinstance(record, dict) and (record.get("interior_photo_urls") is not None or record.get("photo_review") is not None):
+                receipt, interiors = record.get("photo_review"), record.get("interior_photo_urls")
+                if (not matching_browser_offer(row, record) or not isinstance(receipt, dict)
+                        or receipt.get("method") != "normal_browser_visual"
+                        or receipt.get("photo_type") not in (None, "interior")
+                        or receipt.get("checked_at") != record.get("checked_at")
+                        or not isinstance(interiors, list) or not 1 <= len(interiors) <= 3):
+                    raise ValueError("Invalid source-linked interior photo receipt")
+                try:
+                    checked = datetime.fromisoformat(record["checked_at"].replace("Z", "+00:00"))
+                    fresh = checked.tzinfo is not None and now - timedelta(hours=2) <= checked <= now
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    fresh = False
+                if not fresh or any(safe_photo_url(url) is None or url not in current for url in interiors):
+                    raise ValueError("Interior photo proof is stale or not part of the current source listing")
+                approved.extend(url for url in interiors if url not in approved)
+        result.append({**row, "approved_photo_urls": approved[:3]})
+    return result
+
+
 def preview_with_recent_measurements(rows: list[dict], snapshot: dict | None, now: datetime) -> list[dict]:
     """Private discovery hints only; real generation never calls this helper.
 
@@ -363,17 +415,22 @@ async def export_candidate_pool(target: str, now: datetime) -> dict:
     if not dsn:
         raise RuntimeError("DATABASE_URL is required")
     rows = owner_evidence_rows(await read_candidates(dsn, now), review_preview=True)
+    rows = photo_evidence_rows(rows, None, now, review_preview=True)
     rows = preview_with_recent_measurements(rows, load_daily_picks(), now)
     excluded = set()
     items = []
     for _ in range(3):
-        batch = build_daily_picks(rows, now, excluded_ids=excluded)
+        batch = build_daily_picks(rows, now, excluded_ids=excluded, minimum_factor_count=1)
         if not batch["items"]:
             break
         items.extend(batch["items"])
         excluded.update(item["id"] for item in batch["items"])
+    review_photos = {str(row["id"]): _safe_photo_list(row.get("candidate_photo_urls")) for row in rows}
     for rank, item in enumerate(items, 1):
         item["rank"] = rank
+        # Private discovery only. Public cards keep the independent 1-3-photo
+        # allowlist and never inherit this unclassified current gallery.
+        item["review_photo_urls"] = review_photos.get(item["id"], [])
     result = {"schema_version": 1, "kind": "unverified_review_candidates", "generated_at": now.isoformat(), "input_count": len(rows), "items": items}
     encoded = json.dumps(result, ensure_ascii=False, allow_nan=False)
     if target == "-":
@@ -420,6 +477,7 @@ async def generate(args, now: datetime) -> dict:
         raise RuntimeError("DATABASE_URL is required")
     source_checks = load_source_checks(args.source_checks, now) if getattr(args, "source_checks", None) else None
     rows = owner_evidence_rows(await read_candidates(dsn, now), source_checks)
+    rows = photo_evidence_rows(rows, source_checks, now)
     snapshot = build_daily_picks(rows, now)
     head_count = 0
     source_gets = 0
@@ -460,38 +518,50 @@ async def generate(args, now: datetime) -> dict:
     return {"snapshot": snapshot, "input_count": len(rows), "photo_heads": head_count, "source_gets": source_gets}
 
 
-def publication_satisfies_policy(snapshot: dict, quality_policy: str = "daily_30") -> bool:
-    """A short quality edition does not satisfy the default quota policy."""
-    count = len(snapshot.get("items", []))
-    if quality_policy == "daily_30":
-        return count == MAX_PICKS
-    policy = snapshot.get("publication_policy")
-    return bool(quality_policy == "three_factors" and 1 <= count <= MAX_PICKS
-                and isinstance(policy, dict) and policy.get("name") == "three_factors"
-                and policy.get("published_count") == count and policy.get("explicit") is True)
+def publication_satisfies_policy(snapshot: dict, quality_policy: str = DEFAULT_QUALITY_POLICY) -> bool:
+    """An older three-factor edition never satisfies the current requirements."""
+    if quality_policy not in {DEFAULT_QUALITY_POLICY, "daily_30"}:
+        return False
+    try:
+        safe = validate_snapshot(snapshot)
+        count = len(safe["items"])
+        policy = safe.get("publication_policy") or {}
+        return (MINIMUM_PICKS <= count <= MAX_PICKS and len(snapshot.get("items", [])) == count
+                and (quality_policy != "daily_30" or count == MAX_PICKS)
+                and policy.get("name") == DEFAULT_QUALITY_POLICY
+                and policy.get("minimum_count") == MINIMUM_PICKS
+                and policy.get("published_count") == count
+                and policy.get("required_strong_factors") == 4
+                and policy.get("minimum_discount_pct") == 3
+                and policy.get("explicit") is True)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False
 
 
-def prepare_publication(snapshot: dict, quality_policy: str = "daily_30", *, allow_partial: bool = False) -> dict:
-    """Explicitly select quality over quota; no filler or weakening of checks."""
+def prepare_publication(snapshot: dict, quality_policy: str = DEFAULT_QUALITY_POLICY, *, allow_partial: bool = False) -> dict:
+    """Publish 10-30 discounted cards with four evidence-backed factors each."""
     count = len(snapshot.get("items", []))
-    if quality_policy not in {"daily_30", "three_factors"}:
+    if quality_policy not in {"daily_30", DEFAULT_QUALITY_POLICY}:
         raise ValueError("Unknown daily quality policy")
-    if quality_policy == "three_factors" and allow_partial:
-        raise ValueError("Explicit quality policy cannot be combined with legacy partial publication")
-    if not 1 <= count <= MAX_PICKS:
-        raise RuntimeError("A positive bounded daily edition is required; previous snapshot retained")
-    if quality_policy == "daily_30":
-        if count != MAX_PICKS and not allow_partial:
-            raise RuntimeError(f"Only {count} qualifying cards; previous snapshot retained")
-        # Preserve the existing default/explicit legacy-partial contract. The
-        # atomic publisher still validates every card before writing it.
-        return snapshot
+    if allow_partial:
+        raise ValueError("Partial publication cannot bypass the minimum of ten discounted four-factor cards")
+    if not MINIMUM_PICKS <= count <= MAX_PICKS or quality_policy == "daily_30" and count != MAX_PICKS:
+        raise RuntimeError(f"Only {count} qualifying cards; previous snapshot retained")
     safe = validate_snapshot(snapshot)
-    if len(safe["items"]) != count or any(len(item["reasons"]) != 3 or item.get("complex_identity") is None for item in safe["items"]):
-        raise ValueError("Every quality-edition card requires identity and three proven factors")
+    generated = datetime.fromisoformat(safe["generated_at"].replace("Z", "+00:00"))
+    if len(safe["items"]) != count:
+        raise ValueError("Every quality-edition card must retain its verified evidence")
+    for item in safe["items"]:
+        factors = best_apartment_factors(item, generated)
+        discount = item.get("price_comparison", {}).get("discount_pct")
+        if (len(item["reasons"]) != 4 or len(factors) < 4 or item.get("complex_identity") is None
+                or not any(factor["key"] == "price" for factor in factors[:4])
+                or type(discount) not in {int, float} or not math.isfinite(discount) or discount < 3):
+            raise ValueError("Every card requires identity, a discount of at least 3% and four proven factors")
     safe["publication_policy"] = {
-        "name": "three_factors", "target_count": MAX_PICKS, "published_count": count,
-        "required_strong_factors": 3, "reason": "quality_before_quota", "explicit": True,
+        "name": DEFAULT_QUALITY_POLICY, "target_count": MAX_PICKS, "minimum_count": MINIMUM_PICKS,
+        "published_count": count, "required_strong_factors": 4, "minimum_discount_pct": 3,
+        "reason": "discount_and_four_factors", "explicit": True,
         "evaluated_at": safe["generated_at"],
     }
     return validate_snapshot(safe)
@@ -502,16 +572,16 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Read and evaluate; do not publish")
     parser.add_argument("--force", action="store_true", help="Explicitly republish today's snapshot")
     parser.add_argument("--skip-photo-check", action="store_true", help="Dry-run only; avoids CDN HEAD requests")
-    parser.add_argument("--allow-partial", action="store_true", help="Explicitly publish fewer than 30 eligible listings")
-    parser.add_argument("--quality-policy", choices=("daily_30", "three_factors"), default="daily_30",
-                        help="Default: exactly 30; explicitly choose three_factors to publish 1-30 fully verified cards")
+    parser.add_argument("--allow-partial", action="store_true", help="Retired: partial publication cannot bypass the minimum quality policy")
+    parser.add_argument("--quality-policy", choices=(DEFAULT_QUALITY_POLICY, "daily_30"), default=DEFAULT_QUALITY_POLICY,
+                        help="Default: 10-30 discounted cards with four factors; daily_30 additionally requires exactly 30")
     parser.add_argument("--source-checks", help="Fresh owner-created normal-browser confirmation JSON; missing confirmations fail closed")
     parser.add_argument("--export-candidates", metavar="PATH", help="Read-only candidate export, no HTTP requests. Use '-' for JSON stdout.")
     args = parser.parse_args()
     if args.skip_photo_check and not args.dry_run:
         parser.error("--skip-photo-check is only permitted with --dry-run")
-    if args.quality_policy == "three_factors" and args.allow_partial:
-        parser.error("--quality-policy three_factors cannot be combined with --allow-partial")
+    if args.allow_partial:
+        parser.error("--allow-partial is retired; every publication requires at least ten discounted four-factor cards")
     now = datetime.now(timezone.utc)
     path = snapshot_path()
     try:

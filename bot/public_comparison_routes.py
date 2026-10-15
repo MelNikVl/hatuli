@@ -60,7 +60,7 @@ def _public_offer(offer: dict, *, daily_identity: dict | None = None,
                     if observed_label else "В залоге — указано в исходном объявлении Krisha.kz."]
                    if pledged else [])
         result.update(
-            from_daily_picks=True, is_daily_pick=not daily_mismatch_notices and len(reasons) == 3,
+            from_daily_picks=True, is_daily_pick=not daily_mismatch_notices and len(reasons) == 4,
             complex_identity=daily_identity, complex_name=daily_identity["canonical_name"] or "",
             floor=offer.get("floor") if not daily_mismatch_notices else None,
             floors_total=offer.get("floors_total") if not daily_mismatch_notices else None,

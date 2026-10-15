@@ -17,7 +17,7 @@ def verified_snapshot():
         area=60, rooms=2, floor=5, floors_total=12, is_active=True,
         market_type="secondary", last_seen=NOW, complex_id=1,
         complex_resolution="name", canonical_complex_name="Тестовый ЖК",
-        approved_photo_urls=[PHOTO], finish_level="finished", ceiling_height=3.0,
+        approved_photo_urls=[PHOTO], finish_level="finished", ceiling_height=3.0, kitchen_area=14,
         identity_checked=True, identity_complex_id=1, identity_complex_name="Тестовый ЖК",
         identity_complex_valid=True, identity_complex_is_umbrella=False, identity_complex_parent_id=None,
         resolved_house_id=None, identity_house_id=None, identity_house_name=None,
@@ -77,7 +77,7 @@ def test_nearby_short_copy_retains_exact_radius_and_uncertainty_without_changing
     original = copy.deepcopy(snapshot)
     safe = dp.validate_snapshot(snapshot)
     card = safe["items"][0]
-    assert len(card["reasons"]) == 3
+    assert len(card["reasons"]) == 4
     assert "предложений рядом" in card["reasons"][0]
     assert any("800 м" in caution and "приблизительные" in caution for caution in card["cautions"])
     assert card["price_comparison"] == original["items"][0]["price_comparison"]
@@ -100,3 +100,14 @@ def test_rounded_public_area_and_median_keep_valid_price_evidence():
     item["price_comparison"]["reference_price_per_m2"] = 500_000
     item["price_comparison"]["discount_pct"] = round((1 - item["price"] / actual_area / 500_000) * 100, 1)
     assert dp.validate_snapshot(snapshot)["items"][0]["price_comparison"] == item["price_comparison"]
+
+
+@pytest.mark.parametrize("discount", [-1, 0, 1, 2.9])
+def test_public_validator_rejects_parity_premium_or_small_discount_with_four_other_facts(discount):
+    snapshot = verified_snapshot()
+    item = snapshot["items"][0]
+    item["price"] = round(500_000*item["area"]*(1-discount/100))
+    item["price_per_m2"] = round(item["price"]/item["area"])
+    item["price_comparison"].update(discount_pct=discount, reference_price_per_m2=500_000)
+    item["selection_facts"].update(is_owner=True, owner_source_verified=True)
+    assert dp.validate_snapshot(snapshot)["items"] == []

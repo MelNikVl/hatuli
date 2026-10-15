@@ -55,12 +55,11 @@ def full_deposits(now):
 def checked_daily_comparison(monkeypatch):
     edition = daily_snapshot(NOW)
     item = edition["items"][0]
-    item["price_comparison"].update(discount_pct=0, reference_price_per_m2=item["price_per_m2"])
-    item["selection_facts"].update(is_owner=True, owner_source_verified=True)
+    item["selection_facts"].update(kitchen_area=None, is_owner=True, owner_source_verified=True)
     item["source_facts"] = {"is_pledged": True, "contact": "PRIVATE-PLEDGE-CONTACT"}
     item["cautions"] = ["Уточните, есть ли комиссия посредника.", "Состояние и ремонт уточните у продавца."]
     item["reasons"] = best_apartment_reasons(item, NOW)
-    assert len(item["reasons"]) == 3
+    assert len(item["reasons"]) == 4
     market = detailed_market(NOW, item["id"], item["price"], item["area"])
     detail = market["listing_details"][0]
     detail["selection_facts"] = {"ceiling_height": None, "kitchen_area": None,
@@ -74,7 +73,7 @@ def checked_daily_comparison(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_checked_daily_offer_keeps_three_factors_floor_and_dated_pledge_on_compare(checked_daily_comparison):
+async def test_checked_daily_offer_keeps_four_factors_floor_and_dated_pledge_on_compare(checked_daily_comparison):
     edition, market, item = checked_daily_comparison
     frozen = copy.deepcopy(edition)
     selected = comparison_context(listing=item["id"])["selected_offer"]
@@ -94,7 +93,7 @@ async def test_checked_daily_offer_keeps_three_factors_floor_and_dated_pledge_on
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(f"/compare?listing={item['id']}")
     assert response.status_code == 200
-    assert response.text.count("data-daily-picks-factor") == 3
+    assert response.text.count("data-daily-picks-factor") == 4
     assert 'data-mc-daily-floor>4 из 12 этаж</p>' in response.text
     assert "В залоге — указано на Krisha.kz при проверке" in response.text
     assert "Уточните, есть ли комиссия посредника." not in response.text
@@ -104,14 +103,14 @@ async def test_checked_daily_offer_keeps_three_factors_floor_and_dated_pledge_on
 
 
 @pytest.mark.parametrize("change", ["price", "area"])
-def test_changed_daily_offer_is_not_redeclared_as_three_supported_recommendations(checked_daily_comparison, change):
+def test_changed_daily_offer_is_not_redeclared_as_four_supported_recommendations(checked_daily_comparison, change):
     edition, market, item = checked_daily_comparison
     frozen = copy.deepcopy(edition)
     detail = market["listing_details"][0]
     detail["current_price" if change == "price" else "area"] += 1_000_000 if change == "price" else 10
     selected = comparison_context(listing=item["id"])["selected_offer"]
     assert selected["from_daily_picks"] is True and selected["is_daily_pick"] is False
-    assert len(selected["reasons"]) < 3
+    assert len(selected["reasons"]) < 4
     assert not any("ниже похожих" in reason for reason in selected["reasons"])
     assert selected["floor"] is None
     assert selected["cautions"] == []
@@ -136,7 +135,7 @@ async def test_daily_compare_retains_specific_history_gap_and_never_promotes_it_
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get(f"/compare?listing={item['id']}")
     assert response.status_code == 200
-    assert response.text.count("data-daily-picks-factor") == 3
+    assert response.text.count("data-daily-picks-factor") == 4
     assert 'data-history-status="incomplete"' in response.text
     assert "Между записанными изменениями цены есть пропуски" in response.text
     assert "В залоге — указано на Krisha.kz при проверке" in response.text
@@ -206,7 +205,7 @@ def assert_checked_cards_preserved(original, displayed, excluded_ids=()):
         source = expected[item["id"]]
         for field in ("source_checked_at", "observed_at", "price", "area", "rooms", "selection_facts", "complex_identity", "price_comparison"):
             assert item[field] == source[field]
-        assert len(item["reasons"]) == 3
+        assert len(item["reasons"]) == 4
     assert [item["rank"] for item in displayed["items"]] == list(range(1, len(expected)+1))
 
 
@@ -272,7 +271,7 @@ def test_changed_area_and_large_kitchen_never_break_daily_page_or_promote_old_ca
     assert original == frozen
     assert item["id"] not in {card["id"] for card in displayed["items"]}
     assert_checked_cards_preserved(original, displayed, excluded_ids={item["id"]})
-    assert all(card["selection_facts"]["kitchen_area"] is None for card in displayed["items"])
+    assert all(card["selection_facts"]["kitchen_area"] == 12 for card in displayed["items"])
 
 
 @pytest.mark.asyncio

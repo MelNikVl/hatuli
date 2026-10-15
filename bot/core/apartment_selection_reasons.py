@@ -187,7 +187,7 @@ def best_apartment_factors(offer: dict, now=None) -> list[dict]:
     """Independent positive evidence for the curated page, strongest first.
 
     Market parity, a premium, generic repair labels and missing information
-    never fill one of the three positions. An owner label is a source claim,
+    never fill one of the four positions. An owner label is a source claim,
     not proof of title or freedom from intermediary fees.
     """
     now = _utc(now or datetime.now(timezone.utc))
@@ -219,4 +219,7 @@ def best_apartment_factors(offer: dict, now=None) -> list[dict]:
 
 
 def best_apartment_reasons(offer: dict, now=None) -> list[str]:
-    return [factor["text"] for factor in best_apartment_factors(offer, now)[:3]]
+    factors = best_apartment_factors(offer, now)
+    if not any(factor["key"] == "price" for factor in factors):
+        return []
+    return [factor["text"] for factor in factors[:4]]

@@ -33,7 +33,15 @@ def row(index=0, **changes):
 
 
 def rows():
-    return [row(0, price=24_000_000)] + [row(i) for i in range(1, 8)]
+    # Two discounted homes are candidates. The reference homes retain their
+    # full asking prices in the median without qualifying as public picks.
+    return [row(0, price=24_000_000), row(1, price=25_000_000)] + [
+        row(i, approved_photo_urls=[]) for i in range(2, 9)]
+
+
+def publishable_rows(count=10):
+    return [row(i, price=24_000_000+i*1_000) for i in range(count)] + [
+        row(100+i, approved_photo_urls=[]) for i in range(count+6)]
 
 
 def first(snapshot):
@@ -50,7 +58,7 @@ def test_fresh_median_correct_discount_not_upside_or_stale_score():
     sample = rows()
     sample[0].update(score_total=100, hex_details={"di": 2, "expected_m2": 1_000_000})
     result = first(dp.build_daily_picks(sample, NOW))
-    assert result["price_comparison"] == dict(discount_pct=20., reference_price_per_m2=500_000, scope="в том же ЖК", comparable_count=7)
+    assert result["price_comparison"] == dict(discount_pct=20., reference_price_per_m2=500_000, scope="в том же ЖК", comparable_count=8)
     assert "20% ниже" in result["reasons"][0]
     assert result["price_per_m2"] == 400_000
 
@@ -133,17 +141,13 @@ def test_extreme_discount_excluded_not_celebrated():
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
 
 
-def test_near_median_premium_requires_strong_fact_not_middle_floor():
+@pytest.mark.parametrize("price", [29_500_000, 30_000_000, 31_000_000])
+def test_below_three_percent_parity_or_premium_is_excluded_even_with_four_other_pluses(price):
     sample = rows()
-    sample[0].update(price=31_000_000, floor=1, ceiling_height=None)
+    sample[0].update(price=price, is_owner=True, owner_source_verified=True,
+        price_events=[{"old_price": price+2_000_000, "new_price": price, "changed_at": NOW-timedelta(days=5)}])
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
-    sample[0]["floor"] = 5
-    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
-    sample[0]["ceiling_height"] = 3
-    result = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
-    assert len(result["reasons"]) == 3
-    assert not any("выше похожих" in reason or "на уровне" in reason for reason in result["reasons"])
-    assert result["price_comparison"]["discount_pct"] < 0
+    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW, minimum_factor_count=1)["items"]]
 
 
 def test_floor_caution_survives_price_cut_reason():
@@ -161,32 +165,47 @@ def test_price_cut_not_reported_if_history_outdated():
     assert not any("Снижение цены" in reason for reason in first(dp.build_daily_picks(sample, NOW))["reasons"])
 
 
-def test_recorded_recent_price_reduction_combines_with_kitchen_and_floor_for_three_reasons():
+def test_recorded_recent_price_reduction_combines_with_discount_kitchen_and_floor_for_four_reasons():
     sample = rows()
-    sample[0].update(price=30_000_000, ceiling_height=None,
-        price_events=[{"old_price": 32_000_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=7)}])
+    sample[0].update(ceiling_height=None,
+        price_events=[{"old_price": 26_000_000, "new_price": 24_000_000, "changed_at": NOW-timedelta(days=7)}])
     item = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
-    assert len(item["reasons"]) == 3
+    assert len(item["reasons"]) == 4
     assert not any("на уровне" in reason for reason in item["reasons"])
     assert item["price_history"]["net_change"] == -2_000_000
     assert item["price_history"]["changes_count"] == 1
 
 
-def test_every_published_pick_has_exactly_three_positive_independent_reasons():
+def test_every_published_pick_has_exactly_four_positive_independent_reasons():
     original = rows()
     snapshot = confirmed(dp.build_daily_picks(original, NOW))
-    assert len(snapshot["items"]) == 8
-    assert all(len(item["reasons"]) == 3 for item in snapshot["items"])
-    assert all(len(set(item["reasons"])) == 3 for item in snapshot["items"])
+    assert len(snapshot["items"]) == 2
+    assert all(len(item["reasons"]) == 4 for item in snapshot["items"])
+    assert all(len(set(item["reasons"])) == 4 for item in snapshot["items"])
     for item in snapshot["items"]:
         text = " ".join(item["reasons"])
         assert "на уровне" not in text and "выше похожих" not in text
         assert "аналогов" not in text and "±15%" not in text
-    assert all(len(item["reasons"]) == 3 for item in dp.validate_snapshot(snapshot)["items"])
+    assert all(len(item["reasons"]) == 4 for item in dp.validate_snapshot(snapshot)["items"])
+
+
+def test_discovery_can_inspect_one_factor_but_cannot_publish_it_as_a_complete_pick(tmp_path):
+    sample = publishable_rows(count=11)
+    sample[0].update(ceiling_height=None, kitchen_area=None, floor=1)
+    discovered = dp.build_daily_picks(sample, NOW, minimum_factor_count=1)
+    candidate = next(item for item in discovered["items"] if item["id"] == "1016000000")
+    assert len(candidate["reasons"]) == 1
+    assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
+    confirmed_discovery = confirmed(discovered)
+    safe = dp.validate_snapshot(confirmed_discovery)
+    assert "1016000000" not in [item["id"] for item in safe["items"]]
+    dp.publish_snapshot(confirmed_discovery, tmp_path/"daily.json")
+    published = dp.load_daily_picks(tmp_path/"daily.json")
+    assert all(len(item["reasons"]) == 4 for item in published["items"])
 
 
 @pytest.mark.parametrize("finish", [None, "furnished", "renovated", "designer", "finished"])
-def test_two_facts_never_gain_a_third_from_furniture_repair_or_raw_quality_claims(finish):
+def test_two_facts_never_gain_extra_reasons_from_furniture_repair_or_raw_quality_claims(finish):
     sample = rows()
     sample[0].update(ceiling_height=None, kitchen_area=None, finish_level=finish,
                      description="Качественный ЖК, тихо и хороший ремонт", photo_quality="excellent",
@@ -194,13 +213,13 @@ def test_two_facts_never_gain_a_third_from_furniture_repair_or_raw_quality_claim
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
 
 
-def test_owner_only_completes_three_factors_after_source_verification():
+def test_owner_only_completes_four_factors_after_source_verification():
     sample = rows()
-    sample[0].update(ceiling_height=None, kitchen_area=None, is_owner=True)
+    sample[0].update(ceiling_height=None, is_owner=True)
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
     sample[0]["owner_source_verified"] = True
     selected = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
-    assert len(selected["reasons"]) == 3
+    assert len(selected["reasons"]) == 4
     assert selected["selection_facts"]["owner_source_verified"] is True
 
 
@@ -213,23 +232,23 @@ def test_discount_percent_cash_gap_and_two_price_cuts_are_only_two_factors():
 
 
 @pytest.mark.parametrize("history", [
-    [{"old_price": 30_600_000, "new_price": 30_300_000, "changed_at": NOW-timedelta(days=5)},
-     {"old_price": 30_300_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=5)}],
-    [{"old_price": 30_600_000, "new_price": 30_300_000, "changed_at": NOW-timedelta(days=20)},
-     {"old_price": 30_300_000, "new_price": 30_400_000, "changed_at": NOW-timedelta(days=10)},
-     {"old_price": 30_400_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=5)}],
+    [{"old_price": 24_600_000, "new_price": 24_300_000, "changed_at": NOW-timedelta(days=5)},
+     {"old_price": 24_300_000, "new_price": 24_000_000, "changed_at": NOW-timedelta(days=5)}],
+    [{"old_price": 24_600_000, "new_price": 24_300_000, "changed_at": NOW-timedelta(days=20)},
+     {"old_price": 24_300_000, "new_price": 24_400_000, "changed_at": NOW-timedelta(days=10)},
+     {"old_price": 24_400_000, "new_price": 24_000_000, "changed_at": NOW-timedelta(days=5)}],
 ])
-def test_fake_repeated_or_nonmonotone_price_history_cannot_complete_three_factors(history):
+def test_fake_repeated_or_nonmonotone_price_history_cannot_complete_four_factors(history):
     sample = rows()
-    sample[0].update(price=30_000_000, ceiling_height=None, price_events=history)
+    sample[0].update(ceiling_height=None, price_events=history)
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
 
 
 def test_duplicate_or_broken_history_is_not_a_reason_to_select_market_price():
     sample = rows()
-    sample[0].update(price=30_000_000, ceiling_height=None, price_events=[
-        {"old_price": 32_000_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=7)},
-        {"old_price": 32_000_000, "new_price": 30_000_000, "changed_at": NOW-timedelta(days=2)}])
+    sample[0].update(ceiling_height=None, price_events=[
+        {"old_price": 26_000_000, "new_price": 24_000_000, "changed_at": NOW-timedelta(days=7)},
+        {"old_price": 26_000_000, "new_price": 24_000_000, "changed_at": NOW-timedelta(days=2)}])
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
 
 
@@ -238,13 +257,13 @@ def test_repair_category_alone_cannot_qualify_a_market_priced_pick(finish):
     sample = [{**item, "finish_level": finish} for item in rows()]
     sample[0].update(price=30_000_000, ceiling_height=None)
     assert "1016000000" not in [item["id"] for item in dp.build_daily_picks(sample, NOW)["items"]]
-    sample[0]["price"] = 24_000_000
+    sample[0].update(price=24_000_000, ceiling_height=3)
     item = next(item for item in dp.build_daily_picks(sample, NOW)["items"] if item["id"] == "1016000000")
     assert any("ниже похожих" in reason for reason in item["reasons"])
     assert not any("ремонт" in reason.lower() or "отделк" in reason.lower() for reason in item["reasons"])
 
 
-def test_legacy_snapshot_without_three_recorded_facts_is_hidden_without_inventing_reasons():
+def test_legacy_snapshot_without_four_recorded_facts_is_hidden_without_inventing_reasons():
     data = confirmed(dp.build_daily_picks(rows(), NOW))
     for item in data["items"]:
         item.pop("selection_facts")
@@ -291,7 +310,7 @@ def test_legacy_luxury_cards_are_removed_without_discarding_verified_edition():
 
 
 def test_all_luxury_legacy_cards_are_hidden_but_empty_edition_cannot_overwrite(tmp_path):
-    snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
+    snapshot = confirmed(dp.build_daily_picks(publishable_rows(), NOW))
     path = tmp_path / "daily.json"
     dp.publish_snapshot(snapshot, path)
     original = path.read_bytes()
@@ -299,7 +318,7 @@ def test_all_luxury_legacy_cards_are_hidden_but_empty_edition_cannot_overwrite(t
         item["price"] = 120_000_000
     safe = dp.validate_snapshot(snapshot)
     assert safe["items"] == [] and dp.validate_snapshot(safe) == safe
-    with pytest.raises(ValueError, match="empty edition"):
+    with pytest.raises(ValueError, match="ten qualifying"):
         dp.publish_snapshot(safe, path)
     assert path.read_bytes() == original
 
@@ -355,21 +374,21 @@ def test_photo_allowlist_rejects_untrusted_urls(url):
 
 def test_atomic_failure_keeps_last_good_snapshot(tmp_path, monkeypatch):
     path = tmp_path / "daily.json"
-    baseline = confirmed(dp.build_daily_picks(rows(), NOW))
+    baseline = confirmed(dp.build_daily_picks(publishable_rows(), NOW))
     dp.publish_snapshot(baseline, path)
     content = path.read_bytes()
     def fail(*args):
         raise OSError("simulated interrupted publish")
     monkeypatch.setattr(dp.os, "replace", fail)
     with pytest.raises(OSError):
-        dp.publish_snapshot(confirmed(dp.build_daily_picks(rows(), NOW+timedelta(hours=1))), path)
+        dp.publish_snapshot(confirmed(dp.build_daily_picks(publishable_rows(), NOW+timedelta(hours=1))), path)
     assert path.read_bytes() == content
     assert list(tmp_path.iterdir()) == [path]
 
 
 def test_validation_fail_never_overwrites_previous_snapshot(tmp_path):
     path = tmp_path / "daily.json"
-    snapshot = confirmed(dp.build_daily_picks(rows(), NOW))
+    snapshot = confirmed(dp.build_daily_picks(publishable_rows(), NOW))
     dp.publish_snapshot(snapshot, path)
     content = path.read_bytes()
     snapshot["items"][0]["source_url"] = "javascript:alert(1)"
@@ -445,7 +464,8 @@ def test_snapshot_stale_after_missed_8am_refresh():
 
 
 def test_selection_bounded_deterministic_and_input_unchanged():
-    sample = [row(i) for i in range(50)]
+    sample = [row(i, price=24_000_000) for i in range(50)] + [
+        row(100+i, approved_photo_urls=[]) for i in range(60)]
     original = copy.deepcopy(sample)
     snapshot = dp.build_daily_picks(sample, NOW, limit=100)
     assert len(snapshot["items"]) == 30

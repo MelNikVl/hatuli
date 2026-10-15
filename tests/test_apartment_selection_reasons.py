@@ -167,7 +167,7 @@ def factor_keys(data):
     return [factor["key"] for factor in best_apartment_factors(data, NOW)]
 
 
-def test_best_factors_are_independent_ordered_and_reasons_take_exactly_first_three():
+def test_best_factors_are_independent_ordered_and_reasons_take_exactly_first_four():
     data = offer(selection_facts={"ceiling_height": 3, "kitchen_area": 14, "is_owner": True,
                                  "owner_source_verified": True},
                  price_history=price_history([event(27_000_000, 26_000_000, 20),
@@ -176,8 +176,8 @@ def test_best_factors_are_independent_ordered_and_reasons_take_exactly_first_thr
     factors = best_apartment_factors(data, NOW)
     assert [factor["key"] for factor in factors] == ["price", "price_history", "ceiling", "kitchen", "owner", "floor"]
     assert all(set(factor) == {"key", "text"} and 0 < len(factor["text"]) <= 200 for factor in factors)
-    assert best_apartment_reasons(data, NOW) == [factor["text"] for factor in factors[:3]]
-    assert len(best_apartment_reasons(data, NOW)) == 3
+    assert best_apartment_reasons(data, NOW) == [factor["text"] for factor in factors[:4]]
+    assert len(best_apartment_reasons(data, NOW)) == 4
     assert data == original
 
 
@@ -190,16 +190,26 @@ def test_market_or_premium_price_never_pads_best_reasons_with_a_nonpositive_fact
     assert best_apartment_reasons(data, NOW) == []
 
 
+@pytest.mark.parametrize("discount", [-5, 0, 1, 2.9])
+def test_four_nonprice_facts_cannot_replace_required_three_percent_price_advantage(discount):
+    data = offer(price_comparison={"discount_pct": discount, "reference_price_per_m2": 500_000,
+                                  "scope": "в том же ЖК"},
+                 selection_facts={"ceiling_height": 3, "kitchen_area": 14,
+                                  "is_owner": True, "owner_source_verified": True})
+    assert factor_keys(data) == ["ceiling", "kitchen", "owner", "floor"]
+    assert best_apartment_reasons(data, NOW) == []
+
+
 def test_material_discount_is_one_factor_even_when_copy_contains_cash_and_percent():
     data = offer(price=29_100_000, floor=1, price_comparison={"discount_pct": 3,
                  "reference_price_per_m2": 500_000, "scope": "в том же ЖК"})
     factors = best_apartment_factors(data, NOW)
     assert [factor["key"] for factor in factors] == ["price"]
-    assert len(best_apartment_reasons(data, NOW)) == 1  # Never fill to three with generic praise.
+    assert len(best_apartment_reasons(data, NOW)) == 1  # Never fill to four with generic praise.
 
 
 @pytest.mark.parametrize("finish", ["finished", "renovated", "designer", "furnished", "rough", None])
-def test_repair_or_furniture_does_not_become_third_important_best_factor(finish):
+def test_repair_or_furniture_does_not_become_an_extra_important_best_factor(finish):
     data = offer(selection_facts={"finish_level": finish}, photo_quality="excellent",
                  reviews_rating=5, housing_class="premium", location="центр")
     assert factor_keys(data) == ["price", "floor"]

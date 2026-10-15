@@ -30,6 +30,8 @@ from bot.core.comparison_offer_details import build_offer_details, price_history
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
 SCHEMA_VERSION = 2
 MAX_PICKS = 30
+MIN_PICKS = 10
+REQUIRED_FACTORS = 4
 MAX_ASKING_PRICE = 100_000_000
 MAX_SOURCE_AGE = timedelta(hours=72)
 MIN_COMPARABLES = 5
@@ -52,8 +54,8 @@ _NEARBY_CAUTION = "Аналоги в радиусе 800 м; координаты
 _SNAPSHOT_FIELDS = ("schema_version", "selection_date", "timezone", "generated_at", "source_observed_at", "total_candidates", "items", "methodology", "publication_policy")
 METHODOLOGY = {
     "title": "Свежая цена и понятные основания",
-    "summary": "У каждой квартиры ровно три независимых подтверждённых преимущества. Выбираем из цены не менее чем на 3% ниже похожих предложений, существенного или последовательного снижения цены, высоких потолков, большой кухни, проверенной пометки хозяина и этажа между первым и последним. Порог 3% — правило отбора, а не гарантия выгодной сделки. Процент скидки и разница в тенге — один фактор. Цена на уровне рынка или выше него преимуществом не считается. Качество ЖК, отзывы, локация и ремонт по фото станут основаниями только после отдельной проверки.",
-    "exclusions": ["Только вторичная продажа до 100 млн ₸ включительно; наличие каждого выбранного объявления и его цену проверяем на странице источника перед публикацией.", "До отбора и расчёта аналогов исключаем спорные привязки и дубли; у зонтика должен быть определён конкретный дом по адресу или обозначению корпуса. Точный адрес не придумываем.", "Публикуем до 30 вариантов с фотографиями интерьера и тремя преимуществами. Снижение цены должно иметь непротиворечивую историю без повышений в выбранном периоде: не менее 1 млн ₸ или 3%, либо не менее двух дат снижения и 1% суммарно. При недостатке подтверждённых факторов карточку не дополняем общими фразами."],
+    "summary": "Отбираем только квартиры с ценой не менее чем на 3% ниже похожих предложений. У каждой ровно четыре независимых подтверждённых преимущества: цена обязательна, остальные — существенное или последовательное снижение цены, высокие потолки, большая кухня, проверенная пометка хозяина и этаж между первым и последним. Порог 3% — правило отбора, а не гарантия выгодной сделки. Процент скидки и разница в тенге — один фактор. Качество ЖК, отзывы, локация и ремонт по фото станут основаниями только после отдельной проверки.",
+    "exclusions": ["Только вторичная продажа до 100 млн ₸ включительно; наличие каждого выбранного объявления и его цену проверяем на странице источника перед публикацией.", "До отбора и расчёта аналогов исключаем спорные привязки и дубли; у зонтика должен быть определён конкретный дом по адресу или обозначению корпуса. Точный адрес не придумываем.", "Новый выпуск содержит от 10 до 30 вариантов с подтверждёнными фотографиями интерьера и четырьмя преимуществами. Снижение цены должно иметь непротиворечивую историю без повышений в выбранном периоде: не менее 1 млн ₸ или 3%, либо не менее двух дат снижения и 1% суммарно. Цена на уровне аналогов или выше исключает квартиру независимо от остальных плюсов."],
     "caveat": "Это цены объявлений, а не состоявшихся сделок. Сравнение использует недавние наблюдения аналогов; не каждый аналог проверяется повторно на источнике. Ремонт и условия продажи могут отличаться. После публикации объявление может измениться: наличие, итоговую цену, документы и долги уточните у продавца до задатка.",
 }
 
@@ -141,6 +143,16 @@ def _nearby(a: dict, b: dict) -> bool:
     return 6_371_000 * 2 * math.asin(min(1., math.sqrt(h))) <= NEARBY_RADIUS_M
 
 
+def _nearby_cell(row: dict) -> tuple[int, int] | None:
+    lat, lon = _number(row.get("lat")), _number(row.get("lon"))
+    if lat is None or lon is None or not 50.85 <= lat <= 51.4 or not 71.1 <= lon <= 71.85:
+        return None
+    # In these city bounds each cell is wider than 800 m on both axes.
+    # Its eight neighbours therefore contain every possible nearby peer;
+    # _nearby still applies the exact haversine distance afterwards.
+    return math.floor(lat / .01), math.floor(lon / .015)
+
+
 def _similar(a: dict, b: dict) -> bool:
     if _identity(a) == _identity(b) or a["rooms"] != b["rooms"] or not float(a["area"]) * (1 - AREA_BAND) <= float(b["area"]) <= float(a["area"]) * (1 + AREA_BAND):
         return False
@@ -197,13 +209,17 @@ def sanitized_listing_address(value, price: int, now: datetime) -> tuple[str | N
     return address, "Номер дома не указан в объявлении."
 
 
-def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int = MAX_PICKS, excluded_ids: set[str] | None = None) -> dict:
+def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int = MAX_PICKS, excluded_ids: set[str] | None = None, *, minimum_factor_count: int = REQUIRED_FACTORS) -> dict:
     """Pure selection and public allowlist; source addresses are sanitized.
 
-    Input approved_photo_urls must come only from cached fingerprints with
-    fetch_status=ok and photo_type=interior, intersected with current photos.
+    Input approved_photo_urls comes from cached interior fingerprints or a
+    matching, fresh normal-browser visual receipt, intersected with current
+    photos. minimum_factor_count is for private review discovery; the public
+    validator always requires four factors including a discounted price.
     """
     now = _utc(now or datetime.now(timezone.utc))
+    if type(minimum_factor_count) is not int or not 1 <= minimum_factor_count <= REQUIRED_FACTORS:
+        raise ValueError("Invalid private review factor threshold")
     unique = {}
     for row in rows:
         row = normalize_daily_pick_identity(row)
@@ -217,8 +233,12 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
         if key not in unique or (_utc(row["last_seen"]), str(row["id"])) > (_utc(unique[key]["last_seen"]), str(unique[key]["id"])):
             unique[key] = row
     groups = defaultdict(list)
+    nearby_cells = defaultdict(list)
     for row in unique.values():
         groups[_group(row)].append(row)
+        cell = _nearby_cell(row)
+        if cell is not None:
+            nearby_cells[cell].append(row)
     ranked = []
     for row in unique.values():
         # This is a buyer's budget, not a comparable-price truncation. Keep
@@ -232,10 +252,13 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
         if not photos:
             continue
         area, price = float(row["area"]), int(row["price"])
-        peers = [p for p in groups[_group(row)] if _group(row) is not None and _similar(row, p)]
         local_group = _group(row)
+        peers = [p for p in groups[local_group] if _similar(row, p)] if local_group is not None else []
         if len(peers) < MIN_COMPARABLES:
-            peers = [p for p in unique.values() if _similar(row, p) and _nearby(row, p)]
+            cell = _nearby_cell(row)
+            nearby = (p for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                      for p in nearby_cells.get((cell[0] + dx, cell[1] + dy), ())) if cell is not None else ()
+            peers = [p for p in nearby if _similar(row, p) and _nearby(row, p)]
             local_group = None
         if len(peers) < MIN_COMPARABLES:
             continue
@@ -259,10 +282,10 @@ def build_daily_picks(rows: list[dict], now: datetime | None = None, limit: int 
             continue
         evidence = {"price": price, "area": round(area, 1), "floor": int(floor), "floors_total": int(floors), "price_comparison": comparison,
                     "selection_facts": facts, "price_history": history}
-        if discount < .01 and not strong_selection_reason(evidence, now):
+        if percent < 3:
             continue
         reasons = best_apartment_reasons(evidence, now)
-        if len(reasons) != 3:
+        if len(reasons) < minimum_factor_count:
             continue
         cautions = []
         recent_history = [event for event in history["events"] if _utc(event["at"]) >= now-timedelta(days=90)]
@@ -400,7 +423,7 @@ def validate_snapshot(snapshot: dict) -> dict:
             # label. A controlled read-only identity refresh can enrich them.
             continue
         safe_item["reasons"] = best_apartment_reasons(safe_item, generated)
-        if len(safe_item["reasons"]) != 3:
+        if len(safe_item["reasons"]) != REQUIRED_FACTORS:
             continue
         safe_item["cautions"] = [_NEARBY_CAUTION if text == "Координаты приблизительные; расположение нужно уточнить." else text for text in item["cautions"]]
         if scope == _NEARBY_SCOPE and _NEARBY_CAUTION not in safe_item["cautions"]:
@@ -412,14 +435,16 @@ def validate_snapshot(snapshot: dict) -> dict:
     safe["items"] = safe_items
     policy = snapshot.get("publication_policy")
     if policy is not None:
-        policy_fields = ("name", "target_count", "published_count", "required_strong_factors", "reason", "explicit", "evaluated_at")
+        policy_fields = ("name", "target_count", "minimum_count", "published_count", "required_strong_factors", "minimum_discount_pct", "reason", "explicit", "evaluated_at")
         if (not isinstance(policy, dict) or any(key not in policy for key in policy_fields)
-                or policy.get("name") != "three_factors" or policy.get("explicit") is not True
+                or policy.get("name") != "discounted_four_factors" or policy.get("explicit") is not True
                 or type(policy.get("target_count")) is not int or policy["target_count"] != MAX_PICKS
-                or type(policy.get("published_count")) is not int or not 1 <= policy["published_count"] <= MAX_PICKS
+                or type(policy.get("minimum_count")) is not int or policy["minimum_count"] != MIN_PICKS
+                or type(policy.get("published_count")) is not int or not MIN_PICKS <= policy["published_count"] <= MAX_PICKS
                 or policy["published_count"] != len(safe_items) or len(safe_items) != len(items)
-                or type(policy.get("required_strong_factors")) is not int or policy["required_strong_factors"] != 3
-                or policy.get("reason") != "quality_before_quota" or _utc(policy.get("evaluated_at")) != generated):
+                or type(policy.get("required_strong_factors")) is not int or policy["required_strong_factors"] != REQUIRED_FACTORS
+                or type(policy.get("minimum_discount_pct")) is not int or policy["minimum_discount_pct"] != 3
+                or policy.get("reason") != "discount_and_four_factors" or _utc(policy.get("evaluated_at")) != generated):
             raise ValueError("Invalid explicit daily publication policy")
         safe["publication_policy"] = {key: policy[key] for key in policy_fields}
     if not isinstance(snapshot.get("methodology"), dict):
@@ -450,8 +475,8 @@ def load_daily_picks(path: Path | None = None) -> dict | None:
 def publish_snapshot(snapshot: dict, path: Path | None = None) -> None:
     """Atomic, same-filesystem publish. Failed writes retain the last good file."""
     safe = validate_snapshot(snapshot)
-    if not safe["items"]:
-        raise ValueError("An empty edition cannot replace a verified snapshot")
+    if len(safe["items"]) < MIN_PICKS:
+        raise ValueError("Fewer than ten qualifying apartments cannot replace a verified snapshot")
     path = path or snapshot_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None

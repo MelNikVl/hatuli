@@ -82,7 +82,7 @@ def prepare_daily_picks(snapshot: dict | None, now: datetime | None = None) -> d
         enriched["address"], enriched["address_note"] = address, address_note
         enriched["rental_estimate"] = validate_rental_estimate(enriched.get("rental_estimate"), now)
         enriched["reasons"] = best_apartment_reasons(enriched, now)
-        if len(enriched["reasons"]) != 3:
+        if len(enriched["reasons"]) != 4:
             continue
         # Actual history gaps remain beside their chart; do not repeat them
         # as a generic pre-viewing checklist below every apartment.

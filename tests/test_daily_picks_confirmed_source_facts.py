@@ -35,7 +35,7 @@ def test_matching_browser_pledge_observation_survives_public_projection():
     card = display.prepare_daily_picks(safe, NOW)["items"][0]
     assert card["source_facts"] == {"is_pledged": True}
     assert card["evidence_notices"] == ["В залоге — указано в исходном объявлении."]
-    assert len(card["reasons"]) == 3
+    assert len(card["reasons"]) == 4
 
 
 @pytest.mark.parametrize("value", [False, None])

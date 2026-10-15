@@ -381,6 +381,8 @@ def pipeline_args(tmp_path, **changes):
 
 @pytest.mark.asyncio
 async def test_pipeline_requires_evidence_and_30_then_uses_atomic_existing_publisher(tmp_path, monkeypatch):
+    from tests.test_daily_picks_quality_policy import edition
+    verified = edition(30)
     calls = []
     async def export(path, now):
         calls.append("prepare")
@@ -394,7 +396,7 @@ async def test_pipeline_requires_evidence_and_30_then_uses_atomic_existing_publi
     async def generate(args, now):
         calls.append("generate")
         assert args.skip_photo_check is False and args.source_checks == str(tmp_path / "source-checks.json")
-        return {"snapshot": {"items": [item(i) for i in range(1, 31)], "selection_date": "2026-10-13"}, "photo_heads": 30, "source_gets": 0}
+        return {"snapshot": verified, "photo_heads": 30, "source_gets": 0}
     @contextmanager
     def lock(path):
         calls.append("publication_lock")
@@ -421,7 +423,7 @@ async def test_partial_cards_and_dry_run_never_replace_snapshot(tmp_path, monkey
         return {"items": [{"status": "active"}], "attempted_count": 1}
     async def generate(*args):
         calls.append("generate")
-        return {"snapshot": {"items": [item(i) for i in range(1, 30)]}}
+        return {"snapshot": {"items": [item(i) for i in range(1, 10)]}}
     @contextmanager
     def lock(path):
         yield
@@ -451,7 +453,7 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
                  market_type="secondary", last_seen=now, complex_id=1, complex_resolution="name",
                  canonical_complex_name="Тестовый ЖК",
                  price=row["price"], rooms=row["rooms"], area=row["area"], floor=row["floor"],
-                 floors_total=row["floors_total"], finish_level="finished", ceiling_height=3.0,
+                 floors_total=row["floors_total"], finish_level="finished", ceiling_height=3.0, kitchen_area=14,
                  identity_checked=True, identity_complex_id=1, identity_complex_name="Тестовый ЖК",
                  identity_complex_valid=True, identity_complex_is_umbrella=False, identity_complex_parent_id=None,
                  resolved_house_id=None, identity_house_id=None, identity_house_name=None,
@@ -478,7 +480,7 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
     result = await worker.publisher.generate(SimpleNamespace(skip_photo_check=False, source_checks=str(path)), now)
     assert len(result["snapshot"]["items"]) == 30 and result["source_gets"] == 0
     assert {card["id"] for card in result["snapshot"]["items"]} == {item(i)["id"] for i in range(1, 31)}
-    assert all(len(card["reasons"]) == 3 and card["floor"] == 5 and card["floors_total"] == 12
+    assert all(len(card["reasons"]) == 4 and card["floor"] == 5 and card["floors_total"] == 12
                and card["source_checked_at"] == now.isoformat() for card in result["snapshot"]["items"])
 
 

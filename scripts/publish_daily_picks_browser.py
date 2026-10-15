@@ -353,7 +353,7 @@ async def check_sources(items: list[dict], evidence_path: Path, deadline: float,
     return evidence
 
 
-def already_published(path: Path, now: datetime, quality_policy: str = "daily_30") -> bool:
+def already_published(path: Path, now: datetime, quality_policy: str = publisher.DEFAULT_QUALITY_POLICY) -> bool:
     existing = publisher.load_daily_picks(path)
     return bool(existing and publisher.publication_satisfies_policy(existing, quality_policy)
         and existing["selection_date"] == now.astimezone(publisher.LOCAL_TIMEZONE).date().isoformat()
@@ -378,12 +378,13 @@ async def pipeline(args, run_dir: Path, status: dict, snapshot: Path) -> dict:
     status["phase"] = "publish"
     atomic_private_json(run_dir / "status.json", status)
     with publisher.publisher_lock(snapshot):
-        quality_policy = getattr(args, "quality_policy", "daily_30")
+        quality_policy = getattr(args, "quality_policy", publisher.DEFAULT_QUALITY_POLICY)
         if not args.force and already_published(snapshot, utc_now(), quality_policy):
             return {**status, "status": "already_published", "phase": "complete", "published": False}
         # A required source-checks argument makes ordinary source GET fallback impossible.
         result = await publisher.generate(SimpleNamespace(skip_photo_check=False, source_checks=str(evidence_path)), utc_now())
-        if quality_policy == "daily_30" and len(result["snapshot"]["items"]) != publisher.MAX_PICKS:
+        count = len(result["snapshot"]["items"])
+        if not publisher.MINIMUM_PICKS <= count <= publisher.MAX_PICKS or quality_policy == "daily_30" and count != publisher.MAX_PICKS:
             status["eligible_count"] = len(result["snapshot"]["items"])
             raise InsufficientConfirmedCardsError()
         result["snapshot"] = publisher.prepare_publication(result["snapshot"], quality_policy)
@@ -478,8 +479,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--force", action="store_true", help="Explicitly replace today's verified selection")
     parser.add_argument("--dry-run", action="store_true", help="Browser verification only; never publish")
-    parser.add_argument("--quality-policy", choices=("daily_30", "three_factors"), default="daily_30",
-                        help="Default: exactly 30; explicit three_factors publishes 1-30 fully verified cards")
+    parser.add_argument("--quality-policy", choices=(publisher.DEFAULT_QUALITY_POLICY, "daily_30"), default=publisher.DEFAULT_QUALITY_POLICY,
+                        help="Default: 10-30 discounted four-factor cards; daily_30 additionally requires exactly 30")
     parser.add_argument("--check-limit", type=int, default=MAX_CHECKS, help="1-90 candidates; values below 90 are dry-run only")
     parser.add_argument("--budget-seconds", type=int, default=DEFAULT_BUDGET_SECONDS, help="Total bounded run budget, at most 1800 seconds")
     parser.add_argument("--profile-path", default=os.environ.get("HATULI_DAILY_PICKS_BROWSER_PROFILE"), help="Dedicated profile below var/browser-picks")
@@ -496,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         args.profile_path = dedicated_profile(args.profile_path, snapshot)
         if args.open_browser:
             args.source_url = validated_source_url(args.source_url)
-            if args.force or args.dry_run or args.check_limit != MAX_CHECKS or args.quality_policy != "daily_30":
+            if args.force or args.dry_run or args.check_limit != MAX_CHECKS or args.quality_policy != publisher.DEFAULT_QUALITY_POLICY:
                 parser.error("--open-browser does not support publication or check-limit flags")
         elif args.source_url:
             parser.error("--source-url is only supported with --open-browser")

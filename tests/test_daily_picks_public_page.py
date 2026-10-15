@@ -26,9 +26,9 @@ def no_postgres(monkeypatch):
     monkeypatch.setattr("bot.core.daily_picks_display.forecast_for_offer", lambda *args, **kwargs: {"status": "insufficient_history"})
 
 
-def snapshot(now):
+def snapshot(now, count=30):
     items = []
-    for index in range(30):
+    for index in range(count):
         listing_id = str(1010000001 + index)
         item = {
             "id": listing_id, "rank": index + 1,
@@ -40,7 +40,7 @@ def snapshot(now):
                 "house_id": None, "house_label": None, "binding_method": "name"},
             "district": "Нура", "price": 34_000_000, "currency": "KZT", "price_per_m2": 680_000,
             "photo_urls": ["https://krisha-photos.kcdn.online/webp/10/01234567-89ab-cdef-0123-456789abcdef/1-full.webp"],
-            "selection_facts": {"ceiling_height": 3.0},
+            "selection_facts": {"ceiling_height": 3.0, "kitchen_area": 12},
             "cautions": ["GENERIC-CHECKLIST-MUST-NOT-RENDER"], "observed_at": now.isoformat(),
             "source_status": "active", "source_checked_at": now.isoformat(),
             "price_comparison": {"discount_pct": 5.6, "reference_price_per_m2": 720_000, "scope": "в том же ЖК", "comparable_count": 8},
@@ -97,13 +97,48 @@ async def test_anonymous_top30_is_public_safe_and_has_working_source_targets(mon
     assert 'href="/admin/analysis-requests"' not in response.text
     cards = Cards(response.text)
     assert cards.cards == 30
-    assert cards.factor_counts == [3] * 30
+    assert cards.factor_counts == [4] * 30
+    assert response.text.count("4 фактора выбора") == 30
+    assert "минимум на 3% ниже похожих предложений" in response.text
     assert "Перед просмотром:" not in response.text
     assert "GENERIC-CHECKLIST-MUST-NOT-RENDER" not in response.text
     assert len(set(cards.source_links)) == 30
     assert all(link.startswith("https://krisha.kz/a/show/") for link in cards.source_links)
     assert "08:00" in response.text
     assert "https://hatuli.ai-groundtruth.com/best-apartments" in response.text
+
+
+@pytest.mark.asyncio
+async def test_ten_confirmed_cards_show_actual_count_and_four_supported_factors(monkeypatch):
+    monkeypatch.setattr("bot.admin_web.load_daily_picks", lambda: snapshot(datetime.now(timezone.utc), count=10))
+    app = create_admin_app(NoPrivateDB(), "test-form-secret", "test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/best-apartments")
+    assert response.status_code == 200
+    cards = Cards(response.text)
+    assert cards.cards == 10
+    assert cards.factor_counts == [4] * 10
+    assert "10 из 10 вариантов" in response.text
+    assert "от 10 до 30 проверенных квартир" in response.text
+    assert "3 фактора выбора" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_public_page_excludes_over_budget_card_without_weakening_other_factors(monkeypatch):
+    edition = snapshot(datetime.now(timezone.utc))
+    excluded = edition["items"][0]
+    excluded.update(price=120_000_000, price_per_m2=2_400_000)
+    excluded["price_comparison"].update(discount_pct=5.5, reference_price_per_m2=2_540_000)
+    monkeypatch.setattr("bot.admin_web.load_daily_picks", lambda: edition)
+    app = create_admin_app(NoPrivateDB(), "test-form-secret", "test")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/best-apartments")
+    assert response.status_code == 200
+    cards = Cards(response.text)
+    assert cards.cards == 29
+    assert cards.factor_counts == [4] * 29
+    assert excluded["source_url"] not in cards.source_links
+    assert "120 000 000 ₸" not in response.text
 
 
 @pytest.mark.asyncio
@@ -150,7 +185,7 @@ async def test_daily_cards_show_source_address_and_native_graph_for_any_price_ch
     edition = snapshot(now)
     selected = edition["items"][0]
     selected["floor"] = None
-    selected["selection_facts"]["kitchen_area"] = 12
+    selected["selection_facts"].update(is_owner=True, owner_source_verified=True)
     detail = {"id": selected["id"], "area": selected["area"], "rooms": selected["rooms"],
               "current_price": selected["price"]}
     detail.update(build_offer_details({"price": selected["price"], "area": selected["area"],
@@ -164,7 +199,7 @@ async def test_daily_cards_show_source_address_and_native_graph_for_any_price_ch
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/best-apartments")
     assert response.status_code == 200
-    assert Cards(response.text).factor_counts == [3] * 30
+    assert Cards(response.text).factor_counts == [4] * 30
     assert "Перед просмотром:" not in response.text
     assert "улица Сыганак, 12/1" in response.text
     assert "Точный адрес не указан в источнике" not in response.text
@@ -203,7 +238,7 @@ async def test_daily_page_only_renders_a_forecast_for_an_offer_with_validated_nu
     assert response.status_code == 200
     cards = Cards(response.text)
     assert cards.cards == 30
-    assert cards.factor_counts == [3] * 30
+    assert cards.factor_counts == [4] * 30
     assert "Перед просмотром:" not in response.text
     assert response.text.count('aria-label="Оценка цены и прогноз"') == int(has_ready_forecast)
     assert response.text.count("Что будет с ценой?") == int(has_ready_forecast)
@@ -231,7 +266,7 @@ async def test_daily_card_retains_specific_history_gap_with_chart_without_generi
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/best-apartments")
     assert response.status_code == 200
-    assert Cards(response.text).factor_counts == [3] * 30
+    assert Cards(response.text).factor_counts == [4] * 30
     assert 'class="picks-evidence-notices"' not in response.text
     assert "Между записанными изменениями цены есть пропуски" in response.text
     assert "Перед просмотром:" not in response.text
@@ -255,4 +290,4 @@ async def test_confirmed_house_in_umbrella_project_displays_both_labels_once(mon
     assert 'data-picks-house-identity>Проект Тестовый ЖК · Дом Корпус 2 · Нура</p>' in response.text
     assert response.text.count("Корпус 2") == 1
     assert response.text.count("data-picks-house-identity") == 1
-    assert Cards(response.text).factor_counts == [3] * 30
+    assert Cards(response.text).factor_counts == [4] * 30
