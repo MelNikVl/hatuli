@@ -1,7 +1,7 @@
 """Регрессия для задачи 2026-08-14 (Г3, docs/data_collection_audit.md):
 complex_stats_snapshot.py должен класть ежедневный снимок avg_price_m2/
-avg_yield/listings_count в complex_stats_history, по паттерну "имя ИЛИ
-resolved_house_id" (дом под зонтиком получает СВОЙ снимок, не зонтика),
+avg_yield/listings_count в complex_stats_history, с приоритетом complex_id
+и fallback по resolved_house_id/однозначному имени (дом получает свой снимок),
 идемпотентно при повторном запуске в тот же день.
 
 avg_dom_days/price_drop_share_30d/60d (Фаза L1, docs/location_product_
@@ -228,3 +228,123 @@ async def test_snapshot_price_increase_not_counted_as_drop(complex_for_dom_and_d
     row = (await fetch(
         "SELECT price_drop_share_30d FROM complex_stats_history WHERE complex_id=$1 AND date=CURRENT_DATE", cid))[0]
     assert row["price_drop_share_30d"] == pytest.approx(0.0)
+
+
+@pytest_asyncio.fixture
+async def complex_identity_rows(db):
+    """Изолированные строки для проверки aliases и приоритета ID над текстом."""
+    from bot.db.pg import execute, fetchval
+
+    complex_ids = []
+    listing_ids = []
+
+    async def add_complex(label, *, name=None, canonical_id=None, parent_id=None):
+        cid = await fetchval("""
+            INSERT INTO complexes (name, canonical_id, canonical_reason, parent_complex_id)
+            VALUES ($1, $2, $3, $4) RETURNING id
+        """, name or f"__test_stats_identity_{label}__", canonical_id,
+            "krisha_slug" if canonical_id is not None else None, parent_id)
+        complex_ids.append(cid)
+        return cid
+
+    async def add_listing(label, *, complex_id=None, complex_name=None, house_id=None,
+                          price=30_000_000, area=60):
+        lid = f"__test_stats_identity_{label}__"
+        await execute("""
+            INSERT INTO apartment_listings
+                (id, complex_name, complex_id, resolved_house_id, price, area, is_active, first_seen)
+            VALUES ($1, $2, $3, $4, $5, $6, TRUE, now())
+        """, lid, complex_name, complex_id, house_id, price, area)
+        listing_ids.append(lid)
+        return lid
+
+    try:
+        yield add_complex, add_listing
+    finally:
+        if complex_ids:
+            await execute("DELETE FROM complex_stats_history WHERE complex_id = ANY($1::int[])", complex_ids)
+        if listing_ids:
+            await execute("DELETE FROM apartment_listings WHERE id = ANY($1::text[])", listing_ids)
+        if complex_ids:
+            await execute("DELETE FROM complexes WHERE id = ANY($1::int[])", complex_ids)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_complex_id_overrides_conflicting_name_and_house(complex_identity_rows):
+    from bot.db.pg import fetch
+    from complex_stats_snapshot import run_snapshot
+
+    add_complex, add_listing = complex_identity_rows
+    target = await add_complex("target")
+    umbrella = await add_complex("umbrella")
+    house = await add_complex("house", parent_id=umbrella)
+    await add_listing("explicit_id", complex_id=target,
+                      complex_name="__test_stats_identity_umbrella__", house_id=house)
+    await run_snapshot()
+
+    rows = await fetch("""
+        SELECT complex_id, listings_count FROM complex_stats_history
+        WHERE complex_id = ANY($1::int[]) AND date = CURRENT_DATE
+    """, [target, umbrella, house])
+    assert [(r["complex_id"], r["listings_count"]) for r in rows] == [(target, 1)]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_alias_ids_and_names_aggregate_at_canonical_complex(complex_identity_rows):
+    from bot.db.pg import fetch
+    from complex_stats_snapshot import run_snapshot
+
+    add_complex, add_listing = complex_identity_rows
+    canonical = await add_complex("canonical")
+    alias = await add_complex("alias", canonical_id=canonical)
+    await add_listing("canonical_id", complex_id=canonical, price=30_000_000)
+    await add_listing("alias_id", complex_id=alias, price=42_000_000)
+    await add_listing("alias_name", complex_name="__test_stats_identity_alias__", price=54_000_000)
+    await run_snapshot()
+
+    rows = await fetch("""
+        SELECT complex_id, listings_count, avg_price_m2 FROM complex_stats_history
+        WHERE complex_id = ANY($1::int[]) AND date = CURRENT_DATE
+    """, [canonical, alias])
+    assert len(rows) == 1
+    assert rows[0]["complex_id"] == canonical
+    assert rows[0]["listings_count"] == 3
+    assert float(rows[0]["avg_price_m2"]) == pytest.approx(700_000)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_same_name_aliases_do_not_multiply_listing(complex_identity_rows):
+    from bot.db.pg import fetch
+    from complex_stats_snapshot import run_snapshot
+
+    add_complex, add_listing = complex_identity_rows
+    name = "__test_stats_identity_same_name__"
+    canonical = await add_complex("same_name", name=name)
+    alias = await add_complex("same_name_alias", name=name.upper() + " ", canonical_id=canonical)
+    await add_listing("same_name_listing", complex_name=name)
+    await run_snapshot()
+
+    rows = await fetch("""
+        SELECT complex_id, listings_count FROM complex_stats_history
+        WHERE complex_id = ANY($1::int[]) AND date = CURRENT_DATE
+    """, [canonical, alias])
+    assert [(r["complex_id"], r["listings_count"]) for r in rows] == [(canonical, 1)]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_ambiguous_name_without_id_is_not_counted_twice(complex_identity_rows):
+    from bot.db.pg import fetch
+    from complex_stats_snapshot import run_snapshot
+
+    add_complex, add_listing = complex_identity_rows
+    name = "__test_stats_identity_ambiguous__"
+    a = await add_complex("ambiguous_a", name=name)
+    b = await add_complex("ambiguous_b", name=name.upper() + " ")
+    await add_listing("ambiguous_listing", complex_name=name)
+    await run_snapshot()
+
+    rows = await fetch("""
+        SELECT complex_id FROM complex_stats_history
+        WHERE complex_id = ANY($1::int[]) AND date = CURRENT_DATE
+    """, [a, b])
+    assert rows == []
