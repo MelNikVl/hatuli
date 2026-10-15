@@ -14,6 +14,12 @@
     return node;
   }
   function status(text) { byId('sublease-status').textContent = text; }
+  function showResult(box) {
+    if (box.hidden) return;
+    const headerHeight = document.querySelector('.pub-header')?.getBoundingClientRect().height || 80;
+    box.style.setProperty('--sublease-scroll-offset', `${Math.ceil(headerHeight) + 16}px`);
+    box.scrollIntoView({block: 'start', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
+  }
   function clearScanner() {
     lastQuery = null;
     byId('sublease-candidates')?.replaceChildren();
@@ -86,6 +92,7 @@
     }
     box.append(scenarios, element('p', `Ваш сценарий ${pct(result.params_used.occupancy)}: выручка ${money(result.revenue)}, расходы ${money(result.costs)}, маржа ${money(result.margin)}.`), element('p', sourceText(result.index_source), 'sublease-provenance'));
     box.hidden = false;
+    showResult(box);
   }
   form.addEventListener('input', invalidate);
   form.addEventListener('change', invalidate);
@@ -127,6 +134,7 @@
         box.append(button);
       }
     }
+    showResult(box);
   };
   if (root.dataset.accessLocked === 'true') return;
 
@@ -179,7 +187,10 @@
   }
   async function scan(targetPage, snapshot) {
     const result = await api('/api/rental/scanner?' + new URLSearchParams({...snapshot, page: String(targetPage)}));
-    if (result && renderCandidates(result)) lastQuery = {...snapshot};
+    if (result && renderCandidates(result)) {
+      lastQuery = {...snapshot};
+      showResult(byId('sublease-inventory'));
+    }
   }
   byId('sublease-scan-button').onclick = () => scan(1, values());
   byId('sublease-previous').onclick = () => lastQuery && scan(page - 1, lastQuery);
