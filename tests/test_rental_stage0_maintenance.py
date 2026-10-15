@@ -139,6 +139,16 @@ async def test_backfill_uses_read_only_identity_and_observed_coordinates_no_near
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("candidate,status", [(None, "existing_binding_preserved_unresolved"),
+    (99, "existing_binding_requires_review"), (42, "existing_binding_confirmed")])
+async def test_backfill_never_erases_or_overwrites_an_existing_possible_manual_identity(monkeypatch, candidate, status):
+    monkeypatch.setattr("bot.core.rental_stage0_identity.resolve_rental_complex", AsyncMock(return_value=candidate))
+    after, evidence = await tool.backfill_proposal(rental(complex_id=42, complex_url=None), {})
+    assert after["complex_id"] == 42 and evidence["identity_status"] == status
+    assert evidence["resolved_complex_id"] == candidate
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("edge", ["nan", "inf", "0", "501", "broken"])
 async def test_invalid_hex_setting_refuses_plan_instead_of_inventing_geo(edge):
     with pytest.raises(tool.MaintenanceError, match="HEX_EDGE_M"):
@@ -162,6 +172,21 @@ async def test_missing_estimate_clears_legacy_values_to_null(monkeypatch):
     after, evidence = await tool.recompute_proposal(sale(), {}, NOW)
     assert all(value is None for value in after.values())
     assert evidence["reason"] == "no_fresh_policy3_index"
+
+
+@pytest.mark.asyncio
+async def test_segment_cache_reuses_lookup_but_respects_area_and_source_freshness(monkeypatch):
+    lookup = AsyncMock(return_value=index())
+    monkeypatch.setattr("bot.core.rental_parser.lookup_rental_estimate", lookup)
+    cache = {}
+    first, _ = await tool.recompute_proposal(sale(), {}, NOW, estimate_cache=cache)
+    second, _ = await tool.recompute_proposal(sale(id="20002", area=70, complex_name="Другое написание того же ЖК"), {}, NOW, estimate_cache=cache)
+    assert lookup.await_count == 1
+    assert first["est_rent"] == 300000 and second["est_rent"] == 350000
+    # A cached source must still pass the 72-hour provenance gate.
+    later = NOW+timedelta(hours=70)
+    expired, _ = await tool.recompute_proposal(sale(last_seen=later-timedelta(hours=1)), {}, later, estimate_cache=cache)
+    assert all(value is None for value in expired.values()) and lookup.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -208,6 +233,16 @@ async def test_build_plan_is_bounded_private_and_does_not_export_source_text():
     assert "PRIVATE" not in json.dumps(tool.json_value(plan))
     assert not any(sql.startswith(("UPDATE", "DELETE", "INSERT")) for sql, _ in connection.calls)
     tool.verify_plan(plan, plan["plan_sha256"], "backfill")
+
+
+@pytest.mark.asyncio
+async def test_conflicting_existing_identity_is_reported_even_without_any_proposed_write():
+    row = rental(complex_id=42)
+    after, _ = await tool.backfill_proposal(row, {})
+    row.update(after)
+    plan = await tool.build_plan(Connection([row]), "backfill")
+    assert plan["changes"] == []
+    assert plan["identity_review_required"] == [{"id": "10001", "existing_complex_id": 42, "candidate_complex_id": 10}]
 
 
 @pytest.mark.asyncio

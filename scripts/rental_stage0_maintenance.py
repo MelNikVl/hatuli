@@ -191,8 +191,17 @@ async def backfill_proposal(row, values):
     period = "unknown" if conflict else explicit if explicit != "unknown" else previous
     if period not in ("monthly", "daily", "unknown"):
         period = "unknown"
-    cid = await resolve_rental_complex(complex_url=row.get("complex_url"), complex_name=row.get("complex_name"),
-                                       address=row.get("address"), title=row.get("title"))
+    candidate = await resolve_rental_complex(complex_url=row.get("complex_url"), complex_name=row.get("complex_name"),
+                                             address=row.get("address"), title=row.get("title"))
+    # There is no per-rental manual-binding provenance column. A maintenance
+    # backfill cannot distinguish an operator's confirmed FK from a guess, so
+    # only fill missing identities. Disagreements require an explicit review.
+    existing = row.get("complex_id")
+    cid = existing if existing is not None else candidate
+    identity_status = ("existing_binding_requires_review" if existing is not None and candidate not in (None, existing)
+                       else "existing_binding_preserved_unresolved" if existing is not None and candidate is None
+                       else "existing_binding_confirmed" if existing is not None else "verified_missing_binding" if candidate is not None
+                       else "no_source_binding")
     try:
         edge = float(values.get("HEX_EDGE_M", "50"))
     except (ValueError, TypeError, OverflowError):
@@ -203,13 +212,14 @@ async def backfill_proposal(row, values):
     after = {"rent_period": period, "rent_period_conflict": bool(conflict), "complex_id": cid,
              "hex_id": geo["hex_id"] if geo else None, "hex_edge_m": geo["hex_edge_m"] if geo else None}
     evidence = {"period_evidence": "explicit_title" if explicit != "unknown" else "no_new_explicit_period",
-                "observed_period": explicit, "sticky_conflict": bool(conflict), "resolved_complex_id": cid,
+                "observed_period": explicit, "sticky_conflict": bool(conflict), "resolved_complex_id": candidate,
+                "identity_status": identity_status,
                 "hex_basis": "stored_observed_coordinates" if geo else "no_valid_observed_coordinates", "edge_m": edge}
     return after, evidence
 
 
-async def recompute_proposal(row, values, now):
-    from bot.core.rental_parser import lookup_rental_estimate
+async def recompute_proposal(row, values, now, *, estimate_cache=None):
+    from bot.core.rental_parser import lookup_rental_estimate, _rental_index_result_ready, _rental_index_thresholds
     from bot.core.rental_yield import NetYieldParams, monthly_yield_scenario
     empty = dict.fromkeys(WRITABLE["recompute"][2])
     observed = row.get("last_seen")
@@ -224,7 +234,18 @@ async def recompute_proposal(row, values, now):
     cid, name = row.get("complex_id"), row.get("complex_name")
     if row.get("complex_resolution") in ("geo", "unbound") or row.get("house_attribution") in ("geo", "address_geo"):
         cid, name = None, None
-    estimate = await lookup_rental_estimate(row["city"], row.get("district"), name, row.get("rooms"), complex_id=cid)
+    scope = (row["city"], row.get("district"), None if cid is not None else name, row.get("rooms"), cid)
+    if estimate_cache is not None and scope in estimate_cache:
+        estimate = estimate_cache[scope]
+    else:
+        estimate = await lookup_rental_estimate(row["city"], row.get("district"), name, row.get("rooms"), complex_id=cid)
+        if estimate_cache is not None:
+            estimate_cache[scope] = estimate
+    if estimate_cache is not None and estimate:
+        complex_minimum, area_minimum = _rental_index_thresholds()
+        minimum = complex_minimum if estimate.get("level") == "ЖК" else area_minimum
+        if not _rental_index_result_ready(estimate, now, minimum):
+            estimate = None
     if not estimate:
         return empty, {"reason": "no_fresh_policy3_index", "params_used": asdict(params)}
     area = row.get("area")
@@ -297,9 +318,9 @@ def change_record(operation, row, after, evidence):
             "row_sha256": row_hash(row, fields), "evidence": evidence, "evidence_sha256": digest(evidence)}
 
 
-async def propose(operation, row, values, now):
+async def propose(operation, row, values, now, *, estimate_cache=None):
     return (await backfill_proposal(row, values) if operation == "backfill"
-            else await recompute_proposal(row, values, now))
+            else await recompute_proposal(row, values, now, estimate_cache=estimate_cache))
 
 
 async def build_plan(connection, operation, *, limit=500, after_id=""):
@@ -322,14 +343,22 @@ async def build_plan(connection, operation, *, limit=500, after_id=""):
     rows = await connection.fetch(f"SELECT {','.join(fields)} FROM {table} WHERE {scope} AND id>$1 ORDER BY id LIMIT $2", after_id, limit+1)
     values = await settings_snapshot(connection)
     plan.update(settings_sha256=digest(values), scanned=min(len(rows), limit), limit=limit, after_id=after_id,
-                has_more=len(rows)>limit, next_after_id=rows[min(len(rows), limit)-1]["id"] if rows else after_id)
+                has_more=len(rows)>limit, next_after_id=rows[min(len(rows), limit)-1]["id"] if rows else after_id,
+                identity_review_required=[], identity_preserved_without_source_proof=0)
+    estimate_cache = {}
     with read_adapter(connection, values):
         for source in rows[:limit]:
             row = dict(source)
-            after, evidence = await propose(operation, row, values, now)
+            after, evidence = await propose(operation, row, values, now, estimate_cache=estimate_cache)
+            if evidence.get("identity_status") == "existing_binding_requires_review":
+                plan["identity_review_required"].append({"id": row["id"], "existing_complex_id": row.get("complex_id"),
+                                                         "candidate_complex_id": evidence["resolved_complex_id"]})
+            if evidence.get("identity_status") == "existing_binding_preserved_unresolved":
+                plan["identity_preserved_without_source_proof"] += 1
             item = change_record(operation, row, after, evidence)
             if item:
                 plan["changes"].append(item)
+    plan["rental_index_lookup_segments"] = len(estimate_cache)
     return seal(plan)
 
 
@@ -347,12 +376,13 @@ async def apply_plan(connection, plan, expected_sha, operation):
     before = await aggregate_report(connection, True)
     table, fields, allowed = WRITABLE[operation]
     updates = []
+    estimate_cache = {}
     with read_adapter(connection, values):
         for item in sorted(plan["changes"], key=lambda value: value["id"]):
             current = await connection.fetchrow(f"SELECT {','.join(fields)} FROM {table} WHERE id=$1 FOR UPDATE", item["id"])
             if current is None or row_hash(dict(current), fields) != item["row_sha256"]:
                 raise MaintenanceError("A source row changed after planning; no batch changes were applied")
-            after, evidence = await propose(operation, dict(current), values, now)
+            after, evidence = await propose(operation, dict(current), values, now, estimate_cache=estimate_cache)
             if digest(after) != digest(item["after"]) or digest(evidence) != item["evidence_sha256"]:
                 raise MaintenanceError("Resolution or index evidence changed; regenerate the plan")
             updates.append((item["id"], after))
@@ -370,6 +400,7 @@ async def apply_plan(connection, plan, expected_sha, operation):
             "applied_at": now.isoformat(), "database_writes": len(updates), "before": before,
             "after": await aggregate_report(connection, True), "removed_index_rows": None,
             "index_rebuild_performed": False, "deal_score_recompute_performed": False,
+            "rental_index_lookup_segments": len(estimate_cache),
             "deal_score_recompute_required": operation == "recompute" and bool(updates),
             "next_step": "Rebuild the monthly index separately after backfill; generate a new recompute plan afterwards. Run the reviewed Deal Score job after applying recomputed sale estimates."}
 
