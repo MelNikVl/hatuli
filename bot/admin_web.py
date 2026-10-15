@@ -715,9 +715,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         sort: str = "score_total",
         limit: int = 10,
         seller: str = "",
+        tab: str = "",
     ):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
+
+        if tab == 'rental':
+            from bot.rental_analytics_web import render_rental_analytics
+            return await render_rental_analytics(request, templates, rooms)
 
         from bot.db.pg import fetch as pg_fetch
 
@@ -2282,5 +2287,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     register_rental_health_routes(app, templates)
     from bot.rental_detail_web import register_rental_detail_routes
     register_rental_detail_routes(app)
+    from bot.rental_analytics_web import make_rental_analytics_router
+    app.include_router(make_rental_analytics_router(is_authed))
 
     return app
