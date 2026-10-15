@@ -2,9 +2,9 @@
 {% block title %}Сканер субаренды — Hatuli{% endblock %}
 {% block meta_description %}Рассчитайте загрузку для безубыточности субаренды и сравните три сценария расходов. Цены объявлений, прозрачные допущения.{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="/static/rental-scanner.css">
+<link rel="stylesheet" href="/static/rental-scanner.css?v=20261016-1">
 {% if not access_locked %}<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>{% endif %}
-<script defer src="/static/rental-scanner.js"></script>
+<script defer src="/static/rental-scanner.js?v=20261016-1"></script>
 {% endblock %}
 {% block content %}
 <div class="sublease-page" data-access-locked="{{ 'true' if access_locked else 'false' }}">
