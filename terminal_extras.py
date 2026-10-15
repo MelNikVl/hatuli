@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, File, Form, Request, UploadFile
@@ -4490,6 +4491,7 @@ def make_extras_router(templates) -> APIRouter:
                          min_score: int = 0, seller: str = "", market: str = "",
                          price_change: str = "", finish: str = "", cheapest_only: bool = False,
                          has_floorplan: bool = False,
+                         net_yield_min: float = 0, rent_confidence: str = "", sort: str = "", high_yield: bool = False,
                          offset: int = 0, limit: int = 15000,
                          min_lat: float = 0, max_lat: float = 0,
                          min_lon: float = 0, max_lon: float = 0):
@@ -4705,7 +4707,14 @@ def make_extras_router(templates) -> APIRouter:
         else:
             limit = max(1, min(limit, 15000))
             offset = max(0, offset)
-        order_by = "a.price ASC" if cheapest_only else "eff_score DESC"
+        from bot.core.rental_economics_filters import append_rental_filters
+        try:
+            rental_order = append_rental_filters(conds, params, net_yield_min=net_yield_min,
+                rent_confidence=rent_confidence, sort=sort, high_yield=high_yield)
+        except (ValueError, TypeError, OverflowError):
+            return JSONResponse({"error": "invalid_rental_filter"}, status_code=422)
+        i = len(params)+1
+        order_by = rental_order or ("a.price ASC" if cheapest_only else "eff_score DESC")
         limit_idx, offset_idx = i, i + 1
         params.append(limit); params.append(offset)
         rows = await pg_fetch(IDENTITY_CTES + f"""
@@ -4717,12 +4726,20 @@ def make_extras_router(templates) -> APIRouter:
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    a.hex_deal_index, a.deal_confidence, a.yield_pct,
+                   a.rental_economics,a.complex_id,a.complex_resolution,a.resolved_house_id,a.house_attribution,
+                   a.last_seen,a.is_active,a.archived_at,a.is_duplicate,a.dup_needs_review,a.duplicate_of,a.district,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
                    a.effective_score AS eff_score,
                    ph.old_price AS prev_price,
                    ph.changed_at AS price_changed_at,
                    dv.id AS developer_id, dv.name AS developer_name, dv.logo AS developer_logo,
-                   cx.photos AS complex_photos
+                   cx.photos AS complex_photos,
+                   CASE WHEN a.complex_resolution IS DISTINCT FROM 'geo' AND a.complex_resolution IS DISTINCT FROM 'unbound'
+                     AND a.house_attribution IS DISTINCT FROM 'geo' AND a.house_attribution IS DISTINCT FROM 'address_geo'
+                     THEN (SELECT hc.housing_class FROM complexes hc WHERE hc.id=coalesce(a.resolved_house_id,a.complex_id)
+                       AND NOT coalesce(hc.is_garbage,false) AND NOT coalesce(hc.is_street,false)
+                       AND NOT coalesce(hc.is_umbrella,false) AND hc.canonical_reason IS DISTINCT FROM 'junk_unmatched')
+                   END AS rental_housing_class
             FROM listings a
             LEFT JOIN LATERAL (
                 -- Исторический максимум, а не последнее изменение — просили
@@ -4831,6 +4848,24 @@ def make_extras_router(templates) -> APIRouter:
                                  and (r["hex_deal_index"] - 1) * 100 >= 28.8 else None),
             "high_yield": False,
         } for idx, r in enumerate(rows)]
+        from bot.core.rental_economics import cached_rental_economics, attach_benchmark
+        from bot.core.rental_yield import NetYieldParams
+        from bot.db import settings as rental_settings
+        try:
+            rental_params = NetYieldParams.from_settings(rental_settings.get)
+        except (ValueError, TypeError, OverflowError):
+            rental_params = None
+        rental_now = datetime.now(timezone.utc)
+        benchmark_rows = []
+        if rental_params and any(r.get("rental_economics") for r in rows):
+            benchmark_rows = [dict(row) for row in await pg_fetch("SELECT * FROM rental_yield_benchmarks WHERE computed_at BETWEEN now()-interval '26 hours' AND now()")]
+        for point, row in zip(pts, rows):
+            economics = cached_rental_economics(dict(row), now=rental_now, params=rental_params) if rental_params else None
+            economics = attach_benchmark(economics, dict(row), benchmark_rows, rental_params, rental_now) if economics else None
+            point.update(net_yield_pct=economics["net_yield_pct"] if economics else None,
+                         yield_pct=economics["net_yield_pct"] if economics else None,
+                         rent_confidence=economics["confidence"] if economics else None,
+                         high_yield=bool(economics and economics["high_yield"]))
         resp = {"points": pts, "count": len(pts), "offset": offset, "limit": limit,
                 "has_more": (len(pts) == limit) and not cheapest_only}
         if is_authed(request) and offset == 0:
