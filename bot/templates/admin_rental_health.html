@@ -134,7 +134,7 @@
       <h3 style="font-size:14px;">Свежесть арендного индекса</h3>
       {% if cycle.index.pending_observations is not none %}<p>Новых наблюдений после предыдущего обновления индекса: <strong>{{ cycle.index.pending_observations|fmt_num }}</strong>{% if cycle.index.dirty_age_seconds is not none %} · ожидают {{ cycle.index.dirty_age_seconds }} с{% endif %}.</p>{% endif %}
       {% if cycle.index.last_success_age_seconds is not none %}<p class="rh-muted">Последнее успешное обновление индекса — {{ cycle.index.last_success_age_seconds }} с назад.</p>{% endif %}
-      {% if cycle.index.due_reason %}<p class="rh-muted">Причина запуска: {{ {'startup':'старт сервиса','apartment_pages':'новые страницы квартир','saved_observations_age':'накопились свежие наблюдения','full_pass':'завершён круг каталога'}.get(cycle.index.due_reason) }}.</p>{% endif %}
+      {% if cycle.index.due_reason %}<p class="rh-muted">Причина запуска: {{ {'startup':'старт сервиса','apartment_pages':'новые страницы квартир','saved_observations_age':'накопились свежие наблюдения','full_pass':'завершён круг каталога','periodic_revalidation':'периодическая проверка актуальности индекса'}.get(cycle.index.due_reason) }}.</p>{% endif %}
       {% if cycle.index.failures %}<p class="rh-note">Неудачных обновлений подряд: {{ cycle.index.failures }}{% if cycle.index.retry_after_seconds %}; повтор не раньше чем через {{ cycle.index.retry_after_seconds }} с{% endif %}.</p>{% endif %}
     </div>
     {% endif %}

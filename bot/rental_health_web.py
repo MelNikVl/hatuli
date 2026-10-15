@@ -164,7 +164,7 @@ def _safe_cycle(value) -> dict | None:
         output[key] = _number(raw.get(key))
     index = raw.get("index")
     if isinstance(index, dict):
-        reasons = ("startup", "apartment_pages", "saved_observations_age", "full_pass")
+        reasons = ("startup", "apartment_pages", "saved_observations_age", "full_pass", "periodic_revalidation")
         output["index"] = {"due_reason": index.get("due_reason")
                            if isinstance(index.get("due_reason"), str) and index.get("due_reason") in reasons else None}
         for key in ("pending_observations", "apartment_pages_since_refresh", "failures"):
