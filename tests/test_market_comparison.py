@@ -130,7 +130,7 @@ def test_atomic_projection_cache_and_bad_refresh_preserve_previous(tmp_path):
     assert load_market_snapshot(path)["summary"]["primary_count"] == 5
     previous = path.read_bytes()
     with pytest.raises(ValueError):
-        publish_market_snapshot(snapshot(0, 5), path)
+        publish_market_snapshot(snapshot(0, 0), path)
     assert path.read_bytes() == previous
     changed = snapshot(6, 5)
     publish_market_snapshot(changed, path)

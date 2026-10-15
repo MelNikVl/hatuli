@@ -199,9 +199,13 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
         target = next((offer for offer in market.get("offers", []) if offer["id"] == selected["id"]), None)
     elif complex_id:
         target = next((offer for offer in market.get("offers", []) if offer["market_type"] == "primary" and offer["complex_id"] == complex_id), None)
-    if target and not hex_id:
-        hex_id = target["hex_id"]
+    if not hex_id:
+        if target:
+            hex_id = target["hex_id"]
         if selected:
+            # A verified daily card can have supplemental details without a
+            # usable market point. Its validated size still defines the peer
+            # filter; choose a center from the market rather than inventing one.
             rooms, area = selected["rooms"], selected["area"]
     comparison = compare_market(market, hex_id=hex_id, rooms=rooms, area=area, scope=scope)
     primary_choices = [_primary_selection_offer(offer, market) for offer in comparison["apartments"]]

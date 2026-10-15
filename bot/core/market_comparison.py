@@ -318,8 +318,11 @@ def load_market_snapshot(path: Path | None = None) -> dict:
 
 def publish_market_snapshot(snapshot: dict, path: Path | None = None) -> None:
     safe = _validated_snapshot(snapshot)
-    if not safe["summary"]["primary_count"] or not safe["summary"]["secondary_count"]:
-        raise ValueError("Both markets required; retain the previous snapshot")
+    # A stale/missing feed must not block fresh observations from the other
+    # market or the verified daily-card details. compare_market independently
+    # requires five observations on each side before any relative price claim.
+    if not safe["summary"]["primary_count"] and not safe["summary"]["secondary_count"]:
+        raise ValueError("Fresh market offers required; retain the previous snapshot")
     path = path or snapshot_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = None
