@@ -36,10 +36,11 @@ VERSION = 1
 MAX_ROWS = 1000
 MAX_PLAN_BYTES = 8_000_000
 LOCK_NAME = "hatuli:rental-stage0-maintenance:v1"
+MARKET_CITY = 'astana'  # This application has one sale market; its table has no city column.
 RENTAL_FIELDS = ("id", "title", "price", "area", "rooms", "city", "prop_type", "complex_name", "complex_url",
                  "address", "lat", "lon", "rent_period", "rent_period_conflict", "complex_id", "hex_id", "hex_edge_m",
                  "is_active", "archived_at", "is_duplicate", "dup_needs_review", "duplicate_of", "last_seen")
-SALE_FIELDS = ("id", "price", "area", "rooms", "city", "district", "complex_name", "complex_id",
+SALE_FIELDS = ("id", "price", "area", "rooms", "district", "complex_name", "complex_id",
                "complex_resolution", "resolved_house_id", "house_attribution", "is_active", "archived_at",
                "is_duplicate", "dup_needs_review", "duplicate_of", "last_seen", "est_rent", "yield_pct",
                "net_yield_pct", "payback_years", "rent_source")
@@ -227,18 +228,18 @@ async def recompute_proposal(row, values, now, *, estimate_cache=None):
         observed = datetime.fromisoformat(observed.replace("Z", "+00:00"))
     if (row.get("is_active") is not True or row.get("archived_at") is not None
             or row.get("is_duplicate") is True or row.get("dup_needs_review") is True or row.get("duplicate_of")
-            or row.get("city") != "astana" or not isinstance(observed, datetime) or observed.tzinfo is None
+            or row.get("city") not in (None, MARKET_CITY) or not isinstance(observed, datetime) or observed.tzinfo is None
             or not now-timedelta(hours=72) <= observed <= now):
         return empty, {"reason": "sale_not_fresh_clean_active"}
     params = NetYieldParams.from_settings(lambda key, default: values.get(key, default))
     cid, name = row.get("complex_id"), row.get("complex_name")
     if row.get("complex_resolution") in ("geo", "unbound") or row.get("house_attribution") in ("geo", "address_geo"):
         cid, name = None, None
-    scope = (row["city"], row.get("district"), None if cid is not None else name, row.get("rooms"), cid)
+    scope = (MARKET_CITY, row.get("district"), None if cid is not None else name, row.get("rooms"), cid)
     if estimate_cache is not None and scope in estimate_cache:
         estimate = estimate_cache[scope]
     else:
-        estimate = await lookup_rental_estimate(row["city"], row.get("district"), name, row.get("rooms"), complex_id=cid)
+        estimate = await lookup_rental_estimate(MARKET_CITY, row.get("district"), name, row.get("rooms"), complex_id=cid)
         if estimate_cache is not None:
             estimate_cache[scope] = estimate
     if estimate_cache is not None and estimate:
@@ -288,7 +289,7 @@ async def aggregate_report(connection, ready):
             SELECT coalesce(split_part(rent_source,',',1),'unknown') AS source,count(*) AS total,
               count(*) FILTER(WHERE est_rent>0) AS with_rent,
               percentile_cont(ARRAY[.25,.5,.75]) WITHIN GROUP(ORDER BY net_yield_pct) AS net_yield_distribution
-            FROM apartment_listings WHERE city='astana' AND is_active IS TRUE
+            FROM apartment_listings WHERE is_active IS TRUE
               AND NOT coalesce(is_duplicate,false) AND NOT coalesce(dup_needs_review,false)
               AND nullif(btrim(duplicate_of),'') IS NULL AND archived_at IS NULL
             GROUP BY 1 ORDER BY 1
@@ -330,6 +331,7 @@ async def build_plan(connection, operation, *, limit=500, after_id=""):
     before = await aggregate_report(connection, status["ready"])
     now = await connection.fetchval("SELECT clock_timestamp()")
     plan = {"version": VERSION, "operation": operation, "generated_at": now.isoformat(), "dry_run": True,
+            "market_scope": MARKET_CITY, "sale_scope_basis": "dedicated_application_dataset",
             "schema": status, "before": before, "database_writes": 0, "index_rebuild_performed": False,
             "removed_index_rows": None, "deal_score_recompute_performed": False, "changes": [],
             "database_identity_sha256": await database_identity(connection)}
@@ -339,7 +341,7 @@ async def build_plan(connection, operation, *, limit=500, after_id=""):
         raise MaintenanceError("Stage-0 schema is incomplete; audit first and apply the reviewed migrations separately")
     table, fields, _ = WRITABLE[operation]
     # Names are constants selected above. User values are bound parameters.
-    scope = "city='astana'" if operation == "backfill" else "city='astana' AND is_active IS TRUE AND archived_at IS NULL AND NOT coalesce(is_duplicate,false) AND NOT coalesce(dup_needs_review,false) AND nullif(btrim(duplicate_of),'') IS NULL"
+    scope = "city='astana'" if operation == "backfill" else "is_active IS TRUE AND archived_at IS NULL AND NOT coalesce(is_duplicate,false) AND NOT coalesce(dup_needs_review,false) AND nullif(btrim(duplicate_of),'') IS NULL"
     rows = await connection.fetch(f"SELECT {','.join(fields)} FROM {table} WHERE {scope} AND id>$1 ORDER BY id LIMIT $2", after_id, limit+1)
     values = await settings_snapshot(connection)
     plan.update(settings_sha256=digest(values), scanned=min(len(rows), limit), limit=limit, after_id=after_id,

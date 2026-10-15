@@ -353,9 +353,9 @@ async def test_maintenance_real_recompute_writes_numeric_types_and_preserves_sco
     """, seeded.name, seeded.cid)
     identifier = pg.prefix+"0000"
     await pg.connection.execute("""
-        INSERT INTO apartment_listings(id,price,area,rooms,city,complex_name,complex_id,complex_resolution,
+        INSERT INTO apartment_listings(id,price,area,rooms,complex_name,complex_id,complex_resolution,
                                        last_seen,is_active,est_rent,score_total)
-        VALUES($1,40000000,60,2,'astana',$2,$3,'url',now(),TRUE,999,73)
+        VALUES($1,40000000,60,2,$2,$3,'url',now(),TRUE,999,73)
     """, identifier, seeded.name, seeded.cid)
     plan, path = await _review_plan(pg, tmp_path, operation="recompute")
     result = await _apply_reviewed(pg, tmp_path, plan, path)
