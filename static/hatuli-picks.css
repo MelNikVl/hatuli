@@ -78,8 +78,8 @@
 .picks-card-bottom { display: flex; flex-direction: column; justify-content: flex-end; flex: 1; padding-top: 13px; }
 .picks-observed { font-size: 10px; line-height: 1.5; color: var(--muted); }
 .picks-observed span { display: block; }
-.picks-page a.picks-button,.picks-page button.picks-button { display: inline-flex; justify-content: center; align-items: center; gap: 16px; min-height: 44px; padding: 11px 18px; border: 1px solid var(--accent); border-radius: 7px; background: var(--accent); color: #fff; font-family: inherit; font-size: 13px; line-height: 1.4; font-weight: 650; text-decoration: none; cursor: pointer; transition: background .15s; }
-.picks-page .picks-button:hover { background: var(--accent2); border-color: var(--accent2); }
+.picks-page a.picks-button,.picks-page button.picks-button { display: inline-flex; justify-content: center; align-items: center; gap: 16px; min-height: 44px; padding: 11px 18px; border: 1px solid var(--accent-fill); border-radius: 7px; background: var(--accent-fill); color: #fff; font-family: inherit; font-size: 13px; line-height: 1.4; font-weight: 650; text-decoration: none; cursor: pointer; transition: background .15s; }
+.picks-page .picks-button:hover { background: var(--accent-fill-hover); border-color: var(--accent-fill-hover); }
 .picks-page .picks-button span { font-size: 17px; line-height: 1; }
 .picks-page a.picks-card-button { justify-content: space-between; padding-inline: 13px; margin-top: 9px; min-height: 42px; background: var(--surface); color: var(--accent); }
 .picks-page a.picks-card-button:hover { background: var(--surface2); }

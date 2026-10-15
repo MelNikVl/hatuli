@@ -19,7 +19,7 @@ on:
   push:
     branches: [master]
   pull_request:
-    branches: [master, codex/krisha-30-complex-review, 'feat/rental-module**', feat/rental-improvements]
+    branches: [master, codex/krisha-30-complex-review, 'feat/rental-module**', feat/rental-improvements, feat/rental-best]
 
 # ВАЖНО: TEST_DB_USER обязан остаться "krisha" (или совпадать с ним),
 # если его переопределять секретом — десятки migrations/*.sql

@@ -63,7 +63,7 @@ body.buyer-nearby {
 .buyer-nearby .card span { font-size: 12px; line-height: 1.45; color: var(--muted, #596579); margin-top: 4px; }
 .buyer-nearby .card a { display: inline-flex; align-items: center; align-self: center; min-height: 44px; padding: 10px; border-radius: 8px; color: var(--accent, #006aff); font-size: 12px; text-underline-offset: 3px; }
 .buyer-nearby .card.selected { background: var(--surface2, #f0f5ff); border-radius: 10px; }
-.buyer-nearby .pin { border-radius: 50%; background: var(--accent-fill, #006aff); color: #fff; border: 3px solid #fff; box-shadow: 0 2px 8px rgba(15, 31, 60, .25); text-align: center; font-weight: 800; font-size: 15px; line-height: 30px; }
+.buyer-nearby .pin { border-radius: 50%; background: var(--green-fill, #18794e); color: #fff; border: 3px solid #fff; box-shadow: 0 2px 8px rgba(15, 31, 60, .25); text-align: center; font-weight: 800; font-size: 15px; line-height: 30px; }
 .buyer-nearby .pin.base { background: #326aa0; }
 .buyer-nearby .leaflet-control-attribution { font-size: 10px !important; }
 .buyer-nearby .leaflet-bottom { bottom: calc(30vh + 20px); }
