@@ -369,6 +369,9 @@ DISTRICTS = {"есиль": ("esil", "Есиль"), "нура": ("nura", "Нур�
 
 def district_key(value):
     value = value.casefold().replace("ё", "е") if isinstance(value, str) else ""
+    for alias, canonical in (("алматинск", "алматы"), ("сарыаркинск", "сарыарка"),
+                             ("сарайшық", "сарайшык"), ("байқоңыр", "байконур")):
+        value = value.replace(alias, canonical)
     return next((pair for key, pair in DISTRICTS.items() if key in value), None)
 
 
