@@ -47,12 +47,15 @@ async def test_daily_and_monthly_cursors_do_not_share_completion_or_timing(monke
     plan=RentalCyclePlan(backfill_batch=0,archive_batch=0,db_every=30)
     monthly='/arenda/kvartiry/astana/'
     daily='/arenda/kvartiry-posutochno/astana/'
-    await service.run_one_cycle(None,monthly,'apartment',state,operations,plan,type_count=4)
-    await service.run_one_cycle(None,daily,'apartment',state,operations,plan,type_count=4)
+    tick=[100.0]
+    await service.run_one_cycle(None,monthly,'apartment',state,operations,plan,type_count=4,clock=lambda:tick[0])
+    tick[0]=200.0
+    await service.run_one_cycle(None,daily,'apartment',state,operations,plan,type_count=4,clock=lambda:tick[0])
     assert state.completed_types=={'apartment','apartment_daily'}
     assert set(state.last_success)=={'apartment','apartment_daily'}
     operations.rebuild_index.assert_not_awaited()
-    result=await service.run_one_cycle(None,monthly,'apartment',state,operations,plan,type_count=4)
+    tick[0]=300.0
+    result=await service.run_one_cycle(None,monthly,'apartment',state,operations,plan,type_count=4,clock=lambda:tick[0])
     assert result['rent_period']=='monthly' and result['scope']=='apartment'
     assert 'apartment' in state.page_intervals and 'apartment_daily' not in state.page_intervals
     assert any(call.args[0]=='RENTAL_CRAWL_V1_APARTMENT_PAGE_INTERVAL_SEC' for call in operations.set_setting.await_args_list)

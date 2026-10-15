@@ -85,7 +85,7 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
     # Preserve legacy monthly metric names used by collection-health consumers.
     from bot.core.rental_period import catalog_cursor_key, catalog_period
     cursor_prefix = catalog_cursor_key(prop_type, path)
-    scope_key = prop_type + ('_daily' if catalog_period(path) == 'daily' else '')
+    scope_key = cursor_prefix.removeprefix('RENTAL_CRAWL_V1_').lower()
     started = clock()
     list_started = clock()
     step = {}
