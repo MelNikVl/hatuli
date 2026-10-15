@@ -579,9 +579,10 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                          address, district, complex_name, city, prop_type,
                          published_at, found_at, last_seen, complex_url, photo_url, rent_period, complex_id, rent_period_conflict,
                          rental_episode_started_at,rental_episode_last_seen_at)
-                    SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15,$16,$17,$18,$19,$20,
-                           CASE WHEN $18 IN ('monthly','daily') AND NOT $20 THEN $15 ELSE NULL END,
-                           CASE WHEN $18 IN ('monthly','daily') AND NOT $20 THEN $15 ELSE NULL END
+                    SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::timestamptz,$15::timestamptz,
+                           $16,$17,$18::text,$19,$20::boolean,
+                           CASE WHEN $18::text IN ('monthly','daily') AND NOT $20::boolean THEN $15::timestamptz ELSE NULL END,
+                           CASE WHEN $18::text IN ('monthly','daily') AND NOT $20::boolean THEN $15::timestamptz ELSE NULL END
                       FROM (SELECT count(*) FROM previous) previous_observation
                      WHERE TRUE
                     ON CONFLICT (id) DO UPDATE SET
@@ -650,7 +651,7 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                       (listing_id,observed_at,observed_on,source,rent_period,period_source_checked,episode_started_at,
                        city,district,rooms,price,area,complex_name,complex_url,complex_id,
                        hex_id,hex_edge_m,furnishing,furnishing_version)
-                    SELECT o.id,$15,($15::timestamptz AT TIME ZONE 'UTC')::date,'krisha',o.rent_period,TRUE,o.rental_episode_started_at,
+                    SELECT o.id,$15::timestamptz,($15::timestamptz AT TIME ZONE 'UTC')::date,'krisha',o.rent_period,TRUE,o.rental_episode_started_at,
                            o.city,o.district,o.rooms,o.price,o.area,o.complex_name,o.complex_url,o.complex_id,
                            o.hex_id,o.hex_edge_m,o.furnishing,o.furnishing_version
                     FROM observed o WHERE o.city='astana' AND o.prop_type='apartment'

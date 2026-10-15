@@ -251,6 +251,7 @@ async def test_catalog_upsert_captures_immutable_history_in_same_statement(monke
     assert 'INSERT INTO rental_observations' in sql and 'FROM observed o' in sql
     assert 'ON CONFLICT(listing_id,observed_on,source,rent_period) DO NOTHING' in sql
     assert 'UPDATE rental_observations' not in sql
+    assert 'THEN $15::timestamptz ELSE NULL END' in sql
 
 
 @pytest.mark.asyncio
