@@ -7,14 +7,13 @@
   </figcaption>
   <div class="ha-chart-unit">{{ chart.unit }}</div>
   <ol class="ha-chart-rows" role="list">
-    {% set displayed_rows = chart.rows[:3] if compact else chart.rows %}
-    {% for row in displayed_rows %}
-    <li><div class="ha-chart-label"><span>{{ row.label }}</span><strong>{{ row.value_label }}</strong></div><div class="ha-chart-track" aria-hidden="true"><span {% if row.negative %}class="ha-chart-negative"{% endif %} style="width:{{ row.bar_width }}%"></span></div>{% if not compact and row.n is not none %}<span class="ha-chart-sample">{{ row.n }} объявлений</span>{% endif %}</li>
+    {% for row in chart.rows %}
+    <li><div class="ha-chart-label"><span>{{ row.label }}</span><strong>{{ row.value_label }}</strong></div><div class="ha-chart-track" aria-hidden="true"><span {% if row.negative %}class="ha-chart-negative"{% endif %} style="width:{{ row.bar_width }}%"></span></div>{% if not compact and row.n is not none %}<span class="ha-chart-sample">{{ row.n }} наблюдений</span>{% endif %}</li>
     {% endfor %}
   </ol>
   <p class="ha-chart-axis"><span>{% if chart.signed %}← Снижение · 0 · Рост →{% else %}0{% endif %}</span><span>{{ chart.axis_label }}</span></p>
   {% if not compact %}
-  <details class="ha-chart-data"><summary>Данные графика</summary><div class="ha-chart-table-wrap"><table><caption>{{ chart.title }} · {{ chart.unit }}</caption><thead><tr><th scope="col">Группа</th><th scope="col">Значение</th>{% if chart.has_samples %}<th scope="col">Объявлений</th>{% endif %}</tr></thead><tbody>{% for row in chart.rows %}<tr><th scope="row">{{ row.label }}</th><td>{{ row.value_label }}</td>{% if chart.has_samples %}<td>{{ row.n if row.n is not none else '' }}</td>{% endif %}</tr>{% endfor %}</tbody></table></div></details>
+  <details class="ha-chart-data"><summary>Данные графика</summary><div class="ha-chart-table-wrap"><table><caption>{{ chart.title }} · {{ chart.unit }}</caption><thead><tr><th scope="col">Группа</th><th scope="col">Значение</th>{% if chart.has_samples %}<th scope="col">Наблюдений</th>{% endif %}</tr></thead><tbody>{% for row in chart.rows %}<tr><th scope="row">{{ row.label }}</th><td>{{ row.value_label }}</td>{% if chart.has_samples %}<td>{{ row.n if row.n is not none else '' }}</td>{% endif %}</tr>{% endfor %}</tbody></table></div></details>
   {% endif %}
 </figure>
 {% endif %}

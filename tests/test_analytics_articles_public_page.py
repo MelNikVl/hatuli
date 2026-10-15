@@ -157,7 +157,7 @@ async def test_detail_has_takeaways_navigation_full_chart_table_sources_and_arti
     assert "Главное за минуту" in response.text
     assert "Данные графика" in response.text
     assert "Общая шкала: 0–800 тыс. ₸/м²" in response.text
-    assert "70 объявлений" in response.text
+    assert "70 наблюдений" in response.text
     assert '<th scope="row">Есильский</th><td>720</td><td>70</td>' in response.text
     assert "Опубликовано" in response.text
     assert "16 октября 2026, 08:00" in response.text
@@ -185,7 +185,7 @@ async def test_editorial_text_and_json_ld_escape_script_markup(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("field,value", [("bar_pct", "90%;background:red"), ("bar_pct", float("nan")), ("bar_pct", 101), ("bar_pct", -1), ("value", float("inf")), ("value", True), ("n", 0)])
+@pytest.mark.parametrize("field,value", [("bar_pct", "90%;background:red"), ("bar_pct", float("nan")), ("bar_pct", 101), ("bar_pct", -1), ("value", float("inf")), ("value", True), ("n", -1)])
 async def test_invalid_chart_is_hidden_in_full_without_unsafe_or_misleading_widths(monkeypatch, field, value):
     article = prepared()
     article["charts"][0]["rows"][0][field] = value
@@ -217,7 +217,7 @@ async def test_official_series_without_published_sample_counts_omit_count_column
     assert Parts(response.text).charts == 1
     assert "None" not in response.text
     assert "ha-chart-sample" not in response.text
-    assert '<th scope="col">Объявлений</th>' not in response.text
+    assert '<th scope="col">Наблюдений</th>' not in response.text
     assert '<th scope="row">Есильский</th><td>720</td>' in response.text
 
 
@@ -231,3 +231,25 @@ async def test_negative_series_uses_centered_zero_and_signed_direction(monkeypat
     assert 'class="ha-chart-negative" style="width:45.0%"' in response.text
     assert "← Снижение · 0 · Рост →" in response.text
     assert "−7,2%" in response.text
+
+
+@pytest.mark.asyncio
+async def test_archive_preview_retains_the_whole_time_series_including_latest_month(monkeypatch):
+    article = prepared("rent")
+    article["charts"][0]["rows"] = [
+        {"label": label, "value_label": str(value), "value": value, "n": None, "bar_pct": value}
+        for label, value in [("Апрель", 50), ("Май", 60), ("Июнь", 70), ("Июль", 80), ("Август", 90), ("Сентябрь", 100)]
+    ]
+    response = await page(monkeypatch, [article])
+    assert Parts(response.text).charts == 1
+    for row in article["charts"][0]["rows"]:
+        assert row["label"] in response.text
+
+
+@pytest.mark.asyncio
+async def test_explicit_zero_sample_count_is_preserved_as_a_count_without_fabrication(monkeypatch):
+    article = prepared()
+    article["charts"][0]["rows"][0].update(value=0, value_label="0", n=0, bar_pct=0)
+    response = await page(monkeypatch, [article], "/analytics/2026-10-16-market")
+    assert Parts(response.text).charts == 1
+    assert "0 наблюдений" in response.text
