@@ -47,7 +47,7 @@ def _display_article(article):
                     or not math.isfinite(value)
                     or isinstance(width, bool) or not isinstance(width, (int, float))
                     or not math.isfinite(width) or not 0 <= width <= 100
-                    or (n is not None and (isinstance(n, bool) or not isinstance(n, int) or n < 1))):
+                    or (n is not None and (isinstance(n, bool) or not isinstance(n, int) or n < 0))):
                 valid = False
                 break
             row["bar_pct"] = round(width, 3)

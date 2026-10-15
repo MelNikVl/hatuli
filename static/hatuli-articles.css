@@ -9,7 +9,7 @@
 .ha-filters a:hover { background: var(--surface2); }
 .ha-filters a[aria-current="page"] { color: #fff; background: var(--accent-fill); border-color: var(--accent-fill); }
 .ha-editions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; }
-.ha-story-card { display: flex; flex-direction: column; min-width: 0; padding: 26px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.ha-story-card { display: flex; flex-direction: column; min-width: 0; padding: 26px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow-wrap: anywhere; }
 .ha-story-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; color: var(--muted); font-size: 12px; }
 .ha-category { display: inline-flex; align-items: center; min-height: 27px; padding: 4px 8px; border-radius: 5px; color: var(--accent); background: var(--surface2); font-size: 11px; font-weight: 750; }
 .ha-category-rent { border: 1px solid var(--border); }
@@ -76,7 +76,7 @@
 .ha-chart-compact { border: 0; border-radius: 7px; background: var(--bg); padding: 16px; margin: 0; }
 .ha-chart-compact figcaption h3 { font-size: 12px; margin: 0; }
 .ha-chart-compact .ha-chart-unit { font-size: 10px; margin: 10px 0; }
-.ha-chart-compact .ha-chart-rows { gap: 12px; }
+.ha-chart-compact .ha-chart-rows { gap: 8px; }
 .ha-chart-compact .ha-chart-label { font-size: 11px; margin-bottom: 4px; gap: 10px; }
 .ha-chart-compact .ha-chart-label strong { font-size: 12px; }
 .ha-chart-compact .ha-chart-track { height: 7px; }
