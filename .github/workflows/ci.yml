@@ -148,7 +148,12 @@ jobs:
       # test_server_search.py не переименовывал/не трогал — не в рамках
       # "минимальный CI", отдельная мелкая находка.
       - name: pytest (полный suite, без параллельных флагов)
-        run: pytest tests/ -q --tb=short -m "not live_data"
+        run: |
+          if [ "$TEST_DB_NAME" = "hatuli_test" ]; then
+            export RENTAL_FK_TEST_DSN="$DATABASE_URL"
+            export HATULI_RENTAL_STAGE0_TEST_DATABASE_URL="$DATABASE_URL"
+          fi
+          pytest tests/ -q --tb=short -m "not live_data"
 
       - name: Import smoke test
         run: |

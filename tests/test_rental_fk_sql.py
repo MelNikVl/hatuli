@@ -1,7 +1,7 @@
 """Rental SQL identity regressions; optional PostgreSQL uses temp tables only.
 
-RENTAL_FK_TEST_DSN is opt-in, must be loopback, non-default-port and a database
-named hatuli_test*. No app pool, migrations or permanent tables are touched.
+RENTAL_FK_TEST_DSN is opt-in, must be loopback, port 15439/5432 and a database
+named hatuli_test. No app pool, migrations or permanent tables are touched.
 """
 from datetime import datetime, timezone
 import os
@@ -46,8 +46,9 @@ async def sql_connection():
     if not dsn:
         pytest.skip("Set RENTAL_FK_TEST_DSN for opt-in disposable PostgreSQL temp-table tests")
     parsed = urlsplit(dsn)
-    if (parsed.scheme not in ("postgres", "postgresql") or parsed.hostname != "127.0.0.1"
-            or parsed.port in (None, 5432) or not parsed.path.startswith("/hatuli_test")):
+    if (parsed.scheme not in ("postgres", "postgresql") or parsed.hostname not in ("127.0.0.1", "localhost")
+            or parsed.port not in (15439, 5432) or parsed.path != "/hatuli_test"
+            or parsed.query or parsed.fragment):
         pytest.fail("RENTAL_FK_TEST_DSN must identify an isolated loopback test database")
     import asyncpg
     connection = await asyncpg.connect(dsn, command_timeout=15)
