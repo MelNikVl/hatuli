@@ -159,8 +159,9 @@ async def test_comps_keep_source_address_without_flat_or_contact(monkeypatch):
     now=datetime.now(timezone.utc)
     row={"id":"10000002","price":300000,"area":60,"rooms":2,"last_seen":now-timedelta(hours=1),
          "is_active":True,"rent_period":"monthly","complex_binding_verified":True,
-         "address":"Анет баба 4, кв. 25 — Телефон +77001234567"}
+         "address":"Анет баба 4, кв. 25 — Телефон +77001234567","district":"Есильский"}
     fetch=AsyncMock(return_value=[row]);monkeypatch.setattr("bot.db.pg.fetch",fetch)
     result=await eco.rental_comps_for_listing(listing())
     assert result[0]["address"]=="Анет баба 4"
-    assert "r.address" in fetch.await_args.args[0] and "77001234567" not in str(result)
+    assert result[0]["district"]=="Есиль"
+    assert "r.address" in fetch.await_args.args[0] and "r.district" in fetch.await_args.args[0] and "77001234567" not in str(result)

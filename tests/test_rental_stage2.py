@@ -343,6 +343,25 @@ def test_analytics_hides_small_groups_and_empty_hexes_without_guessing_ratio():
     assert 'listing_id' not in feature['properties'] and feature['properties']['window_days']==30
 
 
+@pytest.mark.parametrize('offset,hour',[(0,19),(3,22),(5,0)])
+def test_display_dates_convert_offsets_to_astana_instead_of_relabeling(offset,hour):
+    value=datetime(2026,10,16 if offset==5 else 15,hour,30,tzinfo=timezone(timedelta(hours=offset)))
+    assert web._date(value)=='16.10.2026 00:30 · Астана, UTC+5'
+    assert web._date(value.replace(tzinfo=None))==''
+
+
+def test_public_and_analytics_source_range_use_astana_calendar_days():
+    now=datetime(2026,10,15,21,tzinfo=timezone.utc)
+    row=aggregate(source_oldest_at=now-timedelta(hours=2,minutes=30),
+                  source_newest_at=now-timedelta(minutes=30),updated_at=now-timedelta(minutes=15),
+                  hex_id='0:0',hex_edge_m=50.)
+    value=web.segment_table([row],now)[0]['daily']
+    assert value['source_range_label']=='15.10.2026–16.10.2026 · Астана, UTC+5'
+    assert value['source_newest_label']=='16.10.2026 01:30 · Астана, UTC+5'
+    feature=web.hex_feature_collection([row],now,period='daily',rooms=2,edge_m=50.)['features'][0]
+    assert feature['properties']['source_newest_at']==value['source_newest_label']
+
+
 @pytest.mark.asyncio
 async def test_analytics_api_auth_before_database_and_actual_template(monkeypatch):
     app=FastAPI()
@@ -394,7 +413,9 @@ async def test_public_daily_route_renders_actual_base_template_without_auth(monk
         response=await client.get('/rental/daily')
     assert response.status_code==200 and response.headers['Cache-Control']=='no-store'
     assert response.text.count('data-daily-segment')==1 and '20 000' in response.text and '₸/сут' in response.text
-    assert 'n=10' in response.text and 'активно 7' in response.text and 'Окно 30 дн.' in response.text
+    assert '10 объявлений' in response.text and 'активно 7' in response.text and 'Окно 30 дн.' in response.text
+    assert 'Типичный диапазон:' in response.text and 'средние 50%' in response.text and 'n=10' not in response.text
+    assert 'Астана, UTC+5' in response.text
     assert 'Источник:' in response.text and 'Индекс:' in response.text and 'наблюдения' in response.text
     assert ('250 000' in response.text)==monthly_ready
     assert ('<strong>8.0%</strong>' in response.text)==monthly_ready
