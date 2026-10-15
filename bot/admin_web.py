@@ -715,9 +715,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         sort: str = "score_total",
         limit: int = 10,
         seller: str = "",
+        tab: str = "",
     ):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
+
+        if tab == 'rental':
+            from bot.rental_analytics_web import render_rental_analytics
+            return await render_rental_analytics(request, templates, rooms)
 
         from bot.db.pg import fetch as pg_fetch
 
@@ -1751,7 +1756,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
         from bot.core.rental_data_quality import rental_live_sql
         from bot.core.comparison_rental_estimate import rental_estimate_for_listing
-        rental_estimate = await rental_estimate_for_listing(dict(listing))
+        rental_estimate = await rental_estimate_for_listing(dict(listing)) if listing.get("market_type") != "primary" else None
+        from bot.core.rental_economics import rental_economics_for_listing
+        rental_economics = await rental_economics_for_listing(dict(listing))
         rental_scope = rental_live_sql()
         rental_comps = await pg_fetch(f"""
             SELECT complex_name, district, rooms, price, area
@@ -1882,6 +1889,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "bargain": bargain,
                 "rental_comps": [dict(r) for r in rental_comps],
                 "rental_estimate": rental_estimate,
+                "rental_economics": rental_economics,
                 "reasons_list": reasons_list,
                 "negotiation_points": negotiation_points,
                 "seller_questions": seller_questions,
@@ -2280,9 +2288,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.include_router(make_rental_tools_router(templates))
     from bot.web.rental_scanner import make_rental_scanner_router
     app.include_router(make_rental_scanner_router(templates))
+    from bot.web.rental_economics import router as rental_economics_router
+    app.include_router(rental_economics_router)
     from bot.rental_health_web import register_rental_health_routes
     register_rental_health_routes(app, templates)
     from bot.rental_detail_web import register_rental_detail_routes
     register_rental_detail_routes(app)
+    from bot.rental_analytics_web import make_rental_analytics_router
+    app.include_router(make_rental_analytics_router(is_authed,templates))
 
     return app

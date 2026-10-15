@@ -195,6 +195,10 @@ def render_summary(result: dict) -> str:
     lines += ['', f'Вариантов рядом: {n}. Откройте карту или сравните списком кнопками ниже.' if n else 'В радиусе 2 км пока нет проверенных вариантов, подходящих под ваши параметры.']
     if result['confidence'] == 'limited':
         lines.append('Вывод предварительный: данные неполные.')
+    economics = result['listing'].get('rental_economics')
+    if economics:
+        from bot.core.buyer_alerts import rental_summary_lines
+        lines += ['', *rental_summary_lines(economics)]
     lid = str(result['listing']['id'])
     if lid.isdigit():
         lines += ['', f'<a href="https://hatuli.ai-groundtruth.com/listing/{lid}">Посмотреть подробнее</a>']
@@ -270,6 +274,38 @@ async def menu_command(message: Message, state: FSMContext) -> None:
 async def check_command(message: Message, state: FSMContext) -> None:
     await reset_profile_state(state)
     await message.answer('Пришлите ссылку на квартиру с Krisha.kz. Я проверю её и подберу варианты рядом.', reply_markup=main_menu())
+
+
+@router.message(Command('yield'))
+async def yield_subscription_command(message: Message, state: FSMContext) -> None:
+    from bot.core.buyer_store import get_profile
+    from bot.core.buyer_alerts import parse_yield_command, save_subscription
+    await reset_profile_state(state)
+    try:
+        params = parse_yield_command(message.text, await get_profile(message.from_user.id))
+        await save_subscription(message.from_user.id, 'yield', params)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    except Exception:
+        await message.answer('Не удалось сохранить подписку. Попробуйте позже.')
+        return
+    from bot.db import settings
+    cap = max(1, min(20, settings.get_int('BUYER_ALERT_DAILY_CAP', 5)))
+    await message.answer(f"Подписка сохранена: сценарная чистая доходность от {params['net_yield_min']:g}% в год. "
+        'Только свежие расчёты по ЖК или району с той же комнатностью; учитываем подтверждённую квартиру, чтобы не повторять перевыставления. '
+        f'До {cap} уведомлений в день. Отключить: /alerts_off. Ставки объявлений не равны доходу по договору.')
+
+
+@router.message(Command('alerts_off'))
+async def stop_typed_alerts_command(message: Message) -> None:
+    from bot.core.buyer_alerts import disable_subscription
+    try:
+        await disable_subscription(message.from_user.id)
+    except Exception:
+        await message.answer('Не удалось отключить уведомления. Попробуйте ещё раз.')
+        return
+    await message.answer('Уведомления по доходности и сценариям субаренды отключены.')
 
 
 @router.message(Command('nearby'))

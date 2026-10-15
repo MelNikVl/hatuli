@@ -447,5 +447,6 @@ async def test_rent_page_offers_scanner_without_extra_main_menu_item():
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/rent")
     assert response.status_code == 200 and 'href="/rental/scanner"' in response.text
+    assert 'href="/rental/daily"' in response.text
     assert "Рассчитать субаренду" in response.text
     assert '>Субаренда</a>' not in response.text

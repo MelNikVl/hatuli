@@ -291,6 +291,31 @@ async def test_maintenance_real_backfill_roundtrip_preserves_other_columns(stage
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('resolver_conflicts', [False, True])
+async def test_catalog_observation_preserves_existing_rental_fk(stage0_pg, monkeypatch, resolver_conflicts):
+    from unittest.mock import AsyncMock
+    from bot.core import rental_parser as parser
+    from bot.db import pg as database
+    pg = stage0_pg
+    seeded = await _seed_rentals(pg)
+    await pg.connection.execute("UPDATE rental_listings SET complex_id=$2,rent_period='monthly' WHERE id=$1",
+                                seeded.ids[0], seeded.cid)
+    candidate = None
+    if resolver_conflicts:
+        candidate = await pg.connection.fetchval('INSERT INTO complexes(name) VALUES($1) RETURNING id', pg.prefix+'other')
+    monkeypatch.setattr(parser, 'resolve_rental_complex', AsyncMock(return_value=candidate))
+    monkeypatch.setattr(database, 'fetchrow', pg.connection.fetchrow)
+    listing = parser.RentalListing(id=seeded.ids[0],url='https://krisha.kz/a/show/10000000',
+        title='Квартира',price=260000,area=60,rooms=2,floor=3,floors_total=9,address='',
+        district='Есиль',complex_name=None,city='astana',prop_type='apartment',published_at='',rent_period='monthly')
+    assert await parser.save_rental_listings([listing]) == 1
+    observed = await pg.connection.fetchrow('SELECT complex_id,complex_url,price FROM rental_listings WHERE id=$1', seeded.ids[0])
+    assert observed['complex_id'] == seeded.cid and observed['complex_url'] == seeded.url
+    assert observed['price'] == 260000
+    assert await pg.connection.fetchval('SELECT count(*) FROM rental_price_history WHERE listing_id=$1 AND old_price=250000 AND new_price=260000', seeded.ids[0]) == 1
+
+
+@pytest.mark.asyncio
 async def test_maintenance_real_row_change_aborts_whole_batch(stage0_pg, tmp_path):
     pg = stage0_pg
     seeded = await _seed_rentals(pg, ("Квартира в месяц", "Квартира в месяц"))
@@ -353,9 +378,9 @@ async def test_maintenance_real_recompute_writes_numeric_types_and_preserves_sco
     """, seeded.name, seeded.cid)
     identifier = pg.prefix+"0000"
     await pg.connection.execute("""
-        INSERT INTO apartment_listings(id,price,area,rooms,city,complex_name,complex_id,complex_resolution,
+        INSERT INTO apartment_listings(id,price,area,rooms,complex_name,complex_id,complex_resolution,
                                        last_seen,is_active,est_rent,score_total)
-        VALUES($1,40000000,60,2,'astana',$2,$3,'url',now(),TRUE,999,73)
+        VALUES($1,40000000,60,2,$2,$3,'url',now(),TRUE,999,73)
     """, identifier, seeded.name, seeded.cid)
     plan, path = await _review_plan(pg, tmp_path, operation="recompute")
     result = await _apply_reviewed(pg, tmp_path, plan, path)

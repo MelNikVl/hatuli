@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/yield-heat.js?v=20261008"></script>
+<script src="/static/hatuli-rental-economics.js?v=20261016-1"></script>
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261014">
 <script src="/static/hatuli-forecast.js?v=20261014-ready-only"></script>
 <link rel="stylesheet" href="/static/hatuli-journey.css?v=20261013">
@@ -303,6 +304,14 @@ html, body { overflow: hidden !important; }
         <input id="f-floorplan" type="checkbox" onchange="applyFilters()"> Только с планом</label></div>
     <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;margin-bottom:6px;">Минимальный смарт рейтинг</label>
       <input id="f-score" type="number" min="0" max="100" step="5" onchange="applyFilters()" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
+    <fieldset id="f-rental-economics-wrap" style="border:1px solid var(--border);border-radius:10px;padding:12px;">
+      <legend>Сценарная чистая доходность от аренды</legend>
+      <label for="f-net-yield">От, % в год</label> <input id="f-net-yield" type="number" min="0" max="100" step="0.1" onchange="applyFilters()" style="width:80px;">
+      <label for="f-rent-confidence">Основа расчёта</label><select id="f-rent-confidence" onchange="applyFilters()"><option value="medium">ЖК или район с той же комнатностью</option><option value="high">Только подтверждённый ЖК</option><option value="low">Включая более широкие срезы</option></select>
+      <label for="f-rent-sort">Сортировка</label><select id="f-rent-sort" onchange="applyFilters()"><option value="">По рейтингу</option><option value="net_yield_pct">По чистой доходности</option></select>
+      <label style="display:block;margin-top:8px;"><input id="f-high-yield" type="checkbox" onchange="applyFilters()"> Высокая доходность — верхние 10% своего среза</label>
+      <p style="font-size:11px;color:var(--muted);">По ставкам объявлений и явным допущениям. Учитываются только свежие расчёты.</p>
+    </fieldset>
 
     <button onclick="closeMoreFilters()" style="padding:11px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;">Показать</button>
   </div>
@@ -2205,7 +2214,7 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt, rental) {
   // Недооценено/высокая доходность (топ-10% по городу, см. map_points на
   // бэкенде) — маленькие бейджи прямо на пине, чтобы было видно без клика.
   const underpricedBadge = pt.underpriced_pct != null ? `<span title="Недооценено на ${pt.underpriced_pct}%" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:9px;color:#fff;background:#ef4444;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">🔥</span>` : '';
-  const highYieldBadge = pt.high_yield ? `<span title="Высокая доходность (≥13.9%)" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:9px;color:#fff;background:#16a34a;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">💰</span>` : '';
+  const highYieldBadge = pt.high_yield ? `<span title="Чистая доходность сценария — в верхних 10% своего среза" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:9px;color:#fff;background:#16a34a;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">💰</span>` : '';
   // Топ-10 по умному рейтингу: единая овальная плашка с градиентом
   // красный→тёмно-синий, звезда и цена внутри одного пилла (раньше были
   // раздельные звезда-бейдж + обычная синяя плашка — просили слить в одно).
@@ -2627,6 +2636,17 @@ function applyFilters() {
   if (cheapestOnly && type === 'sale') p.set('cheapest_only', '1');
   const floorplanOnly = document.getElementById('f-floorplan').checked;
   if (floorplanOnly && type === 'sale') p.set('has_floorplan', '1');
+  if (type === 'sale') {
+    const netMin = Number(document.getElementById('f-net-yield')?.value || 0);
+    const rentSort = document.getElementById('f-rent-sort')?.value || '';
+    const highYield = document.getElementById('f-high-yield')?.checked;
+    if (netMin > 0 || rentSort === 'net_yield_pct' || highYield || document.getElementById('f-rent-confidence')?.value !== 'medium') {
+      p.set('net_yield_min', netMin);
+      p.set('rent_confidence', document.getElementById('f-rent-confidence')?.value || 'medium');
+      if (rentSort) p.set('sort', rentSort);
+      if (highYield) p.set('high_yield', '1');
+    }
+  }
 
   lastFilterParams = new URLSearchParams(p);
   ['min_lat', 'max_lat', 'min_lon', 'max_lon', 'offset', 'limit'].forEach(k => lastFilterParams.delete(k));
@@ -5125,10 +5145,10 @@ function openDetailModal(id, ev, scrollToScore) {
       && Number.isFinite(rentalRange.monthly_low) && Number.isFinite(rentalRange.monthly_high)
       && rentalRange.monthly_low >= 50000 && rentalRange.monthly_high >= rentalRange.monthly_low
       && rentalRange.monthly_high <= 2000000 && rentalRange.sample_count >= 5;
-    const yieldHtml = hasRentalRange ? `
+    const yieldHtml = window.HatuliRentalEconomics?.render(d.rental_economics) || (hasRentalRange ? `
 <div style="margin:14px 22px 0;padding:12px 14px;background:var(--bg);border-radius:10px;display:flex;gap:22px;flex-wrap:wrap;">
   <div><div style="font-size:12px;color:var(--muted);">Похожие квартиры в этом ЖК предлагают в аренду</div><div style="font-weight:800;font-size:17px;color:var(--green);">${Math.round(rentalRange.monthly_low).toLocaleString('ru')}–${Math.round(rentalRange.monthly_high).toLocaleString('ru')} ₸/мес</div><div style="font-size:12px;color:var(--muted);margin-top:5px;">${escapeHtml(rentalRange.date_label || '')} · Это ставки объявлений; фактическая сдача и доходность не подтверждены.</div></div>
-</div>` : '';
+</div>` : '');
 
     // Полукруглый спидометр Deal Score: 5 цветных секторов (красный..зелёный)
     // + стрелка, повёрнутая на угол пропорционально score (0..100).

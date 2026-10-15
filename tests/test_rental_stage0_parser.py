@@ -159,8 +159,9 @@ async def test_known_coordinates_receive_hex_without_detail_fetch(monkeypatch):
     from bot.core import complex_audit
     monkeypatch.setattr(apartment_details, "detail_fetch_cooldown_remaining", lambda: 0)
     monkeypatch.setattr(complex_audit, "street_names", AsyncMock(return_value=set()))
-    monkeypatch.setattr(settings, "get", lambda key, default=None: "100")
-    monkeypatch.setattr(pg, "fetch", AsyncMock(return_value=[{"id":"123456","url":"https://krisha.kz/a/show/123456", "lat":51.128,"lon":71.430,"complex_id":10,"complex_name":"Пример","complex_url":"https://krisha.kz/complex/show/10"}]))
+    monkeypatch.setattr(settings, "get", lambda key, default=None: "100" if key == 'HEX_EDGE_M' else default)
+    from bot.core.rental_furnishing import version_tag
+    monkeypatch.setattr(pg, "fetch", AsyncMock(return_value=[{"id":"123456","url":"https://krisha.kz/a/show/123456", "lat":51.128,"lon":71.430,"complex_id":10,"complex_name":"Пример","complex_url":"https://krisha.kz/complex/show/10", "description_checked_at":datetime.now(timezone.utc), "furnishing_version":version_tag()}]))
     write, fetch = AsyncMock(), AsyncMock()
     monkeypatch.setattr(pg, "execute", write)
     monkeypatch.setattr(apartment_details, "fetch_apartment_details", fetch)

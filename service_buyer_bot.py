@@ -27,9 +27,16 @@ async def main() -> None:
                 ('menu','Главное меню'),('check','Проверить квартиру по ссылке'),
                 ('nearby','Варианты рядом на карте'),('profile','Настроить подбор'),
                 ('map','Выбрать места, где хочу жить'),('favorites','Сохранённые квартиры'),
+                ('yield','Подписка по чистой доходности'),('alerts_off','Отключить уведомления'),
                 ('cancel','Отменить настройку')]])
             await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-            await dp.start_polling(bot)
+            from bot.core.buyer_alerts import dispatcher_loop
+            delivery = asyncio.create_task(dispatcher_loop(bot))
+            try:
+                await dp.start_polling(bot)
+            finally:
+                delivery.cancel()
+                await asyncio.gather(delivery, return_exceptions=True)
     finally:
         await close_pool()
 
