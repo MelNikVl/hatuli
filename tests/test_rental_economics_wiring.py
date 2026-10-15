@@ -141,3 +141,51 @@ def test_static_integration_uses_existing_entry_points():
     assert "HatuliRentalEconomics?.render(d.rental_economics)" in dashboard and "p90" in dashboard
     assert "dispatcher_loop(bot)" in (root/"service_buyer_bot.py").read_text(encoding="utf-8")
     assert "refresh_all()" in (root/"service_apartments.py").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed",[None,"finish","dedup","refresh","benchmarks","score","sheets"])
+async def test_sale_cycle_orders_fresh_rent_before_score_and_sheets_with_independent_failures(monkeypatch,failed):
+    """Execute the actual tail AST with mocked stages; never run the crawl."""
+    import ast
+    import copy
+    from pathlib import Path
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    source=Path(__file__).resolve().parents[1]/"service_apartments.py"
+    cycle=next(node for node in ast.parse(source.read_text(encoding="utf-8")).body
+               if isinstance(node,ast.AsyncFunctionDef) and node.name=="run_cycle")
+    tail=next(node for node in cycle.body if isinstance(node,ast.Try) and any(
+        isinstance(call,ast.Call) and isinstance(call.func,ast.Name) and call.func.id=="sync_apartments_to_sheets_pg"
+        for call in ast.walk(node)))
+    calls=[]
+    def stage(name):
+        async def execute(*args,**kwargs):
+            calls.append(name)
+            if failed==name: raise RuntimeError("Synthetic stage failure")
+            return 0 if name=="dedup" else {"complete":True}
+        return execute
+    for module,functions in {
+        "finish_classify":{"apply_finish_classification":"finish"},
+        "dedup_listings":{"deduplicate_apartment_listings":"dedup"},
+        "rental_economics_refresh":{"refresh_all":"refresh","rebuild_benchmarks":"benchmarks"},
+        "deal_score":{"apply_deal_scores":"score"},
+    }.items():
+        monkeypatch.setitem(sys.modules,"bot.core."+module,SimpleNamespace(**{name:stage(label) for name,label in functions.items()}))
+    async def set_setting(key,value): calls.append(key)
+    namespace={"app_settings":SimpleNamespace(get_bool=lambda *a:True,get=lambda *a:"",set=set_setting),
+               "log":SimpleNamespace(info=Mock(),warning=Mock()),"datetime":datetime,"timezone":timezone,
+               "sync_apartments_to_sheets_pg":stage("sheets")}
+    function=ast.AsyncFunctionDef(name="post_process",args=ast.arguments(posonlyargs=[],args=[],kwonlyargs=[],kw_defaults=[],defaults=[]),
+                                  body=[copy.deepcopy(tail)],decorator_list=[])
+    tree=ast.fix_missing_locations(ast.Module(body=[function],type_ignores=[]))
+    exec(compile(tree,str(source),"exec"),namespace)
+    await namespace["post_process"]()
+    expected=["finish","dedup","refresh"]+([] if failed=="refresh" else ["benchmarks"])+["score"]
+    if failed!="score": expected.append("DEAL_SCORE_LAST_RUN_AT")
+    expected.append("sheets")
+    if failed!="sheets": expected.append("SHEETS_APARTMENTS_SYNCED_AT")
+    assert calls==expected
+    names=[call.func.id for call in ast.walk(cycle) if isinstance(call,ast.Call) and isinstance(call.func,ast.Name)]
+    assert names.count("refresh_all")==names.count("apply_deal_scores")==1
