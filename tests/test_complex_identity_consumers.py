@@ -97,8 +97,8 @@ async def test_rental_graphs_follow_aliases_umbrella_and_room_filters(client, id
     reviewed = p + "rental-reviewed"
     await _alias(identity["child"], reviewed)
     for index, name in enumerate([p + "child", reviewed, p + "root"]):
-        await execute("INSERT INTO rental_listings(id,complex_name,rooms,price,area,found_at,last_seen) "
-                      "VALUES($1,$2,2,200000,50,now()-interval '10 days',now()-interval '4 days')",
+        await execute("INSERT INTO rental_listings(id,complex_name,rooms,price,area,found_at,last_seen,rent_period) "
+                      "VALUES($1,$2,2,200000,50,now()-interval '10 days',now()-interval '4 days','monthly')",
                       p + str(index), name)
     for key, expected in [("root", 3), ("child", 2), ("alias", 2)]:
         path = f"/admin/api/complex/{identity[key]}/{endpoint}"
