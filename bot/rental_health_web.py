@@ -13,11 +13,19 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from bot.core.admin_sessions import is_admin
 from bot.core.rental_service_metrics import COUNTERS
+from bot.core.rental_period import catalog_cursor_key
 from bot.db.pg import fetch
 
 log = logging.getLogger(__name__)
 HEADERS = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow"}
 TYPES = {"apartment": "Квартиры", "parking": "Парковки и гаражи", "commercial": "Коммерция"}
+CATALOGS = (
+    ("apartment", "monthly", "Квартиры · помесячно", "/arenda/kvartiry/astana/"),
+    ("apartment", "daily", "Квартиры · посуточно", "/arenda/kvartiry-posutochno/astana/"),
+    ("parking", "unknown", TYPES["parking"], "/arenda/garazhi/astana/"),
+    ("commercial", "unknown", TYPES["commercial"], "/arenda/kommercheskaya-nedvizhimost/astana/"),
+)
+PERIOD_LABELS = {"monthly": "Помесячная", "daily": "Посуточная", "unknown": "Срок не подтверждён", "conflict": "Противоречивый срок"}
 SUFFIXES = (
     "STARTED_AT", "COMPLETED_AT", "COMPLETED_VERIFIED", "DURATION_SEC", "LAST_PAGES", "UNIQUE_SEEN", "TOTAL",
     "LAST_STATUS", "LAST_SUCCESS_AT", "ABORTED_AT", "ABORT_REASON",
@@ -28,7 +36,7 @@ STAT_FIELDS = (
     "total_rows", "active_rows", "clean_active_rows", "fresh_72h", "fresh_1h", "stale_active",
     "new_24h", "updated_24h", "confirmed_archives_24h", "status_mismatches",
     "with_complex_source_link", "with_address", "with_area", "with_rooms", "with_floor",
-    "with_coordinates", "with_photos", "with_gallery",
+    "with_coordinates", "with_photos", "with_gallery", "catalog_fresh_72h", "catalog_fresh_1h",
 )
 
 _CLEAN = ("COALESCE(is_duplicate, FALSE) = FALSE AND COALESCE(dup_needs_review, FALSE) = FALSE "
@@ -36,7 +44,17 @@ _CLEAN = ("COALESCE(is_duplicate, FALSE) = FALSE AND COALESCE(dup_needs_review, 
 _LIVE = f"is_active IS TRUE AND archived_at IS NULL AND {_CLEAN}"
 _FRESH = f"{_LIVE} AND last_seen BETWEEN now() - interval '72 hours' AND now()"
 AGGREGATE_SQL = f"""
-    SELECT prop_type, count(*) AS total_rows,
+    WITH scoped AS (
+        SELECT prop_type, is_active, archived_at, is_duplicate, dup_needs_review,
+            duplicate_of, last_seen, found_at, archive_reason, complex_name, complex_url,
+            address, area, rooms, floor, lat, lon, photo_url, photos, rental_episode_last_seen_at, CASE
+            WHEN prop_type = 'apartment' AND COALESCE(rent_period_conflict, FALSE) THEN 'conflict'
+            WHEN prop_type = 'apartment' AND rent_period IN ('monthly', 'daily') THEN rent_period
+            ELSE 'unknown' END AS scope_period
+        FROM rental_listings
+        WHERE city = 'astana' AND prop_type = ANY($1::text[])
+    )
+    SELECT prop_type, scope_period AS rent_period, count(*) AS total_rows,
         count(*) FILTER (WHERE is_active IS TRUE AND archived_at IS NULL) AS active_rows,
         count(*) FILTER (WHERE {_LIVE}) AS clean_active_rows,
         count(*) FILTER (WHERE {_FRESH}) AS fresh_72h,
@@ -62,10 +80,15 @@ AGGREGATE_SQL = f"""
                          OR (jsonb_typeof(photos) = 'array' AND photos <> '[]'::jsonb))) AS with_photos,
         count(*) FILTER (WHERE {_FRESH} AND jsonb_typeof(photos) = 'array'
                          AND photos <> '[]'::jsonb) AS with_gallery,
+        count(*) FILTER (WHERE {_LIVE} AND scope_period IN ('monthly', 'daily')
+                         AND rental_episode_last_seen_at BETWEEN now() - interval '72 hours' AND now()) AS catalog_fresh_72h,
+        count(*) FILTER (WHERE {_LIVE} AND scope_period IN ('monthly', 'daily')
+                         AND rental_episode_last_seen_at BETWEEN now() - interval '1 hour' AND now()) AS catalog_fresh_1h,
+        max(rental_episode_last_seen_at) FILTER (WHERE {_LIVE} AND scope_period IN ('monthly', 'daily')
+                         AND rental_episode_last_seen_at <= now()) AS last_catalog_observed_at,
         max(last_seen) FILTER (WHERE {_LIVE} AND last_seen <= now()) AS last_observed_at
-    FROM rental_listings
-    WHERE city = 'astana' AND prop_type = ANY($1::text[])
-    GROUP BY prop_type
+    FROM scoped
+    GROUP BY prop_type, scope_period
 """
 
 
@@ -125,31 +148,47 @@ def _safe_cycle(value) -> dict | None:
     statuses = ("ok", "error", "timeout", "budget_exhausted")
     output = {"at": _iso(raw.get("at")),
               "type": raw.get("type") if isinstance(raw.get("type"), str) and raw.get("type") in TYPES else None,
-              "list_status": raw.get("list_status") if raw.get("list_status") in ("ok", "error", "blocked") else None,
+              "list_status": raw.get("list_status") if isinstance(raw.get("list_status"), str) and raw.get("list_status") in ("ok", "error", "blocked") else None,
               "geo_complex_guess_enabled": raw.get("geo_complex_guess_enabled") is True,
               "stages": {}}
+    catalog = next((item for item in CATALOGS
+                    if item[0] == output["type"]
+                    and raw.get("scope") == catalog_cursor_key(item[0], item[3]).removeprefix("RENTAL_CRAWL_V1_").lower()
+                    and raw.get("rent_period") == item[1]), None)
+    output["scope_label"] = catalog[2] if catalog else None
+    output["rent_period"] = catalog[1] if catalog else None
     for key in ("cycle", "page", "saved", "head_pages", "durable_pages", "page_interval_samples"):
         output[key] = _number(raw.get(key), integer=True)
     for key in ("list_seconds", "maintenance_seconds", "work_seconds", "sleep_seconds",
                 "page_interval_seconds", "estimated_circle_hours"):
         output[key] = _number(raw.get(key))
+    index = raw.get("index")
+    if isinstance(index, dict):
+        reasons = ("startup", "apartment_pages", "saved_observations_age", "full_pass")
+        output["index"] = {"due_reason": index.get("due_reason")
+                           if isinstance(index.get("due_reason"), str) and index.get("due_reason") in reasons else None}
+        for key in ("pending_observations", "apartment_pages_since_refresh", "failures"):
+            output["index"][key] = _number(index.get(key), integer=True)
+        for key in ("refresh_interval_seconds", "dirty_age_seconds", "last_success_age_seconds", "retry_after_seconds"):
+            output["index"][key] = _number(index.get(key))
     if isinstance(stages, dict):
         for key in allowed_stages:
             stage = stages.get(key)
             if isinstance(stage, dict):
                 output["stages"][key] = {"seconds": _number(stage.get("seconds")),
-                    "status": stage.get("status") if stage.get("status") in statuses else "unknown"}
+                    "status": stage.get("status") if isinstance(stage.get("status"), str) and stage.get("status") in statuses else "unknown"}
     return output
 
 
 def project_rental_health(rows, settings: dict, *, now: datetime | None = None) -> dict:
     """Projection is deliberately independent of raw cursor IDs/settings."""
     now = now or datetime.now(timezone.utc)
-    by_type = {row["prop_type"]: row for row in rows if row.get("prop_type") in TYPES}
+    by_period = {(row["prop_type"], row.get("rent_period")): row for row in rows
+                 if row.get("prop_type") in TYPES and row.get("rent_period") in PERIOD_LABELS}
     types = []
-    for prop_type, label in TYPES.items():
-        row = by_type.get(prop_type, {})
-        prefix = f"RENTAL_CRAWL_V1_{prop_type.upper()}"
+    for prop_type, period, label, path in CATALOGS:
+        row = by_period.get((prop_type, period), {})
+        prefix = catalog_cursor_key(prop_type, path)
         cursor = _safe_cursor(settings.get(prefix))
         cursor["expected_last_page"] = cursor["expected_last_page"] or _number(
             settings.get(prefix + "_EXPECTED_LAST_PAGE"), integer=True, maximum=100_000)
@@ -170,8 +209,9 @@ def project_rental_health(rows, settings: dict, *, now: datetime | None = None) 
         recent = bool(success and timedelta(0) <= now - success <= timedelta(minutes=30))
         status = "collecting" if recent else ("stale" if success or observed else "unknown")
         raw_status = settings.get(prefix + "_LAST_STATUS")
-        item = {"type": prop_type, "label": label, "status": status,
+        item = {"type": prop_type, "rent_period": period, "scope": prefix.removeprefix("RENTAL_CRAWL_V1_").lower(), "label": label, "status": status,
                 "last_success_at": _iso(success), "last_observed_at": _iso(observed),
+                "last_catalog_observed_at": _iso(row.get("last_catalog_observed_at")),
                 "cursor": cursor,
                 "last_round_status": raw_status if raw_status in (
                     "complete", "collecting", "incomplete_legacy_tail") else "unknown",
@@ -187,6 +227,12 @@ def project_rental_health(rows, settings: dict, *, now: datetime | None = None) 
                 "incomplete_completed_at": _iso(settings.get(prefix + "_INCOMPLETE_COMPLETED_AT"))}
         item.update({key: _number(row.get(key, 0), integer=True) or 0 for key in STAT_FIELDS})
         types.append(item)
+    periods = []
+    for period, label in PERIOD_LABELS.items():
+        row = by_period.get(("apartment", period), {})
+        periods.append({"rent_period": period, "label": label, **{
+            key: _number(row.get(key, 0), integer=True) or 0
+            for key in ("clean_active_rows", "fresh_72h", "catalog_fresh_72h")}})
     day = now.astimezone(timezone(timedelta(hours=5))).date()
     daily = []
     for offset in range(3):
@@ -198,15 +244,15 @@ def project_rental_health(rows, settings: dict, *, now: datetime | None = None) 
                       "http_468_share_pct": round(counter["http_468"] / requests * 100, 2) if requests else None})
     revision = settings.get("RENTAL_SERVICE_REVISION", "")
     return {"at": now.isoformat(), "market_coverage": "unknown",
-            "scope": "Астана · квартиры из месячной категории Krisha, парковки/гаражи, коммерция",
+            "scope": "Астана · помесячная и посуточная аренда квартир, парковки/гаражи, коммерция",
             "notes": [
                 "Полнота рынка пока не подтверждена: даже полный обход динамической выдачи может пропустить объявления.",
-                "Квартиры берём из категории месячной аренды. Дома, комнаты и отдельный каталог посуточной аренды не входят в этот охват; срок каждой квартиры требует проверки.",
+                "Помесячный и посуточный каталоги квартир обходятся отдельно, со своими курсорами и временем круга. Дома и комнаты в этот охват не входят. Объявления с неизвестным или противоречивым сроком не входят в арендные индексы.",
                 "Архив означает подтверждённое снятие объявления, а не подтверждённую сдачу квартиры.",
-                "Свежий чистый пул: активные объявления без дублей/спорных дублей, замеченные в списке за 72 часа. Ссылка на ЖК — сохранённый сигнал источника; она сама по себе не доказывает точную привязку к корпусу. Привязку по близости на карте не считаем подтверждением.",
+                "Свежий чистый пул: активные объявления без дублей/спорных дублей, строка которых обновлялась за 72 часа; обновление деталей тоже меняет эту отметку. Для квартир отдельно считаем подтверждения каталога по rental_episode_last_seen_at, а не по last_seen. Ссылка на ЖК — сохранённый сигнал источника; она сама по себе не доказывает точную привязку к корпусу. Привязку по близости на карте не считаем подтверждением.",
                 "Наличие фото включает обложку из списка. Сохранённая галерея и параметры из деталей показываются отдельно; содержимое фотографий автоматически здесь не проверяется.",
                 "Счётчики сервиса считают наблюдения при сборе; обновления одной квартиры могут повторяться. Статистика БД за 24 часа считает строки, а не запросы.",
-            ], "types": types, "daily": daily,
+            ], "types": types, "apartment_periods": periods, "daily": daily,
             "latest_cycle": _safe_cycle(settings.get("RENTAL_SERVICE_CYCLE_LAST")),
             "service_revision": revision if isinstance(revision, str) and re.fullmatch(r"[a-f0-9]{7,40}", revision) else "unknown",
             "service_started_at": _iso(settings.get("RENTAL_SERVICE_STARTED_AT"))}
@@ -215,8 +261,8 @@ def project_rental_health(rows, settings: dict, *, now: datetime | None = None) 
 async def load_rental_health(*, now: datetime | None = None) -> dict:
     now = now or datetime.now(timezone.utc)
     keys = ["RENTAL_SERVICE_REVISION", "RENTAL_SERVICE_STARTED_AT", "RENTAL_SERVICE_CYCLE_LAST"]
-    for prop_type in TYPES:
-        prefix = f"RENTAL_CRAWL_V1_{prop_type.upper()}"
+    for prop_type, _period, _label, path in CATALOGS:
+        prefix = catalog_cursor_key(prop_type, path)
         keys.extend([prefix, *(prefix + "_" + suffix for suffix in SUFFIXES)])
     day = now.astimezone(timezone(timedelta(hours=5))).date()
     keys.extend("RENTAL_METRICS_V1_" + (day - timedelta(days=offset)).isoformat() for offset in range(3))

@@ -7,7 +7,7 @@
 .rh-top h1 {font-size:clamp(24px,4vw,34px);line-height:1.2;margin:10px 0;}
 .rh-muted {color:var(--muted);font-size:13px;overflow-wrap:anywhere;}
 .rh-button {display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border:1px solid var(--border);border-radius:10px;text-decoration:none;color:var(--text);background:var(--surface);}
-.rh-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;}
+.rh-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
 .rh-card,.rh-section {background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;min-width:0;}
 .rh-card h2,.rh-section h2 {font-size:18px;margin:0 0 12px;}
 .rh-card .rh-big {font-size:32px;font-weight:750;line-height:1.2;margin:12px 0 2px;}
@@ -39,18 +39,35 @@
     <a href="/admin/rental-health" class="rh-button">Обновить данные</a>
   </div>
   <p class="rh-note"><strong>Полнота рынка пока не подтверждена.</strong> Здесь видно, что именно собрали и насколько свежие данные. Число активных строк в нашей базе не равно числу объявлений на рынке.</p>
+  <section class="rh-section" style="margin-bottom:20px;">
+    <h2>Проверка срока аренды квартир</h2>
+    <p class="rh-muted">Активные объявления без дублей и спорных дублей. Неизвестный и противоречивый срок не участвует в индексах и расчётах дохода.</p>
+    <div class="rh-scroll"><table class="rh-table">
+      <thead><tr><th>Срок</th><th>Активных</th><th>Строка обновлена за 72 ч</th><th>Подтверждены каталогом за 72 ч</th></tr></thead>
+      <tbody>{% for period in health.apartment_periods %}<tr data-rental-period="{{ period.rent_period }}">
+        <td>{{ period.label }}</td><td>{{ period.clean_active_rows|fmt_num }}</td><td>{{ period.fresh_72h|fmt_num }}</td>
+        <td>{% if period.rent_period in ('monthly', 'daily') %}{{ period.catalog_fresh_72h|fmt_num }}{% else %}—{% endif %}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+  </section>
   <div class="rh-grid">
     {% for item in health.types %}
-    <article class="rh-card" data-rental-type="{{ item.type }}">
+    <article class="rh-card" data-rental-type="{{ item.type }}" data-rental-scope="{{ item.scope }}">
       <h2>{{ item.label }}</h2>
       <span class="rh-badge {{ item.status }}">{% if item.status == 'collecting' %}Списки недавно обновлялись{% elif item.status == 'stale' %}Нет свежего подтверждения сбора{% else %}Нет данных о сборе{% endif %}</span>
+      {% if item.type == 'apartment' %}
+      <p class="rh-big">{{ item.catalog_fresh_72h|fmt_num }}</p>
+      <p class="rh-muted">активных объявлений без дублей, подтверждены каталогом за 72 часа</p>
+      {% else %}
       <p class="rh-big">{{ item.fresh_72h|fmt_num }}</p>
-      <p class="rh-muted">свежих активных объявлений без дублей за 72 часа</p>
+      <p class="rh-muted">активных объявлений без дублей, строка обновлена за 72 часа</p>
+      {% endif %}
       <dl>
         <dt>Активных в базе</dt><dd>{{ item.active_rows|fmt_num }}</dd>
         <dt>Активных без дублей/спорных дублей</dt><dd>{{ item.clean_active_rows|fmt_num }}</dd>
-        <dt>Активных без свежей проверки списка</dt><dd>{{ item.stale_active|fmt_num }}</dd>
-        <dt>Замечены за последний час</dt><dd>{{ item.fresh_1h|fmt_num }}</dd>
+        <dt>Активных без обновлений строки за 72 часа</dt><dd>{{ item.stale_active|fmt_num }}</dd>
+        <dt>Строка обновлена за последний час</dt><dd>{{ item.fresh_1h|fmt_num }}</dd>
+        {% if item.type == 'apartment' %}<dt>Подтверждены каталогом за последний час</dt><dd>{{ item.catalog_fresh_1h|fmt_num }}</dd>{% endif %}
         <dt>Новые строки за сутки</dt><dd>{{ item.new_24h|fmt_num }}</dd>
         <dt>Ранее известные, обновлённые за сутки</dt><dd>{{ item.updated_24h|fmt_num }}</dd>
         <dt>Подтверждённые снятия за сутки</dt><dd>{{ item.confirmed_archives_24h|fmt_num }}</dd>
@@ -74,7 +91,8 @@
         <p class="rh-muted">Последняя успешная страница: {{ item.last_success_at or 'нет отметки' }}</p>
       </div>
       <div class="rh-sub">
-        <h3 style="font-size:14px;">Заполнение свежего пула</h3>
+        <h3 style="font-size:14px;">Заполнение обновлённых строк</h3>
+        <p class="rh-muted">Среди активных без дублей с обновлением строки за 72 часа. Это заполнение полей, а не доказательство актуальности в каталоге.</p>
         <dl>
           <dt>Адрес указан</dt><dd>{{ item.with_address|fmt_num }} / {{ item.fresh_72h|fmt_num }}</dd>
           <dt>Площадь указана</dt><dd>{{ item.with_area|fmt_num }} / {{ item.fresh_72h|fmt_num }}</dd>
@@ -108,9 +126,18 @@
   <section class="rh-section">
     <h2>Последний цикл</h2>
     {% if health.latest_cycle %}{% set cycle = health.latest_cycle %}
-    <p class="rh-muted">{{ cycle.at or 'Дата неизвестна' }} · {{ cycle.type or 'Тип неизвестен' }} · список: {{ cycle.list_status or 'неизвестно' }}</p>
+    <p class="rh-muted">{{ cycle.at or 'Дата неизвестна' }} · {{ cycle.scope_label or cycle.type or 'Каталог неизвестен' }} · список: {{ cycle.list_status or 'неизвестно' }}</p>
     <p>Список: <strong>{{ cycle.list_seconds if cycle.list_seconds is not none else '—' }} с</strong> · обогащение: <strong>{{ cycle.maintenance_seconds if cycle.maintenance_seconds is not none else '—' }} с</strong> · пауза: {{ cycle.sleep_seconds if cycle.sleep_seconds is not none else '—' }} с</p>
     <p class="rh-muted">Привязка к ЖК только по близости на карте: {% if cycle.geo_complex_guess_enabled %}включена — результат требует проверки{% else %}отключена{% endif %}.</p>
+    {% if cycle.index %}
+    <div class="rh-sub">
+      <h3 style="font-size:14px;">Свежесть арендного индекса</h3>
+      {% if cycle.index.pending_observations is not none %}<p>Новых наблюдений после предыдущего обновления индекса: <strong>{{ cycle.index.pending_observations|fmt_num }}</strong>{% if cycle.index.dirty_age_seconds is not none %} · ожидают {{ cycle.index.dirty_age_seconds }} с{% endif %}.</p>{% endif %}
+      {% if cycle.index.last_success_age_seconds is not none %}<p class="rh-muted">Последнее успешное обновление индекса — {{ cycle.index.last_success_age_seconds }} с назад.</p>{% endif %}
+      {% if cycle.index.due_reason %}<p class="rh-muted">Причина запуска: {{ {'startup':'старт сервиса','apartment_pages':'новые страницы квартир','saved_observations_age':'накопились свежие наблюдения','full_pass':'завершён круг каталога'}.get(cycle.index.due_reason) }}.</p>{% endif %}
+      {% if cycle.index.failures %}<p class="rh-note">Неудачных обновлений подряд: {{ cycle.index.failures }}{% if cycle.index.retry_after_seconds %}; повтор не раньше чем через {{ cycle.index.retry_after_seconds }} с{% endif %}.</p>{% endif %}
+    </div>
+    {% endif %}
     <div class="rh-scroll"><table class="rh-table"><thead><tr><th>Этап</th><th>Время, с</th><th>Результат</th></tr></thead><tbody>
       {% for name, stage in cycle.stages.items() %}<tr><td>{{ {'index':'Индекс аренды','sheets':'Google Sheets','dedup':'Дубли','address_bind':'Привязка по адресу','geo_bind':'Геопривязка','backfill':'Детали объявлений','archive':'Проверка снятий'}.get(name, name) }}</td><td>{{ stage.seconds if stage.seconds is not none else '—' }}</td><td>{{ {'ok':'Выполнен','timeout':'Превышен бюджет','error':'Ошибка','budget_exhausted':'Нет оставшегося бюджета'}.get(stage.status, 'Неизвестно') }}</td></tr>{% endfor %}
     </tbody></table></div>
