@@ -17,10 +17,10 @@
 .ha-story-card h2 a { color: var(--heading); text-decoration: none; }
 .ha-story-card h2 a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 4px; }
 .ha-story-summary { color: var(--muted); font-size: 14px; line-height: 1.7; margin: 0 0 20px; }
-.ha-story-preview { margin-top: auto; }
+.ha-story-preview { margin: 0 0 22px; }
 .ha-story-points { font-size: 14px; padding-left: 18px; line-height: 1.65; }
 .ha-story-points li { margin-bottom: 8px; }
-.ha-story-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 22px; padding-top: 17px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.ha-story-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: auto; padding-top: 17px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
 .ha-story-bottom a { color: var(--accent); font-size: 14px; font-weight: 700; text-decoration: none; display: inline-flex; align-items: center; gap: 13px; min-height: 32px; }
 .ha-story-bottom a:hover { text-decoration: underline; }
 .ha-pagination { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 24px; margin: 30px 0; font-size: 14px; }
