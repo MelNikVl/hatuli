@@ -43,3 +43,5 @@ research/phase_c/data/
 /var/server-browser-probe-*
 /var/browser-smoke-*.py
 /var/gui-smoke-*.py
+# Private rental pilot inquiries and SQLite sidecars.
+/var/rental-inquiries.sqlite3*

@@ -31,7 +31,7 @@
   <main id="main-content" class="hp-shell">{% block content %}{% endblock %}</main>
   <footer class="hp-footer">
     <div class="hp-shell hp-footer-row">
-      <p>Hatuli · Астана. Цены в объявлениях — предложения продавцов, не цены сделок. Разбор помогает подготовить вопросы перед покупкой.</p>
+      <p>{% block footer_note %}Hatuli · Астана. Цены в объявлениях — предложения продавцов, не цены сделок. Разбор помогает подготовить вопросы перед покупкой.{% endblock %}</p>
       <div class="hp-footer-links"><a href="/guides/check-apartment-before-deposit">Чеклист перед задатком</a>{% if is_admin(request) %}<a href="/admin/analysis-requests">Заявки на разбор</a>{% else %}<a href="/request-analysis">Запросить свой разбор</a>{% endif %}</div>
     </div>
   </footer>

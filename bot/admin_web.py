@@ -137,6 +137,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             ("https://hatuli.ai-groundtruth.com/example", "monthly", "0.9"),
             ("https://hatuli.ai-groundtruth.com/best-apartments", "daily", "0.9"),
             ("https://hatuli.ai-groundtruth.com/compare", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/rent", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/improve-listing", "monthly", "0.7"),
             ("https://hatuli.ai-groundtruth.com/map", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/how-it-works", "monthly", "0.7"),
@@ -2272,6 +2273,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.include_router(make_analysis_requests_router(templates))
     from bot.web.seller_review import make_seller_review_router
     app.include_router(make_seller_review_router(templates))
+    from bot.web.rental_tools import make_rental_tools_router
+    app.include_router(make_rental_tools_router(templates))
     from bot.rental_health_web import register_rental_health_routes
     register_rental_health_routes(app, templates)
     from bot.rental_detail_web import register_rental_detail_routes
