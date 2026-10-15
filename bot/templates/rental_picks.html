@@ -4,28 +4,22 @@
 {% block description %}Помесячная аренда в Астане до 500 тысяч ₸ с ценой за м² минимум на 5% ниже похожих квартир. Четыре подтверждённые причины выбора, адреса, фотографии и изменения цены.{% endblock %}
 {% block footer_note %}Hatuli · Астана. Указаны цены предложений помесячной аренды. Снятие объявления с публикации не подтверждает заключение договора.{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="/static/hatuli-picks.css?v=20261016.2">
+<link rel="stylesheet" href="/static/hatuli-picks.css?v=20261016.3">
 <link rel="stylesheet" href="/static/hatuli-price-history.css?v=20261013">
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261013">
 <script src="/static/hatuli-picks.js?v=20261014" defer></script>
 {% endblock %}
 {% block content %}
 <div class="picks-page">
-  {% with picks_kind='rental' %}{% include '_picks_kind_switch.html' %}{% endwith %}
   <section class="picks-hero" aria-labelledby="picks-title">
-    <div class="picks-hero-copy">
-      <p class="picks-eyebrow">Астана · помесячная аренда</p>
+    <div class="picks-heading-row">
       <h1 id="picks-title">Лучшие квартиры для аренды</h1>
-      <p class="picks-lead">До 500 тысяч ₸ в месяц. Цена за м² минимум на 5% ниже похожих предложений — и ещё три подтверждённых фактора выбора.</p>
-      <a class="picks-method-link" href="#picks-method">Как выбираем квартиры <span aria-hidden="true">↗</span></a>
+      {% with picks_kind='rental' %}{% include '_picks_kind_switch.html' %}{% endwith %}
     </div>
-    {% if snapshot and snapshot['items'] %}
-    <aside class="picks-edition" aria-label="Сведения о подборке">
-      <p class="picks-edition-top">Проверенная подборка</p>
-      <p class="picks-edition-count">{{ snapshot['items']|length }} <span>в подборке</span></p>
-      <p class="picks-edition-date">{{ snapshot.date_label }}</p>
-    </aside>
-    {% endif %}
+    <div class="picks-hero-meta">
+      <p class="picks-lead">До 500 тысяч ₸ в месяц. Цена за м² минимум на 5% ниже похожих предложений — и ещё три подтверждённых фактора выбора.</p>
+      {% if snapshot and snapshot['items'] %}<p class="picks-edition-date">Подборка от {{ snapshot.date_label }}</p>{% endif %}
+    </div>
   </section>
 
   {% if not snapshot or not snapshot['items'] %}
@@ -34,14 +28,17 @@
 
   {% if snapshot and snapshot['items'] and snapshot.is_stale %}
   <aside class="picks-status picks-status-stale" role="status"><strong>Последний выпуск — {{ snapshot.date_label }}.</strong>{% if snapshot.status_message %}<span>{{ snapshot.status_message }}</span>{% endif %}</aside>
-  {% elif snapshot and snapshot['items'] and snapshot.status_message %}
+  {% elif snapshot and snapshot['items'] and snapshot.status_message and snapshot.status_message != 'В каждой карточке указано время проверки исходного объявления.' %}
   <p class="picks-status" role="status">{{ snapshot.status_message }}</p>
   {% endif %}
 
   {% if snapshot and snapshot['items'] %}
   <section id="apartments" class="picks-selection" aria-labelledby="picks-selection-title">
-    <div class="picks-section-heading"><div><h2 id="picks-selection-title">Квартиры в подборке</h2><p class="picks-section-note">Цены, адреса и четыре причины выбора</p></div><p class="picks-result-count" role="status" aria-live="polite" data-picks-count>{{ snapshot['items']|length }} из {{ snapshot['items']|length }} вариантов</p></div>
-    <div class="picks-filters" role="group" aria-label="Количество комнат" hidden data-picks-filters><button type="button" class="picks-filter" aria-pressed="true" data-picks-filter="all">Все квартиры</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="1">1-комнатные</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="2">2-комнатные</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="3">3-комнатные</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="4">4 комнаты и больше</button></div>
+    <h2 id="picks-selection-title" class="picks-sr-only">Квартиры в подборке</h2>
+    <div class="picks-toolbar">
+      <div class="picks-filters" role="group" aria-label="Количество комнат" hidden data-picks-filters><button type="button" class="picks-filter" aria-pressed="true" data-picks-filter="all">Все квартиры</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="1">1-комнатные</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="2">2-комнатные</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="3">3-комнатные</button><button type="button" class="picks-filter" aria-pressed="false" data-picks-filter="4">4 комнаты и больше</button></div>
+      <p class="picks-result-count" role="status" aria-live="polite" data-picks-count>{{ snapshot['items']|length }} из {{ snapshot['items']|length }} вариантов</p>
+    </div>
     <div class="picks-grid">
       {% for item in snapshot['items'] %}
       <article class="picks-card" data-picks-card data-rooms="{{ item.rooms }}">
