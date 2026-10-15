@@ -1060,20 +1060,8 @@ async def run_cycle():
     except Exception as e:
         log.warning("system stats snapshot failed: %s", e)
 
-    # Google Sheets sync
+    # Finish/dedup -> current rental inputs -> Deal Score -> Google Sheets.
     try:
-        # === Гексагональный анализ цены (микролокальный Deal Index) ===
-        try:
-            from bot.core.deal_score import apply_deal_scores
-            await apply_deal_scores()
-            # Топ-10 по скору пересчитывается каждый цикл парсера квартир
-            # (см. app_settings.PARSE_INTERVAL_*/random.uniform(50,80) мин) —
-            # штамп нужен только чтобы показать "когда в последний раз" в аналитике.
-            await app_settings.set("DEAL_SCORE_LAST_RUN_AT",
-                                    datetime.now(timezone.utc).isoformat())
-        except Exception as e:
-            log.warning("hex price failed: %s", e)
-
         # === Отделка (черновая/с отделкой/с мебелью) — бесплатная эвристика
         # по тексту, см. bot/core/finish_classify.py ===
         if app_settings.get_bool("AI_FINISH_CLASSIFY", True):
@@ -1091,6 +1079,26 @@ async def run_cycle():
                 log.info("Deduplicated %d apartment listings", dup_count)
         except Exception as e:
             log.warning("Apartment deduplication failed: %s", e)
+
+        try:
+            from bot.core.rental_economics_refresh import refresh_all, rebuild_benchmarks
+            snapshot_result = await refresh_all()
+            log.info("Rental scenario snapshots: %s", snapshot_result)
+            await rebuild_benchmarks()
+        except Exception as exc:
+            log.warning("Rental scenario refresh unavailable (%s)", type(exc).__name__)
+
+        # === Гексагональный анализ цены (микролокальный Deal Index) ===
+        try:
+            from bot.core.deal_score import apply_deal_scores
+            await apply_deal_scores()
+            # Топ-10 по скору пересчитывается каждый цикл парсера квартир
+            # (см. app_settings.PARSE_INTERVAL_*/random.uniform(50,80) мин) —
+            # штамп нужен только чтобы показать "когда в последний раз" в аналитике.
+            await app_settings.set("DEAL_SCORE_LAST_RUN_AT",
+                                    datetime.now(timezone.utc).isoformat())
+        except Exception as e:
+            log.warning("hex price failed: %s", e)
 
         # Раньше синкали КАЖДЫЙ цикл парсера (~50-80 мин, т.е. десятки раз в
         # сутки) — Sheets не нужен настолько часто, а лишняя нагрузка на API
@@ -1119,13 +1127,6 @@ async def run_cycle():
     except Exception as e:
         log.warning("Sheets sync failed: %s", e)
 
-    try:
-        from bot.core.rental_economics_refresh import refresh_all, rebuild_benchmarks
-        snapshot_result = await refresh_all()
-        log.info("Rental scenario snapshots: %s", snapshot_result)
-        await rebuild_benchmarks()
-    except Exception as exc:
-        log.warning("Rental scenario refresh unavailable (%s)", type(exc).__name__)
     log.info("=== Apartment cycle done ===\n")
 
 
