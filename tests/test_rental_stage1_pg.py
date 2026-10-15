@@ -240,3 +240,26 @@ async def test_real_midnight_backlog_reserves_delivery_cap_and_defers_remainder(
     await database.execute("UPDATE user_listing_notifications SET attempted_at=attempted_at-interval '1 day' WHERE user_id=$1",user_id)
     assert (await alerts.dispatch_pending(bot,limit=20))["sent"]==5
     assert bot.send_message.await_count==10
+
+
+@pytest.mark.asyncio
+async def test_real_source_address_and_district_reach_safe_rental_comps(database):
+    from bot.core.comparison_rental_estimate import SINGLE_OFFER_RENTAL_SQL
+    from bot.core.rental_economics import rental_comps_for_listing
+    token=uuid4().hex
+    name="Тестовый ЖК аренды "+token
+    url="https://krisha.kz/complex/show/astana/stage1-"+token
+    cid=await database.fetchval("INSERT INTO complexes(name,krisha_url,district) VALUES($1,$2,'Есиль') RETURNING id",name,url)
+    identifier="9"+str(uuid4().int)[:14]
+    address="Анет баба 4, кв. 25 — Телефон +77001234567"
+    await database.execute("""INSERT INTO rental_listings(id,price,area,rooms,city,prop_type,complex_name,complex_id,complex_url,
+        address,district,rent_period,last_seen,is_active)
+        VALUES($1,300000,60,2,'astana','apartment',$2,$3,$4,$5,'Есильский','monthly',now()-interval '1 hour',TRUE)""",
+        identifier,name,cid,url,address)
+    rows=await database.fetch(SINGLE_OFFER_RENTAL_SQL,await database.fetchval("SELECT now()"),cid,2,60.0)
+    row=next(row for row in rows if row["id"]==identifier)
+    assert row["address"]==address and row["district"]=="Есильский"
+    comps=await rental_comps_for_listing({"complex_id":cid,"complex_resolution":"url","rooms":2,"area":60})
+    comp=next(comp for comp in comps if comp["id"]==identifier)
+    assert comp["address"]=="Анет баба 4" and comp["district"]=="Есиль"
+    assert "77001234567" not in str(comps) and "кв." not in str(comps)

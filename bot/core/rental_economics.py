@@ -269,8 +269,7 @@ async def rental_comps_for_listing(listing):
     if not listing.get("complex_id") or listing.get("complex_resolution") in ("geo", "unbound"):
         return []
     now = datetime.now(timezone.utc)
-    sql=SINGLE_OFFER_RENTAL_SQL.replace("SELECT r.id,r.price,r.area", "SELECT r.id,r.address,r.price,r.area",1)
-    rows = await fetch(sql, now, listing["complex_id"], listing["rooms"], float(listing["area"]))
+    rows = await fetch(SINGLE_OFFER_RENTAL_SQL, now, listing["complex_id"], listing["rooms"], float(listing["area"]))
     result, seen = [], set()
     for row in rows:
         identifier = str(row.get("id") or "")
@@ -290,6 +289,9 @@ async def rental_comps_for_listing(listing):
         address,_=sanitized_listing_address(row.get("address"),int(row["price"]),now)
         if address:
             result[-1]["address"]=address
+        district=_extract_district(row.get("district") or "")
+        if district:
+            result[-1]["district"]=district
         if len(result) == 5:
             break
     return result

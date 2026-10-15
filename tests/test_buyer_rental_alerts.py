@@ -65,6 +65,24 @@ def test_yield_alert_crossing_and_medium_required():
     assert alerts.evaluate_yield_alert(row, {"net_yield_min":7}) is None
 
 
+@pytest.mark.parametrize("encoded",[False,True])
+def test_raw_sale_row_uses_existing_buyer_deal_readmodel_without_map_bonuses(encoded):
+    row=candidate(score_total=73,hex_details={"deal":73,"confidence":60})
+    row["effective_score"]=98  # Generated map ranking includes extra bonuses.
+    if encoded: row["hex_details"]=json.dumps(row["hex_details"])
+    payload=alerts.evaluate_yield_alert(row,{"net_yield_min":7})
+    assert payload["deal_score"]==73
+    assert "Deal Score: 73/100" in alerts.render_alert("yield",payload)
+    del row["effective_score"]  # No synthetic alias is needed in raw fixtures.
+    assert alerts.evaluate_yield_alert(row,{"net_yield_min":7})["deal_score"]==73
+
+
+@pytest.mark.parametrize("details",[{"deal":73,"confidence":49},None,"not-json"])
+def test_unready_buyer_deal_score_hidden_without_legacy_fallback(details):
+    payload=alerts.evaluate_yield_alert(candidate(score_total=73,hex_details=details),{"net_yield_min":7})
+    assert payload["deal_score"] is None and "Deal Score:" not in alerts.render_alert("yield",payload)
+
+
 class Ledger:
     def __init__(self, cap=5):
         self.cap, self.notices, self.enabled = cap, {}, True

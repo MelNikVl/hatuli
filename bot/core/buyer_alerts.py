@@ -114,6 +114,23 @@ def matches_filters(candidate, params):
                 or params.get("complex_ids") and candidate.get("complex_id") not in params["complex_ids"])
 
 
+def _buyer_deal_score(candidate):
+    """Use the existing Buyer Bot read model, without map-ranking bonuses."""
+    from bot.core.buyer import _deal
+    from bot.core.rental_economics import number
+    details=candidate.get("hex_details")
+    if isinstance(details,str):
+        try:
+            details=json.loads(details)
+        except (ValueError,TypeError):
+            return None
+    if (not isinstance(details,dict) or number(details.get("deal"),0,100) is None
+            or number(details.get("confidence"),0,100) is None
+            or type(details.get("deal")) not in (int,float) or type(details.get("confidence")) not in (int,float)):
+        return None
+    return _deal({"deal_score":details})
+
+
 def evaluate_yield_alert(candidate, params, *, event="new", previous_economics=None):
     from bot.core.rental_economics import cached_rental_economics
     try:
@@ -132,7 +149,7 @@ def evaluate_yield_alert(candidate, params, *, event="new", previous_economics=N
     return {"listing_id": str(candidate["id"]), "price": candidate["price"], "rooms": candidate.get("rooms"),
             "complex_name": candidate.get("complex_name"), "est_rent": economics["est_rent"], "rent_range": economics["rent_range"],
             "net_yield_pct": economics["net_yield_pct"], "confidence": economics["confidence"],
-            "benchmark": economics.get("benchmark"), "deal_score": candidate.get("effective_score"),
+            "benchmark": economics.get("benchmark"), "deal_score": _buyer_deal_score(candidate),
             "asking_prices": True, "scenario": True}
 
 
