@@ -209,6 +209,8 @@ async def test_daily_cards_show_source_address_and_native_graph_for_any_price_ch
     assert "История изменений цены пока не загружена" not in response.text
     assert "Этаж уточняйте у продавца" not in response.text
     assert response.text.count('class="picks-floor"') == 29
+    assert '<p class="picks-floor">4 этаж из 12</p>' in response.text
+    assert "4-й этаж из 12 — между первым и последним" not in response.text
     assert "Цена и срок фактической продажи" not in response.text
     assert "недостаточно подтверждённых сделок" not in response.text
     assert 'data-price-history-chart' in response.text
