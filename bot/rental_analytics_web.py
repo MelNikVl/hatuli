@@ -1,7 +1,7 @@
 """Ready rental aggregates for the analytics tab and public daily index."""
 from __future__ import annotations
 
-from datetime import datetime,timezone
+from datetime import datetime,timedelta,timezone
 
 import asyncpg
 from fastapi import APIRouter,Query,Request
@@ -11,6 +11,7 @@ from bot.core.rental_stage2_index import index_ready,DAILY_POLICY,HEX_MONTHLY_PO
 
 HEADERS={'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow'}
 PUBLIC_HEADERS={'Cache-Control':'no-store','Referrer-Policy':'same-origin'}
+ASTANA_TZ=timezone(timedelta(hours=5))
 
 SEGMENT_SQL="""SELECT i.* FROM rental_index i WHERE i.city='astana' AND i.district IS NOT NULL
   AND i.complex_id IS NULL AND i.complex_name IS NULL AND i.rooms BETWEEN 1 AND 6
@@ -21,7 +22,15 @@ PUBLIC_INDEX_FIELDS=('median_price','p25_price','p75_price','sample_count','acti
 
 
 def _date(value):
-    return value.strftime('%d.%m.%Y %H:%M UTC') if isinstance(value,datetime) else ''
+    return (value.astimezone(ASTANA_TZ).strftime('%d.%m.%Y %H:%M')+' · Астана, UTC+5'
+            if isinstance(value,datetime) and value.utcoffset() is not None else '')
+
+
+def _date_range(oldest,newest):
+    if not all(isinstance(value,datetime) and value.utcoffset() is not None for value in (oldest,newest)):
+        return ''
+    return (oldest.astimezone(ASTANA_TZ).strftime('%d.%m.%Y')+'–'
+            +newest.astimezone(ASTANA_TZ).strftime('%d.%m.%Y')+' · Астана, UTC+5')
 
 
 def segment_table(rows,now,minimum=10):
@@ -36,7 +45,7 @@ def segment_table(rows,now,minimum=10):
         key=(row['district'],row['rooms'])
         row['updated_at_label']=_date(row['updated_at'])
         row['source_newest_label']=_date(row['source_newest_at'])
-        row['source_range_label']=row['source_oldest_at'].strftime('%d.%m')+'–'+row['source_newest_at'].strftime('%d.%m')
+        row['source_range_label']=_date_range(row['source_oldest_at'],row['source_newest_at'])
         grouped.setdefault(key,{'district':key[0],'rooms':key[1]})[period]=row
     result=[]
     for key,item in sorted(grouped.items()):

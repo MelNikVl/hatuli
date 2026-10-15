@@ -23,8 +23,8 @@
           <th scope="row">{{ row.district }}<span>{{ row.rooms }} комн.</span></th>
           {% for period in ['daily','monthly'] %}{% if period == 'daily' or has_monthly %}<td>{% if row[period] is defined %}{% set value = row[period] %}
             <strong>{{ '{:,}'.format(value.median_price).replace(',', ' ') }} <span>₸/{{ 'сут' if period == 'daily' else 'мес' }}</span></strong>
-            <small>P25–P75: {{ '{:,}'.format(value.p25_price).replace(',', ' ') }}–{{ '{:,}'.format(value.p75_price).replace(',', ' ') }} ₸</small>
-            <small>n={{ value.sample_count }} · активно {{ value.active_supply }}</small>
+            <small>Типичный диапазон: {{ '{:,}'.format(value.p25_price).replace(',', ' ') }}–{{ '{:,}'.format(value.p75_price).replace(',', ' ') }} ₸</small>
+            {% set count = value.sample_count %}<small>{{ count }} {{ 'объявлений' if count % 100 in range(11,15) else 'объявление' if count % 10 == 1 else 'объявления' if count % 10 in [2,3,4] else 'объявлений' }} · активно {{ value.active_supply }}</small>
             <small>Окно {{ value.window_days }} дн. · наблюдения {{ value.source_range_label }}</small>
             <small>Источник: {{ value.source_newest_label }}</small>
             <small>Индекс: {{ value.updated_at_label }}</small>
@@ -37,7 +37,7 @@
   </section>
   <details class="rental-daily-method"><summary>Как читать индекс</summary>
     <p>Один исходный ID учитывается один раз. Посуточные наблюдения берём за 30 дней; если выборки не хватает — за 90. У каждого показанного среза есть реальное наблюдение за последние 72 часа и свежее активное предложение. Даты выше показывают фактически сохранённую историю внутри выбранного окна.</p>
-    <p>Месячная цена появляется рядом только при отдельной готовой выборке: активные объявления, проверенные за 72 часа. P25–P75 — середина распределения цен. Число объявлений не измеряет спрос; запрашиваемая ставка не подтверждает договор аренды.</p>
+    <p>Месячная цена появляется рядом только при отдельной готовой выборке: активные объявления, проверенные за 72 часа. Типичный диапазон охватывает средние 50% запрашиваемых ставок: от 25-го до 75-го процентиля. Число объявлений не измеряет спрос; запрашиваемая ставка не подтверждает договор аренды.</p>
     <p>Загрузку и срок заселения по объявлениям измерить нельзя. В калькуляторе загрузку задаёте вы; расходы учитываются по выбранному сценарию.</p>
   </details>
   {% endif %}
