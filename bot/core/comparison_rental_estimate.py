@@ -15,6 +15,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from statistics import median
 from typing import Any
+from bot.core.complex_membership import rental_identity_ctes_sql
 
 MAX_RENTAL_AGE = timedelta(hours=72)
 MIN_RENTAL_COMPARABLES = 5
@@ -24,32 +25,22 @@ _LOCAL_TIMEZONE = timezone(timedelta(hours=5))
 _NONMONTHLY = re.compile(r"посуточ|сутк|почас|за\s+(?:\d+\s*)?час|за\s+ночь|(?:в|на)\s+день|тәулік|сағат|per\s+(?:day|night|hour)", re.I)
 log = logging.getLogger(__name__)
 
-# rental_parser's apartment source is /arenda/kvartiry/astana/, the monthly
-# category. The schema has no explicit rental-period column yet. The literal
-# is source provenance, rather than a period inferred from an amount. Rows
-# with contrary text are discarded again by estimate_rental_offer.
-RENTAL_COMPARISON_SQL = """
-WITH cx AS (
-    SELECT id,coalesce(canonical_id,id) AS cid,complex_name_key(name) AS n
-    FROM complexes
-    WHERE NOT coalesce(is_garbage,false) AND NOT coalesce(is_street,false)
-      AND canonical_reason IS DISTINCT FROM 'junk_unmatched'
-), names AS (
-    SELECT n,cid FROM cx
-    UNION ALL
-    SELECT a.normalized_name,cx.cid FROM complex_aliases a JOIN cx ON cx.id=a.complex_id
-    WHERE a.status='verified'
-), name_keys AS (
-    SELECT n,min(cid) AS cid FROM names WHERE n<>''
-    GROUP BY n HAVING count(DISTINCT cid)=1
-)
+# The FK is authoritative, including a canonical alias or an explicitly
+# resolved child under a source umbrella. Names only identify unbound legacy
+# rows; both branches require an unambiguous structural source URL.
+RENTAL_COMPARISON_SQL = rental_identity_ctes_sql() + """
 SELECT r.id,r.price,r.area,r.rooms,r.floor,r.floors_total,r.last_seen,
        r.city,r.prop_type,r.is_active,r.is_duplicate,r.dup_needs_review,r.duplicate_of,
-       r.archived_at,r.title,nk.cid AS complex_id,'monthly'::text AS rent_period,
+       r.archived_at,r.title,canonical.id AS complex_id,r.rent_period,
        TRUE AS complex_binding_verified
 FROM rental_listings r
-JOIN name_keys nk ON nk.n=complex_name_key(r.complex_name)
-JOIN complexes canonical ON canonical.id=nk.cid
+LEFT JOIN rental_canonical_map bound ON bound.id=r.complex_id
+LEFT JOIN name_keys nk ON r.complex_id IS NULL AND nk.n=complex_name_key(r.complex_name)
+JOIN rental_roots canonical ON canonical.id=coalesce(bound.cid,nk.cid)
+JOIN rental_source_keys source ON
+  r.complex_url ~ '^https://krisha[.]kz/complex/show/[^/?#]+(/[^/?#]+)?/?$'
+  AND source.url=rtrim(r.complex_url,'/')
+  AND (source.cid=canonical.id OR (r.complex_id IS NOT NULL AND source.cid=canonical.parent_id))
 WHERE r.city='astana' AND r.prop_type='apartment' AND r.is_active IS TRUE
   AND r.rent_period='monthly'
   AND NOT coalesce(r.rent_period_conflict,false)
@@ -58,23 +49,7 @@ WHERE r.city='astana' AND r.prop_type='apartment' AND r.is_active IS TRUE
   AND r.last_seen BETWEEN $1::timestamptz-interval '72 hours' AND $1
   AND r.price BETWEEN 50000 AND 2000000 AND r.area BETWEEN 20 AND 300
   AND r.rooms BETWEEN 1 AND 6
-  -- A nearest-building guess cannot establish comparable rents in this JK.
-  -- Require the listing's source link to agree with the canonical project's
-  -- existing source identity as well as its unambiguous name.
-  AND r.complex_url ~ '^https://krisha[.]kz/complex/show/[^/?#]+(/[^/?#]+)?/?$'
-  AND (
-    rtrim(r.complex_url,'/') = rtrim(split_part(split_part(canonical.krisha_url,'?',1),'#',1),'/')
-    OR EXISTS (
-      SELECT 1 FROM complex_source_links sl
-      JOIN cx source_complex ON source_complex.id=sl.complex_id
-      WHERE sl.source='krisha' AND source_complex.cid=nk.cid
-        AND rtrim(r.complex_url,'/') = rtrim(split_part(split_part(sl.url,'?',1),'#',1),'/')
-        AND (sl.match_method='manual' OR sl.confidence>=0.85)
-    )
-  )
-  AND NOT coalesce(canonical.is_garbage,false) AND NOT coalesce(canonical.is_street,false)
   AND NOT coalesce(canonical.is_umbrella,false)
-  AND canonical.canonical_reason IS DISTINCT FROM 'junk_unmatched'
 ORDER BY r.last_seen DESC,r.id
 """
 
@@ -82,11 +57,9 @@ ORDER BY r.last_seen DESC,r.id
 # physical canonical project in SQL. No fallback to a sale's textual name.
 SINGLE_OFFER_RENTAL_SQL = RENTAL_COMPARISON_SQL.replace(
     "ORDER BY r.last_seen DESC,r.id", """
-  AND nk.cid = (
-      SELECT coalesce(bound.canonical_id,bound.id) FROM complexes bound
-      WHERE bound.id=$2 AND NOT coalesce(bound.is_garbage,false)
-        AND NOT coalesce(bound.is_street,false) AND NOT coalesce(bound.is_umbrella,false)
-        AND bound.canonical_reason IS DISTINCT FROM 'junk_unmatched'
+  AND canonical.id = (
+      SELECT bound.cid FROM rental_canonical_map bound JOIN rental_roots target ON target.id=bound.cid
+      WHERE bound.id=$2 AND NOT target.is_umbrella
   )
   AND r.rooms=$3 AND r.area BETWEEN $4::double precision*0.85 AND $4::double precision*1.15
 ORDER BY r.last_seen DESC,r.id LIMIT 200
