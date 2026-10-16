@@ -380,11 +380,10 @@ def photo_evidence_rows(rows: list[dict], checks: dict[str, dict] | None, now: d
                 if (not fresh or None in reviewed_assets or len(set(reviewed_assets)) != len(reviewed_assets)
                         or any(key not in current_assets for key in reviewed_assets)):
                     raise ValueError("Interior photo proof is stale or not part of the current source listing")
-                observed_urls = dict(zip(reviewed_assets, interiors))
-                # If a reviewed asset already has an older approved derivative,
-                # preserve its position but use the exact URL actually seen.
-                approved = [observed_urls.get(photo_asset_key(url), url) for url in approved]
-                approved.extend(url for url in interiors if url not in approved)
+                # A fresh visual receipt replaces the entire photo selection.
+                # Older fingerprint approvals must neither add unseen frames
+                # nor displace today's actually inspected interior URLs.
+                approved = list(interiors)
         result.append({**row, "approved_photo_urls": list(dict.fromkeys(approved))[:3]})
     return result
 
