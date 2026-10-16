@@ -26,6 +26,23 @@ from bot.core.entity_resolution import _haversine_m
 GEO_MAX_M = 150.0
 GEO_MARGIN_M = 15.0
 
+# Keep the full identifier: plot 6, 6/1 and 6Б are different locations.
+# The left boundary also prevents a malformed 6/1/2 from matching its tail.
+_NUMBER = r"(?<![\w/])\d+(?:/\d+)?[a-zа-яәіңғүұқөһ]?"
+_PLOT_MARKER = re.compile(r"(?<!\w)уч(?:асток)?\.?\s*", re.IGNORECASE)
+
+
+def _address_head(addr: str) -> str:
+    return re.split(r"\s+[—-]\s+", addr.strip())[0].strip()
+
+
+def _address_number_match(head: str):
+    plot = _PLOT_MARKER.search(head)
+    if plot:
+        number = re.fullmatch(_NUMBER, head[plot.end():], re.IGNORECASE)
+        return plot, number
+    return None, re.search(_NUMBER + r"$", head, re.IGNORECASE)
+
 
 def _extract_house_number(addr: str | None) -> str | None:
     """Номер дома/участка из адреса — 'уч. N' (участок, частый паттерн у
@@ -35,15 +52,8 @@ def _extract_house_number(addr: str | None) -> str | None:
     находим (число не в конце строки)."""
     if not addr:
         return None
-    addr = addr.strip()
-    m = re.search(r"уч\.?\s*(\d+)", addr, re.IGNORECASE)
-    if m:
-        return "уч" + m.group(1)
-    head = re.split(r"\s+[—-]\s+", addr)[0].strip()
-    m2 = re.search(r"(\d+(?:/\d+)?[а-яa-zА-ЯA-Z]?)\s*$", head)
-    if m2:
-        return m2.group(1).lower()
-    return None
+    plot, number = _address_number_match(_address_head(addr))
+    return ("уч" if plot else "") + number.group().casefold() if number else None
 
 
 def _address_street_key(addr: str | None) -> str | None:
@@ -55,12 +65,11 @@ def _address_street_key(addr: str | None) -> str | None:
     """
     if not addr:
         return None
-    head = re.split(r"\s+[—-]\s+", addr.strip())[0].strip()
-    plot = re.search(r"уч\.?\s*\d+", head, re.IGNORECASE)
+    head = _address_head(addr)
+    plot, number = _address_number_match(head)
     if plot:
         head = head[:plot.start()].strip(" ,")
     else:
-        number = re.search(r"\d+(?:/\d+)?[а-яa-zА-ЯA-Z]?\s*$", head)
         if number:
             head = head[:number.start()].strip(" ,")
     markers = list(re.finditer(
