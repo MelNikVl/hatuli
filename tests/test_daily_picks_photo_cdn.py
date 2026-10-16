@@ -83,6 +83,19 @@ def test_observed_derivative_replaces_the_same_old_approved_asset_and_is_not_dup
     assert OLD not in result["approved_photo_urls"]
 
 
+def test_three_older_approved_frames_cannot_displace_todays_reviewed_interior():
+    now = datetime.now(timezone.utc)
+    source, check = checked_photo(now)
+    older = [OLD.replace("23-full", f"{index}-full") for index in (23, 24, 25)]
+    newest = OBSERVED.replace("23-full", "26-full")
+    source.update(candidate_photo_urls=[*older, OLD.replace("23-full", "26-full")],
+                  approved_photo_urls=older)
+    check["interior_photo_urls"] = [newest]
+    result = publisher.photo_evidence_rows([source], {source["id"]: check}, now)[0]
+    assert result["approved_photo_urls"] == [newest]
+    assert source["approved_photo_urls"] == older
+
+
 @pytest.mark.parametrize("field,value", [
     ("source_url", "https://krisha.kz/a/show/9999999999"), ("id", "9999999999"),
     ("price", 99_000_000), ("rooms", 6), ("floor", 40), ("floors_total", 40),
