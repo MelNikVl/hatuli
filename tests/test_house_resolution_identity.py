@@ -143,3 +143,41 @@ async def test_geo_still_resolves_with_clear_distance_margin():
 @pytest.mark.asyncio
 async def test_only_house_outside_geo_radius_is_not_resolved():
     assert await resolve([child(1, north_m=151)], geo=True) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("number", ["6/1", "6Б", "6/1Б"])
+async def test_plot_suffix_is_part_of_identity(number):
+    result = await resolve(
+        [child(1, address="ул. Туран, уч. 6"),
+         child(2, address=f"ул. Туран, уч. {number}")],
+        address=f"ул. Туран, уч. {number}",
+    )
+    assert result is not None and result["house_id"] == 2
+    assert result["method"] == "address"
+
+
+@pytest.mark.asyncio
+async def test_distinct_fractional_plots_do_not_match():
+    assert await resolve([child(1, address="Туран, уч. 6/1")],
+                         address="Туран, уч. 6/2") is None
+
+
+@pytest.mark.asyncio
+async def test_plot_in_landmark_comment_is_not_the_listing_address():
+    assert await resolve([child(1, address="уч. 6")],
+                         address="Туран, 10 — рядом уч. 6") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("number", ["20Қ", "14/2Б"])
+async def test_house_letters_are_kept_in_street_matching(number):
+    result = await resolve([child(1, address=f"ул. Туран, {number}")],
+                           address=f"Туран, {number.lower()}")
+    assert result is not None and result["method"] == "address"
+
+
+@pytest.mark.asyncio
+async def test_unsupported_multi_fraction_is_not_truncated():
+    assert await resolve([child(1, address="Туран, уч. 6/1")],
+                         address="Туран, уч. 6/1/2") is None
