@@ -15,6 +15,9 @@ from tests.test_daily_picks_quality_policy import edition_rows, photo_review_row
 OLD = "https://krisha-photos.kcdn.online/webp/97/975ab662-be68-44d9-9ab1-9af315e70c7a/23-full.jpg"
 # Exact gallery DOM URL personally inspected by the parent browser session.
 OBSERVED = "https://astps-photos-kr.kcdn.kz/webp/97/975ab662-be68-44d9-9ab1-9af315e70c7a/23-full.webp"
+ALAPS_OLD = "https://krisha-photos.kcdn.online/webp/6a/6a1e2d8e-e8f2-4a2e-8b80-cf28b6aea53c/1-full.jpg"
+# Literal URL inspected by the parent in listing 1015074964 on 2026-10-17.
+ALAPS_OBSERVED = "https://alaps-photos-kr.kcdn.kz/webp/6a/6a1e2d8e-e8f2-4a2e-8b80-cf28b6aea53c/1-full.webp"
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +45,40 @@ def test_exact_observed_url_is_allowlisted_without_rewriting_and_identity_matche
     assert dp.photo_asset_key(OBSERVED.replace("23-full", "24-full")) != dp.photo_asset_key(OLD)
     assert dp.photo_asset_key(OBSERVED.replace("975ab662", "975ab663")) != dp.photo_asset_key(OLD)
     assert dp.photo_asset_key("https://example.com/photo.jpg") is None
+
+
+def test_alaps_literal_url_keeps_asset_identity_and_requires_its_own_fresh_receipt():
+    assert dp.safe_photo_url(ALAPS_OBSERVED) == ALAPS_OBSERVED
+    assert dp.photo_asset_key(ALAPS_OBSERVED) == dp.photo_asset_key(ALAPS_OLD) == ("6a1e2d8e-e8f2-4a2e-8b80-cf28b6aea53c", "1")
+    now = datetime.now(timezone.utc)
+    source, check = checked_photo(now)
+    source.update(candidate_photo_urls=[ALAPS_OLD], approved_photo_urls=[])
+    check["interior_photo_urls"] = [ALAPS_OBSERVED]
+    assert publisher.photo_evidence_rows([source], None, now)[0]["approved_photo_urls"] == []
+    assert publisher.photo_evidence_rows([source], {source["id"]: check}, now)[0]["approved_photo_urls"] == [ALAPS_OBSERVED]
+    check["interior_photo_urls"] = [ALAPS_OBSERVED.replace("/1-full", "/2-full")]
+    with pytest.raises(ValueError, match="current source listing"):
+        publisher.photo_evidence_rows([source], {source["id"]: check}, now)
+
+
+@pytest.mark.parametrize("url", [
+    ALAPS_OBSERVED.replace("https://", "http://"),
+    ALAPS_OBSERVED.replace("alaps-photos-kr.kcdn.kz", "alaps-photos-kr.kcdn.kz.evil.test"),
+    ALAPS_OBSERVED.replace("alaps-photos-kr.kcdn.kz", "alaps2-photos-kr.kcdn.kz"),
+    ALAPS_OBSERVED.replace("https://", "https://user:pass@"),
+    ALAPS_OBSERVED.replace("https://", "https://@"),
+    ALAPS_OBSERVED.replace(".kz/", ".kz:443/"),
+    ALAPS_OBSERVED.replace(".kz/", ".kz:invalid/"),
+    ALAPS_OBSERVED + "?", ALAPS_OBSERVED + "?token=private", ALAPS_OBSERVED + "#", ALAPS_OBSERVED + "#image",
+    ALAPS_OBSERVED + "\n", ALAPS_OBSERVED.replace("/1-full", "/-1-full"),
+    ALAPS_OBSERVED.replace("/1-full.webp", "/1-full.png"),
+    ALAPS_OBSERVED.replace("/1-full.webp", "/1-750x470.webp"),
+    ALAPS_OBSERVED.replace("6a1e2d8e-e8f2-4a2e-8b80-cf28b6aea53c", "6a1e2d8ee8f2-4a2e-8b80-cf28b6aea53cc"),
+    ALAPS_OBSERVED.replace("/webp/6a/", "/webp/../6a/"),
+])
+def test_alaps_host_variants_and_unsafe_urls_stay_rejected(url):
+    assert dp.safe_photo_url(url) is None
+    assert dp.photo_asset_key(url) is None
 
 
 @pytest.mark.parametrize("url", [
@@ -151,13 +188,14 @@ def test_duplicate_asset_derivatives_do_not_count_as_multiple_reviewed_photos():
 
 
 @pytest.mark.asyncio
-async def test_full_generation_preserves_observed_urls_quality_policy_and_head_only_checks(tmp_path, monkeypatch):
+@pytest.mark.parametrize("old,observed", [(OLD, OBSERVED), (ALAPS_OLD, ALAPS_OBSERVED)])
+async def test_full_generation_preserves_observed_urls_quality_policy_and_head_only_checks(tmp_path, monkeypatch, old, observed):
     now = datetime.now(timezone.utc)
     rows = edition_rows(now=now)
     for source in rows:
-        source.update(candidate_photo_urls=[OLD], approved_photo_urls=[])
+        source.update(candidate_photo_urls=[old], approved_photo_urls=[])
     checks = [{"id": source["id"], "source_url": source["url"], "status": "active", "sale_astana": True,
-               "checked_at": now.isoformat(), "interior_photo_urls": [OBSERVED],
+               "checked_at": now.isoformat(), "interior_photo_urls": [observed],
                "photo_review": {"method": "normal_browser_visual", "photo_type": "interior", "checked_at": now.isoformat()},
                **{field: source[field] for field in ("price", "rooms", "area", "floor", "floors_total")}}
               for source in rows[:10]]
@@ -171,7 +209,7 @@ async def test_full_generation_preserves_observed_urls_quality_policy_and_head_o
     requests = []
     def handler(request):
         requests.append((request.method, str(request.url)))
-        assert str(request.url) == OBSERVED
+        assert str(request.url) == observed
         return httpx.Response(200, headers={"content-type": "image/webp"})
     original_client = httpx.AsyncClient
     def client(**kwargs):
@@ -182,8 +220,8 @@ async def test_full_generation_preserves_observed_urls_quality_policy_and_head_o
     ready = publisher.prepare_publication(generated["snapshot"])
     assert len(ready["items"]) == 10
     assert generated["source_gets"] == 0
-    assert requests == [("HEAD", OBSERVED)] * 10
-    assert all(item["photo_urls"] == [OBSERVED] and len(item["reasons"]) == 4 for item in ready["items"])
+    assert requests == [("HEAD", observed)] * 10
+    assert all(item["photo_urls"] == [observed] and len(item["reasons"]) == 4 for item in ready["items"])
     assert ready["publication_policy"]["required_strong_factors"] == 4
     assert ready["publication_policy"]["minimum_discount_pct"] == 3
     assert dp.validate_snapshot(ready) == ready
