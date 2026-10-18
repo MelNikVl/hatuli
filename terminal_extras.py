@@ -5440,7 +5440,8 @@ def make_extras_router(templates) -> APIRouter:
         # буквально в /admin/api/complex/{id}/location-score, см. докстринг
         # функции про resolved_house_id/зонтик.
         from bot.core.house_resolution import resolve_complex_geo_centroid
-        from bot.core.complex_membership import listing_complex_match_sql
+        from bot.core.complex_membership import (listing_complex_page_match_sql,
+                                                 rental_complex_page_match_sql, sale_membership_ctes_sql)
         include_children = bool(cx.get("is_umbrella")) or bool(await fetchval("""
             SELECT EXISTS (
                 SELECT 1 FROM complexes
@@ -5451,8 +5452,8 @@ def make_extras_router(templates) -> APIRouter:
                   AND COALESCE(canonical_reason, '') <> 'junk_unmatched'
             )
         """, complex_id))
-        _listing_id_match = listing_complex_match_sql(include_children=include_children)
-        _rental_id_match = rental_complex_match_sql(include_children=include_children)
+        _listing_id_match = listing_complex_page_match_sql(include_children=include_children)
+        _rental_id_match = rental_complex_page_match_sql(include_children=include_children)
         _unit_id_match = unit_complex_match_sql(include_children=include_children)
         _unit_link_match = unit_complex_match_sql(unit_alias='nu', include_children=include_children)
         centroid = await resolve_complex_geo_centroid(complex_id, cname)
@@ -5626,7 +5627,7 @@ def make_extras_router(templates) -> APIRouter:
         # Direct membership исключает complex_id известных детей;
         # resolved_house_id исключает дома, привязанные отдельно от ЖК.
         from bot.db.pg import fetchval as _fetchval_house_unknown
-        _parent_listing_match = listing_complex_match_sql()
+        _parent_listing_match = listing_complex_page_match_sql()
         house_unknown_count = await _fetchval_house_unknown(f"""
             SELECT COUNT(*) FROM apartment_listings
             WHERE {_parent_listing_match}
@@ -6003,18 +6004,20 @@ def make_extras_router(templates) -> APIRouter:
         # — не только точное имя-совпадение, но и resolved_house_id=c2.id
         # (объявления зонтика, привязанные к ЭТОМУ дому по адресу/токену/
         # гео, см. bot/core/house_resolution.py).
-        # c2.id — доверенное SQL-выражение этого запроса; подставляется только
-        # вместо технического параметра helper, пользовательского текста нет.
-        _child_listing_match = listing_complex_match_sql(listing_alias="al").replace("$1", "c2.id")
-        child_complexes = await fetch(f"""
+        # One shared membership map avoids repeating the identity match for
+        # every child/listing pair in both aggregates.
+        # Reuse one current identity map for both child count and address.
+        child_complexes = await fetch(f"""{sale_membership_ctes_sql()}
             SELECT c2.id, c2.name, c2.krisha_url,
                    (SELECT count(*) FROM apartment_listings al
-                     WHERE {_child_listing_match}
+                     JOIN listing_membership member ON member.listing_id = al.id
+                     WHERE member.complex_id = c2.id
                        AND COALESCE(al.is_duplicate, FALSE) = FALSE) AS listings_count,
                    c2.source_info->'krisha'->>'deadline' AS deadline,
                    COALESCE(c2.address, (
                        SELECT al.address FROM apartment_listings al
-                       WHERE {_child_listing_match}
+                       JOIN listing_membership member ON member.listing_id = al.id
+                       WHERE member.complex_id = c2.id
                          AND al.address IS NOT NULL AND al.address != ''
                        GROUP BY al.address ORDER BY count(*) DESC LIMIT 1
                    )) AS address

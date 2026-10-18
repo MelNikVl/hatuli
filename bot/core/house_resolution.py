@@ -153,11 +153,11 @@ async def resolve_complex_geo_centroid(complex_id: int, complex_name: str) -> tu
     complex_name is retained for compatibility with existing callers.
     """
     from bot.db.pg import fetchrow
-    from bot.core.complex_membership import listing_complex_match_sql
+    from bot.core.complex_membership import listing_complex_page_match_sql
     canonical = await fetchrow("SELECT COALESCE(canonical_id, id) AS id FROM complexes WHERE id = $1", complex_id)
     if not canonical:
         return None
-    membership = listing_complex_match_sql(include_children=True)
+    membership = listing_complex_page_match_sql(include_children=True)
     geo = await fetchrow(f"""
         SELECT AVG(lat) AS lat, AVG(lon) AS lon
         FROM apartment_listings
