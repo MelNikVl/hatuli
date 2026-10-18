@@ -1,0 +1,121 @@
+{
+  "results": [
+    {
+      "id": 299,
+      "iteration": 1,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 4.100434,
+      "seconds": 4.225578,
+      "canonical_ok": true
+    },
+    {
+      "id": 601,
+      "iteration": 1,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 3.560505,
+      "seconds": 3.648901,
+      "canonical_ok": true
+    },
+    {
+      "id": 606,
+      "iteration": 1,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 3.961211,
+      "seconds": 4.078991,
+      "canonical_ok": true
+    },
+    {
+      "id": 691,
+      "iteration": 1,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 3.658618,
+      "seconds": 3.756827,
+      "canonical_ok": true
+    },
+    {
+      "id": 891,
+      "iteration": 1,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 3.74134,
+      "seconds": 3.846469,
+      "canonical_ok": true
+    },
+    {
+      "id": 299,
+      "iteration": 2,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 4.265983,
+      "seconds": 4.358704,
+      "canonical_ok": true
+    },
+    {
+      "id": 601,
+      "iteration": 2,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 3.767054,
+      "seconds": 3.921219,
+      "canonical_ok": true
+    },
+    {
+      "id": 606,
+      "iteration": 2,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 3.540826,
+      "seconds": 3.650578,
+      "canonical_ok": true
+    },
+    {
+      "id": 691,
+      "iteration": 2,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 3.474524,
+      "seconds": 3.56685,
+      "canonical_ok": true
+    },
+    {
+      "id": 891,
+      "iteration": 2,
+      "exit": 0,
+      "status": "200",
+      "ttfb": 4.025541,
+      "seconds": 4.141716,
+      "canonical_ok": true
+    }
+  ],
+  "summary": {
+    "n": 10,
+    "successes": 10,
+    "all_canonicals_ok": true,
+    "p50_seconds": 3.883844,
+    "p95_nearest_rank_seconds": 4.358704,
+    "max_seconds": 4.358704
+  },
+  "scope": {
+    "date": "2026-10-18",
+    "timezone": "Asia/Qyzylorda",
+    "origin": "https://hatuli.ai-groundtruth.com",
+    "method": "Two sequential curl passes over the five issue #76 pages. p95 uses nearest rank. Not a load test.",
+    "first_request_outside_sample": {
+      "id": 299,
+      "status": 200,
+      "ttfb_seconds": 4.536479,
+      "total_seconds": 4.655988
+    },
+    "before_rollout_today": {
+      "id": 299,
+      "curl_exit": 28,
+      "timeout_seconds": 8,
+      "total_seconds": 8.010829,
+      "bytes_received": 0
+    }
+  }
+}

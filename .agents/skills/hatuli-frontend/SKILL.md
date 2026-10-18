@@ -8,3 +8,5 @@ Private listings and lead data must retain current access and cache rules. Publi
 Check public routes without authentication and inspect affected desktop/mobile layouts when visuals change. Use current public route tests with database connections denied when possible. Record what was published, validated and still unmeasured in README and the project log.
 
 The sitemap uses the bulk identity helper in bot/core/complex_membership.py, including child membership for umbrella pages. Do not reintroduce name-only joins or count restored URLs as indexed pages/users. The active count is only an inclusion/ranking signal and does not prove that a physical house has been independently verified.
+
+When accepting page-performance fixes, measure complete anonymous HTTP responses as well as query time. Record first request separately from repeated samples, percentile method and sample size; verify canonical URLs and private-data gates. A bounded sequential sample is not a load test or evidence of increased daily users.
