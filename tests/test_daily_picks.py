@@ -25,7 +25,8 @@ def row(index=0, **changes):
                  identity_complex_valid=True, identity_complex_is_umbrella=False,
                  identity_complex_parent_id=None, identity_complex_year_built=2020,
                  identity_complex_review_pending=False, identity_property_match_pending=False,
-                 identity_name_ambiguous=False)
+                 identity_name_ambiguous=False, identity_source_name_conflict=False,
+                 identity_source_name_keys=["тестовый жк"])
     value.update(changes)
     if "complex_id" in changes and "identity_complex_id" not in changes:
         value["identity_complex_id"] = changes["complex_id"]

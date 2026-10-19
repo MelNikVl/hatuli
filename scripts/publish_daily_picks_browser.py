@@ -59,6 +59,10 @@ READ_OFFER_DOM = r"""() => {
   const offer = firstVisible(document, '.offer') || firstVisible(document, 'main');
   const title = offer && firstVisible(offer, 'h1, .offer__title');
   const price = offer && firstVisible(offer, '.offer__price');
+  const sourceComplexNames = offer ? [...offer.querySelectorAll(
+    '.offer__info-item[data-name="map.complex"] a[href*="/complex/show/"]'
+  )].filter(visible).map(element => element.innerText.replace(/\s+/g, ' ').trim()).filter(Boolean) : [];
+  const uniqueComplexNames = [...new Set(sourceComplexNames)];
   const authorLabels = [];
   const measurements = {};
   const measurementValues = {kitchen_area: [], ceiling_height: []};
@@ -105,6 +109,8 @@ READ_OFFER_DOM = r"""() => {
       .map(element => element.getAttribute(element.tagName === 'LINK' ? 'href' : 'content')),
     main_visible: !!offer,
     author_labels: [...new Set(authorLabels)],
+    source_complex_name: uniqueComplexNames.length === 1 ? uniqueComplexNames[0] : null,
+    source_complex_name_conflict: uniqueComplexNames.length > 1,
     is_pledged: pledged ? true : null,
     ...measurements,
     title: title ? title.innerText.slice(0, 1000) : '',
@@ -244,6 +250,14 @@ def source_record(item: dict, observation: dict, checked_at: datetime) -> dict:
     if (values["price"] <= 0 or not 1 <= values["floor"] <= values["floors_total"]
             or values["rooms"] <= 0 or values["area"] <= 0):
         return result
+    # Missing DOM observation is unknown, not an explicit absence of a ЖК.
+    if ("source_complex_name" not in observation or observation.get("source_complex_name_conflict") is True
+            or observation["source_complex_name"] is not None and (
+                not isinstance(observation["source_complex_name"], str)
+                or not observation["source_complex_name"].strip()
+                or len(observation["source_complex_name"]) > 200)):
+        return result
+    result["source_complex_name"] = observation["source_complex_name"]
     result.update(values)
     result["status"] = "active" if (values["price"] == item["price"]
         and values["rooms"] == item["rooms"] and abs(values["area"] - item["area"]) <= .2
