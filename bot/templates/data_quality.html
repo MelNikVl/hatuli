@@ -7,7 +7,7 @@
 
 <div style="background:var(--surface);border:1px solid {{ C[r.overall] }}66;border-radius:12px;padding:14px 18px;margin-bottom:16px;font-size:15px;">
   Итог: {{ pill(r.overall) }}
-  {% if r.overall == 'ok' %}данные полные и свежие.{% elif r.overall == 'warn' %}есть отклонения — смотрите жёлтые строки.{% else %}есть проблемы — цифры аналитики могут быть неверны, смотрите красные строки.{% endif %}
+  {% if r.overall == 'ok' %}основные проверки пройдены.{% elif r.overall == 'warn' %}есть отклонения — смотрите жёлтые строки.{% else %}есть проблемы — цифры аналитики могут быть неверны, смотрите красные строки.{% endif %}
 </div>
 
 <h3 style="margin:18px 0 8px;">Каталог</h3>
@@ -19,9 +19,12 @@
     <div style="font-size:13px;color:var(--muted);margin-top:4px;">
       видели за 2 дня: {{ s.seen_2d }} · первичка: {{ s.primary }}<br>
       полный обход: {% if s.completed_at %}{{ s.completed_at.astimezone().strftime('%d.%m %H:%M') }}, длился {{ '%.1f'|format(s.duration_h) }} ч{% else %}не было{% endif %}
-      (цель ≤ 48 ч) · сейчас страница {{ s.page or '?' }} из {{ s.max_page or '?' }}<br>
+      (цель ≤ 24 ч) · сейчас страница {{ s.page or '?' }} из {{ s.max_page or '?' }}<br>
       в каталоге Крыши: {{ '{:,}'.format(s.krisha_total).replace(',', ' ') if s.krisha_total else '?' }} объявлений ·
-      круг покрывает <b style="color:{{ C['ok'] if (s.circle_coverage_pct or 0) >= 95 else C['bad'] }};">{{ s.circle_coverage_pct if s.circle_coverage_pct is not none else '?' }}%</b> каталога
+      завершённый круг: <b style="color:{{ C['ok'] if (s.circle_coverage_pct or 0) >= 95 else C['bad'] }};">{{ s.circle_coverage_pct if s.circle_coverage_pct is not none else '?' }}%</b>
+      {% if s.unique_ids is not none %}({{ s.unique_ids }} уникальных ID / {{ s.source_total }}){% endif %}<br>
+      текущий круг: {{ s.current_unique_ids if s.current_unique_ids is not none else '?' }} ID · повторить страниц: {{ s.retry_pages if s.retry_pages is not none else '?' }}.
+      Полнота всего рынка не подтверждена.
     </div>
   </div>
   {% set t = r.catalog.rent %}

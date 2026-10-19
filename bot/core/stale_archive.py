@@ -59,35 +59,37 @@ def _parse_ts(v: str | None) -> datetime | None:
 
 def sweep_health(settings: dict[str, str], now: datetime) -> SweepHealth:
     """Чистая функция над app_settings (DEEP_SWEEP_CIRCLE_*)."""
-    completed = _parse_ts(settings.get('DEEP_SWEEP_CIRCLE_COMPLETED_AT'))
-    try:
-        duration_s = float(settings.get('DEEP_SWEEP_CIRCLE_DURATION_SEC') or 0)
-    except ValueError:
-        duration_s = 0.0
+    from bot.core.sale_sweep import completed_evidence, utc, SaleSweep, STATE_KEY
+    proof = completed_evidence(settings)
+    if proof is None:
+        return SweepHealth(False, 'нет подтверждённого журнала страниц завершённого круга')
+    current = SaleSweep.loads(settings.get(STATE_KEY))
+    if proof.presence_overflow or (current and current.presence_overflow):
+        return SweepHealth(False, 'журнал недавних наблюдений переполнен; архивирование остановлено')
+    completed = utc(proof.completed_at)
+    duration_s = (completed - utc(proof.started_at)).total_seconds()
     if completed is None:
         return SweepHealth(False, 'нет ни одного завершённого круга deep sweep')
     if duration_s <= 0:
         return SweepHealth(False, 'неизвестна длительность круга', completed)
     age = now - completed
     dur_h = duration_s / 3600
+    if age < timedelta(0):
+        return SweepHealth(False, 'завершение круга датировано будущим', completed, dur_h)
     if age > MAX_CIRCLE_AGE:
         return SweepHealth(False, f'последний круг завершён {age.total_seconds() / 3600:.0f} ч назад '
                                   f'(> {MAX_CIRCLE_AGE.total_seconds() / 3600:.0f} ч)', completed, dur_h)
     if duration_s > STALE_DAYS * 86400 / 2:
         return SweepHealth(False, f'круг длится {dur_h:.0f} ч — в окно {STALE_DAYS} дн. не влезает 2 круга',
                            completed, dur_h)
-    # Полнота: завершённый круг должен был пройти весь каталог. До 2026-10-03 снимок
-    # считал 40 объявлений на страницу вместо 20 — круг покрывал половину выдачи, и
-    # архивация по last_seen снимала живые объявления из нижней половины.
-    try:
-        pages = int(settings.get('DEEP_SWEEP_CIRCLE_COMPLETED_PAGES') or 0)
-        total = int(settings.get('DEEP_SWEEP_CIRCLE_COMPLETED_TOTAL') or 0)
-    except ValueError:
-        pages, total = 0, 0
-    if not pages or not total:
+    # Page spans are not enumeration: duplicates, HTTP failures and partial
+    # persistence used to pass pages*20 even without seeing the source IDs.
+    total = proof.denominator
+    observed = len(proof.unique_ids)
+    if not observed or not total:
         return SweepHealth(False, 'нет замера полноты завершённого круга', completed, dur_h)
-    if pages * PAGE_SIZE < MIN_COVERAGE * total:
-        return SweepHealth(False, f'круг покрыл {pages} стр. × {PAGE_SIZE} = {pages * PAGE_SIZE} из {total} '
+    if observed < MIN_COVERAGE * total:
+        return SweepHealth(False, f'круг покрыл {observed} уникальных ID из {total} '
                                   f'объявлений каталога (< {MIN_COVERAGE:.0%})', completed, dur_h)
     return SweepHealth(True, 'ok', completed, dur_h)
 
@@ -98,7 +100,9 @@ def stale_cutoff(now: datetime) -> datetime:
 
 async def _settings() -> dict[str, str]:
     from bot.db.pg import fetch
-    rows = await fetch("SELECT key, value FROM app_settings WHERE key LIKE 'DEEP_SWEEP_CIRCLE_%'")
+    from bot.core.sale_sweep import STATE_KEY, COMPLETED_KEY
+    rows = await fetch("SELECT key, value FROM app_settings WHERE key LIKE 'DEEP_SWEEP_CIRCLE_%' OR key=ANY($1::text[])",
+                       [STATE_KEY, COMPLETED_KEY])
     return {r['key']: r['value'] for r in rows}
 
 
@@ -132,11 +136,15 @@ async def reactivate_seen(*, dry_run: bool = False) -> int:
 
 async def archive_stale(*, dry_run: bool = False, now: datetime | None = None) -> dict:
     from bot.db.pg import execute, fetchval
+    from bot.core.sale_sweep import recent_unsaved_source_ids
     now = now or datetime.now(timezone.utc)
-    health = sweep_health(await _settings(), now)
+    settings = await _settings()
+    health = sweep_health(settings, now)
     cutoff = stale_cutoff(now)
+    protected = recent_unsaved_source_ids(settings, cutoff=cutoff, now=now)
     candidates = await fetchval(
-        "SELECT count(*) FROM apartment_listings WHERE is_active IS NOT FALSE AND last_seen < $1", cutoff)
+        "SELECT count(*) FROM apartment_listings WHERE is_active IS NOT FALSE AND last_seen < $1 AND NOT(id=ANY($2::text[]))",
+        cutoff, protected)
     result = {'healthy': health.healthy, 'health_reason': health.reason, 'cutoff': cutoff.isoformat(),
               'candidates': int(candidates or 0), 'archived': 0, 'dry_run': dry_run}
     if not health.healthy:
@@ -147,7 +155,7 @@ async def archive_stale(*, dry_run: bool = False, now: datetime | None = None) -
     status = await execute("""
         UPDATE apartment_listings
            SET is_active = FALSE, archived_at = last_seen, archive_reason = $2
-         WHERE is_active IS NOT FALSE AND last_seen < $1""", cutoff, ARCHIVE_REASON)
+         WHERE is_active IS NOT FALSE AND last_seen < $1 AND NOT(id=ANY($3::text[]))""", cutoff, ARCHIVE_REASON, protected)
     result['archived'] = int(status.split()[-1]) if status and status.startswith('UPDATE') else 0
     logger.info('stale archive: заархивировано %s (cutoff %s)', result['archived'], cutoff)
     return result

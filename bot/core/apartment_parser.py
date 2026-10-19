@@ -9,7 +9,10 @@ import logging
 import random
 import re
 from collections import Counter
-from urllib.parse import urlencode
+from datetime import datetime, timezone
+import time
+from email.utils import parsedate_to_datetime
+from urllib.parse import urlencode, urlparse, parse_qs
 
 import httpx
 import re as _re_mod
@@ -79,6 +82,51 @@ def _extract_rooms(title):
     return int(m.group(1)) if m else None
 
 
+def _sale_page_evidence(soup, page):
+    """A missing selector is not an empty market; challenges never mean EOF."""
+    text = soup.get_text(" ", strip=True).lower()
+    main = soup.select_one(".a-list.a-search-list")
+    cards = (main.select(":scope > div.a-card, :scope > section.a-card") if main is not None
+             else soup.select("div.a-card, section.a-card"))
+    if re.search(r"подтвердите.{0,30}(робот|человек)|access denied|just a moment", text) or (
+            not cards and re.search(r"captcha|капч|провер.{0,20}(робот|человек)", text)):
+        raise ValueError("source_challenge")
+    count = _re_total.search(soup.get_text(" ", strip=True))
+    total = int(_re_total_clean.sub("", count.group(1))) if count else None
+    if not cards:
+        empty = (soup.select_one(".a-list-empty") is not None or re.search(
+            r"ничего не найдено|объявлени[йя] не найдено|найдено\s+0\s+объявлен", text))
+        if not empty:
+            raise ValueError("unrecognised_search_html")
+        if page == 1 and total != 0:
+            raise ValueError("unconfirmed_empty_head")
+        return [], {"ids": [], "total_count": total,
+                    "terminal_reason": "explicit_empty", "expected_last_page": None}
+    ids = []
+    for card in cards:
+        link = card.select_one('a[href*="/a/show/"]')
+        match = re.search(r"/a/show/(\d{5,})", link.get("href", "")) if link else None
+        identifier = str(card.get("data-id", "")).strip() or (match.group(1) if match else "")
+        if not re.fullmatch(r"\d{5,}", identifier) or (match and match.group(1) != identifier):
+            raise ValueError("invalid_or_conflicting_card_id")
+        ids.append(identifier)
+    links = [link for box in soup.select(".paginator, .pagination, [data-pagination]")
+             for link in box.select('a[href]')]
+    links += soup.select('a[rel="last"][href]')
+    numbers = [int(match.group(1)) for link in links
+               if (match := re.search(r"[?&]page=(\d+)", link.get("href", "")))]
+    has_later = any(n > page for n in numbers)
+    explicit_last = any("last" in (link.get("rel") or []) and
+                        re.search(rf"[?&]page={page}(?:&|$)", link.get("href", "")) for link in links)
+    count_last = (total + 19) // 20 if total else None
+    # A current parsed counter plus real source cards is evidence, unlike
+    # the service's old planned snapshot. Pagination that says more wins.
+    terminal = not has_later and (explicit_last or (count_last == page))
+    return cards, {"ids": ids, "total_count": total,
+                   "expected_last_page": max([count_last or 0, *numbers]) or None,
+                   "terminal_reason": ("explicit_last_page" if explicit_last else "observed_catalog_count") if terminal else None}
+
+
 async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=None,
                                      start_page=1, stats: dict | None = None):
     """Parse apartment sale listings from krisha.kz.
@@ -94,6 +142,8 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=None,
         stats.setdefault("pages_ok", 0)
         stats.setdefault("pages_failed", 0)
         stats.setdefault("reached_end", False)
+        stats.setdefault("page_reports", [])
+        stats.setdefault("page_elapsed_sec", 0.0)
 
     for page in range(start_page, start_page + max_pages):
         # das[price][to]=0 в реальном запросе к Крыше означает "цена до 0" —
@@ -111,34 +161,63 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=None,
             params["page"] = page
         url = f"{BASE_URL}/prodazha/kvartiry/{city}/?{urlencode(params)}"
 
+        started = time.monotonic()
+        report = {"page": page, "ids": [], "accepted_ids": [], "rejected": {},
+                  "checked_at": datetime.now(timezone.utc).isoformat()}
         await asyncio.sleep(random.uniform(2.0, 5.0))
         async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=30.0, follow_redirects=True) as client:
             try:
+                REQUEST_COUNTS['search'] += 1
                 resp = await client.get(url)
                 resp.raise_for_status()
-                REQUEST_COUNTS['search'] += 1
+                report["checked_at"] = datetime.now(timezone.utc).isoformat()
+                final = urlparse(str(resp.url))
+                expected = urlparse(url)
+                if (final.hostname not in ("krisha.kz", "www.krisha.kz")
+                        or final.path.rstrip("/") != expected.path.rstrip("/")
+                        or parse_qs(final.query).get("page", ["1"]) != [str(page)]):
+                    raise ValueError("redirected_search_scope_or_page")
+                soup = BeautifulSoup(resp.text, "html.parser")
+                cards, evidence = _sale_page_evidence(soup, page)
+                report.update(evidence)
+                if cards and not report.get("terminal_reason") and stats is not None and any(
+                        previous.get("ids") and set(previous["ids"]) == set(report["ids"])
+                        for previous in stats["page_reports"]):
+                    raise ValueError("repeated_page_without_terminal_proof")
             except Exception as exc:
+                report["checked_at"] = datetime.now(timezone.utc).isoformat()
                 logger.warning("apt_parser: page %d failed: %s", page, exc)
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                report.update(error=f"http_{status}" if status else str(exc)[:120],
+                              blocked=status in (403, 429, 468) or str(exc) == "source_challenge")
+                retry = getattr(getattr(exc, "response", None), "headers", {}).get("Retry-After", "")
+                try:
+                    report["retry_after_seconds"] = max(0, int(retry))
+                except ValueError:
+                    try:
+                        report["retry_after_seconds"] = max(0, (parsedate_to_datetime(retry) - datetime.now(timezone.utc)).total_seconds())
+                    except (ValueError, TypeError, OverflowError):
+                        pass
                 if stats is not None:
                     stats["pages_failed"] += 1
-                continue
+                    stats["blocked"] = report["blocked"]
+                    stats["page_reports"].append(report)
+                    stats["page_elapsed_sec"] += time.monotonic() - started
+                # Do not spray the remaining batch at a failing source and
+                # never let a later success skip this page.
+                break
 
         # Общее число объявлений в выдаче ("Найдено N объявлений") — для
         # детерминированного конца глубокого обхода (последняя страница =
         # ceil(N/20)). Обновляется при каждом парсе первой страницы.
         global LAST_TOTAL_FOUND
-        m_total = _re_total.search(resp.text)
-        if m_total:
-            try:
-                LAST_TOTAL_FOUND = int(_re_total_clean.sub("", m_total.group(1)))
-            except ValueError:
-                pass
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-        cards = soup.select("div.a-card") or soup.select("section.a-card")
+        if report.get("total_count") is not None:
+            LAST_TOTAL_FOUND = report["total_count"]
         if not cards:
             if stats is not None:
                 stats["reached_end"] = True
+                stats["page_reports"].append(report)
+                stats["page_elapsed_sec"] += time.monotonic() - started
             break
         if stats is not None:
             stats["pages_ok"] += 1
@@ -160,9 +239,11 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=None,
                 price_tag = card.select_one(".a-card__price") or card.select_one(".price")
                 digits = re.sub(r"[^\d]", "", price_tag.get_text() if price_tag else "")
                 if not digits:
+                    report["rejected"]["missing_price"] = report["rejected"].get("missing_price", 0) + 1
                     continue
                 price = int(digits)
                 if price < 5_000_000:
+                    report["rejected"]["below_minimum_price"] = report["rejected"].get("below_minimum_price", 0) + 1
                     continue
 
                 addr_tag = card.select_one(".a-card__subtitle") or card.select_one(".a-card__text-preview")
@@ -215,8 +296,25 @@ async def parse_apartments_for_sale(city="astana", max_pages=5, max_price=None,
                     "rooms": rooms, "area": area, "published_at": published,
                     "description": "", "photo_url": photo_url,
                 })
+                report["accepted_ids"].append(lid)
             except Exception:
+                report["rejected"]["card_parse_error"] = report["rejected"].get("card_parse_error", 0) + 1
                 continue
+
+        # Unidentified/unparsed cards are a parse failure, not harmless
+        # consumer exclusions. Their page must be retried after repair.
+        parsed = len(report["accepted_ids"]) + sum(report["rejected"].values())
+        if parsed != len(cards) or report["rejected"].get("card_parse_error"):
+            report["error"] = "incomplete_card_parse"
+            if stats is not None:
+                stats["pages_ok"] -= 1
+                stats["pages_failed"] += 1
+        if stats is not None:
+            stats["page_reports"].append(report)
+            stats["page_elapsed_sec"] += time.monotonic() - started
+            stats["reached_end"] = bool(report.get("terminal_reason") and not report.get("error"))
+        if report.get("error") or report.get("terminal_reason"):
+            break
 
     logger.info("apt_parser: got %d listings from %d pages", len(listings), max_pages)
     return listings
@@ -378,6 +476,10 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
     # топа), половину — случайную выборку из остальных (чтобы карта отражала
     # реальный разброс качества).
     results.sort(key=lambda x: x["_prelim_rank"], reverse=True)
+
+    if stats and stats.get("pages_failed"):
+        logger.warning("apt_parser: search failed; no detail requests in this cycle")
+        return results
 
     from bot.db import settings as _app_settings
     detail_batch = _app_settings.get_int("DETAIL_FETCH_BATCH", 15)
