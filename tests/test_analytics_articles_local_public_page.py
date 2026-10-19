@@ -177,6 +177,21 @@ async def test_missing_local_pair_never_falls_back_to_original_article(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_kazakh_complex_label_survives_native_publication_and_rendering(monkeypatch, tmp_path):
+    base = publish_base(tmp_path)
+    snapshots = frozen(base)
+    value = local_edition()
+    value["digest"]["facts"]["sales.rooms_1"]["label"] = "ЖК Арғымақ"
+    core.publish_edition(value, root=tmp_path, now=NOW, local=True)
+    async with public_client(monkeypatch, tmp_path) as client:
+        response = await client.get(f"/analytics/{DAY}-market-local")
+        assert response.status_code == 200
+        assert "ЖК Арғымақ" in response.text
+        assert "{label:" not in response.text and "{fact:" not in response.text
+    assert_frozen(snapshots)
+
+
+@pytest.mark.asyncio
 async def test_unused_observed_source_cannot_create_public_local_routes(monkeypatch, tmp_path):
     base = publish_base(tmp_path)
     snapshots = frozen(base)
