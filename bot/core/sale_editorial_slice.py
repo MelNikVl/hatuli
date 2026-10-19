@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import math
 import statistics
 import hashlib
@@ -16,6 +17,7 @@ from bot.core.analytics_articles import district_key
 from bot.core.apartment_selection_reasons import FINISH_LEVELS
 from bot.core.daily_pick_identity import normalize_daily_pick_identity, _single_source_house
 from bot.core.daily_picks import _valid_source
+from bot.core.house_resolution import _address_street_key, _extract_house_number
 from scripts.publish_daily_picks import source_identity_rows
 
 MAX_ROWS = 100_000
@@ -25,7 +27,11 @@ AREA_ANCHORS = (35, 45, 55, 65, 75, 85, 100, 120)
 KNOWN_SOURCE_CONFLICTS = ({
     "id": "1012143050", "source_url": "https://krisha.kz/a/show/1012143050",
     "source_complex_name": "Акерке 2", "catalog_name": "Возрождение",
-    "catalog_id": 3119, "observed_at": "2026-10-19T03:18:21.462+00:00",
+    "catalog_id": 3119, "observed_date": "2026-10-19",
+    "time_precision": "date_only_for_source_complex_name",
+    "listing_checked_at": "2026-10-19T03:18:21.462+00:00",
+    "listing_receipt_sha256": "fc643f2f23cf867827bce9331a22abdf71c64c093732e9e835b6295de661e05b",
+    "listing_receipt_contains_source_complex_name": False,
     "issue_url": "https://github.com/MelNikVl/hatuli/issues/81",
     "review_document": "docs/source_complex_guard_20261019.md",
     "status": "unresolved_negative_evidence", "method": "normal_browser",
@@ -41,7 +47,28 @@ def _time(value):
 
 
 def _number(value):
-    return float(value) if type(value) in (int, float) and math.isfinite(value) else None
+    if type(value) not in (int, float, Decimal):
+        return None
+    if isinstance(value,Decimal) and not value.is_finite():
+        return None
+    try:
+        number=float(value)
+    except (ValueError,OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def reference_address_status(row, safe):
+    if safe is None or safe['complex_identity']['status']=='source_address_only':
+        return 'catalog_reference_unavailable'
+    reference = row.get('reference_house_address' if safe['complex_identity']['status']=='house_from_source' else 'reference_complex_address')
+    if not _single_source_house(reference) or not _single_source_house(row.get('address')):
+        return 'catalog_reference_unavailable'
+    source_street, ref_street = _address_street_key(row['address']), _address_street_key(reference)
+    source_house, ref_house = _extract_house_number(row['address']), _extract_house_number(reference)
+    if source_street != ref_street:
+        return 'street_spelling_unresolved'
+    return 'exact_database_reference_agreement' if source_house==ref_house else 'house_number_conflict'
 
 
 def audit_reasons(row, now, *, known_ids):
@@ -94,6 +121,11 @@ def audit_reasons(row, now, *, known_ids):
         expected = row.get("identity_complex_id") or row.get("identity_house_id")
         if row.get("membership_complex_id") != expected:
             reasons.append("canonical_membership_disagreement")
+    address_status = reference_address_status(row, safe)
+    if safe is not None:
+        safe.update(address_reference_status=address_status,price=price,area=area)
+    if address_status=='house_number_conflict':
+        reasons.append('catalog_house_number_conflict')
     return list(dict.fromkeys(reasons)), safe
 
 
@@ -126,10 +158,13 @@ def profiles(rows, *, minimum=10, confirmed_only=True):
         if confirmed_only and (row.get("property_identity_status") != "confirmed"
                                or type(row.get("property_id")) is not int or row["property_id"] <= 0):
             continue
+        if confirmed_only and row.get('address_reference_status')!='exact_database_reference_agreement':
+            continue
         district = district_key(row.get("district"))
         scopes = [("district", district[0], district[1])]
         identity = row["complex_identity"]
-        if identity["status"] in {"catalog_bound", "house_from_source"}:
+        if (identity["status"] in {"catalog_bound", "house_from_source"}
+                and row.get('address_reference_status')=='exact_database_reference_agreement'):
             scopes.append(("house" if identity["status"] == "house_from_source" else "complex",
                            identity["canonical_id"], identity["canonical_name"]))
         for anchor in AREA_ANCHORS:
@@ -216,6 +251,7 @@ def build_sale_editorial_slice(rows, *, now, browser_checks=None, minimum=10, he
                        "exclusion_primary_reasons": dict(primary), "quality_diagnostics_overlapping": dict(quality),
                        "accepted_property_identity_statuses": dict(Counter(str(r.get('property_identity_status')) for r in dedup)),
                        "accepted_scope_counts": dict(Counter(r['complex_identity']['status'] for r in dedup)),
+                       "accepted_reference_address_statuses": dict(Counter(r['address_reference_status'] for r in dedup)),
                        "ready_profiles": len(ready), "descriptive_cohorts": len(preview)},
             "decisions": decisions, "input_rows": rows, "accepted_rows": dedup,
             "ready_profiles": ready, "descriptive_cohorts": preview,

@@ -1,12 +1,13 @@
 """No real DB/source access: sale editorial audit, identity and both medians."""
 from datetime import datetime, timezone, timedelta
 from copy import deepcopy
+from decimal import Decimal
 import json
 
 import pytest
 
 from bot.core.sale_editorial_slice import build_sale_editorial_slice, KNOWN_SOURCE_CONFLICTS
-from tests.test_daily_source_complex_guard import annotated
+from tests.test_daily_source_complex_guard import annotated, catalog
 from scripts import export_sale_editorial_slice as exporter
 
 NOW = datetime(2026,10,19,10,tzinfo=timezone.utc)
@@ -30,6 +31,7 @@ def row(i, **changes):
              is_active=True,is_duplicate=False,dup_needs_review=False,duplicate_of=None,
              finish_level='renovated',property_id=i+1,property_identity_status='confirmed',
              property_link_count=1,membership_complex_id=3119)
+    r['reference_complex_address']='Туран 6'
     r.update(changes)
     return r
 
@@ -53,7 +55,8 @@ def test_known_akerke_conflict_removed_even_if_database_name_was_overwritten():
     assert actual['ready_profiles']==expected['ready_profiles']
     assert actual['descriptive_cohorts']==expected['descriptive_cohorts']
     assert 'known_source_conflict' in next(d for d in actual['decisions'] if d['id']==bad['id'])['reasons']
-    assert KNOWN_SOURCE_CONFLICTS[0]['observed_at'].startswith('2026-10-19')
+    assert KNOWN_SOURCE_CONFLICTS[0]['observed_date']=='2026-10-19'
+    assert 'observed_at' not in KNOWN_SOURCE_CONFLICTS[0]
 
 
 def test_other_publication_of_held_property_cannot_influence_either_median():
@@ -85,6 +88,40 @@ def test_stale_browser_receipts_cannot_relabel_unvisited_market():
 def test_umbrella_without_exact_house_is_not_a_comparable():
     d=build_sale_editorial_slice([row(1,identity_complex_is_umbrella=True)],now=NOW)
     assert 'umbrella_house_unresolved' in d['decisions'][0]['reasons']
+
+
+@pytest.mark.parametrize('value',[Decimal('NaN'),Decimal('sNaN'),Decimal('Infinity'),Decimal('1e9999'),True])
+def test_nonfinite_numeric_and_bool_cannot_enter_price_distribution(value):
+    d=build_sale_editorial_slice([row(1,price=value)],now=NOW)
+    assert not d['accepted_rows']
+
+
+def test_postgresql_numeric_values_are_normalized_without_losing_sample():
+    d=build_sale_editorial_slice([row(i,price=Decimal(30_000_000+i*100_000),area=Decimal('60.0')) for i in range(12)],now=NOW)
+    assert d['counts']['accepted_after_identity_and_dedup']==12 and d['ready_profiles']
+
+
+def test_multi_property_relation_is_not_min_id_as_confirmed_identity():
+    d=build_sale_editorial_slice([row(1,property_link_count=2)],now=NOW)
+    assert not d['accepted_rows'] and 'property_review_pending' in d['decisions'][0]['reasons']
+    assert 'count(DISTINCT property_id)' in exporter.SALES_SQL
+
+
+@pytest.mark.parametrize('source,reference,expected',[
+    ('Туран 6/1','Туран 6/2','house_number_conflict'),
+    ('Туран 6б','Туран 6','house_number_conflict'),
+    ('Туран 6','Косшыгулулы 6','street_spelling_unresolved'),
+    ('Туран 6',None,'catalog_reference_unavailable'),
+])
+def test_reference_addresses_preserve_fraction_letters_and_unknown(source,reference,expected):
+    rows=[row(i,address=source,reference_complex_address=reference) for i in range(12)]
+    d=build_sale_editorial_slice(rows,now=NOW)
+    if expected=='house_number_conflict':
+        assert not d['accepted_rows'] and 'catalog_house_number_conflict' in d['decisions'][0]['reasons']
+    else:
+        assert not d['ready_profiles'] and d['descriptive_cohorts']
+        assert all(g['scope']=='district' for g in d['descriptive_cohorts'])
+        assert all(r['address_reference_status']==expected for r in d['accepted_rows'])
 
 
 @pytest.mark.parametrize('change,reason',[
@@ -156,3 +193,35 @@ async def test_reader_fails_closed_without_readonly_transaction():
         assert kw['server_settings']['default_transaction_read_only']=='on';return c
     with pytest.raises(ValueError,match='Read-only'):await exporter.read_sale_slice('placeholder',NOW,connect=connect)
     assert c.closed
+
+
+@pytest.mark.asyncio
+async def test_reader_uses_one_repeatable_read_and_bounded_existing_identity_evidence():
+    class Transaction:
+        async def __aenter__(self):return self
+        async def __aexit__(self,*a):pass
+    class Connection:
+        closed=False
+        reads=[]
+        def transaction(self,**kw):
+            assert kw==dict(readonly=True,isolation='repeatable_read');return Transaction()
+        async def fetchval(self,q):
+            return 'on' if q=='SHOW transaction_read_only' else 'repeatable read'
+        async def fetch(self,q,*params):
+            self.reads.append(q)
+            assert q.lstrip().upper().startswith(('SELECT','WITH'))
+            if q==exporter.SALES_SQL:return [row(1)]
+            if q==exporter.MEMBERSHIP_SQL:return [dict(listing_id=row(1)['id'],complex_id=3119)]
+            if q.lstrip().startswith('SELECT id,name,address,'):
+                return [dict(catalog(),address='Туран 6')]
+            return []
+        async def close(self):self.closed=True
+    c=Connection()
+    async def connect(dsn,**kw):
+        assert kw['server_settings']['default_transaction_read_only']=='on';return c
+    out=await exporter.read_sale_slice('placeholder',NOW,connect=connect)
+    assert c.closed and out['database_writes']==0
+    assert out['rows'][0]['reference_complex_address']=='Туран 6'
+    assert out['rows'][0]['identity_checked'] is True
+    assert out['rows'][0]['membership_complex_id']==3119
+    assert len(c.reads)==8

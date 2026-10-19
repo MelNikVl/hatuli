@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
 import json
 import os
@@ -23,15 +24,18 @@ from bot.core.sale_editorial_slice import MAX_ROWS, KNOWN_SOURCE_CONFLICTS, buil
 from scripts.publish_daily_picks import IDENTITY_READS
 
 SALES_SQL = """
-SELECT a.id,a.url,a.price,a.area,a.rooms,a.floor,a.floors_total,a.district,a.address,
+SELECT a.id,a.url,a.price::float8 AS price,a.area::float8 AS area,a.rooms,a.floor,a.floors_total,a.district,a.address,
        a.market_type,a.last_seen,a.is_active,a.archived_at,a.is_duplicate,a.dup_needs_review,a.duplicate_of,
        a.complex_id,a.complex_resolution,a.resolved_house_id,a.house_attribution,a.finish_level,
        complex_name_key(a.complex_name) AS identity_raw_name_key,
        a.complex_name AS stored_source_complex_name,
        pl.property_id, p.identity_status AS property_identity_status,
-       CASE WHEN pl.property_id IS NULL THEN 0 ELSE 1 END AS property_link_count
+       coalesce(pl.property_link_count,0) AS property_link_count
 FROM apartment_listings a
-LEFT JOIN property_listings pl ON pl.listing_id=a.id
+LEFT JOIN LATERAL (
+    SELECT min(property_id) AS property_id,count(DISTINCT property_id) AS property_link_count
+    FROM property_listings WHERE listing_id=a.id
+) pl ON TRUE
 LEFT JOIN properties p ON p.property_id=pl.property_id
 WHERE a.is_active IS TRUE AND a.last_seen BETWEEN $1::timestamptz-interval '72 hours' AND $1
 ORDER BY a.id LIMIT $2
@@ -61,6 +65,10 @@ async def read_sale_slice(dsn, now, *, connect=None):
                 raise ValueError("Incomplete bounded sale scan")
             evidence = {}
             for name, sql, bound in IDENTITY_READS:
+                if name=='complexes':
+                    if 'SELECT id,name,' not in sql:
+                        raise ValueError('Catalog query changed; review address projection')
+                    sql=sql.replace('SELECT id,name,','SELECT id,name,address,',1)
                 values = [dict(r) for r in await connection.fetch(sql, bound+1)]
                 if len(values) > bound:
                     raise ValueError("Incomplete bounded identity evidence: " + name)
@@ -80,7 +88,12 @@ async def read_sale_slice(dsn, now, *, connect=None):
             holds = await connection.fetch(
                 "SELECT property_id FROM property_listings WHERE listing_id=ANY($1::text[])",
                 [r['id'] for r in KNOWN_SOURCE_CONFLICTS])
-            return {"rows": annotate_daily_pick_identity_rows(rows, **evidence),
+            annotated=annotate_daily_pick_identity_rows(rows, **evidence)
+            catalog={r['id']:r for r in evidence['complexes']}
+            for row in annotated:
+                row['reference_complex_address']=catalog.get(row.get('identity_complex_id'),{}).get('address')
+                row['reference_house_address']=catalog.get(row.get('identity_house_id'),{}).get('address')
+            return {"rows": annotated,
                     "held_property_ids": sorted({r['property_id'] for r in holds}),
                     "evidence_counts": {k:len(v) for k,v in evidence.items()},
                     "membership_rows": len(memberships), "database_writes": 0}
@@ -91,6 +104,8 @@ async def read_sale_slice(dsn, now, *, connect=None):
 def _default(value):
     if isinstance(value, datetime):
         return value.isoformat()
+    if isinstance(value,Decimal) and value.is_finite():
+        return int(value) if value==value.to_integral_value() else float(value)
     raise TypeError("Unsupported export value type")
 
 
