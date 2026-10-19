@@ -4,7 +4,8 @@ import sqlite3
 
 import pytest
 
-from bot.core.complex_membership import active_sale_membership_ctes_sql, listing_complex_match_sql
+from bot.core.complex_membership import (active_sale_membership_ctes_sql, listing_complex_match_sql,
+                                         listing_complex_page_match_sql)
 from bot.core.sitemap import COMPLEX_SITEMAP_SQL
 
 
@@ -105,6 +106,21 @@ def test_bulk_membership_matches_existing_page_rule(database, include_children):
                           'unbound_name', 'unbound_house', 'invalid_house'} for lid, _ in bulk)
 
 
+@pytest.mark.parametrize('include_children', [False, True])
+def test_page_id_set_preserves_archived_and_duplicate_membership(database, include_children):
+    for cid in (1, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 999):
+        results = []
+        for fn in (listing_complex_match_sql, listing_complex_page_match_sql):
+            predicate = fn(include_children=include_children)
+            results.append(set(database.execute('SELECT id FROM apartment_listings WHERE ' + predicate,
+                                                {"1": cid})))
+        assert results[0] == results[1]
+        if cid == 6:
+            assert ('duplicate',) in results[1]
+        if cid == 7:
+            assert ('inactive',) in results[1]
+
+
 def test_sitemap_counts_canonical_and_child_membership_once(database):
     rows = list(database.execute(COMPLEX_SITEMAP_SQL))
     assert [(r[0], r[2]) for r in rows] == [(1, 5), (9, 3), (10, 3), (8, 1)]
@@ -157,6 +173,17 @@ async def test_bulk_membership_in_isolated_postgres(include_children):
                                     + predicate, cid)
             expected.update((row['id'], cid) for row in rows)
         assert bulk == expected
+        for cid in (1, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 999):
+            results = []
+            for fn in (listing_complex_match_sql, listing_complex_page_match_sql):
+                predicate = fn(include_children=include_children)
+                results.append({row['id'] for row in await conn.fetch(
+                    'SELECT id FROM apartment_listings WHERE ' + predicate, cid)})
+            assert results[0] == results[1]
+            if cid == 6:
+                assert 'duplicate' in results[1]
+            if cid == 7:
+                assert 'inactive' in results[1]
         sitemap = await conn.fetch(COMPLEX_SITEMAP_SQL)
         assert [(r['id'], r['active_cnt']) for r in sitemap] == [(1, 5), (9, 3), (10, 3), (8, 1)]
     finally:
