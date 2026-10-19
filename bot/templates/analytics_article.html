@@ -18,6 +18,7 @@
     <p class="ha-published">Hatuli · Опубликовано <time datetime="{{ article.edition_date }}">{{ article.published_label }}</time></p>
     {% if article.modified_label %}<p class="ha-modified">Обновлено {{ article.modified_label }}{% if article.revision_reason %} · {{ article.revision_reason }}{% endif %}</p>{% endif %}
   </header>
+  {% if brief %}<div class="ha-brief-charts">{% for chart in article.charts %}{{ render_analytics_chart(chart) }}{% endfor %}</div>{% endif %}
   {% if article.key_points %}<aside class="ha-takeaways" aria-labelledby="ha-takeaways-title"><h2 id="ha-takeaways-title">Главное за минуту</h2><ul>{% for point in article.key_points %}<li>{{ point }}</li>{% endfor %}</ul></aside>{% endif %}
   {% if not brief %}
   <div class="ha-article-charts">{% for chart in article.charts %}{{ render_analytics_chart(chart) }}{% endfor %}</div>
@@ -29,15 +30,16 @@
     <section class="ha-article-section" id="section-{{ loop.index }}">
       <h2>{{ section.heading }}</h2>
       {% for paragraph in section.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}
-      {% if brief and section.chart_id %}{% for chart in article.charts if chart.id == section.chart_id %}{{ render_analytics_chart(chart) }}{% endfor %}{% endif %}
     </section>
     {% endfor %}
   </div>
   {% if not brief %}</details>{% endif %}
   {% if article.sources or article.methodology %}
   <footer class="ha-article-evidence">
+    {% if brief %}<details class="ha-evidence-disclosure"><summary>Источники и методика</summary>{% endif %}
     {% if article.sources %}<section aria-labelledby="ha-sources-title"><h2 id="ha-sources-title">Источники и даты данных</h2><ul class="ha-sources">{% for source in article.sources %}<li><a href="{{ source.url }}" {% if source.url.startswith('https://') %}target="_blank" rel="noopener noreferrer"{% endif %}>{{ source.label }} <span aria-hidden="true">↗</span></a><span>{{ source.as_of_label }}</span></li>{% endfor %}</ul></section>{% endif %}
     {% if article.methodology %}<details class="ha-methodology"><summary>Как считали и что важно учитывать</summary><ul>{% for item in article.methodology %}<li>{{ item }}</li>{% endfor %}</ul></details>{% endif %}
+    {% if brief %}</details>{% endif %}
   </footer>
   {% endif %}
   <nav class="ha-article-next" aria-label="Продолжить просмотр"><a href="/analytics">← Вся аналитика</a><a href="{% if article.kind == 'rent' %}/best-rentals{% else %}/best-apartments{% endif %}">Посмотреть квартиры <span aria-hidden="true">→</span></a></nav>

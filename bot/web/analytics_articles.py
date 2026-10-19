@@ -90,6 +90,7 @@ def _timeline_plot(rows):
     if len(current) > 1:
         segments.append(" ".join(current))
     return {"points": points, "segments": segments, "ticks": ticks,
+            "period_label": f"{points[0]['month_label']} {months[0] // 12} — {points[-1]['month_label']} {months[-1] // 12}",
             "zero_y": y(0) if minimum <= 0 <= maximum else None,
             "scale_label": f"Шкала: {_axis_number(minimum, step)}–{_axis_number(maximum, step)}",
             "has_gaps": any(b != a + 1 for a, b in zip(months, months[1:])),

@@ -6,7 +6,7 @@
     <h3 id="{{ title_id }}">{{ chart.title }}</h3>
     {% if chart.caption and not compact %}<p>{{ chart.caption }}</p>{% endif %}
   </figcaption>
-  <div class="ha-chart-unit">{{ chart.unit }}</div>
+  <div class="ha-chart-context"><div class="ha-chart-unit">{{ chart.unit }}</div>{% if chart.plot %}<span class="ha-chart-period">{{ chart.plot.period_label }}</span>{% endif %}</div>
   {% if chart.plot %}
   <div class="ha-timechart" data-analytics-timeline>
     <div class="ha-time-scale" aria-hidden="true">{% for tick in chart.plot.ticks %}<span style="top:{{ tick.top }}%">{{ tick.label }}</span>{% endfor %}</div>

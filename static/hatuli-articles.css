@@ -167,6 +167,17 @@
 .ha-chart-compact .ha-timechart { gap: 8px; }
 .ha-chart-compact .ha-time-labels { font-size: 10px; }
 .ha-chart-compact .ha-time-summary > span { display: none; }
+.ha-chart-context { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 5px 12px; margin: 11px 0 13px; }
+.ha-chart-context .ha-chart-unit { margin: 0; }
+.ha-chart-period { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.ha-brief-charts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; margin: 20px 0 24px; }
+.ha-brief-charts > .ha-chart { margin: 0; padding: 16px; }
+.ha-brief-charts .ha-time-canvas, .ha-brief-charts .ha-time-scale { height: 145px; }
+.ha-brief-charts .ha-timechart { gap: 8px; }
+.ha-brief-charts .ha-time-scale { min-width: 43px; font-size: 10px; }
+.ha-brief-charts .ha-time-summary { display: grid; }
+.ha-evidence-disclosure > summary { color: var(--text); font-size: 14px; font-weight: 650; cursor: pointer; min-height: 32px; }
+.ha-evidence-disclosure[open] > summary { margin-bottom: 18px; }
 @media (max-width: 700px) {
   .ha-story-card { padding: 18px; }
   .ha-story-summary { line-height: 1.6; margin-bottom: 16px; }
@@ -179,4 +190,6 @@
   .ha-time-canvas, .ha-time-scale { height: 190px; }
   .ha-time-scale { font-size: 10px; min-width: 43px; }
   .ha-time-summary { display: grid; }
+  .ha-brief-charts { grid-template-columns: minmax(0,1fr); gap: 16px; }
+  .ha-brief-charts .ha-time-canvas, .ha-brief-charts .ha-time-scale { height: 180px; }
 }

@@ -72,6 +72,12 @@ async def test_brief_timeline_has_all_actual_months_and_values_with_accessible_t
     assert '<th scope="col">Наблюдений</th>' not in response.text
     assert "None" not in response.text
     assert "ha-extended" not in response.text
+    assert response.text.index('class="ha-brief-charts"') < response.text.index('class="ha-takeaways"')
+    assert response.text.index("data-analytics-chart") < response.text.index('class="ha-article-body"')
+    body = response.text.split('class="ha-article-body"', 1)[1].split('</div>', 1)[0]
+    assert "data-analytics-chart" not in body
+    assert 'class="ha-evidence-disclosure"><summary>Источники и методика</summary>' in response.text
+    assert "апр 2026 — сен 2026" in response.text
 
 
 @pytest.mark.asyncio
