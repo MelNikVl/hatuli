@@ -343,3 +343,11 @@ def test_displayed_daily_threshold_also_funds_every_interim_month_from_same_budg
     unfunded = calculate(budget=12_000_000, daily={**inputs, 'occupancy_pct': threshold - 0.1})
     assert unfunded['strategies'] == []
     assert unfunded['diagnostics'][0]['status'] == 'insufficient_reserve'
+
+
+def test_finite_but_extremely_large_occupancy_ratio_cannot_overflow_rounding():
+    result = calculate(monthly=monthly(), daily=daily(adr=1e-302))
+    row = next(item for item in result['strategies'] if item['key'] == 'daily')
+    assert row['break_even_occupancy_pct'] is None
+    assert row['break_even_cash_occupancy_pct'] is None
+    json.dumps(result, allow_nan=False)

@@ -75,7 +75,8 @@ def _occupancy_threshold(needed: float, after_fees: float, stays_per_month: floa
     result = max(stays_per_month * HORIZON_MONTHS / MODEL_DAYS * 100,
                  needed / after_fees * 100, funding_floor, 0)
     # Round up: a displayed funding threshold must pass when entered again.
-    return math.ceil(result * 10_000) / 10_000 if math.isfinite(result) else None
+    scaled = result * 10_000
+    return math.ceil(scaled) / 10_000 if math.isfinite(scaled) else None
 
 
 def _threshold(key: str, metric: str, value: float | None, benchmark_key: str, basis: str) -> dict:
