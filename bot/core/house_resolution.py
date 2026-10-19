@@ -101,6 +101,22 @@ def _same_house_address(listing_address: str | None, child_address: str | None) 
     return number.startswith("уч")
 
 
+def conflicting_house_addresses(first: str | None, second: str | None) -> bool:
+    """A known negative: the same street but different full house/plot IDs.
+
+    Missing parts, different street spellings and plot-versus-house notation
+    remain unknown. This never approves an address alias or a physical merge.
+    """
+    if not isinstance(first, str) or not isinstance(second, str):
+        return False
+    first_street, second_street = _address_street_key(first), _address_street_key(second)
+    first_number, second_number = _extract_house_number(first), _extract_house_number(second)
+    return bool(first_street and first_street == second_street
+                and first_number and second_number
+                and first_number.startswith("уч") == second_number.startswith("уч")
+                and first_number != second_number)
+
+
 def _house_text_token(house_name: str, umbrella_name: str) -> str | None:
     """Отличительный суффикс имени дома относительно зонтика — 'Qaiyndy 3'
     минус 'ЖК Qaiyndy' -> '3'; 'Камал-2' минус 'Камал' -> '2'. Возвращает
@@ -180,6 +196,10 @@ async def resolve_house(
     одного объявления. Возвращает {"house_id", "method", "detail"} или
     None (остаётся на зонтике — недостаточно уверенности)."""
     children = children if children is not None else await get_umbrella_children(umbrella_id)
+    # A matching token or nearby point cannot override a known full-number
+    # contradiction on the same street. Unknown spellings remain unresolved.
+    children = [child for child in children
+                if not conflicting_house_addresses(listing_address, child.get("address"))]
     if not children:
         return None
 

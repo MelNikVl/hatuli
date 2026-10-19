@@ -71,7 +71,7 @@ DEFAULTS: dict[str, str] = {
     # DEEP_SWEEP_BATCH_MAX. DEEP_SWEEP_CYCLE_PERIOD_MIN — замеряемая
     # самим сервисом EMA периода цикла (работа + пауза), сюда попадает
     # только сид: реальное значение сервис перезапишет в app_settings.
-    "DEEP_SWEEP_CIRCLE_TARGET_HOURS": "48",
+    "DEEP_SWEEP_CIRCLE_TARGET_HOURS": "24",
     "DEEP_SWEEP_BATCH_MAX": "160",
     "DEEP_SWEEP_CYCLE_PERIOD_MIN": "120",
     # Веса компонентов Deal Score (bot/core/deal_score.py) — сумма нормализуется

@@ -248,6 +248,74 @@ def test_daily_cycle_is_allowlisted_and_cannot_be_supplied_with_arbitrary_scope(
     assert result["list_status"] is None and result["stages"]["index"]["status"] == "unknown"
 
 
+def test_fresh_catalog_does_not_hide_missing_full_detail_refresh():
+    rows = sample_rows()
+    rows[0].update(clean_active_rows=4829, fresh_72h=4669, catalog_fresh_72h=4669,
+        detail_fresh_24h=0, detail_fresh_72h=4, detail_missing=4825,
+        detail_stale_72h=4825, detail_attempted_24h=16,
+        last_detail_success_at=NOW-timedelta(hours=23))
+    result = health.project_rental_health(rows, sample_settings(), now=NOW)
+    monthly = result['types'][0]
+    assert monthly['fresh_72h'] == 4669
+    assert monthly['detail_fresh_72h'] == 4 and monthly['detail_stale_72h'] == 4825
+    assert monthly['detail_fresh_share_pct'] == 0.08
+    assert result['apartment_periods'][0]['detail_fresh_72h'] == 4
+    assert monthly['last_detail_success_at'] == (NOW-timedelta(hours=23)).isoformat()
+
+
+def test_optimistic_eta_cannot_confirm_the_24_hour_target():
+    settings = sample_settings()
+    settings[PREFIX+'_DURATION_SEC'] = str(32*3600)
+    settings[PREFIX+'_ESTIMATED_HOURS'] = '12'
+    monthly = health.project_rental_health(sample_rows(), settings, now=NOW)['types'][0]
+    assert monthly['last_completion_verified']
+    assert monthly['target_circle_hours'] == 24
+    assert not monthly['last_round_within_target']
+    assert not monthly['estimated_target_missed']
+    settings[PREFIX+'_DURATION_SEC'] = str(20*3600)
+    assert health.project_rental_health(sample_rows(), settings, now=NOW)['types'][0]['last_round_within_target']
+    settings[PREFIX+'_COMPLETED_AT'] = (NOW-timedelta(hours=25)).isoformat()
+    assert not health.project_rental_health(sample_rows(), settings, now=NOW)['types'][0]['last_round_within_target']
+
+
+def test_detail_cooldown_is_a_distinct_result_and_private_evidence_is_filtered():
+    cycle = {'type':'apartment', 'scope':'apartment', 'rent_period':'monthly',
+        'detail': {'queue_scope':'apartment', 'status':'cooldown',
+            'selected':2, 'detail_attempts':0, 'success':0, 'checked':0,
+            'cooldown_remaining_seconds':900, 'oldest_due_age_hours':80,
+            'url':'https://krisha.kz/a/show/private-id', 'listing_id':'private-id',
+            'cookies':'secret-cookie', 'raw_error':'private-exception'}}
+    safe = health._safe_cycle(json.dumps(cycle))
+    assert safe['detail']['scope_label'] == 'Квартиры · помесячно'
+    assert safe['detail']['status'] == 'cooldown'
+    assert safe['detail']['success'] == 0 and safe['detail']['cooldown_remaining_seconds'] == 900
+    assert 'private-' not in json.dumps(safe) and 'secret-cookie' not in json.dumps(safe)
+    cycle['detail'].update(queue_scope=[],status={'secret':'private'})
+    safe = health._safe_cycle(json.dumps(cycle))
+    assert safe['detail']['scope_label'] is None and safe['detail']['status'] == 'unknown'
+
+
+def test_list_pause_and_queue_size_are_allowlisted_without_raw_evidence():
+    raw = {'list_status':'cooldown', 'list_cooldown_remaining_seconds':920,
+           'detail':{'status':'cooldown','eligible_due':3914}, 'headers':{'cookie':'secret'}}
+    safe = health._safe_cycle(json.dumps(raw))
+    assert safe['list_status'] == 'cooldown' and safe['list_cooldown_remaining_seconds'] == 920
+    assert safe['detail']['eligible_due'] == 3914 and 'secret' not in json.dumps(safe)
+    raw.update(list_cooldown_remaining_seconds=-1)
+    raw['detail']['eligible_due'] = True
+    safe = health._safe_cycle(json.dumps(raw))
+    assert safe['list_cooldown_remaining_seconds'] is None and safe['detail']['eligible_due'] is None
+
+
+def test_admin_html_separates_full_pages_from_list_updates(monkeypatch):
+    client, _ = make_client(monkeypatch, admin=True)
+    page = client.get('/admin/rental-health')
+    assert page.status_code == 200
+    assert 'Полная страница проверена за 72 ч' in page.text
+    assert 'Свежие характеристики' in page.text
+    assert 'Цель: не более 24 часов' in page.text
+
+
 def test_detail_touch_does_not_claim_recent_catalog():
     rows = sample_rows()
     rows[0].update(last_observed_at=NOW, last_catalog_observed_at=NOW-timedelta(days=4),

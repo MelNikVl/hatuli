@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 
 import httpx
 
@@ -78,20 +79,32 @@ ARCHIVE_MARKERS = (
 async def _check_one(client: httpx.AsyncClient, url: str) -> str | None:
     """'deleted' = страницы больше нет (404/410), 'archived' = помечено
     архивом на странице, 'alive' = живое, None = не удалось проверить."""
+    from bot.core.apartment_details import detail_fetch_cooldown_remaining, _record_detail_block
+    if detail_fetch_cooldown_remaining():
+        logger.warning("archive detail check paused by shared source cooldown")
+        raise RuntimeError("blocked")
     try:
+        # Count actual started attempts, including timeout/cancellation;
+        # an early cooldown makes no request and consumes no counter.
+        REQUEST_COUNTS["archive_check"] += 1
         resp = await client.get(url)
     except Exception as exc:
         logger.warning("archive check failed %s: %s", url, exc)
         return None
-    REQUEST_COUNTS["archive_check"] += 1
     if resp.status_code in (404, 410):
         return "deleted"
-    if resp.status_code in (403, 429):
+    if resp.status_code in (403, 429, 468):
+        _record_detail_block(resp.status_code, url)
         logger.warning("archive check blocked (%s), stopping", resp.status_code)
         raise RuntimeError("blocked")
     if resp.status_code != 200:
         return None
     text = resp.text
+    if (re.search(r"подтвердите[^<]{0,80}(?:не робот|робот)|captcha|access denied", text[:20000], re.I)
+            and not re.search(r'class=["\'][^"\']*offer__', text)):
+        _record_detail_block(200, url)
+        logger.warning("archive detail check received a source challenge, stopping")
+        raise RuntimeError("blocked")
     return "archived" if any(m in text for m in ARCHIVE_MARKERS) else "alive"
 
 

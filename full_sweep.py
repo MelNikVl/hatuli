@@ -49,6 +49,8 @@ PAUSE_BETWEEN = 20  # сек между батчами
 async def upsert(r: dict) -> str:
     """Вставка/обновление одного объявления (те же поля, что в service_apartments)."""
     from bot.db.pg import execute as pg_exec, fetchrow as pg_get
+    from bot.core.sale_detail_persistence import catalog_only_row, save_source_details
+    source_row, r = r, catalog_only_row(r)
 
     sd = r.get("score_data", {})
     bd = sd.get("breakdown", {})
@@ -57,7 +59,7 @@ async def upsert(r: dict) -> str:
 
     exists = await pg_get("SELECT id, price FROM apartment_listings WHERE id=$1", r["id"])
     if not exists:
-        await pg_exec("""
+        result = await pg_exec("""
             INSERT INTO apartment_listings
                 (id, url, title, price, area, rooms, address, district, complex_name,
                  est_rent, yield_pct, payback_years,
@@ -91,6 +93,9 @@ async def upsert(r: dict) -> str:
             bargain.get("discount_pct"), bargain.get("recommendation"),
             r.get("details_fetched", False),
         )
+        if result != "INSERT 0 1":
+            raise RuntimeError("Sale insert not acknowledged; retry the page")
+        await save_source_details(source_row, execute=pg_exec)
         return "new"
 
     # уже есть — обновляем цену/скор/last_seen (лёгкий апдейт)
@@ -102,12 +107,19 @@ async def upsert(r: dict) -> str:
         except Exception:
             pass
     # score_total не трогаем — считается отдельно в deal_score.apply_deal_scores()
-    await pg_exec("""
+    result = await pg_exec("""
         UPDATE apartment_listings SET
-            price=$2, est_rent=$3, yield_pct=$4, last_seen=NOW()
+            price=$2, est_rent=$3, yield_pct=$4, last_seen=NOW(),
+            title=COALESCE(NULLIF($5,''),title), rooms=COALESCE($6,rooms), area=COALESCE($7,area),
+            address=COALESCE(NULLIF($8,''),address), district=COALESCE(NULLIF($9,''),district),
+            floor=COALESCE($10,floor), floors_total=COALESCE($11,floors_total)
         WHERE id=$1
     """, r["id"], r.get("price"), r.get("est_rent", 0),
-         r.get("yield_pct", 0))
+         r.get("yield_pct", 0), r.get('title'), r.get('rooms'), r.get('area'),
+         r.get('address'), r.get('district'), r.get('floor'), r.get('floors_total'))
+    if result != "UPDATE 1":
+        raise RuntimeError("Sale update not acknowledged; retry the page")
+    await save_source_details(source_row, execute=pg_exec)
     return "upd"
 
 
@@ -115,6 +127,8 @@ async def main():
     from bot.db.pg import init_pool
     from bot.db import settings as app_settings
     from bot.core.apartment_parser import analyze_apartments
+    from bot.core.sale_detail_persistence import analyze_with_attempt_capture
+    from bot.core.sale_detail_persistence import persist_actual_attempts
 
     await init_pool(DATABASE_URL)
     await app_settings.load()
@@ -130,7 +144,7 @@ async def main():
     while True:
         stats: dict = {}
         try:
-            results = await analyze_apartments(
+            results = await analyze_with_attempt_capture(analyze_apartments,
                 "astana", max_pages=BATCH, start_page=page,
                 max_price=0,  # БЕЗ потолка — вся выдача
                 stats=stats)
@@ -142,35 +156,42 @@ async def main():
 
         pages_ok = stats.get("pages_ok", 0)
         pages_failed = stats.get("pages_failed", 0)
-        reached_end = stats.get("reached_end", False)
 
+        saved_ids = set()
         for r in results:
             try:
                 if await upsert(r) == "new":
                     total_new += 1
                 else:
                     total_upd += 1
+                saved_ids.add(str(r["id"]))
             except Exception as e:
                 log.warning("DB error %s: %s", r.get("id"), e)
+                await persist_actual_attempts({r['id']: r.get('_source_details_attempted_at')})
 
         log.info("Страницы %d-%d: %d объявлений (ok=%d, fail=%d) | всего +%d новых, ~%d обновлено",
                  page, page + BATCH - 1, len(results), pages_ok, pages_failed,
                  total_new, total_upd)
 
-        if reached_end:
+        from bot.core.sale_sweep import acknowledged_prefix
+        next_page, complete = acknowledged_prefix(stats.get("page_reports", []), saved_ids, start_page=page)
+        if complete:
             log.info("=== КОНЕЦ ВЫДАЧИ на ~стр. %d. Итог: +%d новых, ~%d обновлено ===",
                      page + pages_ok, total_new, total_upd)
             await app_settings.set("FULL_SWEEP_PAGE", "1")
             break
 
-        if pages_ok == 0 and pages_failed > 0:
-            log.warning("Все страницы батча упали — пауза 120с, повтор с той же позиции")
-            await asyncio.sleep(120)
-            continue
-
-        page += pages_ok + pages_failed
+        # Successful prefix only: both parse errors and failed upserts
+        # retain the first unacknowledged page across restarts.
+        stalled = next_page == page or bool(pages_failed)
+        page = next_page
         await app_settings.set("FULL_SWEEP_PAGE", str(page))
-        await asyncio.sleep(PAUSE_BETWEEN)
+        if stats.get("blocked"):
+            retry = max([1800, *(r.get("retry_after_seconds", 0) for r in stats.get("page_reports", []))])
+            log.warning("Source blocked; retain page %d and pause %.0f seconds", page, retry)
+            await asyncio.sleep(retry)
+        else:
+            await asyncio.sleep(120 if stalled else PAUSE_BETWEEN)
 
     log.info("Готово. Скоринг/координаты/зоны добьёт основной сервис в своих циклах.")
 

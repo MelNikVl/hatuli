@@ -1,5 +1,8 @@
 """Архивация по last_seen (задача 2026-10-03): гейт здоровья deep sweep."""
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
+
+import pytest
 
 from bot.core import stale_archive as sa
 
@@ -7,9 +10,20 @@ NOW = datetime(2026, 10, 3, 6, 0, tzinfo=timezone.utc)
 
 
 def _s(completed_h_ago=10, duration_h=33.5, pages=1938, total=38688):
+    from bot.core.sale_sweep import SaleSweep, COMPLETED_KEY
+    done = NOW - timedelta(hours=completed_h_ago)
+    proof = SaleSweep.new(done - timedelta(hours=duration_h))
+    reports = []
+    for page in range(1, pages + 1):
+        ids = [str(100000 + (page - 1) * 20 + i) for i in range(20)]
+        reports.append({"page": page, "ids": ids, "accepted_ids": ids,
+                        "checked_at": done.isoformat(), "total_count": total,
+                        "terminal_reason": "explicit_last_page" if page == pages else None})
+    proof.account(reports, [i for r in reports for i in r["ids"]], now=done)
     return {'DEEP_SWEEP_CIRCLE_COMPLETED_AT': (NOW - timedelta(hours=completed_h_ago)).isoformat(),
             'DEEP_SWEEP_CIRCLE_DURATION_SEC': str(duration_h * 3600),
-            'DEEP_SWEEP_CIRCLE_COMPLETED_PAGES': str(pages), 'DEEP_SWEEP_CIRCLE_COMPLETED_TOTAL': str(total)}
+            'DEEP_SWEEP_CIRCLE_COMPLETED_PAGES': str(pages), 'DEEP_SWEEP_CIRCLE_COMPLETED_TOTAL': str(total),
+            COMPLETED_KEY: proof.dumps()}
 
 
 def test_healthy_sweep():
@@ -31,9 +45,11 @@ def test_too_slow_circle_blocks():
     assert not sa.sweep_health(_s(duration_h=96), NOW).healthy
 
 
-def test_naive_timestamp_treated_as_utc():
-    s = _s(); s['DEEP_SWEEP_CIRCLE_COMPLETED_AT'] = (NOW - timedelta(hours=5)).replace(tzinfo=None).isoformat()
-    assert sa.sweep_health(s, NOW).healthy
+def test_legacy_timestamp_and_planned_pages_cannot_authorize_archiving():
+    from bot.core.sale_sweep import COMPLETED_KEY
+    s = _s()
+    del s[COMPLETED_KEY]
+    assert not sa.sweep_health(s, NOW).healthy
 
 
 def test_garbage_settings_do_not_crash():
@@ -97,5 +113,38 @@ def test_half_catalog_circle_blocks_archiving():
 
 
 def test_unknown_coverage_blocks_archiving():
-    s = _s(); del s['DEEP_SWEEP_CIRCLE_COMPLETED_PAGES']
+    from bot.core.sale_sweep import COMPLETED_KEY
+    s = _s(); del s[COMPLETED_KEY]
     assert not sa.sweep_health(s, NOW).healthy
+
+
+@pytest.mark.asyncio
+async def test_sale_archive_excludes_recent_unpriced_source_ids_without_touching_price_freshness(monkeypatch):
+    from bot.core.sale_sweep import SaleSweep, COMPLETED_KEY
+    from bot.db import pg
+    settings = _s(pages=3, total=60)
+    proof = SaleSweep.loads(settings[COMPLETED_KEY])
+    proof.pages['1']['saved_ids'].remove('100000')
+    proof.pages['1']['rejected'] = {'missing_price': 1}
+    settings[COMPLETED_KEY] = proof.dumps()
+    monkeypatch.setattr(sa, '_settings', AsyncMock(return_value=settings))
+    count = AsyncMock(return_value=1)
+    update = AsyncMock(return_value='UPDATE 1')
+    monkeypatch.setattr(pg, 'fetchval', count)
+    monkeypatch.setattr(pg, 'execute', update)
+    result = await sa.archive_stale(now=NOW)
+    assert result['healthy'] and result['archived'] == 1
+    assert count.call_args.args[-1] == ['100000']
+    assert update.call_args.args[-1] == ['100000']
+    assert 'NOT(id=ANY($3::text[]))' in update.call_args.args[0]
+    assert 'last_seen=' not in update.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_sale_archive_reads_atomic_evidence_keys(monkeypatch):
+    from bot.core.sale_sweep import STATE_KEY, COMPLETED_KEY
+    from bot.db import pg
+    fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(pg, 'fetch', fetch)
+    assert await sa._settings() == {}
+    assert STATE_KEY in fetch.call_args.args[-1] and COMPLETED_KEY in fetch.call_args.args[-1]

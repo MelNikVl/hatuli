@@ -83,6 +83,9 @@ class RentalListing:
     rent_period: str = "unknown"
     complex_id: int | None = None
     rent_period_conflict: bool = False
+    # Transient provenance: a named structural complex link in this card,
+    # never a regex match in its title or a stored/catalog-filled spelling.
+    complex_source_observed: bool = False
 
 
 def _extract_int(text: str) -> int | None:
@@ -238,6 +241,7 @@ def _parse_card(card, prop_type: str, *, verified_catalog_period: str = "unknown
             address=address, district=district, complex_name=complex_name,
             city="astana", prop_type=prop_type, published_at=published_at,
             complex_url=complex_url,
+            complex_source_observed=complex_url is not None,
             photo_url=photo_url,
             rent_period=classify_rental_period(price_text, title, verified_catalog_period=verified_catalog_period),
             rent_period_conflict=rental_period_conflict(price_text, title, verified_catalog_period=verified_catalog_period),
@@ -376,7 +380,9 @@ async def _fetch_page_result(client: httpx.AsyncClient, url: str, prop_type: str
     cards = (main_list.select(":scope > div.a-card, :scope > section.a-card") if main_list is not None
              else soup.select("div.a-card, section.a-card"))
     if explicit_challenge or (challenge and not cards):
-        raise RentalSearchBlockedError(f"Blocked rental search response: {url}")
+        error = RentalSearchBlockedError(f"Blocked rental search response: {url}")
+        error.response = resp
+        raise error
     if not cards:
         explicit_empty = soup.select_one(".a-list-empty") is not None or re.search(
             r"ничего не найдено|объявлени[йя] не найдено|найдено\s+0\s+объявлен", text)
@@ -415,8 +421,9 @@ async def _fetch_page(client: httpx.AsyncClient, url: str, prop_type: str) -> li
 
 
 async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: str,
-                              *, refresh_head: bool = False) -> dict:
-    """One durable page, optionally preceded by a bounded fresh-list check.
+                              *, refresh_head: bool = False, max_durable_pages: int = 1,
+                              head_min_interval_seconds: float = 0) -> dict:
+    """A bounded durable batch, optionally preceded by a fresh-list check.
 
     A hot page never advances deep coverage. It is reused when the cursor is
     at page one. A validated smaller catalog resets an out-of-range old cursor
@@ -426,10 +433,14 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
     await app_settings.load()
     key = catalog_cursor_key(prop_type, path)
     cursor = RentalPagination.loads(app_settings.get(key, ""))
+    max_durable_pages = max(1, min(8, int(max_durable_pages)))
+    head_min_interval_seconds = max(0., min(2700., float(head_min_interval_seconds)))
     metrics = {"requests": 0, "head_pages": 0, "durable_pages": 0,
                "saved": 0, "new": 0, "updated": 0, "reactivated": 0,
                "raw_cards": 0, "accepted_cards": 0, "unpriced_cards": 0}
     reconciled = False
+    from bot.core.rental_list_backoff import require_catalog_ready, remember_catalog_block
+    backoff_key = f"{key}_LIST_BACKOFF"
 
     async def fetch_page(page: int) -> RentalPage:
         metrics["requests"] += 1
@@ -448,10 +459,16 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
             raise RuntimeError(f"Incomplete rental page save: {count}/{len(result.listings)}")
 
     try:
-        head = await fetch_page(1) if refresh_head else None
+        backoff = require_catalog_ready(app_settings,backoff_key)
+        last_head = _rental_index_datetime(app_settings.get(f"{key}_HEAD_CHECKED_AT", ""))
+        head_due = (last_head is None or last_head > datetime.now(timezone.utc)
+                    or (datetime.now(timezone.utc) - last_head).total_seconds()
+                    >= max(0, head_min_interval_seconds))
+        head = await fetch_page(1) if refresh_head and head_due else None
         if head is not None:
             await save_page(head)
             metrics["head_pages"] = 1
+            await app_settings.set(f"{key}_HEAD_CHECKED_AT", datetime.now(timezone.utc).isoformat())
             if head.last_page_confirmed and head.last_page and cursor.page > head.last_page:
                 reconciled = True
                 await app_settings.set(f"{key}_ABORTED_AT", datetime.now(timezone.utc).isoformat())
@@ -459,31 +476,44 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
                 cursor = RentalPagination()
                 await app_settings.set(key, cursor.dumps())
             if head.last_page_confirmed:
+                cursor.expected_last_page = head.last_page
                 await app_settings.set(f"{key}_EXPECTED_LAST_PAGE", str(head.last_page or 0))
             if head.total_count is not None:
+                cursor.expected_total = head.total_count
                 await app_settings.set(f"{key}_EXPECTED_TOTAL", str(head.total_count))
 
-        page = cursor.page
-        if page == 1 and head is not None:
-            result = head
-        else:
-            if head is not None:
-                await asyncio.sleep(random.uniform(MIN_SLEEP, MAX_SLEEP))
-            result = await fetch_page(page)
-            await save_page(result)
-        now = datetime.now(timezone.utc)
-        if page == 1 and cursor.pages_seen == 0:
-            cursor.started_from_first = True
-            await app_settings.set(f"{key}_STARTED_AT", now.isoformat())
-        if head is not None and head.last_page_confirmed:
-            cursor.expected_last_page = head.last_page
-        if head is not None and head.total_count is not None:
-            cursor.expected_total = head.total_count
-        ended = cursor.advance(result)
+        ended = completed = False
+        for batch_page in range(max_durable_pages):
+            page = cursor.page
+            if page == 1 and head is not None and batch_page == 0:
+                result = head
+            else:
+                if head is not None or batch_page:
+                    await asyncio.sleep(random.uniform(MIN_SLEEP, MAX_SLEEP))
+                result = await fetch_page(page)
+                await save_page(result)
+                if page == 1:
+                    await app_settings.set(f"{key}_HEAD_CHECKED_AT", datetime.now(timezone.utc).isoformat())
+            now = datetime.now(timezone.utc)
+            if page == 1 and cursor.pages_seen == 0:
+                cursor.started_from_first = True
+                await app_settings.set(f"{key}_STARTED_AT", now.isoformat())
+            if head is not None and head.last_page_confirmed:
+                cursor.expected_last_page = head.last_page
+            if head is not None and head.total_count is not None:
+                cursor.expected_total = head.total_count
+            ended = cursor.advance(result)
+            completed = ended and cursor.started_from_first and cursor.pages_seen >= page
+            # Commit every successful page. Failure/cancellation on page N+1
+            # must never lose the already saved coverage of pages 1..N.
+            if not ended:
+                await app_settings.set(key, cursor.dumps())
+                metrics["durable_pages"] += 1
+                await app_settings.set(f"{key}_LAST_SUCCESS_AT", now.isoformat())
+            if ended:
+                break
         # Old cursors only contain signatures/page. Finishing their tail does
         # not prove pages 1..N were scanned successfully in this deployment.
-        completed = ended and cursor.started_from_first and cursor.pages_seen >= page
-        metrics["durable_pages"] = 1
         if ended:
             started = app_settings.get(f"{key}_STARTED_AT", "")
             duration = 0
@@ -504,10 +534,13 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
                 await app_settings.set(f"{key}_COMPLETED_VERIFIED", "1")
             await app_settings.set(f"{key}_LAST_STATUS", "complete" if completed else "incomplete_legacy_tail")
             await app_settings.set(key, RentalPagination().dumps())
+            metrics["durable_pages"] += 1
         else:
             await app_settings.set(key, cursor.dumps())
             await app_settings.set(f"{key}_LAST_STATUS", "collecting")
         await app_settings.set(f"{key}_LAST_SUCCESS_AT", now.isoformat())
+        if backoff:
+            await app_settings.set(backoff_key, "")
         return {"page": page, **metrics, "completed": completed, "round_ended": ended,
                 "cursor_reconciled": reconciled, "raw_card_count": len(result.card_ids),
                 "accepted_card_count": len(result.listings),
@@ -515,20 +548,38 @@ async def collect_rental_page(client: httpx.AsyncClient, path: str, prop_type: s
                 "unique_seen": len(cursor.seen_ids), "expected_last_page": cursor.expected_last_page,
                 "expected_total": cursor.expected_total}
     except Exception as exc:
+        await remember_catalog_block(app_settings,backoff_key,exc)
+        if getattr(exc, "source_cooldown", False):
+            metrics["cooldown_remaining_seconds"] = exc.cooldown_remaining_seconds
         # A successful head save remains measurable if the deep request fails.
+        metrics.update(expected_last_page=cursor.expected_last_page,
+                       expected_total=cursor.expected_total)
         exc.rental_metrics = metrics
         raise
 
 
 async def parse_rental_path(path: str, prop_type: str, max_pages: int | None = MAX_PAGES_PER_PATH) -> list[RentalListing]:
     """Unbounded by default; an explicit positive limit is for partial scans."""
+    from bot.db import settings as app_settings
+    from bot.core.rental_list_backoff import require_catalog_ready, remember_catalog_block
+    await app_settings.load()
+    backoff_key = f"{catalog_cursor_key(prop_type,path)}_LIST_BACKOFF"
+    backoff = require_catalog_ready(app_settings,backoff_key)
     all_listings: dict[str, RentalListing] = {}
     cursor = RentalPagination()
     async with httpx.AsyncClient(follow_redirects=True) as client:
         while not max_pages or cursor.page <= max_pages:
             page = cursor.page
             url = catalog_page_url(path, page)
-            result = await _fetch_page_result(client, url, prop_type)
+            try:
+                require_catalog_ready(app_settings,backoff_key)
+                result = await _fetch_page_result(client, url, prop_type)
+            except Exception as exc:
+                await remember_catalog_block(app_settings,backoff_key,exc)
+                raise
+            if backoff:
+                await app_settings.set(backoff_key,"")
+                backoff = None
             all_listings.update((listing.id, listing) for listing in result.listings)
             if cursor.advance(result):
                 logger.info("  %s page %d: end or repeated page", path, page)
@@ -566,8 +617,18 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
     unique = {listing.id: listing for listing in listings}
     for listing in unique.values():
         try:
-            cid = await resolve_rental_complex(complex_url=listing.complex_url, complex_name=listing.complex_name,
-                                               address=listing.address, title=listing.title)
+            incoming_url = source_complex_url(listing.complex_url)
+            source_observed = bool(listing.complex_source_observed and incoming_url
+                and isinstance(listing.complex_name, str) and listing.complex_name.strip())
+            cid = None
+            if source_observed:
+                decision = await resolve_rental_complex(complex_url=incoming_url, complex_name=listing.complex_name,
+                    address=listing.address, title=listing.title, return_decision=True)
+                if not isinstance(decision, dict) or decision.get('status') not in ('resolved','unresolved','conflict'):
+                    raise RuntimeError('Rental source identity decision is unavailable')
+                cid = decision.get('complex_id') if decision['status'] == 'resolved' else None
+                if decision['status'] == 'resolved' and (type(cid) is not int or cid <= 0):
+                    raise RuntimeError('Resolved rental source identity has no complex ID')
             outcome = await fetchrow(
                 """
                 WITH previous AS MATERIALIZED (
@@ -588,11 +649,10 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                     ON CONFLICT (id) DO UPDATE SET
                         price = EXCLUDED.price,
                         last_seen = EXCLUDED.last_seen,
-                        complex_name = CASE WHEN EXCLUDED.complex_url IS NOT NULL
-                            THEN NULLIF(btrim(EXCLUDED.complex_name), '')
-                            ELSE COALESCE(NULLIF(btrim(rental_listings.complex_name), ''),
-                                          NULLIF(btrim(EXCLUDED.complex_name), '')) END,
-                        complex_url = COALESCE(EXCLUDED.complex_url, rental_listings.complex_url),
+                        complex_name = CASE WHEN $21::boolean
+                            THEN NULLIF(btrim(EXCLUDED.complex_name), '') ELSE rental_listings.complex_name END,
+                        complex_url = CASE WHEN $21::boolean
+                            THEN EXCLUDED.complex_url ELSE rental_listings.complex_url END,
                         photo_url = COALESCE(EXCLUDED.photo_url, rental_listings.photo_url),
                         rent_period = CASE WHEN rental_listings.rent_period_conflict OR EXCLUDED.rent_period_conflict
                             OR (rental_listings.rent_period IN ('daily','monthly')
@@ -603,7 +663,8 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                             OR (rental_listings.rent_period IN ('daily','monthly')
                             AND EXCLUDED.rent_period IN ('daily','monthly')
                             AND rental_listings.rent_period <> EXCLUDED.rent_period),
-                        complex_id = COALESCE(rental_listings.complex_id, EXCLUDED.complex_id),
+                        complex_id = CASE WHEN $21::boolean
+                            THEN EXCLUDED.complex_id ELSE rental_listings.complex_id END,
                         rental_episode_started_at = CASE
                             WHEN rental_listings.rent_period_conflict OR EXCLUDED.rent_period_conflict
                               OR EXCLUDED.rent_period NOT IN ('monthly','daily')
@@ -624,12 +685,12 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                             ELSE EXCLUDED.last_seen END,
                         url = EXCLUDED.url,
                         title = EXCLUDED.title,
-                        area = EXCLUDED.area,
-                        rooms = EXCLUDED.rooms,
-                        floor = EXCLUDED.floor,
-                        floors_total = EXCLUDED.floors_total,
-                        address = EXCLUDED.address,
-                        district = EXCLUDED.district,
+                        area = COALESCE(EXCLUDED.area, rental_listings.area),
+                        rooms = COALESCE(EXCLUDED.rooms, rental_listings.rooms),
+                        floor = COALESCE(EXCLUDED.floor, rental_listings.floor),
+                        floors_total = COALESCE(EXCLUDED.floors_total, rental_listings.floors_total),
+                        address = COALESCE(NULLIF(btrim(EXCLUDED.address),''), rental_listings.address),
+                        district = COALESCE(NULLIF(btrim(EXCLUDED.district),''), rental_listings.district),
                         city = EXCLUDED.city,
                         prop_type = EXCLUDED.prop_type,
                         published_at = EXCLUDED.published_at,
@@ -670,8 +731,8 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                 listing.area, listing.rooms, listing.floor, listing.floors_total,
                 listing.address, listing.district, listing.complex_name,
                 listing.city, listing.prop_type, listing.published_at,
-                datetime.now(timezone.utc), listing.complex_url, listing.photo_url,
-                listing.rent_period, cid, listing.rent_period_conflict,
+                datetime.now(timezone.utc), incoming_url if source_observed else None, listing.photo_url,
+                listing.rent_period, cid, listing.rent_period_conflict, source_observed,
             )
             if outcome is None:
                 raise RuntimeError("Rental upsert returned no outcome")
@@ -1025,8 +1086,22 @@ def _rental_description_is_fresh(checked_at, *, now=None):
     return checked is not None and now-timedelta(hours=72) <= checked <= now
 
 
+def _rental_cached_description_observed(snapshot):
+    """A fresh full-page stamp cannot refresh text absent from that page."""
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except (ValueError, TypeError):
+            return False
+    # Preserve the legacy timestamp behavior only when no snapshot exists.
+    return snapshot is None or (isinstance(snapshot, dict)
+                                and snapshot.get("description_observed") is not False)
+
+
 async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
-                                  progress: dict | None = None) -> dict:
+                                  progress: dict | None = None,
+                                  prop_type: str | None = None,
+                                  rent_period: str | None = None) -> dict:
     """Докачивает детальные страницы аренды: у каждого объявления должна
     быть привязка — ЖК (официальный блок map.complex), координаты
     (JS-блоб страницы) или хотя бы адрес. Берёт только живые объявления."""
@@ -1037,11 +1112,17 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
                                            detail_fetch_cooldown_remaining, REQUEST_COUNTS)
     report = {} if progress is None else progress
     report.update(checked=0, coords=0, complex=0, requests=0, http_468=0,
-                  detail_attempts=0, blocked=0, errors=0, budget_exhausted=False)
+                  detail_attempts=0, success=0, selected=0, blocked=0, errors=0,
+                  budget_exhausted=False, status="idle", cooldown_remaining_seconds=0,
+                  queue_scope=("apartment_daily" if rent_period == "daily" else prop_type or "all"))
+    if prop_type not in (None, "apartment", "parking", "commercial") or rent_period not in (None, "monthly", "daily"):
+        raise ValueError("Invalid rental detail scope")
     if batch <= 0 or budget_seconds <= 0:
         return report
-    if detail_fetch_cooldown_remaining():
+    cooldown = detail_fetch_cooldown_remaining()
+    if cooldown:
         report["cooldown"] = True
+        report.update(status="cooldown", cooldown_remaining_seconds=round(cooldown, 3))
         return report
     deadline = time.monotonic() + budget_seconds
     from bot.db import settings as app_settings
@@ -1057,30 +1138,48 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
         rows = await fetch("""
         SELECT id, url, lat, lon, complex_name, complex_url, address, title,
                complex_id, hex_id, hex_edge_m, rent_period, rent_period_conflict,
-               description, description_checked_at, furnishing_version FROM rental_listings
+               description, description_checked_at, furnishing_version, source_details,
+               count(*) OVER () AS queue_due,
+               max(extract(epoch FROM now()-COALESCE(description_checked_at,found_at))/3600)
+                   OVER () AS oldest_due_age_hours FROM rental_listings
         WHERE (lat IS NULL OR complex_name IS NULL OR btrim(complex_name) = ''
                OR complex_url IS NULL OR btrim(complex_url) = '' OR complex_id IS NULL
                OR hex_id IS NULL OR hex_edge_m IS NULL
                OR description_checked_at IS NULL
+               OR source_details IS NULL
                OR description_checked_at < now() - interval '72 hours'
                OR description_checked_at > now()
                OR (description_checked_at IS NOT NULL AND furnishing_version IS DISTINCT FROM $3::text)
                OR ($2::real IS NOT NULL AND hex_edge_m IS DISTINCT FROM $2))
           AND is_active IS NOT FALSE
+          AND archived_at IS NULL
+          AND city = 'astana'
+          AND ($4::text IS NULL OR prop_type = $4)
+          AND ($5::text IS NULL OR rent_period = $5)
+          AND COALESCE(rent_period_conflict, FALSE) = FALSE
           AND COALESCE(is_duplicate, FALSE) = FALSE
           AND COALESCE(dup_needs_review, FALSE) = FALSE
+          AND NULLIF(btrim(duplicate_of),'') IS NULL
           AND url IS NOT NULL
           AND last_seen > now() - interval '7 days'
           AND (coord_fetch_attempted_at IS NULL
                OR coord_fetch_attempted_at < now() - interval '3 days')
-        ORDER BY coord_fetch_attempted_at ASC NULLS FIRST, found_at DESC
+        ORDER BY coord_fetch_attempted_at ASC NULLS FIRST, found_at ASC NULLS FIRST, id
         LIMIT $1
-        """, batch, expected_edge, furnishing_version)
+        """, batch, expected_edge, furnishing_version, prop_type, rent_period)
     except asyncpg.UndefinedColumnError as exc:
+        if "source_details" in str(exc):
+            from bot.core.rental_source_details import RentalSourceDetailsMigrationRequired
+            raise RentalSourceDetailsMigrationRequired() from exc
         from bot.core.rental_furnishing import RentalStage2MigrationRequired
         raise RentalStage2MigrationRequired() from exc
     if not rows:
+        report["eligible_due"] = 0
         return report
+    report["selected"] = len(rows)
+    report["eligible_due"] = int(rows[0].get("queue_due") or len(rows))
+    age = rows[0].get("oldest_due_age_hours")
+    report["oldest_due_age_hours"] = round(max(0, float(age)), 3) if age is not None else None
 
     # Detail fetches use their own cooldown; list collection never consults it.
     from bot.core.complex_audit import street_names
@@ -1088,7 +1187,8 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
 
     got_geo = got_cx = 0
     for r in rows:
-        description_fresh = _rental_description_is_fresh(r.get('description_checked_at'))
+        description_fresh = (_rental_description_is_fresh(r.get('description_checked_at'))
+                             and _rental_cached_description_observed(r.get('source_details')))
         if description_fresh and r.get('furnishing_version') != furnishing_version:
             await execute('UPDATE rental_listings SET furnishing=$2,furnishing_version=$3 WHERE id=$1',
                           r['id'], classify_furnishing(r.get('title'),r.get('description'),furnishing_rules),furnishing_version)
@@ -1110,7 +1210,7 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
         pause = _rnd.uniform(8.0, 15.0)
         remaining = deadline - time.monotonic()
         # Leave enough time for the shared fetcher's own 3–6 s pacing.
-        if remaining <= pause + 6:
+        if remaining <= pause + 7:
             report["budget_exhausted"] = True
             break
         await asyncio.sleep(pause)
@@ -1119,29 +1219,54 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
             break
         before_requests = REQUEST_COUNTS["detail"]
         report["detail_attempts"] += 1
+        # Reserve the fetcher's unchanged <=6s pacing plus bookkeeping. The
+        # actual HTTP timeout is explicit, never silently a 30s call inside a
+        # shorter maintenance deadline.
+        request_timeout = min(30., max(.5, deadline - time.monotonic() - 7.))
+        report["request_timeout_seconds"] = round(request_timeout, 3)
+        outcome = "error"
         try:
             details = await asyncio.wait_for(
-                fetch_apartment_details(r["url"], raise_on_error=True),
+                fetch_apartment_details(r["url"], raise_on_error=True,
+                    request_timeout_seconds=request_timeout),
                 timeout=max(0.1, deadline - time.monotonic()))
+            observed_at = datetime.now(timezone.utc)
         except ListingBlockedError as exc:
             report["blocked"] += 1
             report["http_468"] += int(str(exc).startswith("468 "))
-            break  # do not mark this or remaining rows as failed fetches
+            outcome = "blocked"
+            report["status"] = "blocked"
+            break  # only this genuinely attempted row is marked below
         except asyncio.TimeoutError:
             report["errors"] += 1
             report["budget_exhausted"] = True
+            outcome = "timeout"
             break
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            report.update(status="cycle_stopped", budget_exhausted=True)
+            raise
         except Exception as e:
             logger.warning("rental backfill fetch failed %s: %s", r["id"], e)
             report["errors"] += 1
             details = None
         finally:
-            report["requests"] += max(0, REQUEST_COUNTS["detail"] - before_requests)
+            actual_requests = max(0, REQUEST_COUNTS["detail"] - before_requests)
+            report["requests"] += actual_requests
+            # Rotate a genuinely attempted source failure instead of keeping
+            # the same never-attempted head forever. No freshness timestamp,
+            # last_seen or unvisited record is touched here.
+            if actual_requests and outcome in ("blocked", "timeout", "cancelled"):
+                await execute("UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1", r["id"])
         report["checked"] += 1
-        if not details:
-            await execute(
-                "UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1",
-                r["id"])
+        from bot.core.rental_source_details import rental_source_details
+        snapshot = rental_source_details(details) if details else None
+        if snapshot is None:
+            report["errors"] += int(bool(details))
+            if actual_requests:
+                await execute(
+                    "UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1",
+                    r["id"])
             continue
 
         cx = (details.get("complex_name")
@@ -1156,43 +1281,68 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
 
         sets, params, i = ["coord_fetch_attempted_at=now()"], [], 1
         description = details.get('description')
-        description = description.strip()[:10000] if isinstance(description, str) else None
-        for field, value in (
-            ('description', description),
-            ('furnishing', classify_furnishing(r.get('title'), description, furnishing_rules)),
-            ('furnishing_version', furnishing_version),
-        ):
-            sets.append(f'{field}=${i}'); params.append(value); i += 1
-        sets.append('description_checked_at=now()')
+        description_observed = (details.get('description_observed') is True
+            or ('description_observed' not in details and isinstance(description, str) and bool(description.strip())))
+        if description_observed and isinstance(description, str):
+            description = description.strip()[:10000]
+            for field, value in (
+                ('description', description),
+                ('furnishing', classify_furnishing(r.get('title'), description, furnishing_rules)),
+                ('furnishing_version', furnishing_version),
+            ):
+                sets.append(f'{field}=${i}'); params.append(value); i += 1
+        observed_parameter = i
+        sets.append(f'description_checked_at=${i}'); params.append(observed_at); i += 1
+        sets.append(f'source_details=${i}::jsonb'); params.append(json.dumps(snapshot)); i += 1
+        for field in ('rooms','area','floor','floors_total'):
+            if field in snapshot:
+                sets.append(f'{field}=${i}'); params.append(snapshot[field]); i += 1
+                if field == 'floor' and 'floors_total' not in snapshot:
+                    sets.append(f'floors_total=CASE WHEN floors_total>=${i-1} THEN floors_total ELSE NULL END')
+                if field == 'floors_total' and 'floor' not in snapshot:
+                    sets.append(f'floor=CASE WHEN floor<=${i-1} THEN floor ELSE NULL END')
         projected = observed_hex(details.get("lat"), details.get("lon"), edge_m)
         if projected:
             for field in ("lat", "lon", "hex_id", "hex_edge_m"):
                 sets.append(f"{field}=${i}"); params.append(projected[field]); i += 1
             got_geo += 1
-        cid = await resolve_rental_complex(
+        decision = await resolve_rental_complex(
             complex_url=details.get("complex_url") if cx else None, complex_name=cx,
-            address=details.get("address_full") or r.get("address"), title=r.get("title"))
-        sets.append(f"complex_id=COALESCE(complex_id,${i})"); params.append(cid); i += 1
-        if cx:
-            sets.append(f"complex_name=${i}"); params.append(cx); i += 1
-            safe_url = source_complex_url(details.get("complex_url"))
-            if safe_url:
-                sets.append(f"complex_url=COALESCE(${i}, complex_url)")
-                params.append(safe_url); i += 1
+            address=details.get("address_full") or r.get("address"), title=r.get("title"),
+            return_decision=True)
+        cid = decision["complex_id"]
+        # The freshly observed source supersedes old identity, including an
+        # unresolved/conflicting binding. Never retain a disproved FK.
+        for field, value in (("complex_id", cid), ("complex_name", cx),
+                             ("complex_url", source_complex_url(details.get("complex_url")) if cx else None)):
+            sets.append(f"{field}=${i}"); params.append(value); i += 1
+        if cid:
             got_cx += 1
         if details.get("address_full"):
-            sets.append(f"address=CASE WHEN address IS NULL OR btrim(address)='' "
-                        f"THEN ${i} ELSE address END")
+            sets.append(f"address=${i}")
             params.append(details["address_full"]); i += 1
         if details.get("photos"):
             import json as _json
-            sets.append(f"photos=${i}::jsonb")
-            params.append(_json.dumps(details["photos"][:10])); i += 1
+            from bot.core.daily_picks import safe_photo_url
+            photos = list(dict.fromkeys(p for p in details["photos"][:30] if safe_photo_url(p)))[:10]
+            if photos:
+                sets.append(f"photos=${i}::jsonb")
+                params.append(_json.dumps(photos)); i += 1
         params.append(r["id"])
-        await execute(
-            f"UPDATE rental_listings SET {', '.join(sets)} WHERE id=${i}", *params)
+        written = await execute(
+            f"UPDATE rental_listings SET {', '.join(sets)} WHERE id=${i} "
+            f"AND is_active IS NOT FALSE AND archived_at IS NULL "
+            f"AND (last_seen IS NULL OR last_seen<=${observed_parameter} OR last_seen>now()) "
+            f"AND (description_checked_at IS NULL OR description_checked_at<=${observed_parameter} "
+            "OR description_checked_at>now())", *params)
+        report["success"] += int(written != 'UPDATE 0')
 
     logger.info("rental backfill: %d checked, координаты %d, ЖК %d",
                 report["checked"], got_geo, got_cx)
     report.update(coords=got_geo, complex=got_cx)
+    report["cooldown_remaining_seconds"] = round(detail_fetch_cooldown_remaining(), 3)
+    if report["status"] != "blocked":
+        report["status"] = ("cooldown" if report.get("cooldown") else
+            "budget_exhausted" if report["budget_exhausted"] else
+            "success" if report["success"] else "error" if report["errors"] else "idle")
     return report

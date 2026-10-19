@@ -9,13 +9,14 @@ import random
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Callable
 
 from dotenv import load_dotenv
 from bot.core.rental_service_metrics import (
     MaintenanceBudget, RentalCyclePlan, record_rental_cycle, source_failure_counters,
+    rental_list_batch_size,
 )
 
 load_dotenv()
@@ -62,7 +63,10 @@ class RentalServiceState:
     completed_types: set[str] = field(default_factory=set)
     last_success: dict[str, float] = field(default_factory=dict)
     page_intervals: dict[str, float] = field(default_factory=dict)
+    visit_intervals: dict[str, float] = field(default_factory=dict)
+    visit_pages: dict[str, float] = field(default_factory=dict)
     interval_samples: dict[str, int] = field(default_factory=dict)
+    detail_turn: int = 0
     # Keep the original all-category page counter for diagnostics. Only
     # apartment saves/pages determine apartment-index freshness.
     apartment_pages_since_index: int = 0
@@ -142,7 +146,9 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
     counters = {"cycles": 1}
     list_status = "ok"
     try:
-        step = await operations.collect(client, path, prop_type, refresh_head=True)
+        step = await operations.collect(client, path, prop_type, refresh_head=True,
+            max_durable_pages=plan.list_batch_pages,
+            head_min_interval_seconds=plan.head_refresh_seconds)
         log.info("[%s] page %d: saved %d; completed=%s; head_pages=%d; durable_pages=%d",
                  prop_type, step["page"], step["saved"], step["completed"],
                  step.get("head_pages", 0), step.get("durable_pages", 1))
@@ -161,13 +167,18 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
             "unpriced_cards": step.get("unpriced_cards", 0),
         })
     except Exception as exc:
-        list_status = "blocked" if source_failure_counters(exc)["blocked"] else "error"
-        counters.update(source_failure_counters(exc))
+        cooling_down = bool(getattr(exc, "source_cooldown", False))
+        list_status = "cooldown" if cooling_down else "blocked" if source_failure_counters(exc)["blocked"] else "error"
+        counters.update({"list_cooldown_cycles":1} if cooling_down else source_failure_counters(exc))
         partial = getattr(exc, "rental_metrics", {})
+        step = partial
         counters.update({key: partial.get(key, 0) for key in (
             "head_pages", "new", "updated", "reactivated", "raw_cards", "accepted_cards", "unpriced_cards")})
         counters["saved_observations"] = partial.get("saved", 0)
         counters["list_requests"] = partial.get("requests", 1)
+        counters["pages"] = partial.get("durable_pages", 0)
+        state.pages_since_index += counters["pages"]
+        state.pages_since_sheets += counters["pages"]
         log.error("[%s] rental list step %s: %s", prop_type, list_status, exc,
                   exc_info=list_status != "blocked")
     list_seconds = max(0.0, clock() - list_started)
@@ -178,13 +189,17 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
         state.note_apartment_saves(counters.get("saved_observations", 0),
                                    counters.get("pages", 0), clock())
     estimated_circle_hours = None
-    if list_status == "ok" and counters.get("pages", 0):
+    if counters.get("pages", 0):
         previous_success = state.last_success.get(scope_key)
         successful_at = clock()
         if previous_success is not None and successful_at > previous_success:
-            observed = successful_at - previous_success
-            old = state.page_intervals.get(scope_key, observed)
-            state.page_intervals[scope_key] = round(0.25 * observed + 0.75 * old, 3)
+            elapsed = successful_at - previous_success
+            old_seconds = state.visit_intervals.get(scope_key, elapsed)
+            old_pages = state.visit_pages.get(scope_key, counters["pages"])
+            state.visit_intervals[scope_key] = .25 * elapsed + .75 * old_seconds
+            state.visit_pages[scope_key] = .25 * counters["pages"] + .75 * old_pages
+            state.page_intervals[scope_key] = round(
+                state.visit_intervals[scope_key] / state.visit_pages[scope_key], 3)
             state.interval_samples[scope_key] = state.interval_samples.get(scope_key, 0) + 1
         state.last_success[scope_key] = successful_at
         last_page = step.get("expected_last_page")
@@ -193,6 +208,11 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
     # A blocked list is not a reason to send detail traffic in the same cycle.
     budget = MaintenanceBudget(plan.maintenance_seconds if list_status == "ok" else 0.0,
                                clock=clock)
+    def database_cap(maximum):
+        # Keep a usable request window on detail-priority turns. A local
+        # index/rule job must not consume the entire source-refresh budget.
+        reserve = 30. if plan.backfill_batch and state.cycle % 2 else 0.
+        return min(maximum, max(0., budget.remaining() - reserve))
     full_pass = len(state.completed_types) >= type_count
     index_reason = state.index_due_reason(clock(), pages=index_refresh_pages,
         seconds=plan.index_refresh_seconds, full_pass=full_pass)
@@ -200,7 +220,7 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
         async def refresh_index(_):
             state.index_last_attempt = clock()
             return await operations.rebuild_index()
-        await budget.run("index", refresh_index, cap=15)
+        await budget.run("index", refresh_index, cap=database_cap(15))
         if budget.stages["index"]["status"] == "ok":
             state.pages_since_index = 0
             state.apartment_pages_since_index = 0
@@ -217,7 +237,7 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
             # Preserve the previous 3 * 15 durable-page cadence independently
             # of the shorter index deadline, retaining due work on failure.
             if state.pages_since_sheets >= RENTAL_SHEETS_SYNC_PAGES:
-                synced = await budget.run("sheets", lambda _: operations.sync_sheets(), cap=10)
+                synced = await budget.run("sheets", lambda _: operations.sync_sheets(), cap=database_cap(10))
                 if synced is False and budget.stages["sheets"]["status"] == "ok":
                     budget.stages["sheets"]["status"] = "error"
                 if synced is True and budget.stages["sheets"]["status"] == "ok":
@@ -228,18 +248,25 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
             state.index_failures += 1
 
     if state.cycle % plan.db_every == 0:
-        await budget.run("dedup", lambda _: operations.dedup(), cap=8)
-        await budget.run("address_bind", lambda _: operations.bind_address("rental_listings"), cap=8)
+        await budget.run("dedup", lambda _: operations.dedup(), cap=database_cap(8))
+        await budget.run("address_bind", lambda _: operations.bind_address("rental_listings"), cap=database_cap(8))
         if plan.allow_geo_complex_guess:
-            await budget.run("geo_bind", lambda _: operations.bind_geo(), cap=8)
+            await budget.run("geo_bind", lambda _: operations.bind_geo(), cap=database_cap(8))
 
     # Alternate enrichment priority so neither queue monopolizes the budget.
     order = ("backfill", "archive") if state.cycle % 2 else ("archive", "backfill")
+    detail_report = {"queue_scope": "apartment", "status": "cycle_stopped" if plan.backfill_batch else "idle"}
     for name in order:
         progress = {}
         if name == "backfill" and plan.backfill_batch:
+            # Apartment enrichment cannot be starved by the larger commercial
+            # queue. Two monthly turns per daily turn; a cooldown does not
+            # consume a turn. Real traffic or a confirmed empty queue advances
+            # the persisted turn; an empty monthly queue cannot starve daily.
+            period = "daily" if state.detail_turn % 3 == 2 else "monthly"
             result = await budget.run(name, lambda seconds: operations.backfill(
-                plan.backfill_batch, budget_seconds=seconds, progress=progress), cap=30)
+                plan.backfill_batch, budget_seconds=seconds, progress=progress,
+                prop_type="apartment", rent_period=period), cap=45)
         elif name == "archive" and plan.archive_batch:
             result = await budget.run(name, lambda seconds: operations.archive(
                 limit=plan.archive_batch, budget_seconds=seconds, progress=progress), cap=20)
@@ -248,6 +275,23 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
         if not isinstance(result, dict):
             result = progress
         if isinstance(result, dict):
+            if name == "backfill":
+                detail_report = dict(result)
+                detail_report.setdefault("queue_scope", "apartment_daily" if period == "daily" else "apartment")
+                detail_report.setdefault("status", "cycle_stopped" if not result else "idle")
+                stage_status = budget.stages[name]["status"]
+                if stage_status in ("budget_exhausted", "timeout", "error"):
+                    detail_report["status"] = ("cycle_stopped" if stage_status == "timeout" else stage_status)
+                    if stage_status != "error":
+                        detail_report["budget_exhausted"] = True
+                empty_queue = stage_status == "ok" and result.get("eligible_due") == 0
+                if result.get("requests", 0) or empty_queue:
+                    state.detail_turn = (state.detail_turn + 1) % 3
+                    await operations.set_setting("RENTAL_DETAIL_TURN", str(state.detail_turn))
+                for field in ("checked", "success", "errors", "blocked"):
+                    counters[f"detail_{field}"] = result.get(field, 0)
+                counters["detail_cooldown_cycles"] = int(bool(result.get("cooldown")))
+                counters["detail_budget_exhausted_cycles"] = int(bool(result.get("budget_exhausted")))
             counters[f"{'detail' if name == 'backfill' else 'archive'}_requests"] = result.get("requests", 0)
             counters["blocked"] = counters.get("blocked", 0) + result.get("blocked", 0)
             counters["http_468"] = counters.get("http_468", 0) + result.get("http_468", 0)
@@ -272,7 +316,14 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
              "page_interval_seconds": state.page_intervals.get(scope_key),
              "page_interval_samples": state.interval_samples.get(scope_key, 0),
              "estimated_circle_hours": estimated_circle_hours,
+             "traversal_target_hours": 24,
+             "traversal_target_status": ("unknown" if estimated_circle_hours is None or list_status != "ok" else
+                 "within_target_estimate" if estimated_circle_hours <= 24 else "missed_target_estimate"),
+             "list_batch_pages": plan.list_batch_pages,
+             "head_refresh_seconds": plan.head_refresh_seconds,
+             "detail": detail_report,
              "list_seconds": round(list_seconds, 3), "stages": budget.stages,
+             "list_cooldown_remaining_seconds": step.get("cooldown_remaining_seconds", 0),
              "maintenance_seconds": round(maintenance_seconds, 3),
              "index": {
                  "due_reason": index_reason,
@@ -309,22 +360,8 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
 
 
 async def bind_rental_geo() -> None:
-    from bot.db.pg import execute
-    await execute("""
-        UPDATE rental_listings r
-        SET complex_name = (
-            SELECT c2.name FROM complexes c2
-            WHERE c2.lat IS NOT NULL AND c2.lon IS NOT NULL
-              AND COALESCE(c2.is_street, FALSE) = FALSE
-              AND COALESCE(c2.is_garbage, FALSE) = FALSE
-            ORDER BY (c2.lat - r.lat)^2 + (c2.lon - r.lon)^2 LIMIT 1)
-        WHERE (r.complex_name IS NULL OR btrim(r.complex_name) = '')
-          AND r.lat IS NOT NULL AND r.lon IS NOT NULL
-          AND (SELECT min((c.lat - r.lat)^2 + (c.lon - r.lon)^2)
-               FROM complexes c WHERE c.lat IS NOT NULL AND c.lon IS NOT NULL
-                 AND COALESCE(c.is_street, FALSE) = FALSE
-                 AND COALESCE(c.is_garbage, FALSE) = FALSE) < 2.0e-5
-    """)
+    # Proximity is a hypothesis, never an observed source complex name/FK.
+    return None
 
 
 async def main() -> None:
@@ -352,6 +389,11 @@ async def main() -> None:
     # Rebuild the legacy index on the first healthy list step after startup.
     # Old aggregates must not remain eligible until the fifteenth new page.
     state = RentalServiceState(index_refresh_required=True)
+    await settings.load()
+    try:
+        state.detail_turn = int(settings.get("RENTAL_DETAIL_TURN", "0")) % 3
+    except (ValueError, TypeError):
+        state.detail_turn = 0
     paths = list(RENTAL_PATHS.items())
     path_idx = 0
     while True:
@@ -360,6 +402,12 @@ async def main() -> None:
             await settings.load()
             plan = RentalCyclePlan.from_settings(settings.get)
             path, prop_type = paths[path_idx]
+            from bot.core.rental_period import catalog_cursor_key
+            prefix = catalog_cursor_key(prop_type, path)
+            scope = prefix.removeprefix("RENTAL_CRAWL_V1_").lower()
+            plan = replace(plan, list_batch_pages=rental_list_batch_size(
+                settings.get(f"{prefix}_EXPECTED_LAST_PAGE", "0"),
+                state.visit_intervals.get(scope), maximum=plan.list_batch_pages))
             async with httpx.AsyncClient(
                     headers=DEFAULT_HEADERS, follow_redirects=True, timeout=20) as client:
                 await run_one_cycle(client, path, prop_type, state, operations, plan,

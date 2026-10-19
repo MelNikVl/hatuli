@@ -56,13 +56,13 @@ def grade_cycle(completed_at: datetime | None, duration_h: float | None, now: da
 
 
 def circle_coverage_pct(settings: dict[str, str], page_size: int = 20) -> float | None:
-    """Какую долю каталога Крыши покрывает текущий круг deep sweep (снимок страниц × 20)."""
-    try:
-        pages = int(settings.get('DEEP_SWEEP_CIRCLE_MAX_PAGE') or settings.get('DEEP_SWEEP_CIRCLE_COMPLETED_PAGES') or 0)
-        total = int(settings.get('KRISHA_TOTAL_FOUND') or 0)
-    except ValueError:
-        return None
-    return round(min(100.0, 100.0 * pages * page_size / total), 1) if pages and total else None
+    """Actual unique source IDs of the last gap-free, closed traversal.
+
+    Legacy planned-page counters cannot establish coverage. page_size is
+    retained only for callers of the former interface.
+    """
+    from bot.core.sale_sweep import completion_coverage
+    return completion_coverage(settings)
 
 
 def worst(*statuses: str) -> str:
@@ -163,8 +163,11 @@ async def build_report(now: datetime | None = None) -> dict:
          WHERE is_active IS NOT FALSE AND coalesce(is_duplicate, false) = false AND complex_id IS NOT NULL
          GROUP BY 1""")}
 
-    sale_done = _ts(settings.get('DEEP_SWEEP_CIRCLE_COMPLETED_AT'))
-    sale_dur_h = float(settings.get('DEEP_SWEEP_CIRCLE_DURATION_SEC') or 0) / 3600 or None
+    from bot.core.sale_sweep import SaleSweep, STATE_KEY, completed_evidence, utc
+    sale_proof = completed_evidence(settings)
+    sale_current = SaleSweep.loads(settings.get(STATE_KEY))
+    sale_done = utc(sale_proof.completed_at) if sale_proof else None
+    sale_dur_h = ((sale_done - utc(sale_proof.started_at)).total_seconds() / 3600) if sale_proof else None
     from bot.core.rental_data_quality import rental_clean_sql, rental_live_sql, collection_health
     rent_active = await fetchval(f"SELECT count(*) FROM rental_listings WHERE {rental_clean_sql()} AND is_active IS TRUE AND archived_at IS NULL")
     rent_seen = await fetchval(f"SELECT count(*) FROM rental_listings WHERE {rental_live_sql()}")
@@ -179,7 +182,12 @@ async def build_report(now: datetime | None = None) -> dict:
                  'page': settings.get('DEEP_SWEEP_PAGE'), 'max_page': settings.get('DEEP_SWEEP_CIRCLE_MAX_PAGE'),
                  'krisha_total': int(settings.get('KRISHA_TOTAL_FOUND') or 0),
                  'circle_coverage_pct': circle_coverage_pct(settings),
-                 'status': worst(grade_cycle(sale_done, sale_dur_h, now, target_h=48),
+                 'unique_ids': len(sale_proof.unique_ids) if sale_proof else None,
+                 'source_total': sale_proof.denominator if sale_proof else None,
+                 'current_unique_ids': len(sale_current.unique_ids) if sale_current else None,
+                 'retry_pages': len(sale_current.failures) if sale_current else None,
+                 'market_coverage': 'unknown',
+                 'status': worst(grade_cycle(sale_done, sale_dur_h, now, target_h=24),
                                  'ok' if (circle_coverage_pct(settings) or 0) >= 95 else 'bad')},
         'rent': {'active': rent_active, 'seen_7d': None, 'seen_72h': rent_seen, 'completed_at': rent_done, 'duration_h': rent_dur_h,
                  'last_pages': settings.get('RENTAL_CRAWL_V1_APARTMENT_LAST_PAGES'),

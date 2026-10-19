@@ -35,7 +35,20 @@ def test_every_coverage_key_has_threshold():
 
 
 def test_circle_coverage():
-    assert dq.circle_coverage_pct({'DEEP_SWEEP_CIRCLE_MAX_PAGE': '958', 'KRISHA_TOTAL_FOUND': '38688'}) == 49.5
-    assert dq.circle_coverage_pct({'DEEP_SWEEP_CIRCLE_MAX_PAGE': '1938', 'KRISHA_TOTAL_FOUND': '38688'}) == 100.0
+    # Planned page spans and legacy counters are never source coverage.
+    assert dq.circle_coverage_pct({'DEEP_SWEEP_CIRCLE_MAX_PAGE': '958', 'KRISHA_TOTAL_FOUND': '38688'}) is None
+    assert dq.circle_coverage_pct({'DEEP_SWEEP_CIRCLE_MAX_PAGE': '1938', 'KRISHA_TOTAL_FOUND': '38688'}) is None
     assert dq.circle_coverage_pct({}) is None
     assert dq.worst('ok', 'bad', 'warn') == 'bad'
+
+
+def test_circle_coverage_uses_actual_unique_ids_not_planned_or_completed_page_projections():
+    from bot.core.sale_sweep import SaleSweep, COMPLETED_KEY
+    proof = SaleSweep.new(NOW - timedelta(hours=20))
+    ids = [str(100000 + n) for n in range(20)]
+    proof.account([{"page": 1, "ids": ids, "accepted_ids": ids,
+                    "checked_at": NOW.isoformat(), "total_count": 40,
+                    "terminal_reason": "explicit_last_page"}], ids, now=NOW)
+    settings = {COMPLETED_KEY: proof.dumps(), "DEEP_SWEEP_CIRCLE_COMPLETED_PAGES": "2000",
+                "DEEP_SWEEP_CIRCLE_MAX_PAGE": "2000", "KRISHA_TOTAL_FOUND": "40"}
+    assert dq.circle_coverage_pct(settings) == 50.0

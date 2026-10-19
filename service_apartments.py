@@ -12,7 +12,7 @@
 """
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import os
 import random
@@ -122,7 +122,7 @@ def _next_cycle_sleep_minutes(app_settings) -> float:
 # сдвигает весь круг целиком, и по apartments.log реальные круги
 # занимали от 1.2 до 4.3 суток. Теперь батч планируется под дедлайн:
 # отстали от графика — батч растёт, идём с запасом — остаётся базовым.
-_CIRCLE_TARGET_HOURS_DEFAULT = 48.0
+_CIRCLE_TARGET_HOURS_DEFAULT = 24.0
 # Объявлений на странице выдачи Крыши (см. снимок max_deep_page ниже).
 KRISHA_PAGE_SIZE = 20
 # Планируем не на весь бюджет, а на 85% от него: оставшиеся 15% — запас
@@ -168,17 +168,11 @@ def _plan_deep_batch(*, base_batch: int, max_batch: int, pages_left: int,
     опускаем — незачем тормозить обход, если успеваем), и поднимает
     вплоть до max_batch, когда отстали. Чистая функция: всё состояние
     приходит аргументами — проверяется тестом без БД и без сети."""
-    if base_batch <= 0 or pages_left <= 0:
-        return base_batch
-    max_batch = max(max_batch, base_batch)
-    period_min = max(period_min, 1.0)
-    remaining_min = target_hours * 60.0 * safety - elapsed_min
-    if remaining_min <= 0:
-        # Бюджет уже проеден — закрываем круг максимально быстро.
-        return max_batch
-    cycles_left = max(1, int(remaining_min // period_min))
-    need = -(-pages_left // cycles_left)  # ceil
-    return max(base_batch, min(need, max_batch))
+    from bot.core.sale_sweep import plan_batch
+    return plan_batch(base_batch=base_batch, max_batch=max_batch,
+                      pages_left=pages_left, elapsed_min=elapsed_min,
+                      period_min=period_min, target_hours=target_hours,
+                      reference_batch=base_batch, safety=safety)["batch"]
 
 
 async def _record_cycle_period(app_settings) -> None:
@@ -204,6 +198,118 @@ async def _record_cycle_period(app_settings) -> None:
     await app_settings.set("DEEP_SWEEP_CYCLE_PERIOD_MIN", f"{ema:.1f}")
 
 
+async def _collect_sale_catalog(app_settings, analyze, *, now=None):
+    """Return source receipts; durable advancement happens AFTER DB saves."""
+    from bot.core.sale_sweep import SaleSweep, STATE_KEY, COMPLETED_KEY, plan_batch, utc
+    from bot.core.sale_detail_persistence import analyze_with_attempt_capture
+    now = now or datetime.now(timezone.utc)
+    state = SaleSweep.loads(app_settings.get(STATE_KEY))
+    current_journal_unreadable = bool(app_settings.get(STATE_KEY)) and state is None
+    previous = state or SaleSweep.loads(app_settings.get(COMPLETED_KEY))
+    if state and state.completed_at:
+        # Recover a crash between the atomic current journal and its last
+        # completed copy before beginning a new round.
+        await app_settings.set(COMPLETED_KEY, state.dumps())
+        state = None
+    if state is None:
+        state = SaleSweep.new(now)
+        if previous:
+            state.recent_unsaved = {i: checked for i, checked in previous.recent_unsaved.items()
+                                    if utc(checked) >= now - timedelta(days=7)}
+            state.presence_overflow = previous.presence_overflow
+        if current_journal_unreadable:
+            state.archive_hold_reason = "current_journal_unreadable"
+            state.archive_hold_started_at = now.isoformat()
+        await app_settings.set(STATE_KEY, state.dumps())
+        await app_settings.set("DEEP_SWEEP_CIRCLE_STARTED_AT", state.started_at)
+        log.info("Deep sweep: new evidence journal from page 1 (legacy cursor is not proof)")
+    blocked = utc(state.blocked_until)
+    if blocked and blocked > now:
+        log.warning("Sale catalog paused until %s after source block", state.blocked_until)
+        return [], state, [], {"blocked": True, "paused": True}, {}
+
+    head_stats = {"_detail_budget_remaining": max(0, app_settings.get_int("DETAIL_FETCH_BATCH", 15))}
+    head_pages = max(0, min(app_settings.get_int("PARSER_MAX_PAGES", 5), 20))
+    results = await analyze_with_attempt_capture(analyze, "astana", max_pages=head_pages, stats=head_stats) if head_pages else []
+    reports = list(head_stats.get("page_reports", []))
+    provisional = SaleSweep.loads(state.dumps())
+    provisional.account(reports, {i for p in reports for i in p.get("accepted_ids", [])}, now=now)
+    cursor = provisional.next_page
+    left = max(0, (provisional.expected_last_page or 0) - cursor + 1)
+    current_counts = [p["total_count"] for p in reports if not p.get("error") and p.get("ids") and p.get("total_count")]
+    if current_counts:
+        current_last = (current_counts[-1] + KRISHA_PAGE_SIZE - 1) // KRISHA_PAGE_SIZE
+        if cursor > current_last:
+            # A smaller live catalog must not strand the cursor on an
+            # out-of-range redirect. Re-read its actual last page and
+            # require a fresh positive terminal receipt; never jump gaps.
+            cursor, left = current_last, 1
+    plan = plan_batch(
+        base_batch=app_settings.get_int("DEEP_SWEEP_BATCH", 5),
+        max_batch=app_settings.get_int("DEEP_SWEEP_BATCH_MAX", _CIRCLE_BATCH_MAX_DEFAULT),
+        pages_left=left,
+        elapsed_min=max(0, (now - utc(state.started_at)).total_seconds() / 60),
+        period_min=app_settings.get_float("DEEP_SWEEP_CYCLE_PERIOD_MIN", _CYCLE_PERIOD_SEED_MIN),
+        target_hours=app_settings.get_float("DEEP_SWEEP_CIRCLE_TARGET_HOURS", _CIRCLE_TARGET_HOURS_DEFAULT),
+        reference_batch=app_settings.get_int("DEEP_SWEEP_LAST_BATCH", 40),
+        page_seconds=app_settings.get_float("DEEP_SWEEP_PAGE_SECONDS", 5),
+    )
+    deep_stats = {"_detail_budget_remaining": head_stats["_detail_budget_remaining"]}
+    if plan["batch"] and not provisional.closed and not head_stats.get("pages_failed"):
+        # Sparse DB-save retries must not re-request hundreds of pages
+        # already acknowledged after the gap. The next cycle resumes at
+        # the following gap/new page; a bounded repair costs one cycle.
+        following_done = [int(n) for n in provisional.pages if int(n) > cursor]
+        batch = min(plan["batch"], min(following_done) - cursor) if following_done else plan["batch"]
+        deep_results = await analyze_with_attempt_capture(analyze, "astana", max_pages=batch, start_page=cursor,
+                                                         stats=deep_stats, prior_results=results)
+        results.extend(deep_results or [])
+        reports.extend(deep_stats.get("page_reports", []))
+    elapsed = head_stats.get("page_elapsed_sec", 0) + deep_stats.get("page_elapsed_sec", 0)
+    stats = {"blocked": bool(head_stats.get("blocked") or deep_stats.get("blocked")),
+             "page_elapsed_sec": elapsed, "deep_pages_ok": deep_stats.get("pages_ok", 0)}
+    log.info("Deep sweep: page %d, batch %d, remaining ETA %s h, 24h/configured deadline feasible=%s",
+             cursor, plan["batch"], plan["estimated_remaining_hours"], plan["deadline_feasible"])
+    return results, state, reports, stats, plan
+
+
+async def _commit_sale_catalog(app_settings, state, reports, saved_ids, stats, plan, *, now=None):
+    from bot.core.sale_sweep import STATE_KEY, COMPLETED_KEY, utc
+    now = now or datetime.now(timezone.utc)
+    state.account(reports, saved_ids, now=now)
+    # One atomic settings write is authoritative. Projections below are
+    # diagnostics only; consumers validate the full journal.
+    await app_settings.set(STATE_KEY, state.dumps())
+    await app_settings.set("DEEP_SWEEP_PAGE", str(state.next_page))
+    await app_settings.set("DEEP_SWEEP_CIRCLE_MAX_PAGE", str(state.expected_last_page or 0))
+    await app_settings.set("DEEP_SWEEP_CURRENT_UNIQUE_IDS", str(len(state.unique_ids)))
+    await app_settings.set("DEEP_SWEEP_RETRY_PAGES", str(len(state.failures)))
+    if reports:
+        await app_settings.set("DEEP_SWEEP_LAST_AT", now.isoformat())
+    if stats.get("deep_pages_ok"):
+        await _record_cycle_period(app_settings)
+        await app_settings.set("DEEP_SWEEP_LAST_BATCH", str(stats["deep_pages_ok"]))
+    if reports and stats.get("page_elapsed_sec", 0) > 0:
+        sample = max(2, min(60, stats["page_elapsed_sec"] / len(reports)))
+        old = app_settings.get_float("DEEP_SWEEP_PAGE_SECONDS", 5)
+        await app_settings.set("DEEP_SWEEP_PAGE_SECONDS", str(round(.3 * sample + .7 * old, 3)))
+    if plan:
+        await app_settings.set("DEEP_SWEEP_PLAN_V1", json.dumps({"at": now.isoformat(), **plan}))
+    if state.completed_at:
+        await app_settings.set(COMPLETED_KEY, state.dumps())
+        duration = max(0, (now - utc(state.started_at)).total_seconds())
+        for key, value in {
+            "COMPLETED_AT": state.completed_at, "DURATION_SEC": duration,
+            "COMPLETED_PAGES": sum(bool(p["ids"]) for p in state.pages.values()),
+            "COMPLETED_TOTAL": state.denominator, "COMPLETED_UNIQUE_IDS": len(state.unique_ids),
+            "COMPLETED_VERIFIED": "1", "MAX_PAGE": "0",
+        }.items():
+            await app_settings.set("DEEP_SWEEP_CIRCLE_" + key, str(value))
+        log.info("Deep sweep closed: %.2f h, %d source IDs, %d saved IDs, coverage=%s%%, failed attempts=%d",
+                 duration / 3600, len(state.unique_ids), len(state.saved_ids), state.coverage_pct, state.failed_attempts)
+    return state
+
+
 async def run_cycle():
     from bot.core.apartment_parser import analyze_apartments
     from bot.core.sheets_sync import sync_apartments_to_sheets_pg
@@ -214,201 +320,13 @@ async def run_cycle():
 
     # Подтягиваем настройки, выставленные через веб-терминал (/admin/settings)
     await app_settings.load()
-    max_pages = app_settings.get_int("PARSER_MAX_PAGES", 5)
-
-    # ── Свежие объявления: первые страницы выдачи (как раньше) ────────────
-    results = await analyze_apartments("astana", max_pages=max_pages)
-    log.info("Parsed %d fresh listings (pages 1-%d)", len(results), max_pages)
-
-    # ── ГЛУБОКИЙ ОБХОД: идём до конца выдачи, запоминая позицию ───────────
-    # Выдача Астаны без ценового потолка и фильтра фото. Свежий парс покрывает
-    # только первые max_pages, дальше живут объявления, которые никто не
-    # «поднимает» — они никогда не попадут в базу без сквозного обхода.
-    # Каждый цикл дочитываем страниц с сохранённой позиции; дойдя до конца
-    # выдачи — начинаем заново. Сколько именно страниц — решает
-    # _plan_deep_batch() из остатка бюджета круга (DEEP_SWEEP_CIRCLE_
-    # TARGET_HOURS, по умолчанию 48 ч), а DEEP_SWEEP_BATCH задаёт нижнюю
-    # границу: по графику идём базовым батчем, отстали — батч растёт.
-    #
-    # ФИКС (задача "adaptive recheck", 2026-08-13, предусловие — см.
-    # docs/adaptive_recheck_plan.md, п.4/7): max_deep_page раньше
-    # ПЕРЕСЧИТЫВАЛСЯ каждый цикл из живого KRISHA_TOTAL_FOUND — тот
-    # оказался нестабильным (наблюдали разброс ~830 vs ~1642 страниц за
-    # несколько дней между реальными "круг завершён" событиями в
-    # apartments.log), из-за чего конец круга был движущейся целью:
-    # реальный круг (75.4ч) оказался втрое дольше теоретического (~25ч
-    # при DEEP_SWEEP_BATCH=36). Теперь снимок max_deep_page берётся ОДИН
-    # РАЗ на весь круг (DEEP_SWEEP_CIRCLE_MAX_PAGE, лениво — на первом
-    # цикле после того, как предыдущий круг завершился и обнулил снимок)
-    # и не меняется, пока круг не завершится — конец круга детерминирован
-    # на весь круг вперёд, не пересчитывается на лету. DEEP_SWEEP_CIRCLE_
-    # STARTED_AT — начало ТЕКУЩЕГО круга, используется bot.core.
-    # archive_check._select_candidates() как порог "пропало из каталога"
-    # (cold-confirm пул).
+    results, sweep, page_reports, collection_stats, sweep_plan = await _collect_sale_catalog(
+        app_settings, analyze_apartments)
+    if collection_stats.get("paused"):
+        return
     from bot.core import apartment_parser as _ap
-    if _ap.LAST_TOTAL_FOUND:
+    if _ap.LAST_TOTAL_FOUND is not None:
         await app_settings.set("KRISHA_TOTAL_FOUND", str(_ap.LAST_TOTAL_FOUND))
-
-    max_deep_page = app_settings.get_int("DEEP_SWEEP_CIRCLE_MAX_PAGE", 0)
-    if max_deep_page == 0:
-        krisha_total = app_settings.get_int("KRISHA_TOTAL_FOUND", 0)
-        # Крыша отдаёт 20 объявлений/страницу (проверено 2026-10-03: 38 688 найдено,
-        # выдача идёт до ~1936-й страницы). Раньше здесь стояло 40 («проверено
-        # 2026-08-07») — снимок круга был вдвое меньше каталога, и нижнюю половину
-        # выдачи (~19К живых объявлений) deep sweep не видел вовсе.
-        max_deep_page = (krisha_total // KRISHA_PAGE_SIZE + 2) if krisha_total else 0
-        if max_deep_page:
-            await app_settings.set("DEEP_SWEEP_CIRCLE_MAX_PAGE", str(max_deep_page))
-            await app_settings.set("DEEP_SWEEP_CIRCLE_STARTED_AT",
-                                   datetime.now(timezone.utc).isoformat())
-            log.info("Deep sweep: новый круг, снимок max_deep_page=%d", max_deep_page)
-
-    base_batch = app_settings.get_int("DEEP_SWEEP_BATCH", 5)
-    if base_batch > 0:
-        cursor = app_settings.get_int("DEEP_SWEEP_PAGE", max_pages + 1)
-        if cursor <= max_pages:
-            cursor = max_pages + 1
-
-        # Размер батча планируется под дедлайн круга, а не задан намертво
-        # (см. _plan_deep_batch): пока идём по графику — это базовый
-        # DEEP_SWEEP_BATCH, отстали после простоя — батч растёт, чтобы
-        # круг всё равно закрылся за DEEP_SWEEP_CIRCLE_TARGET_HOURS.
-        circle_started_at = _parse_iso(app_settings.get("DEEP_SWEEP_CIRCLE_STARTED_AT"))
-        if circle_started_at is None and max_deep_page:
-            # Снимок круга есть, а метки старта нет — значит круг идёт, но
-            # часы бюджета считать не от чего. Бывает при апгрейде с версии
-            # без дедлайна и если метку затёрли снаружи (её, например,
-            # удаляет tests/test_archive_check_pools.py, а он ходит в ту же
-            # БД). Заводим часы сейчас: дедлайн будет отсчитан от этого
-            # момента, а не проигнорирован молча. Ту же метку читает
-            # archive_check._select_candidates() как порог "пропало из
-            # каталога" — без неё cold-confirm пул просто не набирается.
-            circle_started_at = datetime.now(timezone.utc)
-            await app_settings.set("DEEP_SWEEP_CIRCLE_STARTED_AT",
-                                   circle_started_at.isoformat())
-            log.warning("Deep sweep: метка старта круга отсутствовала при "
-                        "снимке max_deep_page=%d — часы бюджета запущены сейчас",
-                        max_deep_page)
-        elapsed_min = 0.0
-        if circle_started_at:
-            elapsed_min = max(0.0, (datetime.now(timezone.utc)
-                                    - circle_started_at).total_seconds() / 60.0)
-        target_hours = app_settings.get_float("DEEP_SWEEP_CIRCLE_TARGET_HOURS",
-                                              _CIRCLE_TARGET_HOURS_DEFAULT)
-        pages_left = (max_deep_page - cursor + 1) if max_deep_page else 0
-        deep_batch = _plan_deep_batch(
-            base_batch=base_batch,
-            max_batch=app_settings.get_int("DEEP_SWEEP_BATCH_MAX", _CIRCLE_BATCH_MAX_DEFAULT),
-            pages_left=pages_left,
-            elapsed_min=elapsed_min,
-            period_min=app_settings.get_float("DEEP_SWEEP_CYCLE_PERIOD_MIN",
-                                              _CYCLE_PERIOD_SEED_MIN),
-            target_hours=target_hours,
-        )
-        if deep_batch != base_batch:
-            log.info("Deep sweep: круг идёт %.1f ч из целевых %.0f ч, осталось "
-                     "%d стр. — батч %d → %d, чтобы уложиться в дедлайн",
-                     elapsed_min / 60.0, target_hours, pages_left, base_batch, deep_batch)
-        try:
-            deep_stats: dict = {}
-            deep_results = await analyze_apartments(
-                "astana", max_pages=deep_batch, start_page=cursor, stats=deep_stats)
-            pages_ok = deep_stats.get("pages_ok", 0)
-            pages_failed = deep_stats.get("pages_failed", 0)
-            reached_end = deep_stats.get("reached_end", False)
-            # Крыша на несуществующие страницы отдаёт последнюю (НЕ пустую!),
-            # поэтому "пустая страница" как признак конца не работает —
-            # только позиция курсора относительно снимка max_deep_page.
-            past_end = bool(max_deep_page) and cursor > max_deep_page
-
-            results.extend(deep_results or [])
-            if not past_end and pages_ok == 0 and pages_failed:
-                # БАГ (найден 2026-09-28 по apartments.log): когда ВСЯ пачка
-                # ложилась на сети (наблюдали "[Errno -3] Temporary failure
-                # in name resolution" — 2878 упавших страниц за сутки),
-                # deep_results приходил пустым, и ветка ниже трактовала это
-                # ровно как "конец выдачи": засчитывала круг завершённым,
-                # сбрасывала курсор на начало и обнуляла снимок max_deep_
-                # page. За 20 часов 28.09 так "завершилось" 13 кругов
-                # подряд, каждые 1.5-2 часа, — реального обхода каталога в
-                # этот день не было вовсе. Побочно это ломало и archive_
-                # check: DEEP_SWEEP_CIRCLE_STARTED_AT для него — порог
-                # "пропало из каталога" (bot/core/archive_check.py::
-                # _select_candidates), и сдвиг этого порога на "полтора часа
-                # назад" подсовывал в cold-confirm пул живые объявления,
-                # которые просто не успели попасться заново.
-                # Пустая пачка из-за сети — НЕ конец круга: курсор стоит на
-                # месте, следующий цикл перечитает те же страницы.
-                #
-                # Условие намеренно НЕ смотрит на reached_end: "ни одной
-                # страницы не прочитали, при этом часть запросов упала" —
-                # это состояние, из которого мы про конец выдачи ничего не
-                # узнали, даже если последняя (единственная доехавшая)
-                # страница пришла без карточек. Честный конец выдачи — это
-                # pages_failed == 0 (см. ветку else ниже), он сюда не
-                # попадает.
-                next_cursor = cursor
-                log.warning("Deep sweep: страницы %d-%d — упали все %d запросов "
-                            "(сеть/блокировка), круг НЕ засчитан, курсор остаётся на %d",
-                            cursor, cursor + deep_batch - 1, pages_failed, cursor)
-            elif deep_results and not past_end:
-                if pages_failed:
-                    log.warning("Deep sweep: %d из %d страниц не прочитаны — "
-                                "их объявления этот круг пропустит",
-                                pages_failed, pages_ok + pages_failed)
-                next_cursor = cursor + deep_batch
-                log.info("Deep sweep: pages %d-%d → %d listings, cursor → %d",
-                         cursor, cursor + deep_batch - 1, len(deep_results), next_cursor)
-                await _record_cycle_period(app_settings)
-            else:
-                next_cursor = max_pages + 1
-                # Причину пишем явно: именно смешение "курсор дошёл до
-                # конца" с "выдача не ответила" и было багом 28.09 —
-                # по логу эти два случая различить было невозможно.
-                if past_end:
-                    reason = "курсор за снимком max_deep_page"
-                elif reached_end:
-                    reason = "Крыша отдала страницу без карточек"
-                else:
-                    reason = "пачка без объявлений"
-                log.info("Deep sweep: страница %d (последняя ~%d по счётчику "
-                         "Крыши) — круг завершён (%s), cursor → %d", cursor,
-                         max_deep_page, reason, next_cursor)
-                # Метрика "за сколько мы обходим всю Крышу". Считаем от
-                # СТАРТА этого круга (DEEP_SWEEP_CIRCLE_STARTED_AT), а не
-                # от прошлого завершения: старт — это ровно тот момент, с
-                # которого круг реально идёт, тогда как дельта между
-                # завершениями прихватывала ещё и цикл-другой паузы между
-                # кругами. На прошлое завершение откатываемся только если
-                # метки старта нет (первый круг после деплоя).
-                now = datetime.now(timezone.utc)
-                started = circle_started_at or _parse_iso(
-                    app_settings.get("DEEP_SWEEP_CIRCLE_COMPLETED_AT"))
-                if started:
-                    duration_sec = int((now - started).total_seconds())
-                    await app_settings.set("DEEP_SWEEP_CIRCLE_DURATION_SEC", str(duration_sec))
-                    if duration_sec > target_hours * 3600:
-                        log.warning("Deep sweep: круг занял %.1f ч — больше "
-                                    "целевых %.0f ч (батч упирался в потолок?)",
-                                    duration_sec / 3600.0, target_hours)
-                await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_AT", now.isoformat())
-                # Сколько страниц реально покрыл завершённый круг и сколько было в каталоге —
-                # гейт полноты для stale_archive (архивировать «не видели» можно, только если
-                # круг прошёл весь каталог).
-                await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_PAGES", str(max_deep_page or 0))
-                await app_settings.set("DEEP_SWEEP_CIRCLE_COMPLETED_TOTAL",
-                                       str(app_settings.get_int("KRISHA_TOTAL_FOUND", 0)))
-                # Обнуляем снимок — следующий цикл (курсор снова на первой
-                # deep-странице) снимет новый max_deep_page на СЛЕДУЮЩИЙ круг.
-                await app_settings.set("DEEP_SWEEP_CIRCLE_MAX_PAGE", "0")
-                await _record_cycle_period(app_settings)
-            await app_settings.set("DEEP_SWEEP_PAGE", str(next_cursor))
-            await app_settings.set("DEEP_SWEEP_LAST_AT",
-                                   datetime.now(timezone.utc).isoformat())
-        except Exception as e:
-            log.warning("Deep sweep failed (продолжаем со свежими): %s", e)
-
-    log.info("Parsed %d listings total", len(results))
 
     # ── Отсев «ЖК-улиц»: названия, помеченные аудитом как улицы, не принимаем ──
     try:
@@ -437,8 +355,11 @@ async def run_cycle():
         log.warning("street filter failed: %s", e)
 
     new_cnt = upd_cnt = 0
+    saved_ids = set()
+    from bot.core.sale_detail_persistence import catalog_only_row, save_source_details, persist_actual_attempts
 
-    for r in results:
+    for source_row in results:
+        r = catalog_only_row(source_row)
         sd = r.get("score_data", {})
         bd = sd.get("breakdown", {})
         bargain = extract_bargain(r)
@@ -448,7 +369,7 @@ async def run_cycle():
 
         try:
             if not exists:
-                await pg_exec("""
+                write_result = await pg_exec("""
                     INSERT INTO apartment_listings
                         (id, url, title, price, area, rooms, address, district, complex_name,
                          est_rent, yield_pct, net_yield_pct, payback_years,
@@ -487,7 +408,8 @@ async def run_cycle():
                     r.get("details_fetched", False), r.get("ceiling_height"),
                     r.get("kitchen_area"), r.get("photo_url"),
                 )
-                new_cnt += 1
+                if write_result == "INSERT 0 1":
+                    new_cnt += 1
             else:
                 # История цен: фиксируем изменение — сигнал для алертов о торге
                 old_price = exists["price"]
@@ -528,16 +450,17 @@ async def run_cycle():
                 # синхронизировались, из-за чего карточка навсегда застревала
                 # на комнатности/площади с момента первого скана (баг с
                 # расхождением комнатности между Крышей и нашей аналитикой).
-                await pg_exec("""
+                write_result = await pg_exec("""
                     UPDATE apartment_listings SET
                         price=$2, est_rent=$3, yield_pct=$4, payback_years=$5,
                         reasons=$6,
-                        floor=$7, floors_total=$8, year_built=$9,
-                        complex_name=$10, seller_type=$11, is_owner=$12,
+                        floor=COALESCE($7, floor), floors_total=COALESCE($8, floors_total), year_built=COALESCE($9, year_built),
+                        complex_name=COALESCE(NULLIF($10,''), complex_name), seller_type=COALESCE($11, seller_type), is_owner=COALESCE($12, is_owner),
                         rent_source=$13, bargain_target=$14,
                         bargain_discount_pct=$15, bargain_rec=$16,
-                        details_fetched=$17, ceiling_height=COALESCE($18, ceiling_height),
-                        title=$19, rooms=$20, area=$21, address=$22, district=$23,
+                        details_fetched=CASE WHEN $17::boolean THEN TRUE ELSE details_fetched END, ceiling_height=COALESCE($18, ceiling_height),
+                        title=COALESCE(NULLIF($19,''),title), rooms=COALESCE($20,rooms), area=COALESCE($21,area),
+                        address=COALESCE(NULLIF($22,''),address), district=COALESCE(NULLIF($23,''),district),
                         net_yield_pct=$24, kitchen_area=COALESCE($25, kitchen_area),
                         photo_url=COALESCE(photo_url, $26), trust_score=$27,
                         comparables_cnt=$28, bargain_method=$29,
@@ -558,18 +481,42 @@ async def run_cycle():
                     r.get("trust_score"),
                     bargain.get("comparables_cnt", 0), bargain.get("method"),
                 )
-                upd_cnt += 1
+                if write_result == "UPDATE 1":
+                    upd_cnt += 1
 
-            if r.get("views_count"):
-                # COALESCE — не затираем уже сохранённое число NULL'ом на
-                # циклах без свежего detail-fetch (views_count там просто нет).
-                await pg_exec(
-                    "UPDATE apartment_listings SET views_count=$2 WHERE id=$1",
-                    r["id"], r["views_count"])
+            if write_result not in ("INSERT 0 1", "UPDATE 1"):
+                log.warning("Sale row %s not acknowledged (%s); page remains queued", r["id"], write_result)
+                await persist_actual_attempts({r['id']: source_row.get('_source_details_attempted_at')}, execute=pg_exec)
+                continue
+            # Detail attributes and the success timestamp are one atomic
+            # write; feed placeholders cannot overwrite the previous detail.
+            await save_source_details(source_row, execute=pg_exec)
+            saved_ids.add(str(r["id"]))
         except Exception as e:
             log.warning("DB error %s: %s", r["id"], e)
+            await persist_actual_attempts({r['id']: source_row.get('_source_details_attempted_at')}, execute=pg_exec)
 
     log.info("DB: +%d new, ~%d updated", new_cnt, upd_cnt)
+
+    await _commit_sale_catalog(app_settings, sweep, page_reports, saved_ids,
+                               collection_stats, sweep_plan)
+    if collection_stats.get("blocked"):
+        log.warning("Sale source blocked: saved successful prefix; remaining source work deferred")
+        return
+
+    # Derivations consume acknowledged DB values, never the raw response:
+    # the atomic detail writer may have rejected an older observation, or a
+    # row may have failed to save. A missing read fails closed for this pass.
+    try:
+        from bot.db.pg import fetch as _saved_sale_fetch
+        results = [dict(row) for row in await _saved_sale_fetch(
+            "SELECT id,title,address,description,lat,lon,complex_name,year_built,"
+            "source_details_checked_at,last_seen FROM apartment_listings WHERE id=ANY($1::text[])",
+            sorted(saved_ids),
+        )] if saved_ids else []
+    except Exception as e:
+        log.warning("Saved sale snapshot unavailable; skipping derived updates: %s", e)
+        results = []
 
     # ── House-resolution (задача 2026-08-13, "применять и при первичном
     # матчинге новых объявлений") — если ЖК объявления оказался зонтиком
@@ -604,11 +551,15 @@ async def run_cycle():
                 listing_description=r.get("description"),
                 listing_lat=r.get("lat"), listing_lon=r.get("lon"), children=children)
             if res:
-                await pg_exec(
+                house_write = await pg_exec(
                     "UPDATE apartment_listings SET resolved_house_id=$2, house_attribution=$3, "
-                    "house_attribution_detail=$4 WHERE id=$1",
-                    r["id"], res["house_id"], res["method"], res["detail"])
-                house_resolved += 1
+                    "house_attribution_detail=$4 WHERE id=$1 "
+                    "AND source_details_checked_at IS NOT DISTINCT FROM $5::timestamptz "
+                    "AND last_seen IS NOT DISTINCT FROM $6::timestamptz",
+                    r["id"], res["house_id"], res["method"], res["detail"],
+                    r.get("source_details_checked_at"), r.get("last_seen"))
+                if house_write == "UPDATE 1":
+                    house_resolved += 1
         if house_resolved:
             log.info("house-resolution: %d объявлений привязано к домам зонтиков", house_resolved)
     except Exception as e:
@@ -631,55 +582,17 @@ async def run_cycle():
             try:
                 await pg_exec(
                     "UPDATE apartment_listings SET finish_level=$2 "
-                    "WHERE id=$1 AND (finish_level IS DISTINCT FROM $2)",
-                    r["id"], code,
+                    "WHERE id=$1 AND (finish_level IS DISTINCT FROM $2) "
+                    "AND source_details_checked_at IS NOT DISTINCT FROM $3::timestamptz "
+                    "AND last_seen IS NOT DISTINCT FROM $4::timestamptz",
+                    r["id"], code, r.get("source_details_checked_at"), r.get("last_seen"),
                 )
             except Exception as e:
                 log.warning("finish update failed %s: %s", r["id"], e)
 
-    # ── Координаты + свежепойманная архивность из детального парсера ──────
-    try:
-        await pg_exec("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS complex_url TEXT")
-    except Exception:
-        pass
-    for r in results:
-        try:
-            if r.get("lat") and r.get("lon"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET lat=$2, lon=$3, geo_source='krisha' WHERE id=$1",
-                    r["id"], r["lat"], r["lon"],
-                )
-            if r.get("complex_url"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET complex_url=$2 WHERE id=$1",
-                    r["id"], r["complex_url"],
-                )
-            if r.get("photos"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
-                    r["id"], json.dumps(r["photos"]),
-                )
-                # Прогреваем кэш первого фото сразу при парсинге, а не по
-                # факту первого открытия попапа пользователем — раньше это
-                # давало 2-3с задержку на каждое ранее непросмотренное фото
-                # (см. img-proxy/prewarm_photo_cache в terminal_extras.py).
-                try:
-                    from terminal_extras import prewarm_photo_cache
-                    asyncio.create_task(prewarm_photo_cache(r["photos"][0]))
-                except Exception:
-                    pass
-            if r.get("seller_name"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET seller_name=$2 WHERE id=$1",
-                    r["id"], r["seller_name"],
-                )
-            if r.get("is_archived"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET is_active=FALSE, archived_at=now() WHERE id=$1",
-                    r["id"],
-                )
-        except Exception as e:
-            log.warning("coords/archive update failed %s: %s", r["id"], e)
+    # Source detail fields (including geo provenance) are written only by
+    # save_source_details. No unguarded replay, archive flag, or source URL
+    # assignment may bypass its observed-field mask and monotonic timestamp.
 
     # ── БЭКФИЛЛ координат по ВСЕЙ базе (не только текущий цикл) ────────────
     # Баг, который это чинит: раньше детали докачивались только для
@@ -805,8 +718,11 @@ async def run_cycle():
             # понижаем автоматически — сданный дом уточняется вручную/годом)
             await pg_exec(
                 "UPDATE apartment_listings SET market_type=$2 WHERE id=$1 "
-                "AND (market_type IS NULL OR (market_type='secondary' AND $2='primary'))",
+                "AND (market_type IS NULL OR (market_type='secondary' AND $2='primary')) "
+                "AND source_details_checked_at IS NOT DISTINCT FROM $3::timestamptz "
+                "AND last_seen IS NOT DISTINCT FROM $4::timestamptz",
                 r["id"], "primary" if is_primary else "secondary",
+                r.get("source_details_checked_at"), r.get("last_seen"),
             )
         except Exception as e:
             log.warning("market_type failed %s: %s", r["id"], e)

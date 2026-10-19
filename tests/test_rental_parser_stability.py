@@ -165,6 +165,7 @@ async def test_deep_block_keeps_successful_head_observations_in_metrics(monkeypa
         "requests": 2, "head_pages": 1, "durable_pages": 0,
         "saved": 1, "new": 1, "updated": 0, "reactivated": 0,
         "raw_cards": 1, "accepted_cards": 1, "unpriced_cards": 0,
+        "expected_last_page":10, "expected_total":100,
     }
     assert durable_settings[KEY] == original
 
@@ -359,7 +360,8 @@ async def test_backfill_stops_on_468_without_marking_unfetched_candidates(monkey
     assert report is progress
     assert report["blocked"] == report["http_468"] == report["requests"] == 1
     assert report["checked"] == 0 and fetch_details.await_count == 1
-    backfill_dependencies.assert_not_awaited()
+    backfill_dependencies.assert_awaited_once_with(
+        "UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1", "1")
 
 
 @pytest.mark.asyncio
@@ -384,7 +386,8 @@ async def test_backfill_preserves_progress_if_parent_budget_cancels(monkeypatch,
         await rentals.backfill_rental_details(2, budget_seconds=30, progress=progress)
     assert progress["requests"] == progress["detail_attempts"] == 1
     assert progress["checked"] == 0
-    backfill_dependencies.assert_not_awaited()
+    backfill_dependencies.assert_awaited_once_with(
+        "UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1", "1")
 
 
 class Context:
