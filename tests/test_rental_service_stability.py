@@ -153,10 +153,10 @@ async def test_circle_estimate_uses_success_intervals_and_requires_known_boundar
     ops = operations(AsyncMock(return_value={"page": 1, "saved": 20, "completed": False,
                                            "requests": 1, "expected_last_page": 200}))
     plan = RentalCyclePlan(maintenance_seconds=0)
-    first = await service.run_one_cycle(None, "/rental/", "apartment", state, ops, plan, clock=lambda: now[0])
+    first = await service.run_one_cycle(None, "/arenda/kvartiry/astana/", "apartment", state, ops, plan, clock=lambda: now[0])
     assert first["estimated_circle_hours"] is None
     now[0] = 400
-    second = await service.run_one_cycle(None, "/rental/", "apartment", state, ops, plan, clock=lambda: now[0])
+    second = await service.run_one_cycle(None, "/arenda/kvartiry/astana/", "apartment", state, ops, plan, clock=lambda: now[0])
     assert second["page_interval_seconds"] == 300
     assert second["estimated_circle_hours"] == 16.67
     assert second["page_interval_samples"] == 1

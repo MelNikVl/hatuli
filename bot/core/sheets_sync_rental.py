@@ -16,6 +16,22 @@ RENTAL_HEADERS = [
     "Цена из объявления ₸", "Единица ставки", "Этаж", "Этажей", "Адрес", "URL", "Замечено в списке",
 ]
 
+# The existing apartment worksheet is monthly inventory. Preserve other
+# property categories without guessing whether their price is per hour/m².
+RENTAL_EXPORT_SQL = """
+    SELECT id, prop_type, rooms, district, complex_name, area,
+           price, floor, floors_total, address, url, last_seen,
+           rent_period, rent_period_conflict
+    FROM rental_listings
+    WHERE city='astana' AND prop_type IN ('apartment','parking','commercial')
+      AND (prop_type <> 'apartment' OR (rent_period='monthly' AND NOT coalesce(rent_period_conflict,false)))
+      AND is_active IS TRUE AND archived_at IS NULL
+      AND NOT coalesce(is_duplicate,false) AND NOT coalesce(dup_needs_review,false)
+      AND nullif(btrim(duplicate_of),'') IS NULL
+      AND last_seen BETWEEN now()-interval '72 hours' AND now()
+    ORDER BY last_seen DESC, id
+"""
+
 
 def rental_sheet_rows(rows):
     data = [RENTAL_HEADERS]
@@ -26,7 +42,8 @@ def rental_sheet_rows(rows):
             r.get('district') or '', r.get('complex_name') or '',
             r['area'] if r.get('area') is not None else '',
             r['price'] if r.get('price') is not None else '',
-            'месяц (категория квартир)' if r.get('prop_type') == 'apartment' else 'не определена',
+            ({'monthly':'месяц','daily':'сутки'}.get(r.get('rent_period'),'не определена')
+             if r.get('prop_type') == 'apartment' and r.get('rent_period_conflict') is not True else 'не определена'),
             r['floor'] if r.get('floor') is not None else '',
             r['floors_total'] if r.get('floors_total') is not None else '',
             r.get('address') or '', r.get('url') or '',
@@ -39,19 +56,7 @@ async def sync_rental_to_sheets() -> bool:
     """Загружает rental_listings из PostgreSQL в вкладку 'Аренда'."""
     try:
         from bot.db.pg import fetch
-        rows = await fetch(
-            """
-            SELECT id, prop_type, rooms, district, complex_name, area,
-                   price, floor, floors_total, address, url, last_seen
-            FROM rental_listings
-            WHERE city='astana' AND prop_type IN ('apartment','parking','commercial')
-              AND is_active IS TRUE AND archived_at IS NULL
-              AND NOT coalesce(is_duplicate,false) AND NOT coalesce(dup_needs_review,false)
-              AND nullif(btrim(duplicate_of),'') IS NULL
-              AND last_seen BETWEEN now()-interval '72 hours' AND now()
-            ORDER BY last_seen DESC, id
-            """
-        )
+        rows = await fetch(RENTAL_EXPORT_SQL)
         data = rental_sheet_rows([dict(row) for row in rows])
 
         def _upload(d):

@@ -18,7 +18,7 @@ HEADERS = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow"}
 DETAIL_SQL = """
     SELECT id, title, price, area, rooms, floor, floors_total, address, district,
            complex_name, prop_type, photos, photo_url, last_seen, found_at,
-           is_active, archived_at, archive_reason
+           is_active, archived_at, archive_reason, rent_period, rent_period_conflict
     FROM rental_listings WHERE id = $1
 """
 HISTORY_SQL = """
@@ -75,6 +75,11 @@ def project_rental_detail(row: dict, history: list, *, history_available=True, n
               "active_observed": "Замечено в списке за последние 72 часа",
               "unknown": "Актуальность требует проверки"}
     kind = row.get("prop_type") if row.get("prop_type") in ("apartment", "parking", "commercial") else "unknown"
+    period = row.get("rent_period") if row.get("rent_period") in ("monthly", "daily") and row.get("rent_period_conflict") is not True else "unknown"
+    # Commercial/parking prices may use m² or hours. A period alone does not
+    # establish their base price unit, so never label them as a whole flat.
+    price_unit = {"monthly": "month", "daily": "day"}.get(period, "unknown") if kind == "apartment" else "unknown"
+    unit_labels = {"month": "за месяц", "day": "за сутки", "unknown": "единица ставки не определена"}
     return {"id": identifier, "source_url": "https://krisha.kz/a/show/" + identifier,
             "title": str(row.get("title") or "Объявление об аренде")[:500],
             "price": _number(row.get("price"), 1, 2_147_483_647, integer=True),
@@ -85,7 +90,9 @@ def project_rental_detail(row: dict, history: list, *, history_available=True, n
             "address": str(row.get("address") or "")[:600],
             "district": str(row.get("district") or "")[:100],
             "complex": str(row.get("complex_name") or "")[:200],
-            "prop_type": kind, "monthly_category": kind == "apartment",
+            "prop_type": kind, "rent_period": period,
+            "monthly_category": kind == "apartment" and period == "monthly",
+            "price_unit": price_unit, "price_unit_label": unit_labels[price_unit],
             "photos": photos[:20], "last_seen": _timestamp(observed), "found_at": _timestamp(row.get("found_at")),
             "status": status, "status_label": labels[status],
             "archive_note": "Снятие объявления не подтверждает сдачу квартиры.",

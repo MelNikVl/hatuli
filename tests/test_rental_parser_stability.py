@@ -398,24 +398,27 @@ async def test_index_counts_unknown_complex_once_and_replaces_obsolete_groups(mo
     rows = [{"id": str(i), "city": "astana", "district": "", "complex_name": "Guessed",
              "complex_url": "https://krisha.kz/complex/show/astana/another-project",
              "rooms": 2, "prop_type": "apartment", "price": 200000 + i * 10000,
-             "area": 50, "title": "2-комнатная, 50 м²"} for i in range(5)]
+             "area": 50, "title": "2-комнатная, 50 м²", "rent_period": "monthly",
+             "rent_period_conflict": False, "is_active": True,
+             "last_seen": datetime.now(timezone.utc)} for i in range(10)]
     rows += [{**rows[0], "title": "Посуточно, 2-комнатная"}]
-    read = AsyncMock(side_effect=[rows, []])
-    monkeypatch.setattr(pg, "fetch", read)
-    connection = SimpleNamespace(execute=AsyncMock(), executemany=AsyncMock(),
+    read = AsyncMock(return_value=rows)
+    connection = SimpleNamespace(fetch=read, execute=AsyncMock(), executemany=AsyncMock(),
                                  transaction=lambda: Context(None))
     monkeypatch.setattr(pg, "get_pool", lambda: SimpleNamespace(acquire=lambda: Context(connection)))
     await rentals.rebuild_rental_index()
     sql = read.await_args_list[0].args[0]
-    assert "'72 hours'" in sql and "is_active IS TRUE" in sql
+    assert "'72 hours'" in sql and "is_active IS TRUE" in sql and "rent_period = 'monthly'" in sql
     assert "is_duplicate" in sql and "dup_needs_review" in sql
     assert "prop_type = 'apartment'" in sql
-    assert connection.execute.await_args_list[0].args == ("DELETE FROM rental_index",)
+    deletion = next(call.args[0] for call in connection.execute.await_args_list if "DELETE FROM rental_index" in call.args[0])
+    assert "rent_period='monthly'" in deletion and "prop_type='apartment'" in deletion
+    assert "furnishing IS NULL" in deletion
     assert "RENTAL_INDEX_POLICY_VERSION" in connection.execute.await_args_list[-1].args[0]
     records = connection.executemany.await_args.args[1]
     assert len(records) == 2
-    assert all(record[2] is None and record[9] == 5 for record in records)
-    assert all(record[5] == 220000 for record in records)
+    assert all(record[2] is None and record[12] == 10 for record in records)
+    assert all(record[8] == 245000 for record in records)
 
 
 @pytest.mark.asyncio
@@ -425,28 +428,29 @@ async def test_index_complex_group_requires_enough_source_identity_verified_rows
     rows = [{"id": str(i), "city": "astana", "district": "", "complex_name": "Actual Complex",
              "complex_url": "https://krisha.kz/complex/show/astana/actual-complex",
              "rooms": 2, "prop_type": "apartment", "price": 220000,
-             "area": 50, "title": "2-комнатная, 50 м²"} for i in range(5)]
-    verified = [{"id": str(i), "complex_binding_verified": True} for i in range(verified_count)]
-    monkeypatch.setattr(pg, "fetch", AsyncMock(side_effect=[rows, verified]))
-    connection = SimpleNamespace(execute=AsyncMock(), executemany=AsyncMock(),
+             "area": 50, "title": "2-комнатная, 50 м²", "rent_period": "monthly",
+             "rent_period_conflict": False, "is_active": True, "last_seen": datetime.now(timezone.utc),
+             "index_complex_id": 10, "index_complex_name": "Actual Complex",
+             "complex_binding_verified": i < verified_count} for i in range(5)]
+    connection = SimpleNamespace(fetch=AsyncMock(return_value=rows), execute=AsyncMock(), executemany=AsyncMock(),
                                  transaction=lambda: Context(None))
     monkeypatch.setattr(pg, "get_pool", lambda: SimpleNamespace(acquire=lambda: Context(connection)))
     await rentals.rebuild_rental_index()
-    records = connection.executemany.await_args.args[1]
+    records = connection.executemany.await_args.args[1] if connection.executemany.await_count else []
     complex_groups = [record for record in records if record[2] == "Actual Complex"]
     assert len(complex_groups) == (2 if verified_count == 5 else 0)
-    assert all(record[9] == 5 for record in records)
+    assert all(record[12] == 5 for record in records)
 
 
 @pytest.mark.asyncio
 async def test_index_removes_stale_groups_when_current_sample_insufficient(monkeypatch):
     from types import SimpleNamespace
-    monkeypatch.setattr(pg, "fetch", AsyncMock(return_value=[]))
-    connection = SimpleNamespace(execute=AsyncMock(), executemany=AsyncMock(),
+    connection = SimpleNamespace(fetch=AsyncMock(return_value=[]), execute=AsyncMock(), executemany=AsyncMock(),
                                  transaction=lambda: Context(None))
     monkeypatch.setattr(pg, "get_pool", lambda: SimpleNamespace(acquire=lambda: Context(connection)))
     await rentals.rebuild_rental_index()
-    assert connection.execute.await_args_list[0].args == ("DELETE FROM rental_index",)
+    deletion = next(call.args[0] for call in connection.execute.await_args_list if "DELETE FROM rental_index" in call.args[0])
+    assert "rent_period='monthly'" in deletion and "furnishing IS NULL" in deletion
     assert "RENTAL_INDEX_POLICY_VERSION" in connection.execute.await_args_list[-1].args[0]
     connection.executemany.assert_not_awaited()
 
@@ -456,13 +460,15 @@ async def test_lookup_refuses_stale_and_small_aggregate_via_database_predicate(m
     read = AsyncMock(return_value=None)
     monkeypatch.setattr(pg, "fetchrow", read)
     assert await rentals.lookup_rental_estimate("astana", "Есиль", "Example", 2) is None
-    assert all("sample_count >= 5" in call.args[0] and "'72 hours'" in call.args[0]
+    assert all("sample_count >= $7" in call.args[0] and "'72 hours'" in call.args[0]
                for call in read.await_args_list)
+    assert [call.args[7] for call in read.await_args_list] == [5, 10, 10, 10, 10]
 
 
 def test_renamed_catalog_paths_are_preserved():
     assert rentals.RENTAL_PATHS == {
         "/arenda/kvartiry/astana/": "apartment",
+        "/arenda/kvartiry-posutochno/astana/": "apartment",
         "/arenda/garazhi/astana/": "parking",
         "/arenda/kommercheskaya-nedvizhimost/astana/": "commercial",
     }

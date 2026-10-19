@@ -103,7 +103,11 @@ async def save_enrichment(found: dict[str, dict], source_key: str,
                         raise InvalidComplexIdentity(f"Source link changed during import: {source_key}/{source_id}")
                     await record_complex_observations(cid, source_key, source_id, name, data.get("address"),
                                                       evidence=evidence, connection=conn)
-                    row = await conn.fetchrow("SELECT source_info FROM complexes WHERE id=$1 FOR UPDATE", cid)
+                    # FK inserts above hold KEY SHARE on this complex. A
+                    # non-key lock serializes JSON merges without making two
+                    # catalog imports deadlock while upgrading those FK locks.
+                    row = await conn.fetchrow(
+                        "SELECT source_info FROM complexes WHERE id=$1 FOR NO KEY UPDATE", cid)
                     existing = {}
                     if row and row["source_info"]:
                         existing = (row["source_info"] if isinstance(row["source_info"], dict)

@@ -108,12 +108,20 @@ function loader(fetch) {
   vm.runInContext(template.slice(rentalDetailStart, rentalDetailEnd), render);
   const detailHtml = render.renderRentalDetailHtml({id:'1234567', title:'<script>bad</script>', price:null,
     rooms:0, photos:[], address:'<img src=x onerror=bad>', status_label:'Снято с публикации',
-    monthly_category:true, source_url:'javascript:bad', history_available:true,
+    monthly_category:true, prop_type:'apartment', rent_period:'monthly', source_url:'javascript:bad', history_available:true,
     price_history:[{old_price:300000,new_price:250000,changed_at:'2026-10-13T10:00:00Z'}]});
   assert(detailHtml.includes('Цена не указана') && detailHtml.includes('Студия'));
   assert(detailHtml.includes('&lt;script&gt;') && !detailHtml.includes('<script>bad'));
   assert(detailHtml.includes('https://krisha.kz/a/show/1234567') && !detailHtml.includes('javascript:bad'));
   assert(detailHtml.includes('История заявленной цены') && detailHtml.includes('не подтверждены'));
   assert(!detailHtml.includes('доходность') && !detailHtml.includes('прогноз продажи'));
-  process.stdout.write('Rental pagination, price and detail production renderer: 9 cases passed\n');
+  for (const [rent_period, title, suffix] of [['daily','Посуточная аренда','/сутки'],['monthly','Помесячная аренда','/мес'],['unknown','единица ставки не определена','']]) {
+    const html = render.renderRentalDetailHtml({id:'1234567',prop_type:'apartment',rent_period,monthly_category:true,price:20000});
+    assert(html.includes(title));
+    if (suffix) assert(html.includes(suffix));
+    if (rent_period !== 'monthly') assert(!html.includes('/мес'));
+  }
+  const parkingHtml = render.renderRentalDetailHtml({id:'1234567',prop_type:'parking',rent_period:'monthly',monthly_category:true,price:20000});
+  assert(parkingHtml.includes('единица ставки не определена') && !parkingHtml.includes('/мес'));
+  process.stdout.write('Rental pagination, price and period detail production renderer passed\n');
 })().catch(error => {console.error(error); process.exitCode = 1;});

@@ -33,6 +33,11 @@ DEFAULTS: dict[str, str] = {
     "POPUP_WIDTH_PX": "380",
     "PARSER_MAX_PAGES": "5",
     "MONETIZATION_ENABLED": "0",
+    "RENT_MIN_SAMPLE_COMPLEX": "5",
+    "RENT_MIN_SAMPLE_AREA": "10",
+    "NET_YIELD_VACANCY": "0.95",
+    "NET_YIELD_OPEX_SHARE": "0.10",
+    "NET_YIELD_PURCHASE_COST": "1.02",
     # Пауза между циклами service_apartments.py (задача 2026-08-17,
     # "интервал apartment parser") — random.uniform(MIN, MAX) минут между
     # завершением одного цикла и стартом следующего; было хардкод 50-80,
