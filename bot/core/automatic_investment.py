@@ -109,8 +109,15 @@ def _observed_purchases(market, picks, complexes, selected, budget, now):
     except (KeyError, ValueError, TypeError):
         return []
     catalogue = {row["id"]: row for row in complexes["items"]}
-    group = ({selected["id"], *selected.get("child_ids", [])} if selected and selected.get("is_umbrella") is True
-             else {selected["id"]} if selected else None)
+    group = {selected["id"]} if selected else None
+    if selected and selected.get("is_umbrella") is True:
+        pending = [selected["id"]]
+        while pending:
+            parent_id = pending.pop()
+            for child_id in catalogue.get(parent_id, {}).get("child_ids", []):
+                if child_id not in group and catalogue.get(child_id, {}).get("parent_id") == parent_id:
+                    group.add(child_id)
+                    pending.append(child_id)
     offers = {row.get("id"): row for row in market.get("offers", []) if row.get("market_type") == "secondary"}
     details = {row.get("id"): row for row in market.get("listing_details", [])}
     rows, signatures, ids = [], set(), set()
@@ -204,7 +211,7 @@ def calculate_automatic_investment(payload, *, catalog, market, picks, complexes
         if best:
             income = best["total_profit"]
             row["bank_threshold"] = {"bank": best["bank"], "product": best["product"], "annual_income": income,
-                                     "minimum_monthly_net_cash": (math.floor(income/12*100)+1)/100,
+                                     "minimum_monthly_net_cash": math.floor(income/12)+1,
                                      "annual_gross_difference": round(annual-income, 2), "is_upper_bound": True}
         properties.append(row)
     properties.sort(key=lambda row: (-row["annual_gross_ceiling"], row["price"], row["id"]))

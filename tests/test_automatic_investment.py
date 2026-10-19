@@ -77,7 +77,8 @@ def test_same_budget_banks_real_price_remainder_and_asking_rent_are_separate():
     assert row["annual_gross_ceiling"] == 3_600_000
     assert row["gross_yield_on_budget_pct"] == 9
     assert row["bank_threshold"]["annual_gross_difference"] == -3_600_000
-    assert row["bank_threshold"]["minimum_monthly_net_cash"] == 600_000.01
+    assert row["bank_threshold"]["minimum_monthly_net_cash"] == 600_001
+    assert row["bank_threshold"]["minimum_monthly_net_cash"]*12 > result["best_bank"]["total_profit"]
     assert "net_operating_cash" not in row and "exit_value" not in row and "end_wealth" not in row
     assert result["strategies"] == [] and result["purchases"] == []
 
@@ -219,3 +220,26 @@ def test_deduplication_bounded_output_and_input_immutability():
     result = calculate_automatic_investment({"budget": 40_000_000}, **data)
     assert len(result["properties"]) == 1 and data == before
     assert original["market"] == data["market"]
+
+def test_nested_umbrella_follows_reciprocal_catalog_children_only():
+    data = sources()
+    data["complexes"]["items"][0].update(parent_id=21)
+    inner = data["complexes"]["items"][2]
+    inner.update(is_umbrella=True, child_ids=[10])
+    for row in (data["picks"]["items"][0], data["market"]["offers"][0]):
+        row["complex_identity"].update(status="house_from_source", house_id=10,
+            house_label="Дом А", umbrella_id=21, umbrella_name="Дом Б1", binding_method="address")
+    result = calculate_automatic_investment({"budget": 40_000_000, "complex_id": 20}, **data)
+    assert [row["complex_id"] for row in result["properties"]] == [10]
+    data["complexes"]["items"][0]["parent_id"] = None
+    assert not calculate_automatic_investment({"budget": 40_000_000, "complex_id": 20}, **data)["properties"]
+
+
+def test_displayed_whole_tenge_rent_threshold_really_exceeds_bank_income():
+    data = sources()
+    data["catalog"]["offers"][0]["effective_pct"] = 17.5
+    result = calculate_automatic_investment({"budget": 40_000_000}, **data)
+    threshold = result["properties"][0]["bank_threshold"]
+    assert threshold["annual_income"] == 7_000_000
+    assert threshold["minimum_monthly_net_cash"] == 583_334
+    assert round(threshold["minimum_monthly_net_cash"])*12 > threshold["annual_income"]

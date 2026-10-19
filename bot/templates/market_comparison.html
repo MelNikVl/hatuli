@@ -79,11 +79,10 @@
   </section>
   <nav class="mc-stepnav" aria-label="Разделы сравнения"><a href="#strategies"><span>1</span> Расчёт по бюджету</a><a href="#market"><span>2</span> Рынок вокруг</a><a href="#comparison-method">Как считаем →</a></nav>
 
-  <div id="investment"></div>
   {% if errors %}<p class="mc-error" role="alert">{{ errors|join(' ') }}</p>{% endif %}
   {% if calculation_error and not errors %}<p class="mc-error" role="alert">{{ calculation_error }}</p>{% endif %}
   {% if selected_offer %}
-  <section class="mc-section" aria-labelledby="mc-investment-title">
+  <section class="mc-section ym-hide-content" id="investment" aria-labelledby="mc-investment-title">
     <div class="mc-heading"><div><p class="mc-eyebrow">Выбранная квартира</p><h2 id="mc-investment-title">{{ selected_offer.title or selected_offer.complex_name }}</h2></div><p>{{ money(selected_offer.price) }}{% if selected_offer.observed_at_label %}<br>Цена наблюдалась: {{ selected_offer.observed_at_label }}{% endif %}</p></div>
     {% if selected_offer.complex_name %}<p>{{ selected_offer.complex_name }}</p>{% endif %}
     {{ offer_address(selected_offer) }}{{ offer_reasons(selected_offer) }}{{ offer_price_history(selected_offer) }}
@@ -101,6 +100,7 @@
     </aside>
     {% endif %}
   </section>
+  {% else %}<div id="investment"></div>
   {% endif %}
   {% include '_investment_strategies.html' %}
 
