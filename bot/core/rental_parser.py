@@ -1072,6 +1072,18 @@ def _rental_description_is_fresh(checked_at, *, now=None):
     return checked is not None and now-timedelta(hours=72) <= checked <= now
 
 
+def _rental_cached_description_observed(snapshot):
+    """A fresh full-page stamp cannot refresh text absent from that page."""
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except (ValueError, TypeError):
+            return False
+    # Preserve the legacy timestamp behavior only when no snapshot exists.
+    return snapshot is None or (isinstance(snapshot, dict)
+                                and snapshot.get("description_observed") is not False)
+
+
 async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
                                   progress: dict | None = None,
                                   prop_type: str | None = None,
@@ -1161,7 +1173,8 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
 
     got_geo = got_cx = 0
     for r in rows:
-        description_fresh = _rental_description_is_fresh(r.get('description_checked_at'))
+        description_fresh = (_rental_description_is_fresh(r.get('description_checked_at'))
+                             and _rental_cached_description_observed(r.get('source_details')))
         if description_fresh and r.get('furnishing_version') != furnishing_version:
             await execute('UPDATE rental_listings SET furnishing=$2,furnishing_version=$3 WHERE id=$1',
                           r['id'], classify_furnishing(r.get('title'),r.get('description'),furnishing_rules),furnishing_version)
@@ -1236,9 +1249,10 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
         snapshot = rental_source_details(details) if details else None
         if snapshot is None:
             report["errors"] += int(bool(details))
-            await execute(
-                "UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1",
-                r["id"])
+            if actual_requests:
+                await execute(
+                    "UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1",
+                    r["id"])
             continue
 
         cx = (details.get("complex_name")
@@ -1253,13 +1267,16 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
 
         sets, params, i = ["coord_fetch_attempted_at=now()"], [], 1
         description = details.get('description')
-        description = description.strip()[:10000] if isinstance(description, str) else None
-        for field, value in (
-            ('description', description),
-            ('furnishing', classify_furnishing(r.get('title'), description, furnishing_rules)),
-            ('furnishing_version', furnishing_version),
-        ):
-            sets.append(f'{field}=${i}'); params.append(value); i += 1
+        description_observed = (details.get('description_observed') is True
+            or ('description_observed' not in details and isinstance(description, str) and bool(description.strip())))
+        if description_observed and isinstance(description, str):
+            description = description.strip()[:10000]
+            for field, value in (
+                ('description', description),
+                ('furnishing', classify_furnishing(r.get('title'), description, furnishing_rules)),
+                ('furnishing_version', furnishing_version),
+            ):
+                sets.append(f'{field}=${i}'); params.append(value); i += 1
         observed_parameter = i
         sets.append(f'description_checked_at=${i}'); params.append(observed_at); i += 1
         sets.append(f'source_details=${i}::jsonb'); params.append(json.dumps(snapshot)); i += 1

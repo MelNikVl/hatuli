@@ -200,10 +200,59 @@ async def test_superseded_full_observation_does_not_claim_success_or_rewrite_new
 
 @pytest.mark.asyncio
 async def test_mismatch_cannot_overwrite_fields_price_or_snapshot(refresh,monkeypatch):
-    monkeypatch.setattr(apartment_details,"fetch_apartment_details",AsyncMock(return_value=full(source_detail_valid=False)))
+    async def source(*args,**kwargs):
+        apartment_details.REQUEST_COUNTS["detail"] += 1
+        return full(source_detail_valid=False)
+    monkeypatch.setattr(apartment_details,"fetch_apartment_details",source)
     result = await parser.backfill_rental_details(1,budget_seconds=45)
     assert result["success"] == 0
     assert refresh[1].await_args.args[0] == "UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("details",[None,{},full(source_detail_valid=False)])
+async def test_cooldown_race_return_without_actual_request_does_not_stamp_attempt(refresh,monkeypatch,details):
+    monkeypatch.setattr(apartment_details,"fetch_apartment_details",AsyncMock(return_value=details))
+    result = await parser.backfill_rental_details(1,budget_seconds=45)
+    assert result["requests"] == result["success"] == 0
+    refresh[1].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("observed",[False,True])
+async def test_missing_description_dom_preserves_text_and_classification_but_explicit_empty_is_observed(refresh,monkeypatch,observed):
+    async def source(*args,**kwargs):
+        apartment_details.REQUEST_COUNTS["detail"] += 1
+        return full(description="",description_observed=observed)
+    monkeypatch.setattr(apartment_details,"fetch_apartment_details",source)
+    result = await parser.backfill_rental_details(1,budget_seconds=45)
+    call = refresh[1].await_args
+    assert result["success"] == 1
+    snapshot = json.loads(value_for(call,"source_details"))
+    assert snapshot["description_observed"] is observed
+    assert "description_checked_at=" in call.args[0]
+    for field in ("description","furnishing","furnishing_version"):
+        assert (re.search(rf"\b{field}=\$",call.args[0]) is not None) is observed
+    if observed:
+        assert value_for(call,"description") == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoded",[False,True])
+async def test_fresh_full_page_stamp_with_absent_description_cannot_reclassify_cached_old_text(refresh,monkeypatch,encoded):
+    from tests.test_rental_detail_refresh import source as stored_source
+    snapshot = {"version":1,"description_observed":False}
+    old = stored_source(description_checked_at=datetime.now(timezone.utc)-timedelta(minutes=1),
+        furnishing_version="old",source_details=json.dumps(snapshot) if encoded else snapshot)
+    refresh[0].return_value = [old]
+    async def source(*args,**kwargs):
+        apartment_details.REQUEST_COUNTS["detail"] += 1
+        return full(description="",description_observed=False)
+    monkeypatch.setattr(apartment_details,"fetch_apartment_details",source)
+    await parser.backfill_rental_details(1,budget_seconds=45)
+    assert refresh[1].await_count == 1
+    assert "SET furnishing=" not in refresh[1].await_args.args[0]
+    assert not re.search(r"\bdescription=\$",refresh[1].await_args.args[0])
 
 
 @pytest.mark.asyncio
