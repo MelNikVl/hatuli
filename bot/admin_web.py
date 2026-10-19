@@ -81,36 +81,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     templates.env.globals["is_admin"] = is_admin
 
-    # ── SEO/AI-краулеры: robots.txt/sitemap.xml/llms.txt на самом ────────────
-    # приложении. Cloudflare перед ним отдаёт свой собственный managed
-    # robots.txt (Content-Signal блок), который блокирует GPTBot/ClaudeBot/
-    # Google-Extended/CCBot и др. по умолчанию — эти файлы на origin ничего
-    # не решают, пока в Cloudflare (Security → Bots → AI Bots / Content
-    # Signals) не разрешат нужных ботов вручную. См. заметку в чате.
+    # Origin crawl policy. A reverse proxy may independently add rules or
+    # challenge crawlers; inspect the external response as well as this route.
+    # robots.txt is a crawl instruction, never a replacement for authorization.
     from fastapi.responses import PlainTextResponse, Response as _Response
 
     @app.get("/robots.txt", response_class=PlainTextResponse)
     async def robots_txt():
-        return PlainTextResponse(
-            "User-agent: *\n"
-            "Allow: /\n\n"
-            "User-agent: GPTBot\nAllow: /\n\n"
-            "User-agent: OAI-SearchBot\nAllow: /\n\n"
-            "User-agent: ChatGPT-User\nAllow: /\n\n"
-            "User-agent: ClaudeBot\nAllow: /\n\n"
-            "User-agent: Claude-SearchBot\nAllow: /\n\n"
-            "User-agent: Claude-User\nAllow: /\n\n"
-            "User-agent: PerplexityBot\nAllow: /\n\n"
-            "User-agent: Google-Extended\nAllow: /\n\n"
-            "User-agent: Applebot-Extended\nAllow: /\n\n"
-            "User-agent: Yandex\nAllow: /\n\n"
-            "Disallow: /admin/login\n"
-            "Disallow: /admin/api/\n"
-            "Disallow: /admin/analysis-requests\n"
-            "Disallow: /request-analysis\n"
-            "Disallow: /cabinet\n\n"
-            "Sitemap: https://hatuli.ai-groundtruth.com/sitemap.xml\n"
-        )
+        from bot.core.sitemap import robots_document
+        return PlainTextResponse(robots_document())
 
     @app.get("/llms.txt", response_class=PlainTextResponse)
     async def llms_txt():
@@ -132,6 +111,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/sitemap.xml")
     async def sitemap_xml():
+        from html import escape
         from bot.db.pg import fetch as pg_fetch
         urls = [
             ("https://hatuli.ai-groundtruth.com/", "weekly", "1.0"),
@@ -152,16 +132,20 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # Топ-2000 ЖК по активным объявлениям — полный список (2500+) в один
         # sitemap не кладём (мягкий лимит поисковиков — 50k URL, но страницы
         # без единого объявления малоценны для индексации).
-        from bot.core.sitemap import COMPLEX_SITEMAP_SQL
+        from bot.core.sitemap import COMPLEX_SITEMAP_SQL, article_sitemap_entry
         rows = await pg_fetch(COMPLEX_SITEMAP_SQL)
         body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
         for loc, freq, prio in urls:
             body.append(f"<url><loc>{loc}</loc><changefreq>{freq}</changefreq><priority>{prio}</priority></url>")
         from bot.core.analytics_articles import list_articles
         for article in list_articles():
+            entry = article_sitemap_entry(article)
+            if entry is None:
+                continue
+            article_url, article_modified = entry
             body.append(
-                f"<url><loc>https://hatuli.ai-groundtruth.com{article['url']}</loc>"
-                f"<lastmod>{article['edition_date']}</lastmod>"
+                f"<url><loc>{escape(article_url)}</loc>"
+                f"<lastmod>{escape(article_modified)}</lastmod>"
                 "<changefreq>monthly</changefreq><priority>0.7</priority></url>"
             )
         for r in rows:
