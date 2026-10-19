@@ -323,3 +323,23 @@ def test_reserve_excluded_monthly_is_not_used_as_daily_threshold_benchmark():
                                             "daily": daily(repair_cost=0)}, catalog(offer()), NOW)
     assert [row["key"] for row in result["strategies"]] == ["daily"]
     assert not any(item["key"] == "daily_vs_monthly_cash" for item in result["strategies"][0]["thresholds"])
+
+
+def test_displayed_daily_threshold_also_funds_every_interim_month_from_same_budget():
+    inputs = daily(purchase_price=11_993_000, exit_value=11_993_000,
+                   repair_cost=0, buy_cost=0, annual_owner_cost=120_000,
+                   wait_months=0.99, adr=20_000, occupancy_pct=60,
+                   stays_per_month=0, cleaning_cost_per_stay=0,
+                   platform_fee_pct=0, management_fee_pct=0, sell_cost_pct=0)
+    original = calculate(budget=12_000_000, daily=inputs)
+    row = original['strategies'][0]
+    assert row['minimum_cash_balance'] == pytest.approx(650)
+    threshold = row['break_even_occupancy_pct']
+    assert 49 < threshold < 50  # Economic equality alone (~30%) lacks cash in month one.
+    funded = calculate(budget=12_000_000, daily={**inputs, 'occupancy_pct': threshold})
+    assert len(funded['strategies']) == 1
+    assert funded['strategies'][0]['minimum_cash_balance'] >= 0
+    assert funded['strategies'][0]['total_profit'] >= funded['banks'][0]['total_profit']
+    unfunded = calculate(budget=12_000_000, daily={**inputs, 'occupancy_pct': threshold - 0.1})
+    assert unfunded['strategies'] == []
+    assert unfunded['diagnostics'][0]['status'] == 'insufficient_reserve'

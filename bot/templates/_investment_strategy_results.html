@@ -1,5 +1,6 @@
 {% macro hs_money(value) -%}{{ value|fmt_num }} ₸{%- endmacro %}
-{% macro hs_percent(value) -%}{{ value|fmt_num(1)|replace(',0', '') }}%{%- endmacro %}
+{% macro hs_percent(value) -%}{{ value|fmt_num(2)|replace(',00', '') }}%{%- endmacro %}
+{% macro hs_threshold(value) -%}{{ value|round(2, 'ceil')|fmt_num(2)|replace(',00', '') }}%{%- endmacro %}
 {% if strategy_result %}
 {% set rows = (strategy_result.strategies or []) + (strategy_result.banks or []) %}
 {% if rows %}
@@ -14,9 +15,9 @@
       {% if row.evidence_type != 'verified_bank_terms' %}<p class="hs-help">Объект оценён по введённой стоимости выхода. Это не полученные деньги от продажи.</p>{% endif %}
       {% if row.net_cash_yield_pct is number %}<p class="hs-help">Доход от работы капитала: <strong>{{ hs_percent(row.net_cash_yield_pct) }}</strong> без изменения стоимости объекта.</p>{% endif %}
       {% if row.guarantee_cap is number %}<p class="hs-help">Лимит гарантии в этом банке: {{ hs_money(row.guarantee_cap) }}.{% if row.unguaranteed_amount > 0 %} Сумма сверх гарантии с процентами: {{ hs_money(row.unguaranteed_amount) }}.{% endif %} <a href="{{ strategy_result.guarantee_source }}" target="_blank" rel="noopener noreferrer">Условия КФГД ↗</a></p>{% endif %}
-      {% if row.break_even_occupancy_pct is number %}<p class="hs-break-even">Для результата на уровне самого доходного подходящего вклада нужна загрузка <strong>{{ hs_percent(row.break_even_occupancy_pct) }}</strong>{% if row.break_even_occupancy_pct > 100 %} — выше доступных 100%{% endif %}. При вашей стоимости выхода и расходах.</p>{% endif %}
-      {% for threshold in row.thresholds or [] %}{% if threshold.key == 'daily_vs_monthly_cash' and threshold.value is number %}<p class="hs-break-even">Чтобы доход после текущих расходов сравнялся с месячной арендой, нужна загрузка <strong>{{ hs_percent(threshold.value) }}</strong>{% if threshold.value > 100 %} — выше доступных 100%{% endif %}.</p>{% endif %}{% endfor %}
-      {% if row.minimum_exit_value_to_match_bank is number %}<p class="hs-break-even">Для итогового капитала на уровне самого доходного подходящего вклада стоимость выхода должна быть <strong>{{ hs_money(row.minimum_exit_value_to_match_bank) }}</strong>. Это расчётный порог, а не оценка будущей цены.</p>{% endif %}
+      {% if row.break_even_occupancy_pct is number %}<p class="hs-break-even">Чтобы результат не уступал самому доходному подходящему вкладу, нужна загрузка не ниже <strong>{{ hs_threshold(row.break_even_occupancy_pct) }}</strong>{% if row.break_even_occupancy_pct > 100 %} — выше доступных 100%{% endif %}. При вашей стоимости выхода, расходах и резерве бюджета.</p>{% endif %}
+      {% for threshold in row.thresholds or [] %}{% if threshold.key == 'daily_vs_monthly_cash' and threshold.value is number %}<p class="hs-break-even">Чтобы доход после текущих расходов не уступал месячной аренде и бюджета хватало до выхода, нужна загрузка не ниже <strong>{{ hs_threshold(threshold.value) }}</strong>{% if threshold.value > 100 %} — выше доступных 100%{% endif %}.</p>{% endif %}{% endfor %}
+      {% if row.minimum_exit_value_to_match_bank is number %}<p class="hs-break-even">Для итогового капитала на уровне самого доходного подходящего вклада стоимость выхода должна быть не ниже <strong>{{ hs_money(row.minimum_exit_value_to_match_bank|round(0, 'ceil')) }}</strong>. Это расчётный порог, а не оценка будущей цены.</p>{% endif %}
       {% if row.asset_stage == 'unfinished_right_scenario' %}<p class="hs-help"><strong>К концу года проект ещё строится.</strong> В капитале учтена введённая стоимость права на объект. Возможность переуступки не подтверждена этим расчётом.</p>{% endif %}
       {% if row.source_url %}<a class="hs-source" href="{{ row.source_url }}" target="_blank" rel="noopener noreferrer">Официальные условия ↗</a>{% endif %}
       {% if row.checked_at_label %}<p class="hs-help">Проверено: {{ row.checked_at_label }}</p>{% endif %}

@@ -51,11 +51,31 @@ def _money(value: float) -> float:
     return round(value, 2)
 
 
-def _occupancy_threshold(needed: float, after_fees: float, stays_per_month: float) -> float | None:
+def _funded_occupancy_floor(values: dict, cash_remainder: float) -> float:
+    """Lowest occupancy that funds every interim month from this budget."""
+    gross = fixed = floor = 0.0
+    fee_multiplier = 1 - (values['platform_fee_pct'] + values['management_fee_pct']) / 100
+    for month in range(1, HORIZON_MONTHS + 1):
+        available = min(1.0, max(0.0, month - values['wait_months']))
+        gross += values['adr'] * MODEL_DAYS / HORIZON_MONTHS * available * fee_multiplier
+        fixed += values['annual_owner_cost'] / HORIZON_MONTHS
+        fixed += values['cleaning_cost_per_stay'] * values['stays_per_month'] * available
+        needed = fixed - cash_remainder
+        if needed > 0:
+            if gross <= 0:
+                return math.inf
+            floor = max(floor, needed / gross * 100)
+    return floor
+
+
+def _occupancy_threshold(needed: float, after_fees: float, stays_per_month: float,
+                         funding_floor: float = 0.0) -> float | None:
     if after_fees <= 0:
         return None
-    result = max(stays_per_month * HORIZON_MONTHS / MODEL_DAYS * 100, needed / after_fees * 100, 0)
-    return round(result, 4) if math.isfinite(result) else None
+    result = max(stays_per_month * HORIZON_MONTHS / MODEL_DAYS * 100,
+                 needed / after_fees * 100, funding_floor, 0)
+    # Round up: a displayed funding threshold must pass when entered again.
+    return math.ceil(result * 10_000) / 10_000 if math.isfinite(result) else None
 
 
 def _threshold(key: str, metric: str, value: float | None, benchmark_key: str, basis: str) -> dict:
@@ -271,17 +291,19 @@ def calculate_strategy_comparison(payload: dict, catalog: dict | None = None,
             full_gross = values["adr"] * MODEL_DAYS * ready / HORIZON_MONTHS
             after_fees = full_gross * (1 - (values["platform_fee_pct"] + values["management_fee_pct"]) / 100)
             fixed = values["annual_owner_cost"] + values["cleaning_cost_per_stay"] * values["stays_per_month"] * ready
+            funding_floor = _funded_occupancy_floor(values, row['cash_remainder'])
+            row['minimum_funded_occupancy_pct'] = round(funding_floor, 4) if math.isfinite(funding_floor) else None
             row["break_even_occupancy_pct"] = None
             row["break_even_cash_occupancy_pct"] = None
             if monthly is not None:
-                value = _occupancy_threshold(monthly["net_operating_cash"] + fixed, after_fees, values["stays_per_month"])
+                value = _occupancy_threshold(monthly["net_operating_cash"] + fixed, after_fees, values["stays_per_month"], funding_floor)
                 row["thresholds"].append(_threshold("daily_vs_monthly_cash", "occupancy_pct", value,
                                                      "monthly", "net_operating_cash"))
             if best_bank is not None:
                 interest = best_bank["total_profit"]
                 needed = interest + fixed + row["upfront_expenses"] + row["exit_cost"] - row["asset_value_change"]
-                row["break_even_occupancy_pct"] = _occupancy_threshold(needed, after_fees, values["stays_per_month"])
-                row["break_even_cash_occupancy_pct"] = _occupancy_threshold(interest + fixed, after_fees, values["stays_per_month"])
+                row["break_even_occupancy_pct"] = _occupancy_threshold(needed, after_fees, values["stays_per_month"], funding_floor)
+                row["break_even_cash_occupancy_pct"] = _occupancy_threshold(interest + fixed, after_fees, values["stays_per_month"], funding_floor)
                 row["thresholds"].extend([
                     _threshold("daily_vs_bank_total", "occupancy_pct", row["break_even_occupancy_pct"],
                                best_bank["key"], "total_profit"),
@@ -289,6 +311,7 @@ def calculate_strategy_comparison(payload: dict, catalog: dict | None = None,
                                best_bank["key"], "net_operating_cash"),
                 ])
                 row["assumptions"].append("Порог загрузки для итогового результата зависит от вашей цены выхода; число заездов и расходы при расчёте порога фиксированы. Порог выше 100% недостижим.")
+            row['assumptions'].append('Минимальная загрузка также обеспечивает расходы каждого месяца из общего бюджета: результат при этом не ниже сравниваемого, но не обязательно точно равен ему.')
         elif row["key"] == "construction":
             row["minimum_exit_value_to_match_bank"] = None
             if best_bank is not None:
