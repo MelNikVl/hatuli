@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import time
+from html import unescape
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -33,6 +34,10 @@ MAX_PHOTOS = 10
 # держим синхронно вручную (два процесса, не делить импортом — этот
 # скрипт исторически написан без импортов bot.*, только psql-подпроцесс).
 SOURCE_PRIORITY = {"developer": 1, "homeportal": 2, "krisha": 3, "korter": 4, "homsters": 5}
+CHALLENGE_MARKERS = re.compile(
+    r"подтвердите.{0,35}не робот|доступ (?:временно )?ограничен|проверка браузера"
+    r"|captcha|challenge-platform|access denied|just a moment"
+    r"|verify\s+(?:that\s+)?you\s+are\s+(?:a\s+)?human", re.I | re.S)
 
 
 class SourcePaused(RuntimeError):
@@ -65,11 +70,10 @@ def fetch_source(url):
         if error.code in (403, 429, 468):
             pause_source(f"HTTP {error.code}")
         raise
-    # A normal page may load a captcha widget. A challenge-only document must
-    # never count as a refreshed complex or trigger the alternate-city URL.
-    if (re.search(r"подтвердите.{0,35}не робот|доступ (?:временно )?ограничен|проверка браузера", html, re.I | re.S)
-            or (not extract_krisha_name(html) and re.search(
-                r"captcha|challenge-platform|access denied|just a moment|verify\s+(?:that\s+)?you\s+are\s+(?:a\s+)?human", html, re.I))):
+    # A normal card may contain a RU/EN captcha widget, with or without a JSON
+    # name. An explicit challenge heading still stops requests even if that
+    # document preloads photos or other card payload.
+    if is_source_challenge(html):
         pause_source("Проверка доступа в ответе источника")
     return html
 
@@ -170,6 +174,20 @@ def extract_photos(html: str):
     return list(bases.values())[:MAX_PHOTOS]
 
 
+def has_subject_data(html: str) -> bool:
+    """Recognize the fields this scanner already updates, independently of name."""
+    return bool(extract_count(html) is not None or extract_build_status(html)
+                or extract_deadline(html) or extract_description(html) or extract_photos(html))
+
+
+def is_source_challenge(html: str) -> bool:
+    for heading in re.finditer(r"<(title|h1)\b[^>]*>(.*?)</\1\s*>", html, re.I | re.S):
+        text = re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", heading.group(2)))).strip()
+        if CHALLENGE_MARKERS.match(text):
+            return True
+    return bool(CHALLENGE_MARKERS.search(html)) and not has_subject_data(html)
+
+
 def esc(s):
     return s.replace(chr(39), chr(39) * 2) if s else s
 
@@ -236,9 +254,11 @@ def main() -> int:
             photos = extract_photos(html)
             krisha_name = extract_krisha_name(html)
 
-            if not krisha_name or not (cnt is not None or build_status or deadline or desc or photos):
-                raise ValueError("Ответ не содержит распознанную карточку ЖК с предметными данными")
+            if not (cnt is not None or build_status or deadline or desc or photos):
+                raise ValueError("Ответ не содержит предметных данных карточки ЖК")
             if fallback_url:
+                if not krisha_name:
+                    raise ValueError("Ответ запасного адреса не содержит распознанного имени ЖК")
                 # Do not publish a fallback URL/name from an empty, generic or
                 # challenge document. Existing identity writers below remain
                 # unchanged; this is a content gate, not identity approval.

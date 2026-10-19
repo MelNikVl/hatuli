@@ -120,14 +120,47 @@ def test_validated_fallback_updates_url_then_runs_unchanged_writers(harness):
     assert harness["events"].index(("fetch", ALT)) < harness["events"].index(("sql", url_writes[0]))
 
 
-@pytest.mark.parametrize("html", ["", "<html>Generic page</html>", '{"name":"Wrong","prefix":"ЖК"}'])
-def test_fallback_empty_or_non_subject_content_cannot_rewrite_url_name_or_mark_ok(harness, html):
+@pytest.mark.parametrize("html", ["", "<html>Generic page</html>", '{"name":"Wrong","prefix":"ЖК"}',
+                                  '<dt>Количество квартир</dt><dd>240</dd>'])
+def test_fallback_requires_name_and_subject_before_url_write_or_ok(harness, html):
     harness["answers"].update({FIRST: http_error(FIRST, 404), ALT: html, SECOND: document("Second")})
     assert scan.main() == 0
     assert harness["requests"] == [FIRST, ALT, SECOND]
     assert len(logs(harness, "error")) == len(logs(harness, "ok")) == 1
     assert not any("WHERE id = 1" in sql or "WHERE complex_id = 1" in sql for sql in writes(harness))
     assert not any("UPDATE apartment_listings" in sql for sql in writes(harness))
+
+
+@pytest.mark.parametrize("html, expected_write", [
+    ('<dt>Количество квартир</dt><dd>0</dd>', 'VALUES (1, 0,'),
+    ('{"prefix":"ЖК","name":"First"}<dt>Количество квартир</dt><dd>31</dd>', 'VALUES (1, 31,'),
+    ('<dt>Статус строительства</dt><dd>Сдан</dd>', "build_status = 'Сдан', updated_at = now() WHERE id = 1"),
+    ('<div data-name="deadline">Срок сдачи<p>IV квартал 2027</p></div>', "deadline = 'IV квартал 2027', updated_at = now() WHERE id = 1"),
+    ('<h2>О жилой недвижимости</h2><p>Подробное описание жилого комплекса с инфраструктурой и благоустройством.</p></section>',
+     "WHERE id = 1 AND (description IS NULL OR description = '')"),
+    ('<img src="https://krisha-photos.kcdn.online/first-full.webp">', "photos_source = 'krisha' WHERE id = 1"),
+])
+def test_normal_card_without_recognized_json_name_still_updates_useful_fields(harness, html, expected_write):
+    assert scan.extract_krisha_name(html) is None
+    harness["answers"].update({FIRST: html, SECOND: document("Second")})
+    assert scan.main() == 0
+    assert harness["requests"] == [FIRST, SECOND]
+    assert len(logs(harness, "ok")) == 2 and not logs(harness, "error")
+    assert any(expected_write in sql for sql in writes(harness))
+    assert not any("SET name =" in sql or "UPDATE apartment_listings" in sql for sql in writes(harness))
+    assert not harness["state"].exists()
+
+
+@pytest.mark.parametrize("html", ["", "<html>Generic page</html>", '{"name":"First","prefix":"ЖК"}'])
+def test_normal_card_without_subject_data_is_not_marked_fresh(harness, html):
+    harness["answers"].update({FIRST: html, SECOND: document("Second")})
+    assert scan.main() == 0
+    assert harness["requests"] == [FIRST, SECOND]
+    assert len(logs(harness, "error")) == len(logs(harness, "ok")) == 1
+    assert "VALUES (1," in logs(harness, "error")[0]
+    assert "VALUES (2," in logs(harness, "ok")[0]
+    assert not any("WHERE id = 1" in sql for sql in writes(harness))
+    assert not harness["state"].exists()
 
 
 @pytest.mark.parametrize("status", [403, 429, 468])
@@ -158,6 +191,55 @@ def test_normal_captcha_widget_with_real_complex_data_is_not_misclassified(harne
     assert scan.main() == 0
     assert len(logs(harness, "ok")) == 2
     assert not harness["state"].exists()
+
+
+@pytest.mark.parametrize("with_name", [False, True])
+@pytest.mark.parametrize("widget", [
+    '<div class="captcha-widget">Подтвердите, что вы не робот</div>',
+    '<div class="captcha-widget">Доступ временно ограничен</div>',
+    '<div class="captcha-widget">Verify you are human</div>',
+    '<script src="captcha.js"></script>',
+])
+def test_incidental_ru_en_widget_with_subject_data_is_not_a_source_block(harness, with_name, widget):
+    html = '<title>ЖК First</title><h1>ЖК First</h1><dt>Количество квартир</dt><dd>35</dd>'
+    if with_name:
+        html += '{"name":"First","prefix":"ЖК"}'
+    harness["answers"].update({FIRST: html + widget, SECOND: document("Second")})
+    assert scan.main() == 0
+    assert harness["requests"] == [FIRST, SECOND]
+    assert len(logs(harness, "ok")) == 2 and not logs(harness, "error")
+    assert any('VALUES (1, 35,' in sql for sql in writes(harness))
+    assert not harness["state"].exists()
+
+
+@pytest.mark.parametrize("with_name", [False, True])
+@pytest.mark.parametrize("challenge", [
+    '<div>Подтвердите, что вы не робот</div>',
+    '<div>Проверка браузера</div>',
+    '<div>Access denied</div>',
+    '<div>Verify you are human</div>',
+])
+def test_challenge_without_subject_data_pauses_even_with_json_name(harness, with_name, challenge):
+    html = challenge + ('{"name":"First","prefix":"ЖК"}' if with_name else '')
+    harness["answers"].update({FIRST: html, SECOND: document("Second")})
+    assert scan.main() == 0
+    assert harness["requests"] == [FIRST]
+    assert writes(harness) == []
+    assert detail_cooldown.read_cooldown()[0] > 0
+
+
+@pytest.mark.parametrize("heading", [
+    '<title>Just a moment...</title>',
+    '<h1><span>Подтвердите,</span>&nbsp;что вы не робот</h1>',
+    '<h1>Access denied</h1>',
+    '<h1>Verify you are human</h1>',
+])
+def test_explicit_challenge_heading_pauses_despite_preloaded_complex_payload(harness, heading):
+    harness["answers"].update({FIRST: heading + document(), SECOND: document("Second")})
+    assert scan.main() == 0
+    assert harness["requests"] == [FIRST]
+    assert writes(harness) == []
+    assert detail_cooldown.read_cooldown()[0] > 0
 
 
 def test_existing_shared_pause_skips_source_and_queue_without_changing_deadline(harness):
