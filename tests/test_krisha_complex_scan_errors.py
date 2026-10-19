@@ -143,7 +143,8 @@ def test_source_block_stops_batch_and_never_becomes_object_error_or_success(harn
     assert "krisha" not in harness["state"].read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("html", ['<h1>Подтвердите, что вы не робот</h1>', '<html>captcha</html>', '<div>challenge-platform</div>'])
+@pytest.mark.parametrize("html", ['<h1>Подтвердите, что вы не робот</h1>', '<html>captcha</html>', '<div>challenge-platform</div>',
+                                  '<h1>Access denied</h1>', '<title>Just a moment...</title>', '<h1>Verify you are human</h1>'])
 def test_challenge_200_is_a_source_pause_not_a_successful_fallback(harness, html):
     harness["answers"].update({FIRST: http_error(FIRST, 404), ALT: html, SECOND: document("Second")})
     assert scan.main() == 0

@@ -68,7 +68,8 @@ def fetch_source(url):
     # A normal page may load a captcha widget. A challenge-only document must
     # never count as a refreshed complex or trigger the alternate-city URL.
     if (re.search(r"подтвердите.{0,35}не робот|доступ (?:временно )?ограничен|проверка браузера", html, re.I | re.S)
-            or (not extract_krisha_name(html) and re.search(r"captcha|challenge-platform", html, re.I))):
+            or (not extract_krisha_name(html) and re.search(
+                r"captcha|challenge-platform|access denied|just a moment|verify\s+(?:that\s+)?you\s+are\s+(?:a\s+)?human", html, re.I))):
         pause_source("Проверка доступа в ответе источника")
     return html
 
