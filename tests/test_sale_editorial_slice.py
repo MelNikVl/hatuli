@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from bot.core.sale_editorial_slice import build_sale_editorial_slice, KNOWN_SOURCE_CONFLICTS
+from bot.core.sale_editorial_slice import build_sale_editorial_slice, district_key, profiles, KNOWN_SOURCE_CONFLICTS
 from tests.test_daily_source_complex_guard import annotated, catalog
 from scripts import export_sale_editorial_slice as exporter
 
@@ -45,6 +45,53 @@ def test_joint_profiles_dedup_and_exact_quartiles():
     assert g['median_price']==30_550_000 and g['n_confirmed_physical']==12
     assert g['p25_price']<g['median_price']<g['p75_price']
     assert all(g['n_confirmed_physical']==g['n_observations'] for g in d['ready_profiles'])
+
+
+@pytest.mark.parametrize('value,expected',[
+    ('Есиль',('esil','Есиль')),
+    ('Есильский р-н',('esil','Есиль')),
+    (' район  ЕСИЛЬСКИЙ ',('esil','Есиль')),
+    ('Нура район',('nura','Нура')),
+    ('Алматы',('almaty','Алматы')),
+    ('Алматинский район',('almaty','Алматы')),
+    ('Сарайшык',('saraishyk','Сарайшык')),
+    ('р-н Сарайшық',('saraishyk','Сарайшык')),
+    ('Сарыарка',('saryarka','Сарыарка')),
+    ('Сарыаркинский р-н',('saryarka','Сарыарка')),
+    ('Байконур',('baikonur','Байконур')),
+    ('Байқоңыр район',('baikonur','Байконур')),
+])
+def test_explicit_district_aliases_admit_and_label_cohorts(value,expected):
+    assert district_key(value)==expected
+    d=build_sale_editorial_slice([row(i,district=value) for i in range(12)],now=NOW)
+    assert d['counts']['accepted_after_identity_and_dedup']==12
+    assert {(g['scope_id'],g['label']) for g in d['ready_profiles'] if g['scope']=='district'}=={expected}
+
+
+@pytest.mark.parametrize('value',[
+    'Есиль, Кабанбай батыра 19',
+    'Есильский р-н, проспект Кабанбай батыра 19',
+    'Есиль — лучшая квартира в центре',
+    'рядом с ТД Сарыарка',
+    'Сарыарка 5',
+    'Сарайшык 7',
+    'в районе Есиль',
+    'Нура / Есиль',
+    'Нурарайон',
+    '',None,123,
+])
+def test_embedded_district_text_is_unknown_and_cannot_change_either_median(value):
+    assert district_key(value) is None
+    good=[row(i) for i in range(12)]
+    d=build_sale_editorial_slice(good+[row(99,district=value,price=90_000_000)],now=NOW)
+    expected=build_sale_editorial_slice(good,now=NOW)
+    assert d['counts']['accepted_after_identity_and_dedup']==12
+    assert d['decisions'][-1]['reasons']==['district_unknown']
+    assert d['ready_profiles']==expected['ready_profiles']
+    assert d['descriptive_cohorts']==expected['descriptive_cohorts']
+    # The pure profile helper must also fail closed if called separately.
+    unsafe=dict(expected['accepted_rows'][0],district=value)
+    assert profiles([unsafe]*12)==[]
 
 
 def test_known_akerke_conflict_removed_even_if_database_name_was_overwritten():

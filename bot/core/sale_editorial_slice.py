@@ -13,7 +13,6 @@ import statistics
 import hashlib
 import json
 
-from bot.core.analytics_articles import district_key
 from bot.core.apartment_selection_reasons import FINISH_LEVELS
 from bot.core.daily_pick_identity import normalize_daily_pick_identity, _single_source_house
 from bot.core.daily_picks import _valid_source
@@ -22,6 +21,30 @@ from scripts.publish_daily_picks import source_identity_rows
 
 MAX_ROWS = 100_000
 AREA_ANCHORS = (35, 45, 55, 65, 75, 85, 100, 120)
+# A district name embedded in an address or advertisement is not evidence of
+# that district. Only complete, explicitly supported field values are allowed.
+_DISTRICT_ALIASES = {}
+for _slug, _label, _aliases in (
+    ("esil", "Есиль", ("Есиль", "Есильский")),
+    ("nura", "Нура", ("Нура",)),
+    ("almaty", "Алматы", ("Алматы", "Алматинский")),
+    ("saraishyk", "Сарайшык", ("Сарайшык", "Сарайшық")),
+    ("saryarka", "Сарыарка", ("Сарыарка", "Сарыаркинский")),
+    ("baikonur", "Байконур", ("Байконур", "Байқоңыр")),
+):
+    for _alias in _aliases:
+        for _value in (_alias, f"{_alias} р-н", f"{_alias} район",
+                       f"р-н {_alias}", f"район {_alias}"):
+            _DISTRICT_ALIASES[" ".join(_value.casefold().split())] = (_slug, _label)
+
+
+def district_key(value):
+    """Return an explicit whole-field district alias, never a substring match."""
+    if not isinstance(value, str):
+        return None
+    return _DISTRICT_ALIASES.get(" ".join(value.casefold().split()))
+
+
 # A negative observation never expires merely because a stored name was later
 # overwritten. Removing this hold requires a separately reviewed correction.
 KNOWN_SOURCE_CONFLICTS = ({
@@ -161,6 +184,8 @@ def profiles(rows, *, minimum=10, confirmed_only=True):
         if confirmed_only and row.get('address_reference_status')!='exact_database_reference_agreement':
             continue
         district = district_key(row.get("district"))
+        if district is None:
+            continue
         scopes = [("district", district[0], district[1])]
         identity = row["complex_identity"]
         if (identity["status"] in {"catalog_bound", "house_from_source"}
