@@ -94,3 +94,43 @@ async def test_real_pg_cast_error_cannot_commit_success_timestamp(detail_db):
                                            '_source_detail_values': {'floor': 'not-an-integer'}}, execute=detail_db.execute)
         row = await detail_db.fetchrow("SELECT * FROM apartment_listings WHERE id='123456789'")
         assert row['floor'] == 5 and row['source_details_checked_at'] is None
+
+
+@pytest.mark.asyncio
+async def test_real_new_catalog_insert_then_observed_identity_and_details_patch(detail_db, monkeypatch):
+    from bot.db import pg
+    from full_sweep import upsert
+    monkeypatch.setattr(pg, 'fetchrow', detail_db.fetchrow)
+    monkeypatch.setattr(pg, 'execute', detail_db.execute)
+    now = datetime.now(timezone.utc)
+    source = {'id': '987654321', 'price': 30000000, 'title': '2-комнатная квартира',
+              'area': 63, 'rooms': 2, 'address': 'Есильский р-н, Достык 1', 'floor': 8,
+              '_source_details_checked_at': now.isoformat(), '_source_details_attempted_at': now.isoformat(),
+              '_source_detail_values': {'area': 63, 'rooms': 2, 'address': 'Есильский р-н, Достык 1',
+                                       'floor': 8, 'description': 'Наблюдаемое описание', 'furniture': False}}
+    assert await upsert(source) == 'new'
+    row = await detail_db.fetchrow("SELECT * FROM apartment_listings WHERE id='987654321'")
+    assert row['rooms'] == 2 and row['area'] == 63 and row['floor'] == 8
+    assert row['address'] == source['address'] and row['description'] == 'Наблюдаемое описание'
+    assert row['source_details_checked_at'] == now and row['source_details_attempted_at'] == now
+
+
+@pytest.mark.asyncio
+async def test_real_existing_catalog_preserves_absent_fields_then_fresh_patch_updates_together(detail_db, monkeypatch):
+    from bot.db import pg
+    from full_sweep import upsert
+    monkeypatch.setattr(pg, 'fetchrow', detail_db.fetchrow)
+    monkeypatch.setattr(pg, 'execute', detail_db.execute)
+    await detail_db.execute("UPDATE apartment_listings SET area=60,rooms=2,address='old address' WHERE id='123456789'")
+    assert await upsert({'id': '123456789', 'price': 30000000, 'description': '', 'floor': None, 'details_fetched': False}) == 'upd'
+    row = await detail_db.fetchrow("SELECT * FROM apartment_listings WHERE id='123456789'")
+    assert row['description'] == 'old' and row['floor'] == 5 and row['year_built'] == 2000
+    assert row['details_fetched'] is True and row['source_details_checked_at'] is None
+    assert row['area'] == 60 and row['rooms'] == 2 and row['address'] == 'old address'
+    now = datetime.now(timezone.utc)
+    assert await upsert({'id': '123456789', 'price': 30000000,
+                         '_source_details_checked_at': now.isoformat(),
+                         '_source_detail_values': {'floor': 9, 'description': 'new', 'year_built': 2020}}) == 'upd'
+    row = await detail_db.fetchrow("SELECT * FROM apartment_listings WHERE id='123456789'")
+    assert row['floor'] == 9 and row['description'] == 'new' and row['year_built'] == 2020
+    assert row['source_details_checked_at'] == now and row['source_details_attempted_at'] is None
