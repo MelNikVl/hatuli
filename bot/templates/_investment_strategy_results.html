@@ -54,3 +54,4 @@
 </div>
 {% endif %}
 {% endif %}
+{% if strategy_result and strategy_result.empty_message %}<p class="hs-result-note" role="status" data-strategy-empty>{{ strategy_result.empty_message }}</p>{% endif %}

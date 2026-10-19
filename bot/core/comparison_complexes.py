@@ -80,7 +80,7 @@ def _city_key(value):
 
 
 def _url_cities(value):
-    """Only explicit known-city URL components count; a project slug does not."""
+    """A structural Krisha city is authoritative even outside our city list."""
     if not isinstance(value, str):
         return set()
     try:
@@ -93,7 +93,7 @@ def _url_cities(value):
         parts = path.split("/")
         if len(parts) >= 4 and parts[:2] == ["complex", "show"]:
             city = _city_key(parts[2])
-            return {city} if city in _LOCAL_CITIES | _FOREIGN_CITIES else set()
+            return {city} if city else {"unknown_explicit_city"}
     if host == "korter.kz":
         for city in _LOCAL_CITIES | _FOREIGN_CITIES:
             # Recognise city suffixes, retaining hyphens inside nur-sultan.
@@ -163,6 +163,13 @@ def build_comparison_complexes(complexes, *, aliases=(), addresses=(), links=(),
     source_conflicts = {roots.get(row.get(key)) for row in conflicts for key in ("complex_id", "conflict_with_complex_id")}
     source_conflicts.discard(None)
     urls, verified_cities = defaultdict(list), defaultdict(set)
+    # Legacy links on redirected rows still belong to the canonical family.
+    # A foreign-city link there cannot be laundered through the root's coords.
+    for member_id, member in catalog.items():
+        root = roots.get(member_id)
+        if root in basic:
+            urls[root].extend(member.get(field) for field in
+                              ("krisha_url", "korter_url", "homsters_url", "source_korter_url"))
     for row in links:
         if roots.get(row.get("complex_id")) in basic:
             urls[roots[row["complex_id"]]].append(row.get("url"))
@@ -193,7 +200,8 @@ def build_comparison_complexes(complexes, *, aliases=(), addresses=(), links=(),
             city_positive.add(cid)
     # Resolve city inheritance and parent membership without turning a child
     # into a duplicate or silently detaching it from an excluded parent.
-    held = pending | source_conflicts | {cid for cid, row in basic.items() if row.get("geo_quarantined_at")} | city_conflict
+    quarantined_roots = {roots.get(cid) for cid, row in catalog.items() if row.get("geo_quarantined_at")}
+    held = pending | source_conflicts | quarantined_roots | city_conflict
     eligible, resolving = set(), set()
 
     def include(cid):
@@ -280,13 +288,16 @@ def validate_comparison_complexes(data, *, now=None, check_age=True):
     for row in items:
         if not isinstance(row, dict) or set(row) != _ITEM_KEYS or not _id(row.get("id")) or row["id"] in by_id:
             raise ValueError("Invalid catalog item")
-        if _text(row.get("name")) != row.get("name") or not _text(row.get("label"), 550) or row.get("city_evidence") not in _EVIDENCE:
+        if (not isinstance(row.get("name"), str) or not _text(row["name"])
+                or _text(row["name"]) != row["name"]
+                or not isinstance(row.get("label"), str) or _text(row["label"], 550) != row["label"]
+                or row.get("city_evidence") not in _EVIDENCE):
             raise ValueError("Invalid catalog label")
         if row.get("address") is not None and _address(row["address"]) != row["address"]:
             raise ValueError("Invalid catalog address")
         if type(row.get("is_umbrella")) is not bool or not isinstance(row.get("aliases"), list) or len(row["aliases"]) > 100:
             raise ValueError("Invalid aliases or umbrella")
-        if any(_text(a) != a for a in row["aliases"]) or len(set(row["aliases"])) != len(row["aliases"]):
+        if any(not isinstance(a, str) or not _text(a) or _text(a) != a for a in row["aliases"]) or len(set(row["aliases"])) != len(row["aliases"]):
             raise ValueError("Invalid catalog alias")
         if not isinstance(row.get("child_ids"), list) or any(not _id(x) for x in row["child_ids"]) or row["child_ids"] != sorted(set(row["child_ids"])):
             raise ValueError("Invalid child IDs")

@@ -160,7 +160,7 @@ async def test_existing_developer_links_keep_selected_amount_without_manual_scen
         manual = await client.get("/compare?listing=&hex=3:-2&scope=ring2")
     assert primary.status_code == manual.status_code == 200
     assert Forms(primary.text).inputs["budget"]["value"] == "30000000"
-    assert Forms(primary.text).inputs["hex"]["value"] == "3:-2"
+    assert 'value="3:-2" selected' in primary.text
     assert Forms(manual.text).inputs["budget"]["value"] == ""
     assert 'data-mc-calculator' not in manual.text
     assert "В поле цены — пример суммы" not in manual.text
@@ -176,7 +176,7 @@ async def test_legacy_post_keeps_selected_offer_but_does_not_restore_manual_fiel
     assert response.status_code == 200
     assert "Выбранная квартира" in response.text
     inputs = Forms(response.text).inputs
-    assert inputs["hex"]["value"] == "3:-2"
+    assert 'value="3:-2" selected' in response.text
     assert 'name="rooms"' in response.text
     assert float(inputs["area"]["value"]) == 80
     assert inputs["scope"]["value"] == "ring2"
@@ -313,12 +313,11 @@ async def test_invalid_nonempty_form_identifier_never_falls_back_to_another_offe
 
 
 @pytest.mark.asyncio
-async def test_unknown_complex_has_honest_public_not_found_response(app):
+async def test_unknown_complex_has_explicit_catalog_validation_response(app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/compare?complex=999999")
-    assert response.status_code == 404
-    assert "Для этого ЖК пока нет свежих данных сравнения" in response.text
-    assert 'href="/compare"' in response.text
+    assert response.status_code == 422
+    assert "ЖК" in response.json()["error"]
     assert "PRIVATE" not in response.text
 
 

@@ -193,7 +193,7 @@ async def test_legacy_rental_post_does_not_restore_unverified_manual_income_or_g
     assert 'data-mc-calculator' not in response.text
     assert "18,8% за первый год" not in response.text
     assert "В вашем сценарии доходность аренды выше этой ставки." not in response.text
-    assert "3 мес." in response.text
+    assert "3 мес." not in response.text  # A short-term rate is not a ready 12-month option.
 
 
 def assert_checked_cards_preserved(original, displayed, excluded_ids=()):

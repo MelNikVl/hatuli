@@ -318,7 +318,7 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
     form.update(overrides or {})
     errors = []
     if (listing or unit) and selected is None:
-        errors.append("Выбранное объявление отсутствует в свежем публичном снимке. Выберите другой вариант или укажите цену вручную.")
+        errors.append("Выбранное объявление отсутствует в свежем публичном снимке. Выберите другое предложение.")
     calculation = None
     if selected or overrides is not None:
         try:
@@ -365,7 +365,7 @@ def register_public_comparison_routes(app, templates) -> None:
                              complex_id: int | None = Query(default=None, ge=1, le=2_147_483_647)):
         if hex is not None and not valid_hex(hex):
             return JSONResponse({"error": "Неверный участок карты"}, status_code=400)
-        manual = "listing" in request.query_params and not listing and unit is None
+        manual = not listing and unit is None
         if listing.startswith("newbuild:"):
             unit, listing = int(listing.split(":", 1)[1]), ""
             if not 1 <= unit <= 2_147_483_647:
@@ -406,6 +406,7 @@ def register_public_comparison_routes(app, templates) -> None:
             return JSONResponse({"error": "Неверные параметры области сравнения"}, status_code=422)
         context = comparison_context(hex_id=hex_id, rooms=rooms, area=area, scope=scope,
                                      listing=listing, unit=unit, overrides=data, manual=not identifier)
+        context["strategy_form"] = _strategy_form(context.get("selected_offer") if identifier else None)
         return render(request, context, status_code=400 if context["errors"] else 200)
 
     @app.post("/api/public/compare-investment")

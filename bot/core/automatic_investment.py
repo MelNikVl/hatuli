@@ -218,6 +218,10 @@ def calculate_automatic_investment(payload, *, catalog, market, picks, complexes
             "market_date_label": (_utc(market.get("generated_at")).astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y, %H:%M")
                                   if isinstance(market, dict) and _utc(market.get("generated_at")) else None),
             "scope": "Проверенные опубликованные предложения Hatuli; не весь рынок Астаны",
+            "empty_message": ("Для этой суммы и выбранного ЖК сейчас нет подходящих проверенных вариантов."
+                              if selected and not banks and not properties and not purchases else
+                              "Для этой суммы сейчас нет подходящих проверенных вариантов."
+                              if not banks and not properties and not purchases else None),
             "diagnostics": [],
             "assumptions": ["Один бюджет на 12 месяцев без ипотеки.",
                             "Остаток после цены покупки указан до расходов оформления и ремонта; проценты на него не начислены.",

@@ -27,7 +27,11 @@ def deny_connections(monkeypatch):
     def denied(*args, **kwargs):
         raise AssertionError("Live network/database forbidden")
     monkeypatch.setattr(socket, "create_connection", denied)
-    monkeypatch.setattr(socket.socket, "connect", denied)
+    # Windows Proactor uses a loopback socketpair to create its event loop.
+    # Block the actual DB entry points, while each reader test mocks asyncpg.
+    import asyncpg
+    monkeypatch.setattr(asyncpg, "connect", AsyncMock(side_effect=denied))
+    monkeypatch.setattr(asyncpg, "create_pool", AsyncMock(side_effect=denied))
 
 
 def project(identifier=1, **extra):
@@ -51,6 +55,29 @@ def test_existing_redirect_chain_is_not_extra_choice_or_unreviewed_alias():
     assert data["count"] == 1
     assert data["items"][0]["aliases"] == []
     assert data["coverage"]["redirect_rows"] == 2
+
+
+@pytest.mark.parametrize("city", ["konaev", "new-city", "алатау", "semey"])
+def test_explicit_nonlocal_source_city_cannot_be_restored_by_astana_coordinates(city):
+    data = build([project(1, krisha_url=f"https://krisha.kz/complex/show/{city}/project/"), project(99)])
+    assert [row["id"] for row in data["items"]] == [99]
+    assert data["coverage"]["city_conflict_roots"] == 1
+
+
+def test_foreign_legacy_link_or_geo_quarantine_on_redirect_holds_canonical_family():
+    for change in ({"krisha_url": "https://krisha.kz/complex/show/almaty/project/"},
+                   {"geo_quarantined_at": NOW}):
+        data = build([project(1), project(2, canonical_id=1, **change), project(99)])
+        assert [row["id"] for row in data["items"]] == [99]
+
+
+@pytest.mark.parametrize("field,value", [("name", None), ("name", ""), ("label", None),
+                                         ("aliases", [None]), ("aliases", [""]), ("aliases", [["bad"]])])
+def test_invalid_catalog_strings_fail_closed(field, value):
+    data = build()
+    data["items"][0][field] = value
+    with pytest.raises(ValueError):
+        validate_comparison_complexes(data, now=NOW)
 
 
 def test_verified_aliases_follow_redirects_only_when_unambiguous():
