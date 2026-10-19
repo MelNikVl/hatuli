@@ -178,6 +178,44 @@ async def test_redirect_to_other_listing_cannot_be_a_fresh_detail_success(monkey
     assert result["source_detail_valid"] is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", ["https://krisha.kz/", "https://elsewhere.example/a/show/123456", ""])
+async def test_present_invalid_or_external_canonical_cannot_be_ignored(monkeypatch,canonical):
+    constructor = httpx.AsyncClient
+    html = ('<h1>Квартира</h1><div class="offer__price">200000</div>'
+        f'<link rel="canonical" href="{canonical}">')
+    monkeypatch.setattr(details.httpx,"AsyncClient",lambda **kwargs:constructor(
+        transport=httpx.MockTransport(lambda request:httpx.Response(200,text=html)),**kwargs))
+    result = await details.fetch_apartment_details("https://krisha.kz/a/show/123456",raise_on_error=True)
+    assert result["source_detail_valid"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["https://elsewhere.example/a/show/123456", "http://krisha.kz/a/show/123456"])
+async def test_redirect_to_same_id_at_untrusted_origin_is_not_fresh(monkeypatch,target):
+    constructor = httpx.AsyncClient
+    def serve(request):
+        if str(request.url) == "https://krisha.kz/a/show/123456":
+            return httpx.Response(302,headers={"location":target})
+        return httpx.Response(200,text='<h1>Квартира</h1><div class="offer__price">200000</div>')
+    monkeypatch.setattr(details.httpx,"AsyncClient",lambda **kwargs:constructor(
+        transport=httpx.MockTransport(serve),**kwargs))
+    result = await details.fetch_apartment_details("https://krisha.kz/a/show/123456",raise_on_error=True)
+    assert result["source_detail_valid"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", ["/a/show/123456", "https://www.krisha.kz/a/show/123456/"])
+async def test_trusted_same_id_absolute_or_relative_canonical_remains_valid(monkeypatch,canonical):
+    constructor = httpx.AsyncClient
+    html = ('<h1>Квартира</h1><div class="offer__price">200000</div>'
+        f'<link rel="canonical" href="{canonical}">')
+    monkeypatch.setattr(details.httpx,"AsyncClient",lambda **kwargs:constructor(
+        transport=httpx.MockTransport(lambda request:httpx.Response(200,text=html)),**kwargs))
+    result = await details.fetch_apartment_details("https://krisha.kz/a/show/123456",raise_on_error=True)
+    assert result["source_detail_valid"] is True
+
+
 @pytest.fixture
 def queue(monkeypatch):
     row = {"id":"123456", "url":"https://krisha.kz/a/show/123456", "title":"2-комнатная",

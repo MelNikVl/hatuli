@@ -4,6 +4,7 @@ Extracts ALL signals from krisha.kz listing page.
 """
 import asyncio, logging, random, re
 import time
+from urllib.parse import urljoin, urlsplit
 import httpx
 from bs4 import BeautifulSoup
 
@@ -68,6 +69,21 @@ class ListingBlockedError(Exception):
     caller явно попросил raise_on_error=True (см. ниже) — умолчание не
     меняется, все существующие вызовы fetch_apartment_details() (parser.py,
     coord_backfill.py, rental_parser.py) продолжают получать {} как раньше."""
+
+
+def _source_listing_id(value, *, base=None):
+    """Identity evidence is only a clean listing path at a trusted HTTPS origin."""
+    if not isinstance(value, str) or not value or re.search(r"[\x00-\x20]", value):
+        return None
+    try:
+        parsed = urlsplit(urljoin(base, value) if base else value)
+        if (parsed.scheme != "https" or parsed.hostname not in ("krisha.kz", "www.krisha.kz")
+                or parsed.username is not None or parsed.password is not None or parsed.port is not None):
+            return None
+        match = re.fullmatch(r"/a/show/(\d+)/?", parsed.path)
+        return match[1] if match else None
+    except ValueError:
+        return None
 
 
 async def fetch_apartment_details(url: str, *, raise_on_error: bool = False,
@@ -189,14 +205,15 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
     title_el = soup.select_one("h1") or soup.select_one(".offer__title")
     title = title_el.get_text(" ", strip=True) if title_el else ""
     result["title_full"] = title
-    requested_id = re.search(r"/a/show/(\d+)(?:[/?#]|$)", url)
-    response_id = re.search(r"/a/show/(\d+)(?:[/?#]|$)", str(getattr(resp, "url", url)))
+    requested_id = _source_listing_id(url)
+    response_url = str(getattr(resp, "url", url))
+    response_id = _source_listing_id(response_url)
     canonical = soup.select_one('link[rel="canonical"]')
-    canonical_id = re.search(r"/a/show/(\d+)(?:[/?#]|$)", canonical.get("href", "")) if canonical else None
+    canonical_id = _source_listing_id(canonical.get("href", ""), base=response_url) if canonical else None
     result["source_detail_valid"] = bool(
         title and soup.select_one(".offer__price, .offer__info") and requested_id and response_id
-        and requested_id[1] == response_id[1]
-        and (canonical_id is None or canonical_id[1] == requested_id[1]))
+        and requested_id == response_id
+        and (canonical is None or canonical_id == requested_id))
 
     price_el = soup.select_one(".offer__price")
     price_text = price_el.get_text(" ", strip=True) if price_el else ""
