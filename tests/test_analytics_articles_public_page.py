@@ -228,7 +228,7 @@ async def test_negative_series_uses_centered_zero_and_signed_direction(monkeypat
     response = await page(monkeypatch, [article], "/analytics/2026-10-16-market")
     assert Parts(response.text).charts == 1
     assert 'ha-chart-signed"' in response.text
-    assert 'class="ha-chart-negative" style="width:45.0%"' in response.text
+    assert 'class="ha-chart-dot ha-chart-negative" style="left:5.0%"' in response.text
     assert "← Снижение · 0 · Рост →" in response.text
     assert "−7,2%" in response.text
 

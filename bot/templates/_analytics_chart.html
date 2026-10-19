@@ -1,19 +1,40 @@
 {% macro render_analytics_chart(chart, compact=false, id_prefix='') %}
 {% if chart and chart.rows %}
-<figure class="ha-chart{% if compact %} ha-chart-compact{% endif %}{% if chart.signed %} ha-chart-signed{% endif %}" {% if not compact %}id="chart-{{ chart.id }}"{% endif %} aria-labelledby="{{ id_prefix }}{% if compact %}preview-{% endif %}{{ chart.id }}-title" data-analytics-chart>
+{% set title_id = id_prefix ~ ('preview-' if compact else '') ~ chart.id ~ '-title' %}
+<figure class="ha-chart{% if compact %} ha-chart-compact{% endif %}{% if chart.signed %} ha-chart-signed{% endif %}{% if chart.plot %} ha-chart-timeline{% endif %}" {% if not compact %}id="chart-{{ chart.id }}"{% endif %} aria-labelledby="{{ title_id }}" data-analytics-chart>
   <figcaption>
-    <h3 id="{{ id_prefix }}{% if compact %}preview-{% endif %}{{ chart.id }}-title">{{ chart.title }}</h3>
+    <h3 id="{{ title_id }}">{{ chart.title }}</h3>
     {% if chart.caption and not compact %}<p>{{ chart.caption }}</p>{% endif %}
   </figcaption>
-  <div class="ha-chart-unit">{{ chart.unit }}</div>
+  <div class="ha-chart-context"><div class="ha-chart-unit">{{ chart.unit }}</div>{% if chart.plot %}<span class="ha-chart-period">{{ chart.plot.period_label }}</span>{% endif %}</div>
+  {% if chart.plot %}
+  <div class="ha-timechart" data-analytics-timeline>
+    <div class="ha-time-scale" aria-hidden="true">{% for tick in chart.plot.ticks %}<span style="top:{{ tick.top }}%">{{ tick.label }}</span>{% endfor %}</div>
+    <div class="ha-time-main">
+      <div class="ha-time-canvas">
+        <svg class="ha-time-svg" viewBox="0 0 1000 240" preserveAspectRatio="none" role="img" aria-labelledby="{{ title_id }}-plot-title" aria-describedby="{{ title_id }}-plot-description">
+          <title id="{{ title_id }}-plot-title">{{ chart.title }}</title>
+          <desc id="{{ title_id }}-plot-description">{{ chart.plot.description }}{% if chart.plot.has_gaps %}. Пропущенные месяцы не соединены.{% endif %}</desc>
+          {% for tick in chart.plot.ticks %}<line class="ha-time-grid" x1="8" x2="992" y1="{{ tick.y }}" y2="{{ tick.y }}" vector-effect="non-scaling-stroke"/>{% endfor %}
+          {% if chart.plot.zero_y is not none %}<line class="ha-time-zero" x1="8" x2="992" y1="{{ chart.plot.zero_y }}" y2="{{ chart.plot.zero_y }}" vector-effect="non-scaling-stroke"/>{% endif %}
+          {% for segment in chart.plot.segments %}<polyline class="ha-time-line" points="{{ segment }}" fill="none" vector-effect="non-scaling-stroke"/>{% endfor %}
+        </svg>
+        {% for point in chart.plot.points %}<span class="ha-time-point" style="left:{{ point.left }}%;top:{{ point.top }}%" title="{{ point.label }}: {{ point.value_label }}{% if point.n is not none %} · {{ point.n }} наблюдений{% endif %}" aria-hidden="true"></span>{% endfor %}
+      </div>
+      <div class="ha-time-labels" aria-hidden="true">{% for point in chart.plot.points %}<span class="{% if loop.first %}ha-time-first{% elif loop.last %}ha-time-last{% endif %}" style="left:{{ point.left }}%">{{ point.month_label }}{% if point.year_label %}<small>{{ point.year_label }}</small>{% endif %}</span>{% endfor %}</div>
+    </div>
+  </div>
+  <div class="ha-time-summary"><span>{{ chart.plot.scale_label }} {{ chart.unit }}</span><strong>{{ chart.rows[-1].label }}: {{ chart.rows[-1].value_label }}</strong></div>
+  {% else %}
   <ol class="ha-chart-rows" role="list">
     {% for row in chart.rows %}
-    <li><div class="ha-chart-label"><span>{{ row.label }}</span><strong>{{ row.value_label }}</strong></div><div class="ha-chart-track" aria-hidden="true"><span {% if row.negative %}class="ha-chart-negative"{% endif %} style="width:{{ row.bar_width }}%"></span></div>{% if not compact and row.n is not none %}<span class="ha-chart-sample">{{ row.n }} наблюдений</span>{% endif %}</li>
+    <li><div class="ha-chart-label"><span>{{ row.label }}</span><strong>{{ row.value_label }}</strong></div><div class="ha-chart-track" aria-hidden="true"><span class="ha-chart-dot{% if row.negative %} ha-chart-negative{% endif %}" style="left:{{ row.dot_position }}%"></span></div>{% if not compact and row.n is not none %}<span class="ha-chart-sample">{{ row.n }} наблюдений</span>{% endif %}</li>
     {% endfor %}
   </ol>
   <p class="ha-chart-axis"><span>{% if chart.signed %}← Снижение · 0 · Рост →{% else %}0{% endif %}</span><span>{{ chart.axis_label }}</span></p>
+  {% endif %}
   {% if not compact %}
-  <details class="ha-chart-data"><summary>Данные графика</summary><div class="ha-chart-table-wrap"><table><caption>{{ chart.title }} · {{ chart.unit }}</caption><thead><tr><th scope="col">Группа</th><th scope="col">Значение</th>{% if chart.has_samples %}<th scope="col">Наблюдений</th>{% endif %}</tr></thead><tbody>{% for row in chart.rows %}<tr><th scope="row">{{ row.label }}</th><td>{{ row.value_label }}</td>{% if chart.has_samples %}<td>{{ row.n if row.n is not none else '' }}</td>{% endif %}</tr>{% endfor %}</tbody></table></div></details>
+  <details class="ha-chart-data"><summary>Данные графика</summary><div class="ha-chart-table-wrap"><table><caption>{{ chart.title }} · {{ chart.unit }}</caption><thead><tr><th scope="col">{% if chart.plot %}Период{% else %}Группа{% endif %}</th><th scope="col">Значение</th>{% if chart.has_samples %}<th scope="col">Наблюдений</th>{% endif %}</tr></thead><tbody>{% for row in chart.rows %}<tr><th scope="row">{{ row.label }}</th><td>{{ row.value_label }}</td>{% if chart.has_samples %}<td>{{ row.n if row.n is not none else '' }}</td>{% endif %}</tr>{% endfor %}</tbody></table></div></details>
   {% endif %}
 </figure>
 {% endif %}

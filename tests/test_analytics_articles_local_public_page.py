@@ -144,7 +144,7 @@ async def test_real_local_detail_has_own_canonical_schema_tables_sources_and_ori
         schema = json.loads("".join(page.json_ld))
         assert schema["@type"] == "Article"
         assert schema["mainEntityOfPage"] == page.canonical
-        assert schema["datePublished"] == DAY
+        assert schema["datePublished"] == expected.get("published_at", DAY)
         assert schema["headline"] == expected["title"]
         assert page.charts == page.tables == 2
         assert len(page.ids) == len(set(page.ids))
