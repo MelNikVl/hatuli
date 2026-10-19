@@ -1,5 +1,7 @@
 """Header status exposes no user/tier data and never changes access rights."""
 from pathlib import Path
+import shutil
+import subprocess
 from unittest.mock import AsyncMock
 
 import httpx
@@ -9,6 +11,14 @@ from fastapi.templating import Jinja2Templates
 
 from bot.core import site_auth
 from bot.site_auth_routes import register_site_auth_routes
+
+
+def test_session_navigation_client():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node runtime is unavailable")
+    subprocess.run([node, "--test", str(Path(__file__).with_name(
+        "test_site_session_nav_client.cjs"))], check=True, timeout=30)
 
 
 @pytest.mark.asyncio
