@@ -8,7 +8,7 @@
   <svg class="hatuli-price-chart" viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-label="{{ chart.summary }}" data-price-history-chart>
     <title>{{ chart.summary }}</title>
     {% for tick in chart.axis %}<line class="hatuli-price-chart-grid" x1="64" x2="344" y1="{{ tick.y }}" y2="{{ tick.y }}"/><text class="hatuli-price-chart-label" x="54" y="{{ tick.y + 4 }}" text-anchor="end">{{ tick.label }}</text>{% endfor %}
-    {% for segment in chart.segments %}<polyline class="hatuli-price-chart-line" points="{{ segment.points }}"/>{% endfor %}
+    {% for segment in chart.segments %}<polyline class="hatuli-price-chart-line" points="{{ segment.points }}" data-price-history-line/>{% endfor %}
     {% for point in chart.points %}<circle class="hatuli-price-chart-point" data-direction="{{ point.direction }}" cx="{{ point.x }}" cy="{{ point.y }}" r="3.6"><title>{{ point.date_label }}: {{ point.price|fmt_num }} ₸{% if point.old_price is not none %}. Предыдущая цена: {{ point.old_price|fmt_num }} ₸{% if point.undated_baseline %}; дата её фиксации неизвестна{% endif %}{% endif %}</title></circle>{% endfor %}
     {% for tick in chart.date_ticks %}<text class="hatuli-price-chart-label" x="{{ tick.x }}" y="165" text-anchor="{{ tick.anchor }}">{{ tick.label }}</text>{% endfor %}
   </svg>

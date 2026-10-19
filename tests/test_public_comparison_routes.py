@@ -342,7 +342,9 @@ async def test_source_address_and_all_price_events_visible_in_cards_and_selected
     assert 'Все изменения по датам' in response.text
     assert response.text.count('data-price-history-chart') == 2
     assert '35 000 000' in response.text and '34 000 000' in response.text and '32 000 000' in response.text
-    assert response.text.count('class="hatuli-price-chart-event"') == 4  # two events in card and selected offer
+    assert response.text.count('class="hatuli-price-chart-point"') == 4  # two dated observations in card and selected offer
+    assert response.text.count('data-price-history-line') == 2
+    assert 'class="hatuli-price-chart-event"' not in response.text
     assert 'PRIVATE' not in response.text
 
 
@@ -391,5 +393,6 @@ async def test_incomplete_history_warning_keeps_individual_events(app, monkeypat
     assert response.status_code == 200
     assert 'data-history-status="incomplete"' in response.text
     assert 'есть пропуски' in response.text
-    assert response.text.count('class="hatuli-price-chart-event"') == 4
+    assert response.text.count('class="hatuli-price-chart-point"') == 4
+    assert 'data-price-history-line' not in response.text  # gaps never get a connecting line
     assert 'class="hatuli-price-chart-connector"' not in response.text
