@@ -30,7 +30,7 @@ def identity_row(**changes):
         "identity_house_id": None, "identity_house_name": None, "identity_house_valid": False,
         "identity_house_is_umbrella": None, "identity_house_parent_id": None, "identity_house_year_built": None,
         "identity_complex_review_pending": False, "identity_property_match_pending": False,
-        "identity_name_ambiguous": False, "address": "Анет баба, 4", "property_id": 123,
+        "identity_name_ambiguous": False, "identity_source_name_conflict": False, "address": "Анет баба, 4", "property_id": 123,
         "identity_status": "provisional", "private_note": "INTERNAL-ONLY",
     }
     return {**row, **changes}
@@ -126,6 +126,11 @@ def catalog_row(identifier, **changes):
 
 
 def annotate(rows, complexes, **extra):
+    # These synthetic observations explicitly carry the catalog key unless
+    # a test supplies a distinct raw source key.
+    lookup = {item['id']: item for item in complexes}
+    rows = [{**row, 'identity_raw_name_key': row.get('identity_raw_name_key',
+             lookup.get(1, {}).get('name_key', ''))} for row in rows]
     return annotate_daily_pick_identity_rows(rows, complexes=complexes, aliases=extra.get("aliases", []),
         complex_reviews=extra.get("complex_reviews", []), relations=extra.get("relations", []),
         property_reviews=extra.get("property_reviews", []))
@@ -144,7 +149,7 @@ def test_batched_catalog_follows_complete_redirects_and_fails_closed_on_cycles_m
 
 def test_children_imply_umbrella_even_without_the_legacy_flag_and_labels_remain_separate():
     catalog = [catalog_row(1), catalog_row(2, parent_complex_id=1)]
-    row = {"id": "A", "complex_id": 1, "complex_resolution": "url", "resolved_house_id": 2, "house_attribution": "address"}
+    row = {"id": "A", "complex_id": 1, "complex_resolution": "url", "resolved_house_id": 2, "house_attribution": "address", "identity_raw_name_key": "жк1"}
     result = annotate([row], catalog)[0]
     assert result["identity_complex_is_umbrella"] is True
     assert result["identity_house_is_umbrella"] is False
@@ -219,13 +224,13 @@ async def test_incomplete_bounded_scan_fails_closed_and_closes_reader(monkeypatc
 
 def owner_row(**changes):
     return {"id": "1016000000", "url": "https://krisha.kz/a/show/1016000000", "is_owner": True,
-            "price": 30_000_000, "rooms": 2, "area": 60, "floor": 5, "floors_total": 12, **changes}
+            "price": 30_000_000, "rooms": 2, "area": 60, "floor": 5, "floors_total": 12, "source_complex_name": None, **changes}
 
 
 def owner_check(**changes):
     return {"id": "1016000000", "source_url": "https://krisha.kz/a/show/1016000000", "is_owner": True,
             "status": "active", "sale_astana": True, "price": 30_000_000, "rooms": 2, "area": 60,
-            "floor": 5, "floors_total": 12, **changes}
+            "floor": 5, "floors_total": 12, "source_complex_name": None, **changes}
 
 
 def test_owner_benefit_requires_matching_browser_evidence_and_does_not_trust_an_incoming_marker():

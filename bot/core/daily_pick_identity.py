@@ -10,6 +10,7 @@ import re
 from collections import defaultdict
 
 from bot.core.house_resolution import _address_street_key, _extract_house_number
+from bot.core.complex_ingest_identity import normalize_complex_name
 
 _PUBLIC_FIELDS = ("checked", "status", "canonical_id", "canonical_name", "umbrella_id",
                   "umbrella_name", "house_id", "house_label", "binding_method")
@@ -64,6 +65,19 @@ def annotate_daily_pick_identity_rows(rows: list[dict], *, complexes: list[dict]
         if alias.get("complex_id") in eligible and alias.get("normalized_name"):
             names[alias["normalized_name"]].add(eligible[alias["complex_id"]]["id"])
     ambiguous = {name for name, ids in names.items() if len(ids) > 1}
+    # A redirect is not a reviewed spelling. Only the canonical row's own
+    # name and explicitly verified aliases may confirm a source name.
+    verified_names = defaultdict(set)
+    for identifier, item in catalog.items():
+        if identifier in eligible and eligible[identifier]["id"] == identifier and item.get("name_key"):
+            verified_names[identifier].add(item["name_key"])
+    for alias in aliases:
+        owner = catalog.get(alias.get("complex_id"), {})
+        if (alias.get("complex_id") in eligible and alias.get("normalized_name")
+                and alias.get("status", "verified") == "verified"
+                and not owner.get("is_garbage") and not owner.get("is_street")
+                and owner.get("canonical_reason") != "junk_unmatched"):
+            verified_names[eligible[alias["complex_id"]]["id"]].add(alias["normalized_name"])
     separated = {tuple(sorted((item["complex_id_a"], item["complex_id_b"]))) for item in relations}
     pending_complexes = set()
     for review in complex_reviews:
@@ -93,12 +107,21 @@ def annotate_daily_pick_identity_rows(rows: list[dict], *, complexes: list[dict]
     for row in rows:
         metadata = {**fields("identity_complex", row.get("complex_id")),
                     **fields("identity_house", row.get("resolved_house_id"))}
+        family = {metadata["identity_complex_id"], metadata["identity_house_id"]} - {None}
+        if (row.get("house_attribution") in {"address", "token"}
+                and metadata["identity_house_valid"] and not metadata["identity_house_is_umbrella"]):
+            family.add(metadata["identity_house_parent_id"])
+        source_keys = sorted({key for cid in family for key in verified_names[cid]
+                              if names.get(key, set()) <= family})
+        raw_key = row.get("identity_raw_name_key")
         metadata.update(
             identity_checked=True,
             identity_complex_review_pending=any(metadata[field] in pending_complexes for field in (
                 "identity_complex_id", "identity_house_id", "identity_complex_parent_id", "identity_house_parent_id")),
             identity_property_match_pending=(row.get("id") in pending_listings or row.get("property_id") in pending_properties),
             identity_name_ambiguous=(row.get("complex_resolution") == "name" and row.get("identity_raw_name_key") in ambiguous),
+            identity_source_name_keys=source_keys,
+            identity_source_name_conflict=bool(family and (not raw_key or raw_key not in source_keys)),
         )
         result.append({**row, **metadata})
     return result
@@ -134,7 +157,8 @@ def normalize_daily_pick_identity(row: dict) -> dict | None:
     """
     if not isinstance(row, dict) or row.get("identity_checked") is not True:
         return None
-    for flag in ("identity_complex_review_pending", "identity_property_match_pending", "identity_name_ambiguous"):
+    for flag in ("identity_complex_review_pending", "identity_property_match_pending", "identity_name_ambiguous",
+                 "identity_source_name_conflict"):
         if row.get(flag) is not False:
             return None
     if row.get("complex_resolution") == "unbound":
@@ -213,6 +237,21 @@ def normalize_daily_pick_identity(row: dict) -> dict | None:
     except ValueError:
         return None
     return safe
+
+
+def matching_source_complex_name(row: dict, record: dict) -> bool:
+    """A fresh explicit observation, never an address/name-prefix inference."""
+    if "source_complex_name" not in record:
+        return False
+    name = record["source_complex_name"]
+    if name is not None and (not isinstance(name, str) or not name.strip() or len(name) > 200):
+        return False
+    bound = row.get("complex_id") is not None or row.get("resolved_house_id") is not None
+    if not bound:
+        return name is None
+    keys = row.get("identity_source_name_keys")
+    return bool(name is not None and isinstance(keys, list)
+                and normalize_complex_name(name) in keys)
 
 
 def validate_public_daily_identity(value: dict) -> dict:
