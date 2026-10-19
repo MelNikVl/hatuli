@@ -31,7 +31,7 @@ LABEL_TOKEN = re.compile(r"\{label:([a-z][a-z0-9_.]{1,79})\}")
 SOURCE_HOSTS = {"hatuli.ai-groundtruth.com", "stat.gov.kz", "nationalbank.kz", "gov.kz",
                 "adilet.zan.kz", "egov.kz", "kdif.kz"}
 BANK_TERMS_HOSTS = {"bankffin.kz", "bank.forte.kz", "berekebank.kz", "home.kz"}
-UNITS = {"объявлений", "₸", "₸/м²", "₸/м²/мес.", "₸/мес.", "₸/сутки", "%", "м²", "сделок", "индекс", "единиц"}
+UNITS = {"объявлений", "₸", "₸/м²", "₸/м²/мес.", "₸/мес.", "₸/сутки", "%", "м²", "сделок", "индекс", "единиц", "дней"}
 MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля",
           "августа", "сентября", "октября", "ноября", "декабря")
 MAX_FILE_BYTES = 1_500_000
@@ -170,7 +170,9 @@ def validate_digest(raw, *, published_at=None):
         if utc(fact["as_of"]) != utc(sources[fact["source_id"]]["as_of"]):
             raise ValueError("Fact and source dates must agree")
         official = sources[fact["source_id"]]["kind"] in {"official_publication", "official_terms"}
-        if sources[fact["source_id"]]["kind"] == "official_terms" and fact["unit"] not in {"%", "₸"}:
+        if fact["unit"] == "дней" and (not float(fact["value"]).is_integer() or not 0 <= fact["value"] <= 36_600):
+            raise ValueError("A duration requires a whole number of days between zero and 36600")
+        if sources[fact["source_id"]]["kind"] == "official_terms" and fact["unit"] not in {"%", "₸", "дней"}:
             raise ValueError("Bank factual terms cannot represent market observations")
         scenario = sources[fact["source_id"]]["kind"] == "calculation_scenario"
         if scenario and fact["unit"] not in {"%", "₸", "₸/мес.", "₸/сутки", "м²", "единиц"}:
