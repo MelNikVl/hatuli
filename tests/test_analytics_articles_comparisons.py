@@ -91,6 +91,7 @@ def test_bank_terms_have_no_fabricated_release_date_sample_or_capital():
     ("profile_id", "different.rooms"), ("profile_label", "Иное состояние и другая площадь"),
     ("entity_id", "complex.test_1"), ("identity_verified", False), ("cost_scope", "all_in"),
     ("metric", "monthly_rent"),
+    ("metric", "all_in_cost"),
 ])
 def test_incompatible_or_ambiguous_entities_do_not_create_public_topics(field, changed):
     value = local_comparison()

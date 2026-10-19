@@ -67,6 +67,8 @@ def validate_comparison_fact(fact, *, plain):
     if meta["metric"] in {"asking_price", "monthly_rent", "nightly_asking_rate"} and (
             meta["basis"] != "observed_asking" or meta["cost_scope"] != "asking_only"):
         raise ValueError("Asking rates cannot become actual income or net returns")
+    if meta["metric"] == "all_in_cost" and meta["cost_scope"] != "all_in":
+        raise ValueError("A full investment comparison must include the full cost scope")
     if meta["topic"] == "banks" and meta["metric"] != "twelve_month_effective_rate":
         raise ValueError("Bank comparisons require a checked twelve-month effective rate")
 
