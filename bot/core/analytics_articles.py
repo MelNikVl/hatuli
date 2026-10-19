@@ -31,7 +31,7 @@ LABEL_TOKEN = re.compile(r"\{label:([a-z][a-z0-9_.]{1,79})\}")
 SOURCE_HOSTS = {"hatuli.ai-groundtruth.com", "stat.gov.kz", "nationalbank.kz", "gov.kz",
                 "adilet.zan.kz", "egov.kz", "kdif.kz"}
 BANK_TERMS_HOSTS = {"bankffin.kz", "bank.forte.kz", "berekebank.kz", "home.kz"}
-UNITS = {"объявлений", "₸", "₸/м²", "₸/м²/мес.", "₸/мес.", "₸/сутки", "%", "м²", "сделок", "индекс", "единиц"}
+UNITS = {"объявлений", "₸", "₸/м²", "₸/м²/мес.", "₸/мес.", "₸/сутки", "%", "м²", "сделок", "индекс", "единиц", "дней"}
 MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля",
           "августа", "сентября", "октября", "ноября", "декабря")
 MAX_FILE_BYTES = 1_500_000
@@ -170,10 +170,12 @@ def validate_digest(raw, *, published_at=None):
         if utc(fact["as_of"]) != utc(sources[fact["source_id"]]["as_of"]):
             raise ValueError("Fact and source dates must agree")
         official = sources[fact["source_id"]]["kind"] in {"official_publication", "official_terms"}
-        if sources[fact["source_id"]]["kind"] == "official_terms" and fact["unit"] not in {"%", "₸"}:
+        if fact["unit"] == "дней" and (not float(fact["value"]).is_integer() or not 0 <= fact["value"] <= 36_600):
+            raise ValueError("A duration requires a whole number of days between zero and 36600")
+        if sources[fact["source_id"]]["kind"] == "official_terms" and fact["unit"] not in {"%", "₸", "дней"}:
             raise ValueError("Bank factual terms cannot represent market observations")
         scenario = sources[fact["source_id"]]["kind"] == "calculation_scenario"
-        if scenario and fact["unit"] not in {"%", "₸", "₸/мес.", "₸/сутки", "м²", "единиц"}:
+        if scenario and fact["unit"] not in {"%", "₸", "₸/м²", "₸/мес.", "₸/сутки", "м²", "единиц"}:
             raise ValueError("Scenario assumptions are not market sample observations")
         if (sources[fact["source_id"]]["kind"] == "official_terms" or scenario) and fact["n"] is not None:
             raise ValueError("Terms and scenarios have no observed sample count")
@@ -241,47 +243,70 @@ def _normalize_article(raw, digest, edition_day, published, *, checked_at=None):
         resolve=_resolve, plain=_plain, utc=utc, number_label=number_label,
     )
     used_facts.update(comparison_facts)
-    if not isinstance(raw["charts"], list) or not 2 <= len(raw["charts"]) <= 4:
-        raise ValueError("Each article needs two to four fact-backed charts")
-    if brief and len(raw["charts"]) != 2:
-        raise ValueError("Brief articles require exactly two monthly timeline charts")
+    if not isinstance(raw["charts"], list) or not (1 <= len(raw["charts"]) <= 2 if brief else 2 <= len(raw["charts"]) <= 4):
+        raise ValueError("A brief needs one or two fact-backed charts" if brief else "Each article needs two to four fact-backed charts")
     chart_ids = set()
     for chart in raw["charts"]:
-        if (not isinstance(chart, dict) or set(chart) - {"id", "title", "caption", "axis_label", "fact_ids", "mode"}
-                or not {"id", "title", "caption", "axis_label", "fact_ids"} <= set(chart)
+        if (not isinstance(chart, dict) or set(chart) - {"id", "title", "caption", "axis_label", "fact_ids", "series", "mode"}
+                or not {"id", "title", "caption", "axis_label"} <= set(chart)
+                or ("fact_ids" in chart) == ("series" in chart)
                 or chart.get("mode", "comparison") not in {"comparison", "timeline"}
                 or not isinstance(chart["id"], str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,39}", chart["id"])
-                or chart["id"] in chart_ids or not isinstance(chart["fact_ids"], list)
-                or not 2 <= len(chart["fact_ids"]) <= 12 or len(set(chart["fact_ids"])) != len(chart["fact_ids"])
-                or any(key not in facts for key in chart["fact_ids"])):
+                or chart["id"] in chart_ids):
             raise ValueError("Invalid chart fact references")
         chart_ids.add(chart["id"])
-        used_facts.update(chart["fact_ids"])
-        entries = [facts[key] for key in chart["fact_ids"]]
+        multi = "series" in chart
+        if multi and (chart.get("mode") != "timeline" or not isinstance(chart["series"], list) or not 1 <= len(chart["series"]) <= 6):
+            raise ValueError("A multi-series chart requires one to six monthly timeline series")
+        series = chart["series"] if multi else [{"fact_ids": chart["fact_ids"]}]
+        referenced, series_ids, factual_series, groups = set(), set(), set(), []
+        for line in series:
+            if not isinstance(line, dict) or (multi and (set(line) != {"id", "label", "fact_ids"}
+                    or not isinstance(line.get("id"), str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,39}", line["id"])
+                    or line["id"] in series_ids)):
+                raise ValueError("Invalid chart series")
+            keys = line.get("fact_ids")
+            if (not isinstance(keys, list) or not 2 <= len(keys) <= 12
+                    or any(not isinstance(key, str) or key not in facts for key in keys)
+                    or len(set(keys)) != len(keys) or referenced.intersection(keys)):
+                raise ValueError("Invalid chart fact references")
+            entries = [facts[key] for key in keys]
+            dates = [utc(entry["as_of"]) for entry in entries]
+            if chart.get("mode", "comparison") == "timeline":
+                if len(set(dates)) != len(dates) or dates != sorted(dates):
+                    raise ValueError("Timeline dates must be unique and strictly chronological")
+            elif len(set(dates)) != 1:
+                raise ValueError("Comparison rows must share an observation date; use an explicit timeline for history")
+            if brief or multi:
+                months = [(value.year, value.month) for value in dates]
+                identities = {entry.get("series_id") for entry in entries}
+                if (chart.get("mode") != "timeline" or len(set(months)) != len(months)
+                        or None in identities or len(identities) != 1 or factual_series.intersection(identities)):
+                    raise ValueError("Timeline lines require distinct factual series and unique chronological months, never connected categories")
+                factual_series.update(identities)
+            referenced.update(keys)
+            if multi:
+                series_ids.add(line["id"])
+            groups.append((line, entries))
+        entries = [entry for _line, group in groups for entry in group]
+        used_facts.update(referenced)
         if len({entry["unit"] for entry in entries}) != 1:
             raise ValueError("Chart rows must have a common unit")
-        dates = [utc(entry["as_of"]) for entry in entries]
-        if chart.get("mode", "comparison") == "timeline":
-            if len(set(dates)) != len(dates) or dates != sorted(dates):
-                raise ValueError("Timeline dates must be unique and strictly chronological")
-        elif len(set(dates)) != 1:
-            raise ValueError("Comparison rows must share an observation date; use an explicit timeline for history")
-        if brief:
-            months = [(value.year, value.month) for value in dates]
-            series = [entry.get("series_id") for entry in entries]
-            if (chart.get("mode") != "timeline" or len(set(months)) != len(months)
-                    or any(value is None for value in series) or len(set(series)) != 1):
-                raise ValueError("Brief charts require one factual series and unique chronological months, never connected categories")
         maximum = max(abs(entry["value"]) for entry in entries)
         if maximum <= 0:
             raise ValueError("Empty chart")
-        charts.append({"id": chart["id"], "title": _resolve(chart["title"], facts, 10, 180),
+        def project(group):
+            return [{"label": entry["label"], "value": entry["value"], "n": entry["n"], "as_of": utc(entry["as_of"]).isoformat(),
+                     "value_label": number_label(entry["value"], entry["unit"]),
+                     "bar_pct": round(100 * abs(entry["value"]) / maximum, 3)} for entry in group]
+        normalized = {"id": chart["id"], "title": _resolve(chart["title"], facts, 10, 180),
                        "caption": _resolve(chart["caption"], facts, 30, 700),
                        "axis_label": _resolve(chart["axis_label"], facts, 3, 180), "mode": chart.get("mode", "comparison"),
-                       "unit": entries[0]["unit"], "rows": [
-                           {"label": entry["label"], "value": entry["value"], "n": entry["n"], "as_of": utc(entry["as_of"]).isoformat(),
-                            "value_label": number_label(entry["value"], entry["unit"]),
-                            "bar_pct": round(100 * abs(entry["value"]) / maximum, 3)} for entry in entries]})
+                       "unit": entries[0]["unit"], "rows": project(entries)}
+        if multi:
+            normalized["series"] = [{"id": line["id"], "label": _resolve(line["label"], facts, 3, 160), "rows": project(group)}
+                                    for line, group in groups]
+        charts.append(normalized)
     if not isinstance(raw["sections"], list) or not (2 <= len(raw["sections"]) <= 4 if brief else 4 <= len(raw["sections"]) <= 7):
         raise ValueError("A brief needs two to four sections" if brief else "An article needs four to seven sections")
     sections = []
@@ -368,6 +393,11 @@ def build_edition(draft, digest, *, now=None):
     return edition
 
 
+def _chart_fact_ids(chart):
+    """Flatten validated chart references for the existing local-source gate."""
+    return [key for line in chart["series"] for key in line["fact_ids"]] if "series" in chart else chart["fact_ids"]
+
+
 def normalize_local_edition(edition, *, now=None):
     values = normalize_edition(edition, now=now)
     facts, sources = edition["digest"]["facts"], edition["digest"]["sources"]
@@ -375,10 +405,10 @@ def normalize_local_edition(edition, *, now=None):
         return sources[facts[key]["source_id"]]["kind"] == "hatuli_observations"
     for article in edition["articles"]:
         numeric = set(FACT_TOKEN.findall(json.dumps(article, ensure_ascii=False)))
-        numeric.update(key for chart in article["charts"] for key in chart["fact_ids"])
+        numeric.update(key for chart in article["charts"] for key in _chart_fact_ids(chart))
         if len([key for key in numeric if observed(key)]) < 4:
             raise ValueError("Each local article requires at least four used numeric Hatuli observations")
-        if any(not all(observed(key) for key in chart["fact_ids"]) for chart in article["charts"]):
+        if any(not all(observed(key) for key in _chart_fact_ids(chart)) for chart in article["charts"]):
             raise ValueError("Local research charts require observed local facts")
     return [_local_article(article) for article in values]
 

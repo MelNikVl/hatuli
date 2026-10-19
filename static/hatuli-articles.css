@@ -173,8 +173,20 @@
 .ha-time-canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: visible; }
 .ha-time-grid { stroke: var(--border); stroke-width: 1; }
 .ha-time-zero { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
-.ha-time-line { stroke: var(--accent-fill); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
-.ha-time-point { position: absolute; width: 7px; height: 7px; border: 2px solid var(--accent-fill); border-radius: 50%; background: var(--surface); transform: translate(-50%,-50%); }
+.ha-time-line { stroke: var(--ha-series-color, var(--accent-fill)); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.ha-time-point { position: absolute; width: 7px; height: 7px; border: 2px solid var(--ha-series-color, var(--accent-fill)); border-radius: 50%; background: var(--surface); transform: translate(-50%,-50%); }
+[data-series-index="0"] { --ha-series-color: var(--accent-fill); }
+[data-series-index="1"] { --ha-series-color: #20956b; }
+[data-series-index="2"] { --ha-series-color: #a06cdb; }
+[data-series-index="3"] { --ha-series-color: #d58b26; }
+[data-series-index="4"] { --ha-series-color: #2999b8; }
+[data-series-index="5"] { --ha-series-color: #d36191; }
+.ha-time-legend { display: flex; flex-wrap: wrap; gap: 12px 22px; list-style: none; padding: 0; margin: 0 0 20px; }
+.ha-time-legend li { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; font-size: 12px; line-height: 1.5; }
+.ha-time-legend-swatch { display: block; flex: 0 0 18px; height: 3px; border-radius: 2px; background: var(--ha-series-color); }
+.ha-time-legend strong { color: var(--heading); font-size: 12px; font-weight: 600; }
+.ha-time-legend small { display: block; color: var(--muted); font-size: 10px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.ha-time-table-sample { display: block; color: var(--muted); font-size: 10px; margin-top: 3px; }
 .ha-time-labels { position: relative; height: 35px; margin: 9px 4px 0; color: var(--muted); font-size: 11px; line-height: 1.3; }
 .ha-time-labels > span { position: absolute; top: 0; transform: translateX(-50%); text-align: center; white-space: nowrap; }
 .ha-time-labels > .ha-time-first { transform: none; text-align: left; }
@@ -191,6 +203,8 @@
 .ha-chart-context .ha-chart-unit { margin: 0; }
 .ha-chart-period { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
 .ha-brief-charts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; margin: 20px 0 24px; }
+.ha-brief-charts-single { grid-template-columns: minmax(0,1fr); }
+.ha-brief-charts.ha-brief-charts-single .ha-time-canvas, .ha-brief-charts.ha-brief-charts-single .ha-time-scale { height: 220px; }
 .ha-brief-charts > .ha-chart { margin: 0; padding: 16px; }
 .ha-brief-charts .ha-time-canvas, .ha-brief-charts .ha-time-scale { height: 145px; }
 .ha-brief-charts .ha-timechart { gap: 8px; }
