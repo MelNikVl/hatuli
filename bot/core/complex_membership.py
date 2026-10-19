@@ -69,13 +69,16 @@ def listing_complex_column_match_sql(complex_column: str, listing_alias: str | N
     return listing_complex_match_sql("$1", listing_alias, include_children=include_children).replace("$1", complex_column)
 
 
-def rental_identity_ctes_sql() -> str:
+def rental_identity_ctes_sql(*, materialize_roots: bool = False) -> str:
     """One read-only identity map for rental membership and asking estimates.
 
     Redirects terminate at an eligible root. Cycles, missing roots, ambiguous
-    source URLs and names never select an arbitrary physical project.
+    source URLs and names never select an arbitrary physical project. The
+    asking-rent publisher materializes roots so PostgreSQL does not repeat
+    their correlated child/umbrella check inside the rental-row join.
     """
-    return """WITH RECURSIVE rental_redirects AS (
+    roots_materialization = "MATERIALIZED " if materialize_roots else ""
+    return f"""WITH RECURSIVE rental_redirects AS (
         SELECT c.id AS original_id,c.id,c.canonical_id,ARRAY[c.id] AS visited
         FROM complexes c
         UNION ALL
@@ -91,7 +94,7 @@ def rental_identity_ctes_sql() -> str:
     ), cx AS (
         SELECT map.id,map.cid,complex_name_key(c.name) AS n
         FROM rental_canonical_map map JOIN complexes c ON c.id=map.id
-    ), rental_roots AS (
+    ), rental_roots AS {roots_materialization}(
         SELECT c.id,c.name,parent.cid AS parent_id,
                (coalesce(c.is_umbrella,false) OR EXISTS (
                    SELECT 1 FROM complexes child JOIN rental_canonical_map p ON p.id=child.parent_complex_id
