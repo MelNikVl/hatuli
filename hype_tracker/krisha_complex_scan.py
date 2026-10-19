@@ -18,7 +18,15 @@ import re
 import subprocess
 import sys
 import time
+from html import unescape
+from pathlib import Path
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+
+# The timer executes this file directly. Import only the file-backed source
+# gate, never a DB/application module (the scanner deliberately uses psql).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from bot.core.detail_cooldown import read_cooldown, record_block
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) Chrome/124.0 Safari/537.36"
 MAX_PHOTOS = 10
@@ -26,6 +34,48 @@ MAX_PHOTOS = 10
 # держим синхронно вручную (два процесса, не делить импортом — этот
 # скрипт исторически написан без импортов bot.*, только psql-подпроцесс).
 SOURCE_PRIORITY = {"developer": 1, "homeportal": 2, "krisha": 3, "korter": 4, "homsters": 5}
+CHALLENGE_MARKERS = re.compile(
+    r"подтвердите.{0,35}не робот|доступ (?:временно )?ограничен|проверка браузера"
+    r"|captcha|challenge-platform|access denied|just a moment"
+    r"|verify\s+(?:that\s+)?you\s+are\s+(?:a\s+)?human", re.I | re.S)
+
+
+class SourcePaused(RuntimeError):
+    """An access restriction stops the batch without excluding one complex."""
+
+
+def require_source_ready():
+    try:
+        remaining, _streak = read_cooldown()
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise SourcePaused("Общая пауза источника недоступна; запросы остановлены") from error
+    if remaining > 0:
+        raise SourcePaused(f"Действует общая пауза источника: ещё {remaining:.0f} с")
+
+
+def pause_source(reason):
+    try:
+        remaining, _streak = record_block()
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise SourcePaused(f"{reason}; общую паузу сохранить не удалось, батч остановлен") from error
+    raise SourcePaused(f"{reason}; общая пауза источника {remaining:.0f} с")
+
+
+def fetch_source(url):
+    """One ordinary request, honoring the shared gate before every attempt."""
+    require_source_ready()
+    try:
+        html = fetch(url)
+    except HTTPError as error:
+        if error.code in (403, 429, 468):
+            pause_source(f"HTTP {error.code}")
+        raise
+    # A normal card may contain a RU/EN captcha widget, with or without a JSON
+    # name. An explicit challenge heading still stops requests even if that
+    # document preloads photos or other card payload.
+    if is_source_challenge(html):
+        pause_source("Проверка доступа в ответе источника")
+    return html
 
 
 def psql(sql: str) -> str:
@@ -124,6 +174,20 @@ def extract_photos(html: str):
     return list(bases.values())[:MAX_PHOTOS]
 
 
+def has_subject_data(html: str) -> bool:
+    """Recognize the fields this scanner already updates, independently of name."""
+    return bool(extract_count(html) is not None or extract_build_status(html)
+                or extract_deadline(html) or extract_description(html) or extract_photos(html))
+
+
+def is_source_challenge(html: str) -> bool:
+    for heading in re.finditer(r"<(title|h1)\b[^>]*>(.*?)</\1\s*>", html, re.I | re.S):
+        text = re.sub(r"\s+", " ", unescape(re.sub(r"<[^>]+>", " ", heading.group(2)))).strip()
+        if CHALLENGE_MARKERS.match(text):
+            return True
+    return bool(CHALLENGE_MARKERS.search(html)) and not has_subject_data(html)
+
+
 def esc(s):
     return s.replace(chr(39), chr(39) * 2) if s else s
 
@@ -131,6 +195,11 @@ def esc(s):
 def main() -> int:
     if get_setting("krisha_enabled", "1") == "0":
         print("парсер выключен (krisha_enabled=0)")
+        return 0
+    try:
+        require_source_ready()
+    except SourcePaused as paused:
+        print(f"⏸ {paused}")
         return 0
     delay = float(get_setting("krisha_delay_sec", "120"))
     batch = int(get_setting("krisha_batch", "10"))
@@ -163,29 +232,38 @@ def main() -> int:
         print("очередь пуста — всё обработано")
         return 0
 
-    done, errors = 0, 0
+    done, errors, paused_reason = 0, 0, None
     for cid, name, url, photos_source in rows:
         try:
-            html = fetch(url)
-        except Exception as e404:
-            # само-лечение: если страница умерла под astana, пробуем nur-sultan
-            alt = url.replace("/complex/show/astana/", "/complex/show/nur-sultan/")
-            if alt != url and "404" in str(e404):
-                try:
-                    html = fetch(alt)
-                    psql(f"UPDATE complexes SET krisha_url = '{alt.replace(chr(39), chr(39) * 2)}' WHERE id = {cid}")
-                    print(f"↪ {cid} {name}: переставлен на nur-sultan")
-                except Exception:
-                    raise e404
-            else:
-                raise e404
-        try:
+            fallback_url = None
+            try:
+                html = fetch_source(url)
+            except HTTPError as missing:
+                # Keep the existing alternate-city fallback only for a real
+                # 404. A source block must never initiate another request.
+                alt = url.replace("/complex/show/astana/", "/complex/show/nur-sultan/")
+                if missing.code != 404 or alt == url:
+                    raise
+                time.sleep(delay)
+                html = fetch_source(alt)
+                fallback_url = alt
             cnt = extract_count(html)
             build_status = extract_build_status(html)
             deadline = extract_deadline(html)
             desc = extract_description(html)
             photos = extract_photos(html)
             krisha_name = extract_krisha_name(html)
+
+            if not (cnt is not None or build_status or deadline or desc or photos):
+                raise ValueError("Ответ не содержит предметных данных карточки ЖК")
+            if fallback_url:
+                if not krisha_name:
+                    raise ValueError("Ответ запасного адреса не содержит распознанного имени ЖК")
+                # Do not publish a fallback URL/name from an empty, generic or
+                # challenge document. Existing identity writers below remain
+                # unchanged; this is a content gate, not identity approval.
+                psql(f"UPDATE complexes SET krisha_url = '{esc(fallback_url)}' WHERE id = {cid}")
+                print(f"↪ {cid} {name}: переставлен на nur-sultan")
 
             # Самовосстановление имени: держим complexes.name синхронным с
             # тем, как ЖК называется на самой Крыше (источник истины по
@@ -242,6 +320,10 @@ def main() -> int:
                  f"'{esc('описание: ' + ('да' if desc else 'нет') + ', фото: ' + str(len(photos)))}')")
             done += 1
             print(f"✅ {cid} {name}: кв={cnt} описание={'да' if desc else 'нет'} фото={len(photos)}")
+        except SourcePaused as paused:
+            paused_reason = str(paused)
+            print(f"⏸ {cid} {name}: {paused_reason}; остальные ЖК в батче не запрашиваются")
+            break
         except Exception as e:
             psql(f"INSERT INTO krisha_parse_log (complex_id, complex_name, status, detail) "
                  f"VALUES ({cid}, '{esc(name)}', 'error', '{esc(str(e)[:150])}')")
@@ -249,7 +331,10 @@ def main() -> int:
             print(f"❌ {cid} {name}: {e}")
         time.sleep(delay)
 
-    print(f"итог: {done} ok, {errors} ошибок, пауза {delay:.0f}с")
+    if paused_reason:
+        print(f"итог: обработано {done} ЖК, {errors} ошибок; батч приостановлен: {paused_reason}")
+    else:
+        print(f"итог: {done} ok, {errors} ошибок, пауза {delay:.0f}с")
     return 0
 
 
