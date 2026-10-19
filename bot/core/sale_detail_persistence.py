@@ -18,6 +18,7 @@ DETAIL_FIELDS = (
     'renovation', 'furniture', 'kitchen_area', 'ceiling_height', 'photos',
     'lat', 'lon', 'seller_type', 'is_owner', 'area', 'rooms', 'address',
     'views_count', 'seller_name', 'is_urgent', 'photo_url',
+    'complex_name', 'complex_url',
 )
 DETAIL_ONLY_FIELDS = (
     'description', 'year_built', 'building_type', 'renovation', 'furniture',

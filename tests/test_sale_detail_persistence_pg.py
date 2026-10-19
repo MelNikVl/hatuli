@@ -114,6 +114,20 @@ async def test_real_pg_geo_provenance_requires_fresh_observed_coordinate_pair(de
 
 
 @pytest.mark.asyncio
+async def test_real_pg_raw_source_complex_fields_are_monotonic_and_absence_preserves(detail_db):
+    now = datetime.now(timezone.utc)
+    fresh = {'complex_name': 'ЖК Источник', 'complex_url': 'https://krisha.kz/complex/show/source-123/'}
+    await save_source_details({'id': '123456789', '_source_details_checked_at': now.isoformat(),
+                               '_source_detail_values': fresh}, execute=detail_db.execute)
+    await save_source_details({'id': '123456789', '_source_details_checked_at': (now-timedelta(hours=1)).isoformat(),
+                               '_source_detail_values': {'complex_name': 'Старый ЖК', 'complex_url': 'stale'}},
+                              execute=detail_db.execute)
+    await save_source_details({'id': '123456789', '_source_details_checked_at': (now+timedelta(seconds=1)).isoformat(),
+                               '_source_detail_values': {'floor': 7}}, execute=detail_db.execute)
+    assert dict(await detail_db.fetchrow("SELECT complex_name,complex_url FROM apartment_listings WHERE id='123456789'")) == fresh
+
+
+@pytest.mark.asyncio
 async def test_real_new_catalog_insert_then_observed_identity_and_details_patch(detail_db, monkeypatch):
     from bot.db import pg
     from full_sweep import upsert

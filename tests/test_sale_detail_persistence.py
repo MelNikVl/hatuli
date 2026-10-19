@@ -34,6 +34,20 @@ def test_catalog_floor_observed_in_feed_is_not_lost_when_detail_did_not_observe_
 
 
 @pytest.mark.asyncio
+async def test_observed_source_complex_name_and_url_defer_to_atomic_fresh_mask():
+    values = {'complex_name': 'ЖК Источник', 'complex_url': 'https://krisha.kz/complex/show/source-123/'}
+    row = observed(**values)
+    row.update(values)
+    assert 'complex_name' not in catalog_only_row(row) and 'complex_url' not in catalog_only_row(row)
+    execute = AsyncMock(return_value='UPDATE 1')
+    await save_source_details(row, execute=execute)
+    sql, _, encoded, _, _ = execute.call_args.args
+    assert json.loads(encoded) == values and execute.await_count == 1
+    assert "AND $2::jsonb ? 'complex_name'" in sql and "AND $2::jsonb ? 'complex_url'" in sql
+    assert 'complex_id=' not in sql and 'resolved_house_id=' not in sql
+
+
+@pytest.mark.asyncio
 async def test_legacy_success_bool_and_unmasked_values_never_backfill_check_dates():
     execute = AsyncMock()
     row = {'id': '123456789', 'details_fetched': True, 'floor': 8,
