@@ -61,6 +61,7 @@ async def sql_connection():
             CREATE TEMP TABLE complex_aliases(complex_id INT,normalized_name TEXT,status TEXT);
             CREATE TEMP TABLE complex_source_links(complex_id INT,source TEXT,url TEXT,match_method TEXT,confidence REAL);
             CREATE TEMP TABLE rental_listings(id TEXT PRIMARY KEY,complex_id INT,complex_name TEXT,complex_url TEXT,
+              address TEXT DEFAULT 'Туран, 4',district TEXT DEFAULT 'Есиль',
               price INT DEFAULT 250000,area REAL DEFAULT 60,rooms INT DEFAULT 2,floor INT DEFAULT 4,floors_total INT DEFAULT 12,
               city TEXT DEFAULT 'astana',prop_type TEXT DEFAULT 'apartment',is_active BOOLEAN DEFAULT TRUE,
               is_duplicate BOOLEAN DEFAULT FALSE,dup_needs_review BOOLEAN DEFAULT FALSE,duplicate_of TEXT,
@@ -107,8 +108,10 @@ async def test_existing_child_fk_and_redirect_chain_win_over_stale_name(sql_conn
     assert await member(connection, 3, include_children=True) == 1
     rows = await comparisons(connection)
     assert len(rows) == 1 and rows[0]["complex_id"] == 4
+    assert rows[0]["address"]=="Туран, 4" and rows[0]["district"]=="Есиль"
     narrowed = await connection.fetch(SINGLE_OFFER_RENTAL_SQL, datetime.now(timezone.utc), 6, 2, 60)
     assert len(narrowed) == 1 and narrowed[0]["complex_id"] == 4
+    assert narrowed[0]["address"]=="Туран, 4" and narrowed[0]["district"]=="Есиль"
 
 
 @pytest.mark.asyncio

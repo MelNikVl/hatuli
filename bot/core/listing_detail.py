@@ -217,7 +217,9 @@ async def build_listing_detail(listing_id: str, tier: str, *, similar_limit: int
         complex_housing_class=complex_housing_class,
     )
     from bot.core.comparison_rental_estimate import rental_estimate_for_listing
-    rental_estimate = await rental_estimate_for_listing(l)
+    rental_estimate = await rental_estimate_for_listing(l) if l.get("market_type") != "primary" else None
+    from bot.core.rental_economics import rental_economics_for_listing
+    rental_economics = await rental_economics_for_listing(l)
 
     return {
         "id": l["id"], "url": l.get("url") or "",
@@ -276,18 +278,19 @@ async def build_listing_detail(listing_id: str, tier: str, *, similar_limit: int
         # и разбивка скора по компонентам, теперь дублируется и в модалке
         # на карте, чтобы не заставлять переходить на отдельную страницу.
         "rental_estimate": rental_estimate,
+        "rental_economics": rental_economics,
         # Stored legacy values may be city/district fallbacks without current
         # property evidence. They must not become an individual rent or yield.
-        "est_rent": None,
-        "yield_pct": None,
-        "net_yield_pct": None,
-        "payback_years": None,
+        "est_rent": rental_economics["est_rent"] if rental_economics else None,
+        "yield_pct": rental_economics["gross_yield_pct"] if rental_economics else None,
+        "net_yield_pct": rental_economics["net_yield_pct"] if rental_economics else None,
+        "payback_years": rental_economics["payback_years"] if rental_economics else None,
         # ── Бейджи "недооценено"/"высокая доходность" — те же пороги
         # (топ-10%), что и в /admin/api/map-points, см. комментарий там.
         "underpriced_pct": (round((l["hex_deal_index"] - 1) * 100)
                              if l.get("hex_deal_index") and (l.get("deal_confidence") or 0) >= 50
                              and (l["hex_deal_index"] - 1) * 100 >= 28.8 else None),
-        "high_yield": False,
+        "high_yield": bool(rental_economics and rental_economics["high_yield"]),
         "rent_source": "заявленные ставки похожих квартир в том же ЖК" if rental_estimate else "недостаточно свежих подтверждённых аналогов",
         "zone_name": l.get("zone_name") or "",
         "zone_bonus": l.get("zone_bonus"),
