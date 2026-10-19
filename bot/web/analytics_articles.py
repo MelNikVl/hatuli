@@ -1,5 +1,6 @@
 """Public editorial pages read the published article archive, never a database."""
 from copy import deepcopy
+from datetime import datetime
 import math
 from urllib.parse import urlencode
 
@@ -32,6 +33,70 @@ def _page_url(category, page):
     return "/analytics" + ("?" + urlencode(query) if query else "")
 
 
+def _axis_number(value, step):
+    decimals = min(3, max(0, -math.floor(math.log10(step))))
+    if step < 1 or step % 1:
+        decimals = max(1, decimals)
+    rendered = f"{value:,.{decimals}f}"
+    if decimals:
+        rendered = rendered.rstrip("0").rstrip(".")
+    return rendered.replace(",", " ").replace(".", ",")
+
+
+def _timeline_plot(rows):
+    """Plot reviewed monthly observations without sorting or bridging gaps."""
+    months = []
+    for row in rows:
+        try:
+            observed = datetime.fromisoformat(row["as_of"].replace("Z", "+00:00"))
+            if observed.tzinfo is None:
+                return None
+            month = observed.year * 12 + observed.month - 1
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return None
+        if months and month <= months[-1]:
+            return None
+        months.append(month)
+    if len(months) < 2:
+        return None
+    values = [row["value"] for row in rows]
+    low, high = min(values), max(values)
+    padding = max((high - low) * .12, abs(high) * .002, .01)
+    span = high - low + 2 * padding
+    raw_step = span / 4
+    magnitude = 10 ** math.floor(math.log10(raw_step))
+    step = next(n * magnitude for n in (1, 2, 2.5, 5, 10) if n * magnitude >= raw_step)
+    minimum = math.floor((low - padding) / step) * step
+    maximum = math.ceil((high + padding) / step) * step
+    def y(value):
+        return round(8 + 224 * (maximum - value) / (maximum - minimum), 3)
+    ticks = []
+    for index in range(round((maximum - minimum) / step) + 1):
+        value = maximum - index * step
+        ticks.append({"label": _axis_number(value, step), "y": y(value), "top": round(y(value) / 2.4, 3)})
+    points, segments, current = [], [], []
+    month_labels = ("янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+    for index, (month, row) in enumerate(zip(months, rows)):
+        x = round(8 + 984 * (month - months[0]) / (months[-1] - months[0]), 3)
+        position = {**row, "x": x, "y": y(row["value"]), "left": round(x / 10, 3),
+                    "top": round(y(row["value"]) / 2.4, 3), "month_label": month_labels[month % 12],
+                    "year_label": str(month // 12) if index in (0, len(months) - 1) or month // 12 != months[index - 1] // 12 else ""}
+        points.append(position)
+        if index and month != months[index - 1] + 1:
+            if len(current) > 1:
+                segments.append(" ".join(current))
+            current = []
+        current.append(f"{x},{position['y']}")
+    if len(current) > 1:
+        segments.append(" ".join(current))
+    return {"points": points, "segments": segments, "ticks": ticks,
+            "period_label": f"{points[0]['month_label']} {months[0] // 12} — {points[-1]['month_label']} {months[-1] // 12}",
+            "zero_y": y(0) if minimum <= 0 <= maximum else None,
+            "scale_label": f"Шкала: {_axis_number(minimum, step)}–{_axis_number(maximum, step)}",
+            "has_gaps": any(b != a + 1 for a, b in zip(months, months[1:])),
+            "description": "; ".join(f"{row['label']}: {row['value_label']}" for row in rows)}
+
+
 def _display_article(article):
     """Do not let an invalid chart width become CSS or a misleading plot."""
     public = deepcopy(article)
@@ -57,6 +122,8 @@ def _display_article(article):
             for row in rows:
                 row["negative"] = row["value"] < 0
                 row["bar_width"] = round(row["bar_pct"] / (2 if chart["signed"] else 1), 3)
+                row["dot_position"] = round(50 + (-1 if row["negative"] else 1) * row["bar_pct"] / 2, 3) if chart["signed"] else row["bar_pct"]
+            chart["plot"] = _timeline_plot(rows) if chart.get("mode") == "timeline" else None
             charts.append(chart)
     public["charts"] = charts
     return public
@@ -103,7 +170,8 @@ def make_analytics_articles_router(templates):
             "@type": "Article",
             "headline": article["title"],
             "description": article["summary"],
-            "datePublished": article["edition_date"],
+            "datePublished": article.get("published_at", article["edition_date"]),
+            "dateModified": article.get("date_modified", article.get("published_at", article["edition_date"])),
             "inLanguage": "ru-KZ",
             "author": {"@type": "Organization", "name": "Hatuli", "url": SITE_URL},
             "publisher": {"@type": "Organization", "name": "Hatuli", "url": SITE_URL},
