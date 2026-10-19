@@ -504,6 +504,20 @@ async def run_cycle():
         log.warning("Sale source blocked: saved successful prefix; remaining source work deferred")
         return
 
+    # Derivations consume acknowledged DB values, never the raw response:
+    # the atomic detail writer may have rejected an older observation, or a
+    # row may have failed to save. A missing read fails closed for this pass.
+    try:
+        from bot.db.pg import fetch as _saved_sale_fetch
+        results = [dict(row) for row in await _saved_sale_fetch(
+            "SELECT id,title,address,description,lat,lon,complex_name,year_built,"
+            "source_details_checked_at,last_seen FROM apartment_listings WHERE id=ANY($1::text[])",
+            sorted(saved_ids),
+        )] if saved_ids else []
+    except Exception as e:
+        log.warning("Saved sale snapshot unavailable; skipping derived updates: %s", e)
+        results = []
+
     # ── House-resolution (задача 2026-08-13, "применять и при первичном
     # матчинге новых объявлений") — если ЖК объявления оказался зонтиком
     # (есть дома), пробуем определить конкретный дом по адресу/токену/гео,
@@ -537,11 +551,15 @@ async def run_cycle():
                 listing_description=r.get("description"),
                 listing_lat=r.get("lat"), listing_lon=r.get("lon"), children=children)
             if res:
-                await pg_exec(
+                house_write = await pg_exec(
                     "UPDATE apartment_listings SET resolved_house_id=$2, house_attribution=$3, "
-                    "house_attribution_detail=$4 WHERE id=$1",
-                    r["id"], res["house_id"], res["method"], res["detail"])
-                house_resolved += 1
+                    "house_attribution_detail=$4 WHERE id=$1 "
+                    "AND source_details_checked_at IS NOT DISTINCT FROM $5::timestamptz "
+                    "AND last_seen IS NOT DISTINCT FROM $6::timestamptz",
+                    r["id"], res["house_id"], res["method"], res["detail"],
+                    r.get("source_details_checked_at"), r.get("last_seen"))
+                if house_write == "UPDATE 1":
+                    house_resolved += 1
         if house_resolved:
             log.info("house-resolution: %d объявлений привязано к домам зонтиков", house_resolved)
     except Exception as e:
@@ -564,55 +582,17 @@ async def run_cycle():
             try:
                 await pg_exec(
                     "UPDATE apartment_listings SET finish_level=$2 "
-                    "WHERE id=$1 AND (finish_level IS DISTINCT FROM $2)",
-                    r["id"], code,
+                    "WHERE id=$1 AND (finish_level IS DISTINCT FROM $2) "
+                    "AND source_details_checked_at IS NOT DISTINCT FROM $3::timestamptz "
+                    "AND last_seen IS NOT DISTINCT FROM $4::timestamptz",
+                    r["id"], code, r.get("source_details_checked_at"), r.get("last_seen"),
                 )
             except Exception as e:
                 log.warning("finish update failed %s: %s", r["id"], e)
 
-    # ── Координаты + свежепойманная архивность из детального парсера ──────
-    try:
-        await pg_exec("ALTER TABLE apartment_listings ADD COLUMN IF NOT EXISTS complex_url TEXT")
-    except Exception:
-        pass
-    for r in results:
-        try:
-            if r.get("lat") and r.get("lon"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET lat=$2, lon=$3, geo_source='krisha' WHERE id=$1",
-                    r["id"], r["lat"], r["lon"],
-                )
-            if r.get("complex_url"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET complex_url=$2 WHERE id=$1",
-                    r["id"], r["complex_url"],
-                )
-            if r.get("photos"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET photos=$2::jsonb WHERE id=$1",
-                    r["id"], json.dumps(r["photos"]),
-                )
-                # Прогреваем кэш первого фото сразу при парсинге, а не по
-                # факту первого открытия попапа пользователем — раньше это
-                # давало 2-3с задержку на каждое ранее непросмотренное фото
-                # (см. img-proxy/prewarm_photo_cache в terminal_extras.py).
-                try:
-                    from terminal_extras import prewarm_photo_cache
-                    asyncio.create_task(prewarm_photo_cache(r["photos"][0]))
-                except Exception:
-                    pass
-            if r.get("seller_name"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET seller_name=$2 WHERE id=$1",
-                    r["id"], r["seller_name"],
-                )
-            if r.get("is_archived"):
-                await pg_exec(
-                    "UPDATE apartment_listings SET is_active=FALSE, archived_at=now() WHERE id=$1",
-                    r["id"],
-                )
-        except Exception as e:
-            log.warning("coords/archive update failed %s: %s", r["id"], e)
+    # Source detail fields (including geo provenance) are written only by
+    # save_source_details. No unguarded replay, archive flag, or source URL
+    # assignment may bypass its observed-field mask and monotonic timestamp.
 
     # ── БЭКФИЛЛ координат по ВСЕЙ базе (не только текущий цикл) ────────────
     # Баг, который это чинит: раньше детали докачивались только для
@@ -738,8 +718,11 @@ async def run_cycle():
             # понижаем автоматически — сданный дом уточняется вручную/годом)
             await pg_exec(
                 "UPDATE apartment_listings SET market_type=$2 WHERE id=$1 "
-                "AND (market_type IS NULL OR (market_type='secondary' AND $2='primary'))",
+                "AND (market_type IS NULL OR (market_type='secondary' AND $2='primary')) "
+                "AND source_details_checked_at IS NOT DISTINCT FROM $3::timestamptz "
+                "AND last_seen IS NOT DISTINCT FROM $4::timestamptz",
                 r["id"], "primary" if is_primary else "secondary",
+                r.get("source_details_checked_at"), r.get("last_seen"),
             )
         except Exception as e:
             log.warning("market_type failed %s: %s", r["id"], e)

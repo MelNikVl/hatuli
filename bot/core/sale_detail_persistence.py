@@ -61,6 +61,9 @@ UPDATE apartment_listings AS a SET
     f"    {field}=CASE WHEN {_FRESH} AND $2::jsonb ? '{field}' THEN (incoming.detail).{field} ELSE a.{field} END"
     for field in DETAIL_FIELDS
 ) + f""",
+    geo_source=CASE WHEN {_FRESH} AND $2::jsonb ? 'lat' AND $2::jsonb ? 'lon'
+        AND (incoming.detail).lat IS NOT NULL AND (incoming.detail).lon IS NOT NULL
+        THEN 'krisha' ELSE a.geo_source END,
     source_details_checked_at=GREATEST(a.source_details_checked_at, $3::timestamptz),
     source_details_attempted_at=GREATEST(a.source_details_attempted_at, $4::timestamptz),
     details_fetched=CASE WHEN {_FRESH} THEN TRUE ELSE a.details_fetched END

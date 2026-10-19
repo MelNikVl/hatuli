@@ -158,6 +158,103 @@ async def test_main_collector_acknowledges_only_after_fresh_patch_save(monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['older', 'fresh', 'failed-save', 'failed-snapshot'])
+async def test_main_cycle_never_replays_rejected_or_unsaved_source_details(monkeypatch, mode):
+    """Exercise the real post-save loops, not just the atomic SQL helper."""
+    from bot.db import pg, settings
+    from bot.core import complex_audit, house_resolution, listing_intel
+    import service_apartments as service
+
+    stored = {'id': '123456789', 'price': 30000000, 'title': 'Квартира',
+              'address': 'Сохранённый адрес', 'description': 'stored description',
+              'lat': 51.1, 'lon': 71.4, 'photos': ['stored.jpg'], 'seller_name': 'stored seller',
+              'is_urgent': False, 'complex_name': 'Зонтик', 'complex_url': 'stored complex',
+              'year_built': 2020, 'source_details_checked_at': NOW, 'last_seen': NOW,
+              'is_active': True, 'geo_source': 'krisha'}
+    checked = NOW + timedelta(seconds=1) if mode == 'fresh' else NOW - timedelta(hours=1)
+    source = observed(description='от застройщика unsafe description', lat=52.2, lon=72.2,
+                      photos=['source.jpg'], seller_name='source seller', is_urgent=True,
+                      year_built=2099)
+    source.update(description='от застройщика unsafe description', lat=52.2, lon=72.2,
+                  photos=['source.jpg'], seller_name='source seller', is_urgent=True,
+                  year_built=2099, complex_name='Зонтик', complex_url='unsafe complex', is_archived=True,
+                  _source_details_checked_at=checked.isoformat())
+    monkeypatch.setattr(settings, 'load', AsyncMock())
+    monkeypatch.setattr(settings, 'set', AsyncMock())
+    monkeypatch.setattr(settings, 'get_int', lambda key, default=0: 0 if key == 'COORD_BACKFILL_BATCH' else default)
+    monkeypatch.setattr(complex_audit, 'street_names', AsyncMock(return_value=set()))
+    monkeypatch.setattr(service, '_collect_sale_catalog', AsyncMock(return_value=([source], None, [], {}, {})))
+    monkeypatch.setattr(service, '_commit_sale_catalog', AsyncMock())
+
+    async def get(sql, *args):
+        return {'id': 123} if 'FROM complexes' in sql else {'id': stored['id'], 'price': stored['price']}
+    monkeypatch.setattr(pg, 'fetchrow', AsyncMock(side_effect=get))
+    snapshots = []
+    async def fetch(sql, *args):
+        if 'WHERE id=ANY($1::text[])' in sql:
+            assert args == ([stored['id']],)
+            if mode == 'failed-snapshot':
+                raise RuntimeError('snapshot unavailable')
+            snapshots.append(dict(stored))
+            return [dict(stored)]
+        if 'primary_score_total IS NULL' in sql:
+            # End after all three real derived loops, before unrelated jobs.
+            raise asyncio.CancelledError()
+        return []
+    monkeypatch.setattr(pg, 'fetch', AsyncMock(side_effect=fetch))
+    async def write(sql, *args):
+        if sql == DETAIL_UPDATE_SQL:
+            if mode == 'failed-save':
+                raise RuntimeError('atomic write unavailable')
+            if args[2] >= stored['source_details_checked_at']:
+                stored.update(json.loads(args[1]))
+                stored['source_details_checked_at'] = args[2]
+        return 'UPDATE 1'
+    execute = AsyncMock(side_effect=write)
+    monkeypatch.setattr(pg, 'execute', execute)
+    children = AsyncMock(return_value=[{'id': 456}])
+    resolve = AsyncMock(return_value={'house_id': 456, 'method': 'address', 'detail': 'stored evidence'})
+    monkeypatch.setattr(house_resolution, 'get_umbrella_children', children)
+    monkeypatch.setattr(house_resolution, 'resolve_house', resolve)
+    finish_inputs = []
+    def finish(title, description):
+        finish_inputs.append(description)
+        return 'ready', 0, 'готово'
+    monkeypatch.setattr(listing_intel, 'detect_finish_level', finish)
+    with pytest.raises(asyncio.CancelledError):
+        await service.run_cycle()
+
+    assert sum(c.args[0] == DETAIL_UPDATE_SQL for c in execute.call_args_list) == 1
+    assert stored['complex_url'] == 'stored complex' and stored['is_active'] is True
+    for call in execute.call_args_list:
+        sql = call.args[0]
+        assert not sql.startswith(('UPDATE apartment_listings SET lat=',
+                                   'UPDATE apartment_listings SET photos=',
+                                   'UPDATE apartment_listings SET seller_name=',
+                                   'UPDATE apartment_listings SET complex_url=',
+                                   'UPDATE apartment_listings SET is_active=FALSE'))
+    derived = [c for c in execute.call_args_list if any(key in c.args[0] for key in
+               ('SET resolved_house_id=', 'SET finish_level=', 'SET market_type='))]
+    if mode in ('failed-save', 'failed-snapshot'):
+        assert not derived and not resolve.called and not finish_inputs
+    else:
+        expected = source['description'] if mode == 'fresh' else 'stored description'
+        assert resolve.call_args.kwargs['listing_description'] == expected
+        assert resolve.call_args.kwargs['listing_lat'] == stored['lat']
+        assert finish_inputs == [expected]
+        assert len(derived) == 3
+        for call in derived:
+            assert 'source_details_checked_at IS NOT DISTINCT FROM' in call.args[0]
+            assert 'last_seen IS NOT DISTINCT FROM' in call.args[0]
+            assert call.args[-2:] == (stored['source_details_checked_at'], NOW)
+        market = next(c for c in derived if 'SET market_type=' in c.args[0])
+        assert market.args[2] == ('primary' if mode == 'fresh' else 'secondary')
+    assert stored['photos'] == (['source.jpg'] if mode == 'fresh' else ['stored.jpg'])
+    assert stored['seller_name'] == ('source seller' if mode == 'fresh' else 'stored seller')
+    assert stored['is_urgent'] is (mode == 'fresh')
+
+
+@pytest.mark.asyncio
 async def test_head_and_deep_share_the_configured_actual_http_budget():
     from service_apartments import _collect_sale_catalog
     class Settings:

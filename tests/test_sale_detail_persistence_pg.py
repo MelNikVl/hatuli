@@ -98,6 +98,22 @@ async def test_real_pg_cast_error_cannot_commit_success_timestamp(detail_db):
 
 
 @pytest.mark.asyncio
+async def test_real_pg_geo_provenance_requires_fresh_observed_coordinate_pair(detail_db):
+    now = datetime.now(timezone.utc)
+    await detail_db.execute("UPDATE apartment_listings SET lat=51,lon=71,geo_source='address' WHERE id='123456789'")
+    await save_source_details({'id': '123456789', '_source_details_checked_at': now.isoformat(),
+                               '_source_detail_values': {'lat': 51.1}}, execute=detail_db.execute)
+    assert await detail_db.fetchval("SELECT geo_source FROM apartment_listings WHERE id='123456789'") == 'address'
+    await save_source_details({'id': '123456789', '_source_details_checked_at': now.isoformat(),
+                               '_source_detail_values': {'lat': 51.2, 'lon': 71.2}}, execute=detail_db.execute)
+    row = await detail_db.fetchrow("SELECT lat,lon,geo_source FROM apartment_listings WHERE id='123456789'")
+    assert row['lat'] == pytest.approx(51.2) and row['lon'] == pytest.approx(71.2) and row['geo_source'] == 'krisha'
+    await save_source_details({'id': '123456789', '_source_details_checked_at': (now-timedelta(hours=1)).isoformat(),
+                               '_source_detail_values': {'lat': 52, 'lon': 72}}, execute=detail_db.execute)
+    assert dict(await detail_db.fetchrow("SELECT lat,lon,geo_source FROM apartment_listings WHERE id='123456789'")) == dict(row)
+
+
+@pytest.mark.asyncio
 async def test_real_new_catalog_insert_then_observed_identity_and_details_patch(detail_db, monkeypatch):
     from bot.db import pg
     from full_sweep import upsert
