@@ -69,4 +69,13 @@ def observed_detail_values(details):
     description = details.get("description")
     if isinstance(description, str) and (description.strip() or details.get("description_observed") is True):
         patch["description"] = description
+    # Preserve the actual source spelling/link, including an unverified name.
+    # This is evidence for later identity guards, never a canonical FK guess.
+    if (details.get("source_detail_valid") is True and not details.get("is_archived")
+            and details.get("complex_source") == "official_map_block"):
+        from bot.core.rental_stage0_identity import source_complex_url
+        name = details.get("complex_name")
+        url = source_complex_url(details.get("complex_url"))
+        if isinstance(name, str) and name.strip() and url:
+            patch.update(complex_name=name.strip(), complex_url=url)
     return patch

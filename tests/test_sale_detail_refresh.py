@@ -65,6 +65,28 @@ def test_source_patch_preserves_absence_and_does_not_promote_inferred_defaults()
     assert observed_detail_values({"description":"","description_observed":True}) == {"description":""}
 
 
+def test_complex_patch_preserves_official_raw_source_spelling_without_resolving_or_assigning_fk():
+    patch = observed_detail_values({"source_detail_valid":True,"complex_source":"official_map_block",
+        "complex_name":" Незнакомое написание ЖК ","complex_url":"https://krisha.kz/complex/show/55/",
+        "complex_id":999,"canonical_name":"Catalog Guess"})
+    assert patch == {"complex_name":"Незнакомое написание ЖК","complex_url":"https://krisha.kz/complex/show/55"}
+
+
+@pytest.mark.parametrize("changes",[
+    {"complex_source":"page_link"},{"complex_source":"text"},{"complex_source":None},
+    {"source_detail_valid":False},{"is_archived":True},{"complex_name":" "},
+    {"complex_url":None},{"complex_url":"https://evil.example/complex/show/55"},
+    {"complex_url":"https://krisha.kz.evil.example/complex/show/55"},
+    {"complex_url":"https://user:secret@krisha.kz/complex/show/55"},
+    {"complex_url":"https://krisha.kz/complex/show/55?invented=1"},
+])
+def test_complex_patch_does_not_promote_missing_inferred_or_untrusted_source(changes):
+    details = {"source_detail_valid":True,"complex_source":"official_map_block",
+        "complex_name":"Исходное название","complex_url":"https://krisha.kz/complex/show/55"}
+    details.update(changes)
+    assert observed_detail_values(details) == {}
+
+
 @pytest.fixture
 def pipeline(monkeypatch):
     from bot.core import apartment_parser as parser, apartment_details as details
