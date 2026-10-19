@@ -64,6 +64,20 @@ def test_public_name_quality_excludes_fragments_even_when_stored_as_trusted(name
     assert data["coverage"]["public_name_policy"] == PUBLIC_NAME_POLICY
 
 
+@pytest.mark.parametrize("name", ["От BI Group", "от NAK", "ОТ Застройщика", "  От   BI Group  "])
+def test_leading_standalone_ot_promotion_is_not_a_project_name(name):
+    data = build([project(1), project(2, name=name, is_newbuild=True,
+                                      krisha_url="https://krisha.kz/complex/show/astana/p/")])
+    assert [row["id"] for row in data["items"]] == [1]
+    assert data["coverage"]["name_junk_roots"] == 1
+
+
+@pytest.mark.parametrize("name", ["Отан", "Отандас", "Отрар", "Otan", "Aisar 3"])
+def test_ot_word_prefix_and_named_projects_are_not_standalone_promotion(name):
+    data = build([project(1, name=name)])
+    assert data["items"][0]["name"] == name
+
+
 def test_real_project_names_numbers_phases_and_fractional_houses_are_preserved():
     names = ["Aisar 3", "Aisar", "GreenLine. Garden", "GreenLine. Headliner", "Нурсая 2",
              "Нурсая", "O'NER", "Дом 17/2А", "Garden", "River Park"]
