@@ -1017,6 +1017,14 @@ async def run_rental_cycle() -> None:
 
 # ── Бэкфилл привязки аренды: ЖК (офиц. блок Крыши) + координаты + адрес ──
 
+def _rental_description_is_fresh(checked_at, *, now=None):
+    """A rule/grid update cannot refresh the age of a source description."""
+    from datetime import timedelta
+    checked = _rental_index_datetime(checked_at)
+    now = now or datetime.now(timezone.utc)
+    return checked is not None and now-timedelta(hours=72) <= checked <= now
+
+
 async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
                                   progress: dict | None = None) -> dict:
     """Докачивает детальные страницы аренды: у каждого объявления должна
@@ -1053,7 +1061,9 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
         WHERE (lat IS NULL OR complex_name IS NULL OR btrim(complex_name) = ''
                OR complex_url IS NULL OR btrim(complex_url) = '' OR complex_id IS NULL
                OR hex_id IS NULL OR hex_edge_m IS NULL
-               OR (NULLIF(btrim(description),'') IS NULL AND description_checked_at IS NULL)
+               OR description_checked_at IS NULL
+               OR description_checked_at < now() - interval '72 hours'
+               OR description_checked_at > now()
                OR (description_checked_at IS NOT NULL AND furnishing_version IS DISTINCT FROM $3::text)
                OR ($2::real IS NOT NULL AND hex_edge_m IS DISTINCT FROM $2))
           AND is_active IS NOT FALSE
@@ -1078,7 +1088,8 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
 
     got_geo = got_cx = 0
     for r in rows:
-        if r.get('description_checked_at') is not None and r.get('furnishing_version') != furnishing_version:
+        description_fresh = _rental_description_is_fresh(r.get('description_checked_at'))
+        if description_fresh and r.get('furnishing_version') != furnishing_version:
             await execute('UPDATE rental_listings SET furnishing=$2,furnishing_version=$3 WHERE id=$1',
                           r['id'], classify_furnishing(r.get('title'),r.get('description'),furnishing_rules),furnishing_version)
             if (r.get('lat') is not None and r.get('lon') is not None and r.get('complex_id')
@@ -1091,7 +1102,7 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
             await execute("UPDATE rental_listings SET hex_id=$2,hex_edge_m=$3 WHERE id=$1",
                           r["id"], known_hex["hex_id"], known_hex["hex_edge_m"])
             if (r.get("complex_name") and r.get("complex_url") and r.get("complex_id")
-                    and r.get('description_checked_at') is not None):
+                    and description_fresh):
                 continue
         if detail_fetch_cooldown_remaining():
             report["cooldown"] = True

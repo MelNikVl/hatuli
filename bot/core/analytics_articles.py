@@ -20,9 +20,10 @@ from zoneinfo import ZoneInfo
 
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
 KINDS = {"market": "Рынок жилья", "rent": "Аренда"}
-SLUG = re.compile(r"(?P<day>\d{4}-\d{2}-\d{2})-(?P<kind>market|rent)\Z")
+SLUG = re.compile(r"(?P<day>\d{4}-\d{2}-\d{2})-(?P<kind>market|rent)(?P<local>-local)?\Z")
 FACT_ID = re.compile(r"[a-z][a-z0-9_.]{1,79}\Z")
 FACT_TOKEN = re.compile(r"\{fact:([a-z][a-z0-9_.]{1,79})\}")
+LABEL_TOKEN = re.compile(r"\{label:([a-z][a-z0-9_.]{1,79})\}")
 SOURCE_HOSTS = {"hatuli.ai-groundtruth.com", "stat.gov.kz", "nationalbank.kz", "gov.kz",
                 "adilet.zan.kz", "egov.kz", "kdif.kz"}
 UNITS = {"объявлений", "₸", "₸/м²", "₸/м²/мес.", "₸/мес.", "₸/сутки", "%", "м²", "сделок", "индекс", "единиц"}
@@ -40,9 +41,9 @@ def utc(value):
     return value.astimezone(timezone.utc)
 
 
-def archive_directory(root=None):
+def archive_directory(root=None, *, local=False):
     base = Path(root) if root is not None else Path(__file__).resolve().parents[2]
-    return base / "var" / "analytics-articles"
+    return base / "var" / ("analytics-local-articles" if local else "analytics-articles")
 
 
 def _day(value):
@@ -80,6 +81,22 @@ def number_label(value, unit):
     digits = f"{value:,.1f}".rstrip("0").rstrip(".") if not float(value).is_integer() else f"{int(value):,}"
     digits = digits.replace(",", " ").replace(".", ",")
     return f"{digits}{unit}" if unit == "%" else f"{digits} {unit}"
+
+
+def _place_label(value):
+    """Only a bounded place name, never prose or another numeric claim."""
+    _plain(value, 2, 120)
+    if (re.search(r"[{}%₸$€]|\b(?:тенге|kzt|usd|percent)\b|скидк|доход|рентаб|прибыл|процент|гарантир", value, re.I)
+            or re.search(r"\d\s*(?:млн|тыс|м²|м2|мес|дней|год|комнат)\b", value, re.I)):
+        raise ValueError("A label token requires a place name without numeric claims")
+    districts = {"Есиль", "Нура", "Алматы", "Сарыарка", "Сарайшык", "Байконур"}
+    if value not in districts:
+        name = next((value[len(prefix):] for prefix in ("ЖК ", "Дом ") if value.startswith(prefix)), "")
+        if (not name or not name[0].isalnum() or len(name) > 110
+                or any(not (char.isalpha() or char.isdecimal() or char in " .,'’«»\"()/-") for char in name)
+                or re.search(r"(?:\d[ -]*){10}", name)):
+            raise ValueError("A label token requires an explicit district, complex or house name")
+    return value
 
 
 def validate_digest(raw, *, published_at=None):
@@ -136,7 +153,7 @@ def validate_digest(raw, *, published_at=None):
 
 def _resolve(text, facts, minimum=1, maximum=2000):
     _plain(text, minimum, maximum)
-    literal = FACT_TOKEN.sub("", text)
+    literal = LABEL_TOKEN.sub("", FACT_TOKEN.sub("", text))
     # A digit in prose must be backed by a dated aggregate. Graph values use
     # fact IDs, never arbitrary draft data. Dates are rendered by the page.
     if re.search(r"\d|\{|\}", literal):
@@ -147,7 +164,11 @@ def _resolve(text, facts, minimum=1, maximum=2000):
             raise ValueError(f"Unknown fact token: {key}")
         fact = facts[key]
         return number_label(fact["value"], fact["unit"])
-    return FACT_TOKEN.sub(substitute, text)
+    def label(match):
+        if match[1] not in facts:
+            raise ValueError(f"Unknown label fact: {match[1]}")
+        return _place_label(facts[match[1]]["label"])
+    return LABEL_TOKEN.sub(label, FACT_TOKEN.sub(substitute, text))
 
 
 def _text_list(value, facts, count_min, count_max, text_min=20, text_max=1200):
@@ -172,7 +193,8 @@ def _normalize_article(raw, digest, edition_day, published):
             or len(set(source_ids)) != len(source_ids) or any(key not in digest["sources"] for key in source_ids)):
         raise ValueError("Every article needs dated sources")
     charts = []
-    used_facts = set(FACT_TOKEN.findall(json.dumps(raw, ensure_ascii=False)))
+    serialized = json.dumps(raw, ensure_ascii=False)
+    used_facts = set(FACT_TOKEN.findall(serialized)) | set(LABEL_TOKEN.findall(serialized))
     if not isinstance(raw["charts"], list) or not 2 <= len(raw["charts"]) <= 4:
         raise ValueError("Each article needs two to four fact-backed charts")
     chart_ids = set()
@@ -278,6 +300,21 @@ def build_edition(draft, digest, *, now=None):
     return edition
 
 
+def normalize_local_edition(edition, *, now=None):
+    values = normalize_edition(edition, now=now)
+    facts, sources = edition["digest"]["facts"], edition["digest"]["sources"]
+    def observed(key):
+        return sources[facts[key]["source_id"]]["kind"] == "hatuli_observations"
+    for article in edition["articles"]:
+        numeric = set(FACT_TOKEN.findall(json.dumps(article, ensure_ascii=False)))
+        numeric.update(key for chart in article["charts"] for key in chart["fact_ids"])
+        if len([key for key in numeric if observed(key)]) < 4:
+            raise ValueError("Each local article requires at least four used numeric Hatuli observations")
+        if any(not all(observed(key) for key in chart["fact_ids"]) for chart in article["charts"]):
+            raise ValueError("Local research charts require observed local facts")
+    return [_local_article(article) for article in values]
+
+
 def _read_json(path):
     if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_FILE_BYTES:
         raise ValueError("Invalid archive file")
@@ -288,17 +325,18 @@ def _read_json(path):
     return result
 
 
-def publish_edition(edition, *, root=None, now=None):
+def publish_edition(edition, *, root=None, now=None, local=False):
     now = utc(now or datetime.now(timezone.utc))
-    normalized = normalize_edition(edition, now=now)
+    normalize = normalize_local_edition if local else normalize_edition
+    normalized = normalize(edition, now=now)
     day = _day(edition["edition_date"])
     if day != now.astimezone(LOCAL_TIMEZONE).date():
         raise ValueError("Only today's edition can be published")
-    directory = archive_directory(root)
+    directory = archive_directory(root, local=local)
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / f"{day.isoformat()}.json"
     if target.exists():
-        current = normalize_edition(_read_json(target), now=now)
+        current = normalize(_read_json(target), now=now)
         if len(current) == 2:
             return {"status": "already_published", "edition_date": day.isoformat(), "articles": 2}
     encoded = json.dumps(edition, ensure_ascii=False, indent=2, allow_nan=False).encode("utf-8")
@@ -316,7 +354,7 @@ def publish_edition(edition, *, root=None, now=None):
         try:
             os.link(temporary, target)
         except FileExistsError:
-            normalize_edition(_read_json(target), now=now)
+            normalize(_read_json(target), now=now)
             return {"status": "already_published", "edition_date": day.isoformat(), "articles": 2}
     finally:
         if temporary is not None:
@@ -328,24 +366,28 @@ def list_articles(root=None, category=None, now=None):
     if category is not None and category not in KINDS:
         return []
     now = utc(now or datetime.now(timezone.utc))
-    directory = archive_directory(root)
-    if not directory.is_dir():
-        return []
     result = []
     # Dated archives do not expire. A malformed day is omitted as a whole pair.
-    for path in sorted(directory.glob("*.json"), reverse=True):
-        try:
-            day = _day(path.stem)
-            if day > now.astimezone(LOCAL_TIMEZONE).date():
+    for local in (True, False):
+        directory = archive_directory(root, local=local)
+        for path in sorted(directory.glob("*.json"), reverse=True):
+            try:
+                day = _day(path.stem)
+                if day > now.astimezone(LOCAL_TIMEZONE).date():
+                    continue
+                raw = _read_json(path)
+                if raw.get("edition_date") != path.stem:
+                    continue
+                values = (normalize_local_edition if local else normalize_edition)(raw, now=now)
+                result.extend(article for article in values if category is None or article["kind"] == category)
+            except (ValueError, TypeError, KeyError, OSError, OverflowError):
                 continue
-            raw = _read_json(path)
-            if raw.get("edition_date") != path.stem:
-                continue
-            values = normalize_edition(raw, now=now)
-            result.extend(article for article in values if category is None or article["kind"] == category)
-        except (ValueError, TypeError, KeyError, OSError, OverflowError):
-            continue
-    return result
+    return sorted(result, key=lambda article: (article["edition_date"], article["slug"].endswith("-local")), reverse=True)
+
+
+def _local_article(article):
+    """A separately dated supplement never replaces the original daily pair."""
+    return {**article, "slug": article["slug"] + "-local", "url": article["url"] + "-local"}
 
 
 def load_article(slug, root=None, now=None):
@@ -353,11 +395,12 @@ def load_article(slug, root=None, now=None):
         return None
     try:
         _day(match["day"])
-        raw = _read_json(archive_directory(root) / f"{match['day']}.json")
+        local = bool(match["local"])
+        raw = _read_json(archive_directory(root, local=local) / f"{match['day']}.json")
         if raw.get("edition_date") != match["day"]:
             return None
-        return next((article for article in normalize_edition(raw, now=utc(now or datetime.now(timezone.utc)))
-                     if article["slug"] == slug), None)
+        values = (normalize_local_edition if local else normalize_edition)(raw, now=utc(now or datetime.now(timezone.utc)))
+        return next((article for article in values if article["slug"] == slug), None)
     except (ValueError, TypeError, KeyError, OSError, OverflowError):
         return None
 

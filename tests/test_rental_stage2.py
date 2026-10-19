@@ -318,7 +318,7 @@ async def test_changed_furnishing_rules_reclassify_stored_text_without_http(monk
     row={'id':'123456','url':'https://krisha.kz/a/show/123456','title':'Квартира','lat':51.128,'lon':71.430,
          'complex_id':10,'complex_name':'Пример','complex_url':'https://krisha.kz/complex/show/10',
          'hex_id':'0:0','hex_edge_m':50.,'description':'Полностью меблирована',
-         'description_checked_at':NOW,'furnishing_version':'old'}
+         'description_checked_at':datetime.now(timezone.utc),'furnishing_version':'old'}
     monkeypatch.setattr(pg,'fetch',AsyncMock(return_value=[row]))
     write=AsyncMock()
     monkeypatch.setattr(pg,'execute',write)

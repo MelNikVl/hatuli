@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 from bot.core.hexgrid import hex_id as point_hex
 from bot.core.comparison_offer_details import DETAIL_FIELDS, build_offer_details, validate_offer_details
+from bot.core.sale_source_quarantine import QUARANTINED_SOURCE_IDS, quarantine_sale_rows
 
 SCHEMA_VERSION = 3
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
@@ -170,6 +171,7 @@ def build_market_snapshot(primary_rows: list[dict], secondary_rows: list[dict], 
         raise ValueError("Invalid scanner hex edge")
     offers, seen = [], set()
     # Known property spine suppresses repeated advertisements. It is not public.
+    secondary_rows = quarantine_sale_rows(secondary_rows)
     latest_secondary = sorted(secondary_rows, key=lambda r: str(r.get("last_seen") or ""), reverse=True)
     properties = set()
     for market, rows in (("primary", primary_rows), ("secondary", latest_secondary)):
@@ -226,6 +228,10 @@ def _validated_snapshot(raw: dict) -> dict:
             raise ValueError("Invalid market or cell")
         if not isinstance(identifier, str) or (market, identifier) in seen:
             raise ValueError("Duplicate offer identifier")
+        if market == "secondary" and identifier in QUARANTINED_SOURCE_IDS:
+            # Hide a known negative in an older publication too. Retain its
+            # actual generated_at; only a fresh publisher expands property links.
+            continue
         price, area, rooms = _int(row["price"], 5_000_000, 600_000_000), _number(row["area"]), _int(row["rooms"], 1, 6)
         if price is None or area is None or not 20 <= area <= 300 or rooms is None:
             raise ValueError("Invalid public price or size")
@@ -276,6 +282,8 @@ def _validated_snapshot(raw: dict) -> dict:
     for row in raw["listing_details"]:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not re.fullmatch(r"\d{5,20}", row["id"]) or row["id"] in detail_ids:
             raise ValueError("Invalid public comparison detail identifier")
+        if row["id"] in QUARANTINED_SOURCE_IDS:
+            continue
         current = _int(row.get("current_price"), 1, 10_000_000_000)
         if current is None:
             raise ValueError("Invalid comparison current price")
@@ -433,7 +441,8 @@ def compare_market(snapshot: dict, hex_id: str | None = None, rooms: int = 2, ar
     area = area if area is not None and 20 <= area <= 300 else 60.0
     scope = scope if scope in SCOPE_RADII else "hex"
     now = _utc(now or datetime.now(timezone.utc))
-    all_offers = snapshot.get("offers", [])
+    all_offers = [row for row in snapshot.get("offers", [])
+                  if row.get("market_type") != "secondary" or row.get("id") not in QUARANTINED_SOURCE_IDS]
     matching = [o for o in all_offers if o["rooms"] == rooms and area * (1 - AREA_BAND) <= o["area"] <= area * (1 + AREA_BAND)]
     center = hex_id if valid_hex(hex_id) else _default_center(matching)
     generated = snapshot.get("generated_at")
