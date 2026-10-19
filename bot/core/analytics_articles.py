@@ -175,7 +175,7 @@ def validate_digest(raw, *, published_at=None):
         if sources[fact["source_id"]]["kind"] == "official_terms" and fact["unit"] not in {"%", "₸", "дней"}:
             raise ValueError("Bank factual terms cannot represent market observations")
         scenario = sources[fact["source_id"]]["kind"] == "calculation_scenario"
-        if scenario and fact["unit"] not in {"%", "₸", "₸/мес.", "₸/сутки", "м²", "единиц"}:
+        if scenario and fact["unit"] not in {"%", "₸", "₸/м²", "₸/мес.", "₸/сутки", "м²", "единиц"}:
             raise ValueError("Scenario assumptions are not market sample observations")
         if (sources[fact["source_id"]]["kind"] == "official_terms" or scenario) and fact["n"] is not None:
             raise ValueError("Terms and scenarios have no observed sample count")

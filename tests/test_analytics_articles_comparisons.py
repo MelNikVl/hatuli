@@ -54,6 +54,37 @@ def bank_edition():
     return core.build_edition(draft, digest, now=NOW)
 
 
+def budget_source():
+    return {"kind": "calculation_scenario", "label": "Арифметический пример бюджета Hatuli",
+            "url": "https://hatuli.ai-groundtruth.com/compare", "reuse_url": "https://hatuli.ai-groundtruth.com/compare",
+            "as_of": NOW.isoformat(), "published_at": NOW.isoformat(), "retrieved_at": NOW.isoformat(),
+            "rights_status": "operator_authorized"}
+
+
+def test_budget_price_filter_keeps_its_per_square_metre_unit_and_scenario_origin():
+    value = bank_edition()
+    value["digest"]["sources"]["hatuli.budget"] = budget_source()
+    value["digest"]["facts"]["budget.unit_cap"] = {
+        "label": "Ценовой фильтр бюджета с округлением вниз", "value": 285000,
+        "unit": "₸/м²", "n": None, "as_of": NOW.isoformat(), "source_id": "hatuli.budget"}
+    value["articles"][0]["source_ids"].append("hatuli.budget")
+    value["articles"][0]["key_points"][0] = (
+        "Для указанной площади бюджет задаёт фильтр до {fact:budget.unit_cap}; "
+        "это арифметический пример, а не наличие квартиры по такой цене.")
+    article = core.normalize_edition(value, now=NOW)[0]
+    assert "285 000 ₸/м²" in article["key_points"][0]
+
+
+def test_budget_filter_cannot_be_relabelled_as_observed_local_price():
+    value = local_comparison()
+    value["digest"]["sources"]["hatuli.budget"] = budget_source()
+    value["articles"][0]["source_ids"].append("hatuli.budget")
+    fact = value["digest"]["facts"]["sales.rooms_1"]
+    fact.update(source_id="hatuli.budget", n=None, as_of=NOW.isoformat())
+    with pytest.raises(ValueError, match="fresh independent"):
+        core.normalize_edition(value, now=NOW)
+
+
 def local_comparison(topic="complexes"):
     value = observed_edition()
     source = value["digest"]["sources"]["bns.housing"]
