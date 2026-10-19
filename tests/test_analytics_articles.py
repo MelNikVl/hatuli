@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
+import hashlib
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -459,3 +460,223 @@ def test_official_publish_branch_never_connects_or_loads_environment(monkeypatch
     digest_path.unlink()
     assert publisher.main(argv) == 0
     assert len(articles.list_articles(root=tmp_path, now=NOW)) == 2
+
+
+def brief_digest(now=NOW):
+    value = digest()
+    value["generated_at"] = now.isoformat()
+    value["sources"]["bns.housing"]["retrieved_at"] = now.isoformat()
+    august = deepcopy(value["sources"]["bns.housing"])
+    august["as_of"] = "2026-08-31T18:00:00+00:00"
+    value["sources"]["bns.august"] = august
+    for prefix in ("sales", "rent_monthly"):
+        for room in range(1, 5):
+            value["facts"][f"{prefix}.rooms_{room}"].update(
+                label="Август" if room % 2 else "Сентябрь",
+                series_id=f"{prefix}.{'first' if room <= 2 else 'second'}",
+                as_of=august["as_of"] if room % 2 else AS_OF.isoformat(),
+                source_id="bns.august" if room % 2 else "bns.housing")
+    return value
+
+
+def brief_draft():
+    value = draft()
+    for article in value["articles"]:
+        article["editorial_format"] = "brief"
+        article["sections"] = article["sections"][:2]
+        article["source_ids"].append("bns.august")
+        for chart in article["charts"]:
+            chart["mode"] = "timeline"
+    return value
+
+
+def base_archive(tmp_path):
+    articles.publish_edition(edition(), root=tmp_path, now=NOW)
+    path = articles.archive_directory(tmp_path) / "2026-10-16.json"
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def revised(tmp_path, at=None):
+    at = at or NOW + timedelta(hours=3)
+    path, sha = base_archive(tmp_path)
+    revision = articles.build_revision(brief_draft(), brief_digest(at), root=tmp_path,
+        base_sha256=sha, reason="Сокращён текст и добавлены проверенные временные ряды.", now=at)
+    return path, revision, at
+
+
+def test_explicit_brief_and_legacy_metadata_are_backwards_compatible():
+    old = articles.normalize_edition(edition(), now=NOW)[0]
+    assert old["editorial_format"] == "standard" and 350 <= old["word_count"] <= 850
+    assert old["published_at"] == old["date_modified"] == NOW.isoformat()
+    assert old["is_revised"] is False and old["modified_label"] is None
+    values = articles.normalize_edition(articles.build_edition(brief_draft(), brief_digest(), now=NOW), now=NOW)
+    assert all(v["editorial_format"] == "brief" and 150 <= v["word_count"] <= 250 for v in values)
+    assert all(len(v["sections"]) == 2 and len(v["charts"]) == 2 for v in values)
+    chart = values[0]["charts"][0]
+    assert chart["mode"] == "timeline"
+    assert [r["as_of"] for r in chart["rows"]] == ["2026-08-31T18:00:00+00:00", AS_OF.isoformat()]
+    assert [r["value"] for r in chart["rows"]] == [510000, 520000]
+
+
+@pytest.mark.parametrize("mutation",["missing_series","mixed_series","same_calendar_month","comparison","no_mode","extra_chart","one_section","five_sections","too_short","too_long"])
+def test_brief_cannot_connect_categories_or_ignore_its_short_contract(mutation):
+    value, body = brief_digest(), brief_draft()
+    if mutation == "missing_series": value["facts"]["sales.rooms_1"].pop("series_id")
+    if mutation == "mixed_series": value["facts"]["sales.rooms_2"]["series_id"] = "sales.other_category"
+    if mutation == "same_calendar_month":
+        value["sources"]["bns.august"]["as_of"] = "2026-09-15T18:00:00+00:00"
+        for fact in value["facts"].values():
+            if fact["source_id"] == "bns.august": fact["as_of"] = "2026-09-15T18:00:00+00:00"
+    if mutation == "comparison": body["articles"][0]["charts"][0]["mode"] = "comparison"
+    if mutation == "no_mode": body["articles"][0]["charts"][0].pop("mode")
+    if mutation == "extra_chart": body["articles"][0]["charts"].append(deepcopy(body["articles"][0]["charts"][0]))
+    if mutation == "one_section": body["articles"][0]["sections"].pop()
+    if mutation == "five_sections": body["articles"][0]["sections"] *= 3
+    if mutation == "too_short":
+        for section in body["articles"][0]["sections"]:
+            section["paragraphs"] = ["Проверяем период официальных данных перед выбором жилья."]
+    if mutation == "too_long":
+        for section in body["articles"][0]["sections"]:
+            section["paragraphs"] = [PARAGRAPH, PARAGRAPH * 2]
+    with pytest.raises(ValueError): articles.build_edition(body, value, now=NOW)
+
+
+def test_brief_timeline_can_have_missing_month_without_inventing_an_intermediate_fact():
+    value = brief_digest()
+    source = value["sources"]["bns.august"]
+    source["as_of"] = "2026-07-31T18:00:00+00:00"
+    for fact in value["facts"].values():
+        if fact["source_id"] == "bns.august": fact["as_of"] = source["as_of"]
+    values = articles.normalize_edition(articles.build_edition(brief_draft(), value, now=NOW), now=NOW)
+    assert len(values[0]["charts"][0]["rows"]) == 2
+    assert values[0]["charts"][0]["rows"][0]["as_of"].startswith("2026-07-31")
+
+
+def test_revision_newly_checked_sources_validate_at_real_modified_time_not_original_publication(tmp_path):
+    path, revision, at = revised(tmp_path)
+    assert articles.utc(revision["digest"]["generated_at"]) > articles.utc(edition()["published_at"])
+    with pytest.raises(ValueError, match="aggregate digest"):
+        articles.normalize_edition({**edition(),"digest":revision["digest"],"articles":revision["articles"]},now=at)
+    before, mtime = path.read_bytes(), path.stat().st_mtime_ns
+    result = articles.publish_revision(revision,root=tmp_path,now=at)
+    assert result["status"] == "revised"
+    assert (path.read_bytes(),path.stat().st_mtime_ns) == (before,mtime)
+    values = articles.list_articles(root=tmp_path,now=at)
+    assert len(values) == 2
+    for value in values:
+        assert value["published_at"] == NOW.isoformat()
+        assert value["date_modified"] == at.isoformat() and value["is_revised"] is True
+        assert value["edition_date"] == "2026-10-16" and value["editorial_format"] == "brief"
+        assert value["modified_label"] and value["revision_reason"] == revision["reason"]
+        assert value["slug"] in {"2026-10-16-market","2026-10-16-rent"}
+        assert articles.load_article(value["slug"],root=tmp_path,now=at+timedelta(days=900))["date_modified"] == at.isoformat()
+
+
+def test_revision_history_is_immutable_idempotent_and_latest_full_pair_wins(tmp_path):
+    path, revision, at = revised(tmp_path)
+    articles.publish_revision(revision,root=tmp_path,now=at)
+    directory=articles.revision_directory("2026-10-16",tmp_path)
+    first=next(directory.glob("*.json"));before=(first.read_bytes(),first.stat().st_mtime_ns)
+    same=articles.build_revision(brief_draft(),revision["digest"],root=tmp_path,
+        base_sha256=revision["base_sha256"],reason=revision["reason"],now=at+timedelta(minutes=1))
+    assert articles.publish_revision(same,root=tmp_path,now=at+timedelta(minutes=1))["status"] == "already_revised"
+    assert len(list(directory.glob("*.json"))) == 1
+    second=deepcopy(same);second["articles"][0]["title"]="Новый короткий разбор официальной динамики цен Астаны"
+    articles.publish_revision(second,root=tmp_path,now=at+timedelta(minutes=1))
+    assert len(list(directory.glob("*.json"))) == 2
+    assert (first.read_bytes(),first.stat().st_mtime_ns) == before
+    pair=articles.list_articles(root=tmp_path,now=at+timedelta(minutes=1))
+    assert len(pair) == 2 and pair[0]["date_modified"] == pair[1]["date_modified"]
+    assert next(v for v in pair if v["kind"]=="market")["title"] == second["articles"][0]["title"]
+    assert not list(directory.glob(".revision-*"))
+
+
+def test_invalid_future_mismatched_or_partial_overlay_falls_back_as_a_whole_pair(tmp_path):
+    _, revision, at = revised(tmp_path)
+    directory=articles.revision_directory("2026-10-16",tmp_path);directory.mkdir(parents=True)
+    for mutation in ("partial","base_sha","day","future","filename"):
+        bad=deepcopy(revision)
+        if mutation=="partial": bad["articles"].pop()
+        if mutation=="base_sha": bad["base_sha256"]="0"*64
+        if mutation=="day": bad["edition_date"]="2026-10-15"
+        if mutation=="future": bad["modified_at"]=(at+timedelta(hours=1)).isoformat()
+        stamp=articles._revision_stamp(bad["modified_at"] if mutation!="filename" else at+timedelta(seconds=1))
+        overlay=directory/f"{stamp}.json";overlay.write_text(json.dumps(bad),encoding="utf-8")
+        assert all(v["is_revised"] is False for v in articles.list_articles(root=tmp_path,now=at))
+        overlay.unlink()
+    articles.publish_revision(revision,root=tmp_path,now=at)
+    corrupt=directory/f"{articles._revision_stamp(at+timedelta(minutes=1))}.json"
+    corrupt.write_text("null",encoding="utf-8")
+    assert all(v["is_revised"] for v in articles.list_articles(root=tmp_path,now=at+timedelta(minutes=1)))
+
+
+def test_changed_original_bytes_disable_old_overlays_and_block_stale_authorization(tmp_path):
+    path, revision, at = revised(tmp_path)
+    articles.publish_revision(revision,root=tmp_path,now=at)
+    path.write_bytes(path.read_bytes()+b"\n")
+    assert all(v["is_revised"] is False for v in articles.list_articles(root=tmp_path,now=at))
+    with pytest.raises(ValueError,match="SHA256"):
+        articles.build_revision(brief_draft(),brief_digest(at),root=tmp_path,
+            base_sha256=revision["base_sha256"],reason=revision["reason"],now=at)
+    with pytest.raises(ValueError,match="SHA256"):
+        articles.publish_revision(revision,root=tmp_path,now=at)
+
+
+@pytest.mark.parametrize("reason",["<b>Новый формат</b>","Читайте https://example.test/revision", "Контакт test@example.com для правки"])
+def test_revision_reason_must_be_plain_without_html_links_or_contacts(reason,tmp_path):
+    _, revision, at = revised(tmp_path)
+    revision["reason"] = reason
+    with pytest.raises(ValueError,match="Plain editorial"):
+        articles.publish_revision(revision,root=tmp_path,now=at)
+    assert not articles.revision_directory("2026-10-16",tmp_path).exists()
+
+
+def test_revision_cannot_forge_modification_timestamp_or_create_absent_original(tmp_path):
+    _, revision, at = revised(tmp_path)
+    with pytest.raises(ValueError,match="actual revision publication"):
+        articles.publish_revision(revision,root=tmp_path,now=at+timedelta(seconds=1))
+    with pytest.raises(ValueError,match="Invalid archive"):
+        articles.build_revision(brief_draft(),brief_digest(at),root=tmp_path/"missing",
+            base_sha256=revision["base_sha256"],reason=revision["reason"],now=at)
+
+
+def test_bounded_revision_overflow_keeps_original_and_refuses_more_history(monkeypatch,tmp_path):
+    _, revision, at = revised(tmp_path)
+    monkeypatch.setattr(articles,"MAX_REVISIONS",2)
+    directory=articles.revision_directory("2026-10-16",tmp_path);directory.mkdir(parents=True)
+    for i in range(2): (directory/f"invalid{i}.json").write_text("null",encoding="utf-8")
+    with pytest.raises(ValueError,match="Maximum immutable"):
+        articles.publish_revision(revision,root=tmp_path,now=at)
+    (directory/"another.json").write_text("null",encoding="utf-8")
+    with pytest.raises(ValueError,match="bounded limit"):
+        articles.publish_revision(revision,root=tmp_path,now=at)
+    assert len(articles.list_articles(root=tmp_path,now=at))==2
+    assert articles.load_article("2026-10-16-rent",root=tmp_path,now=at)["is_revised"] is False
+
+
+def test_revision_check_only_and_publish_never_touch_database_or_environment(monkeypatch,tmp_path,capsys):
+    import dotenv
+    _, revision, at = revised(tmp_path)
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls,tz=None): return at
+    monkeypatch.setattr(publisher,"datetime",FixedDateTime)
+    monkeypatch.setattr(dotenv,"dotenv_values",lambda *a,**k:pytest.fail("No DB environment in revision"))
+    monkeypatch.setattr(publisher,"read_digest",lambda *a,**k:pytest.fail("No DB in revision"))
+    body, facts=tmp_path/"brief.json",tmp_path/"facts.json"
+    body.write_text(json.dumps(brief_draft()),encoding="utf-8")
+    facts.write_text(json.dumps(revision["digest"]),encoding="utf-8")
+    args=["--root",str(tmp_path),"--articles",str(body),"--digest",str(facts),"--revise",
+          "--base-sha256",revision["base_sha256"],"--reason",revision["reason"]]
+    assert publisher.main([*args,"--check-only"]) == 0
+    assert json.loads(capsys.readouterr().out)["file_writes"]==0
+    assert not articles.revision_directory("2026-10-16",tmp_path).exists()
+    assert publisher.main(args)==0
+    assert json.loads(capsys.readouterr().out)["status"]=="revised"
+    assert publisher.main(args)==0
+    assert json.loads(capsys.readouterr().out)["status"]=="already_revised"
+
+
+@pytest.mark.parametrize("extra",[["--revise"],["--base-sha256","0"*64],["--revise","--local","--base-sha256","0"*64,"--reason","Нельзя менять отдельный архив."]])
+def test_revision_cli_requires_explicit_bound_original_and_reason(extra):
+    with pytest.raises(SystemExit): publisher.main(["--articles","missing.json","--digest","missing.json",*extra])
