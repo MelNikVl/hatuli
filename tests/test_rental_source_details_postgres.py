@@ -10,9 +10,10 @@ import uuid
 import pytest
 
 DSN = os.getenv("HATULI_RENTAL_STAGE0_TEST_DATABASE_URL")
+PLACEHOLDER = bool(DSN and urlsplit(DSN).port == 1)
 
 
-@pytest.mark.skipif(not DSN,reason="requires explicitly disposable PostgreSQL CI database")
+@pytest.mark.skipif(not DSN or PLACEHOLDER,reason="requires explicitly disposable PostgreSQL CI database, not a placeholder")
 def test_rental_114_is_nullable_idempotent_and_never_backfills_source_facts():
     parsed = urlsplit(DSN)
     assert parsed.hostname in ("127.0.0.1","localhost","::1")
