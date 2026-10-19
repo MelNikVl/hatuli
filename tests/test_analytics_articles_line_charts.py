@@ -1,5 +1,9 @@
 """Monthly lines preserve observed order and gaps; categories never form a line."""
 from html.parser import HTMLParser
+from copy import deepcopy
+from datetime import timedelta
+import calendar
+import hashlib
 import json
 import math
 
@@ -7,6 +11,9 @@ import pytest
 
 from bot.web import analytics_articles as web
 from tests.test_analytics_articles_public_page import Parts, page, prepared
+from tests.test_analytics_articles_local_public_page import public_client
+from tests.test_analytics_articles import NOW, brief_digest, brief_draft, edition
+from bot.core import analytics_articles as core
 
 
 @pytest.fixture(autouse=True)
@@ -165,3 +172,53 @@ async def test_timeline_labels_are_escaped_in_svg_description_and_titles(monkeyp
     response = await page(monkeypatch, [article], "/analytics/2026-10-16-rent")
     assert attack not in response.text
     assert "&lt;/desc&gt;" in response.text
+
+
+@pytest.mark.asyncio
+async def test_native_revision_overlay_reaches_router_without_rewriting_original_pair(monkeypatch, tmp_path):
+    core.publish_edition(edition(), root=tmp_path, now=NOW)
+    original = core.archive_directory(tmp_path) / "2026-10-16.json"
+    before, mtime = original.read_bytes(), original.stat().st_mtime_ns
+    modified = NOW + timedelta(hours=3)
+    digest, draft = brief_digest(modified), brief_draft()
+    month_sources = []
+    for month in range(4, 10):
+        key = f"bns.month_{month}"
+        source = deepcopy(digest["sources"]["bns.housing"])
+        source["as_of"] = f"2026-{month:02}-{calendar.monthrange(2026, month)[1]}T00:00:00+00:00"
+        digest["sources"][key] = source
+        month_sources.append(key)
+    for article in draft["articles"]:
+        prefix = "sales" if article["kind"] == "market" else "rent_monthly"
+        article["source_ids"].extend(month_sources)
+        for series, chart in enumerate(article["charts"]):
+            chart["fact_ids"] = []
+            for month, source_id in zip(range(4, 10), month_sources):
+                key = f"{prefix}.timeline_{series}.{month}"
+                digest["facts"][key] = {"label": f"Месяц {month}", "value": 500000 + month * 10000,
+                    "unit": "₸/м²", "n": None, "source_id": source_id,
+                    "as_of": digest["sources"][source_id]["as_of"], "series_id": f"{prefix}.timeline_{series}"}
+                chart["fact_ids"].append(key)
+    revision = core.build_revision(draft, digest, root=tmp_path,
+        base_sha256=hashlib.sha256(before).hexdigest(), reason="Короткая редакция с проверенным временным рядом.", now=modified)
+    assert core.publish_revision(revision, root=tmp_path, now=modified)["status"] == "revised"
+    revision_directory = core.revision_directory
+    monkeypatch.setattr(core, "revision_directory", lambda day, root=None: revision_directory(day, tmp_path if root is None else root))
+    async with public_client(monkeypatch, tmp_path) as client:
+        for kind in ("market", "rent"):
+            path = f"/analytics/2026-10-16-{kind}"
+            response = await client.get(path)
+            assert response.status_code == 200
+            schema = json.loads("".join(Parts(response.text).json_ld))
+            assert schema["datePublished"] == NOW.isoformat()
+            assert schema["dateModified"] == modified.isoformat()
+            assert schema["mainEntityOfPage"] == "https://hatuli.ai-groundtruth.com" + path
+            lines = Lines(response.text)
+            assert [len(segment) for segment in lines.segments] == [6, 6]
+            assert len(lines.points) == 12
+            assert response.text.count('<th scope="col">Период</th>') == 2
+            assert "ha-extended" not in response.text
+            assert "Обновлено" in response.text
+        archive = await client.get("/analytics")
+        assert Parts(archive.text).cards == 2
+    assert (original.read_bytes(), original.stat().st_mtime_ns) == (before, mtime)
