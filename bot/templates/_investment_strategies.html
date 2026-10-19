@@ -1,6 +1,7 @@
 <section class="mc-section hs-section ym-hide-content" id="strategies" aria-labelledby="hs-title">
   <div class="mc-heading"><div><p class="mc-eyebrow">Ваш бюджет · Астана · 12 месяцев</p><h2 id="hs-title">Введите сумму. Остальное посчитаем.</h2></div><p>Сравним подходящие вклады в тенге и квартиры в вашем бюджете. ЖК можно выбрать по желанию.</p></div>
   <form class="hs-form" action="/compare/strategies/calculate#strategies" method="post" data-strategy-form>
+    {% if strategy_form.listing %}<input type="hidden" name="listing" value="{{ strategy_form.listing }}">{% endif %}
     <div class="hs-budget">
       <div class="mc-field hs-budget-field"><label for="hs-budget">Сколько хотите вложить?</label><div class="hs-money-input"><input id="hs-budget" name="budget" type="number" min="1" max="1000000000" step="1" inputmode="numeric" value="{{ strategy_form.budget }}" placeholder="Например, 30 000 000" required aria-describedby="hs-budget-help"><span aria-hidden="true">₸</span></div><small id="hs-budget-help">Одна сумма для всех вариантов. Расчёт на год, без ипотеки.</small></div>
       <button type="submit" class="mc-button hs-calculate" data-strategy-submit><span data-strategy-submit-label>Рассчитать</span><span aria-hidden="true">→</span></button>

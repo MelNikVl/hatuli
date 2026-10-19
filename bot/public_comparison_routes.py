@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import datetime, timezone
 from statistics import median
 from urllib.parse import urlencode
@@ -75,6 +76,8 @@ def _strategy_form(selected_offer=None, payload=None):
     selected_offer = selected_offer or {}
     selected_price = selected_offer.get("price", "")
     values = {"budget": payload.get("budget", selected_price), "complex_id": payload.get("complex_id", "")}
+    identifier = str(selected_offer.get("id", ""))
+    values["listing"] = identifier if re.fullmatch(r"(?:[0-9]{1,20}|newbuild:[0-9]{1,10})", identifier) else ""
     if not isinstance(values["budget"], (str, int, float)) or isinstance(values["budget"], bool):
         values["budget"] = ""
     else:
@@ -465,4 +468,4 @@ def register_public_comparison_routes(app, templates) -> None:
         context = comparison_context(listing=listing, unit=unit, manual=not identifier)
         context.update(strategy_form=_strategy_form(context.get("selected_offer"), payload),
                        strategy_result=result, strategy_chart=chart, strategy_error=error)
-        return render(request, context, status_code=400 if error else 200)
+        return render(request, context, status_code=400 if error or context["errors"] else 200)

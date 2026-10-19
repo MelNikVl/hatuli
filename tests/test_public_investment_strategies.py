@@ -105,6 +105,31 @@ async def test_unknown_complex_is_rejected_without_silently_using_city(isolated_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("identifier", ["1000000001", "newbuild:1"])
+async def test_no_js_submit_keeps_the_actual_selected_apartment(isolated_app, identifier):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=isolated_app), base_url="http://test") as client:
+        original = await client.get("/compare", params={"listing": identifier})
+        hidden = Inputs(original.text).inputs["listing"]
+        assert hidden["type"] == "hidden" and hidden["value"] == identifier
+        response = await client.post("/compare/strategies/calculate", data={"budget": "40000000", "listing": hidden["value"]})
+    assert response.status_code == 200
+    assert "Выбранная квартира" in response.text
+    assert Inputs(response.text).inputs["listing"]["value"] == identifier
+    assert Inputs(response.text).inputs["budget"]["value"] == "40000000"
+    assert response.text.count('data-strategy-result="bank:') == 4
+    assert {name for name, attrs in Inputs(response.text).inputs.items() if "required" in attrs} == {"budget"}
+
+
+@pytest.mark.asyncio
+async def test_forged_hidden_selection_does_not_become_a_public_apartment(isolated_app):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=isolated_app), base_url="http://test") as client:
+        response = await client.post("/compare/strategies/calculate", data={"budget": "40000000", "listing": "9999999999"})
+    assert response.status_code == 400
+    assert "Выбранное объявление отсутствует" in response.text
+    assert 'name="listing"' not in response.text
+
+
+@pytest.mark.asyncio
 async def test_stale_banks_do_not_receive_fake_interest(isolated_app, monkeypatch):
     catalog = deposit_catalog(datetime.now(timezone.utc)-timedelta(hours=49))
     monkeypatch.setattr(routes, "load_deposit_catalog", lambda: catalog)
