@@ -238,13 +238,13 @@ def test_stale_or_future_source_and_photo_receipts_are_rejected(offset):
         publisher.photo_evidence_rows([source], {source["id"]: record}, now)
 
 
-def test_existing_approved_photos_stay_usable_and_total_photo_count_is_bounded():
+def test_fresh_visual_receipt_replaces_older_approved_frames_with_only_reviewed_photos():
     now = datetime.now(timezone.utc)
     source, record = photo_review_row(now)
     source["approved_photo_urls"] = [PHOTO_A]
     record["interior_photo_urls"] = [PHOTO_B, PHOTO_C, PHOTO_D]
     reviewed = publisher.photo_evidence_rows([source], {source["id"]: record}, now)[0]
-    assert reviewed["approved_photo_urls"] == [PHOTO_A, PHOTO_B, PHOTO_C]
+    assert reviewed["approved_photo_urls"] == [PHOTO_B, PHOTO_C, PHOTO_D]
 
 
 @pytest.mark.asyncio

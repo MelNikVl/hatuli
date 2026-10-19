@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from bot.core.daily_picks import (
     LOCAL_TIMEZONE, MAX_PICKS, build_daily_picks, load_daily_picks,
-    publish_snapshot, safe_photo_url, snapshot_path, validate_snapshot,
+    publish_snapshot, safe_photo_url, photo_asset_key, snapshot_path, validate_snapshot,
 )
 from bot.core.daily_pick_identity import annotate_daily_pick_identity_rows
 from bot.core.apartment_selection_reasons import best_apartment_factors, validate_selection_facts
@@ -347,7 +347,9 @@ def photo_evidence_rows(rows: list[dict], checks: dict[str, dict] | None, now: d
 
     Existing fingerprint-approved photos stay usable. Additional interiors
     require an owner-created receipt tied to the same fresh source visit and
-    exact URLs in the current listing. Nothing is written back to PostgreSQL.
+    actual URLs seen in the current listing. A known CDN/format derivative
+    must match the same stored UUID and frame index; no URL is constructed.
+    Nothing is written back to PostgreSQL.
     """
     from datetime import timedelta
     result = []
@@ -373,10 +375,16 @@ def photo_evidence_rows(rows: list[dict], checks: dict[str, dict] | None, now: d
                     fresh = checked.tzinfo is not None and now - timedelta(hours=2) <= checked <= now
                 except (ValueError, TypeError, KeyError, AttributeError):
                     fresh = False
-                if not fresh or any(safe_photo_url(url) is None or url not in current for url in interiors):
+                current_assets = {photo_asset_key(url) for url in current}
+                reviewed_assets = [photo_asset_key(url) for url in interiors]
+                if (not fresh or None in reviewed_assets or len(set(reviewed_assets)) != len(reviewed_assets)
+                        or any(key not in current_assets for key in reviewed_assets)):
                     raise ValueError("Interior photo proof is stale or not part of the current source listing")
-                approved.extend(url for url in interiors if url not in approved)
-        result.append({**row, "approved_photo_urls": approved[:3]})
+                # A fresh visual receipt replaces the entire photo selection.
+                # Older fingerprint approvals must neither add unseen frames
+                # nor displace today's actually inspected interior URLs.
+                approved = list(interiors)
+        result.append({**row, "approved_photo_urls": list(dict.fromkeys(approved))[:3]})
     return result
 
 

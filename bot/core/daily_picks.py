@@ -40,8 +40,13 @@ MAX_DISCOUNT = .30
 MAX_PREMIUM = .05
 NEARBY_RADIUS_M = 800
 PHOTO_HOST = "krisha-photos.kcdn.online"
+# The second hostname and full.webp derivative were observed in the normal
+# source gallery on 2026-10-16. No wildcard CDN or guessed URL is permitted.
+PHOTO_HOSTS = frozenset({PHOTO_HOST, "astps-photos-kr.kcdn.kz"})
 _ID = re.compile(r"[0-9]{5,20}\Z")
-_PHOTO_PATH = re.compile(r"/(?:webp/)?[0-9a-f]{2}/[0-9a-f-]{36}/[0-9]+-(?:full|thumb)\.(?:jpg|jpeg|webp)\Z", re.I)
+_PHOTO_PATH = re.compile(
+    r"/(?:webp/)?[0-9a-f]{2}/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/"
+    r"(?P<index>[0-9]+)-(?:full|thumb)\.(?:jpg|jpeg|webp)\Z", re.I)
 _DISTRICTS = {
     "Есильский р-н": "Есильский район", "Нура р-н": "Нура", "Алматы р-н": "Алматы",
     "Сарайшык р-н": "Сарайшык", "Сарыарка р-н": "Сарыарка", "р-н Байконур": "Байконур",
@@ -83,16 +88,30 @@ def _number(value) -> float | None:
 
 
 def safe_photo_url(value) -> str | None:
-    if not isinstance(value, str) or len(value) > 400:
+    if not isinstance(value, str) or len(value) > 400 or any(ord(char) <= 32 for char in value):
         return None
     try:
         parsed = urlsplit(value)
-        if (parsed.scheme != "https" or parsed.hostname != PHOTO_HOST or parsed.username or parsed.password
-                or parsed.port is not None or parsed.query or parsed.fragment or not _PHOTO_PATH.fullmatch(parsed.path)):
+        if (parsed.scheme != "https" or parsed.hostname not in PHOTO_HOSTS
+                or parsed.username is not None or parsed.password is not None
+                or parsed.port is not None or "?" in value or "#" in value or not _PHOTO_PATH.fullmatch(parsed.path)):
             return None
     except ValueError:
         return None
     return value
+
+
+def photo_asset_key(value) -> tuple[str, str] | None:
+    """Identity of an allowlisted source image; never construct a derivative.
+
+    JPEG and WebP gallery derivatives can identify the same image across the
+    two observed CDNs. UUID and frame index must both agree. The caller still
+    needs a fresh, offer-linked visual receipt before trusting a new URL.
+    """
+    if safe_photo_url(value) is None:
+        return None
+    match = _PHOTO_PATH.fullmatch(urlsplit(value).path)
+    return match["uuid"].lower(), match["index"]
 
 
 def _valid_source(row: dict) -> bool:
