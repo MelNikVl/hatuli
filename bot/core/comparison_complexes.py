@@ -16,9 +16,10 @@ import re
 import tempfile
 from urllib.parse import unquote, urlsplit
 
-from bot.core.complex_canonical import norm_name
+from bot.core.complex_canonical import _core, is_junk_name, norm_name
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+PUBLIC_NAME_POLICY = "project_names_without_free_text_v2"
 MAX_ROWS = 20_000
 MAX_FILE_BYTES = 15_000_000
 MAX_CATALOG_AGE = timedelta(days=7)
@@ -33,15 +34,20 @@ _LIMITATIONS = [
     "Список включает подходящие записи каталога Hatuli, а не только объекты с текущими предложениями.",
     "Полнота относительно всех ЖК Астаны не подтверждена внешним городским реестром.",
     "Часть городских привязок основана на каталожной координате в районе Астаны, а не на проверенном адресе.",
-    "Спорные привязки, неизвестный город и карантин исключены; выбор ЖК не подтверждает точность его домов.",
+    "Спорные привязки, неоднозначные имена, рекламные фрагменты, неизвестный город и карантин исключены; выбор ЖК не подтверждает точность его домов.",
 ]
+_PUBLIC_FREE_TEXT_RE = re.compile(
+    r"(?:\sот\s|\b(?:заезжай|живи|хозя\w*|собственник\w*|торг|срочно|сервер|server|"
+    r"телефон\w*|звоните|whatsapp|ватсап|риелтор\w*|риэлтор\w*)\b|"
+    r"\b(?:город|г\.)\s+(?:астана|нур[- ]султан)\b|https?://|www\.|@)", re.I)
+_STREET_NAME_RE = re.compile(r"^\s*\d+\s*[- ]*\s*(?:магистраль|микрорайон|мкр\.?)(?:\s|$)", re.I)
 _ITEM_KEYS = {"id", "name", "label", "aliases", "parent_id", "parent_name", "is_umbrella", "child_ids", "address", "city_evidence"}
 _EVIDENCE = {"verified_address_city", "source_city", "catalog_address_city", "catalog_coordinate_area", "parent_catalog_city"}
 
 
 def complex_catalog_path() -> Path:
     return Path(os.environ.get("HATULI_COMPARISON_COMPLEXES_PATH") or
-                Path(__file__).resolve().parents[2] / "var" / "comparison-complexes.json")
+                Path(__file__).resolve().parents[2] / "var" / "comparison-complexes-v2.json")
 
 
 def _utc(value) -> datetime:
@@ -63,6 +69,23 @@ def _text(value, limit=250):
     if not value or len(value) > limit or any(ord(c) < 32 for c in value):
         return None
     return value
+
+
+def _public_project_name(value):
+    """Conservative display eligibility, never a canonical identity writer.
+
+    A source/newbuild/class flag cannot turn an advert fragment into a project
+    name. Keep numbers, phases, apostrophes and fractional house identifiers;
+    refuse decorated/free-text labels rather than silently stripping them.
+    """
+    name = _text(value)
+    if not name or is_junk_name(name, trusted=False) or _PUBLIC_FREE_TEXT_RE.search(name) or _STREET_NAME_RE.search(name):
+        return False
+    if any(c in name for c in "!?:;<>") or re.search(r"(?:\+?7|8)[ ()-]*\d{3}[ ()-]*\d{3}[ ()-]*\d{2}[ ()-]*\d{2}", name):
+        return False
+    # Emoji/pictograms and their presentation selectors are description markers,
+    # not stable identifiers; ordinary letters in every script remain allowed.
+    return not any(ord(c) >= 0x1F000 or 0x2600 <= ord(c) <= 0x27BF or ord(c) in {0xFE0F, 0x200D} for c in name)
 
 
 def _address(value):
@@ -150,15 +173,18 @@ def build_comparison_complexes(complexes, *, aliases=(), addresses=(), links=(),
         terminal = roots.get(current)
         for member in path:
             roots[member] = terminal
-    basic = {cid: row for cid, row in catalog.items() if roots[cid] == cid and _text(row.get("name"))
+    stored_basic = {cid: row for cid, row in catalog.items() if roots[cid] == cid and _text(row.get("name"))
              and not row.get("is_garbage") and not row.get("is_street") and row.get("canonical_reason") != "junk_unmatched"}
-    separated = {tuple(sorted((x["complex_id_a"], x["complex_id_b"]))) for x in relations
-                 if x.get("relation_type") in {"sibling_phase", "same_umbrella_project", "separate_neighbor_complex"}}
+    name_junk = {cid for cid, row in stored_basic.items() if not _public_project_name(row["name"])}
+    basic = {cid: row for cid, row in stored_basic.items() if cid not in name_junk}
+    separated = {tuple(sorted((roots.get(x.get("complex_id_a")), roots.get(x.get("complex_id_b"))))) for x in relations
+                 if x.get("relation_type") in {"sibling_phase", "same_umbrella_project", "separate_neighbor_complex"}
+                 and roots.get(x.get("complex_id_a")) is not None and roots.get(x.get("complex_id_b")) is not None}
     pending = set()
     for row in reviews:
         a, b = row.get("complex_id_a"), row.get("complex_id_b")
         ra, rb = roots.get(a), roots.get(b)
-        if ra is not None and rb is not None and ra != rb and tuple(sorted((a, b))) not in separated:
+        if ra is not None and rb is not None and ra != rb and tuple(sorted((ra, rb))) not in separated:
             pending.update((ra, rb))
     source_conflicts = {roots.get(row.get(key)) for row in conflicts for key in ("complex_id", "conflict_with_complex_id")}
     source_conflicts.discard(None)
@@ -221,6 +247,31 @@ def build_comparison_complexes(complexes, *, aliases=(), addresses=(), links=(),
 
     for cid in basic:
         include(cid)
+    # Exact normalized/core equality is a reason to withhold an unresolved
+    # public choice, never proof to merge records. Project numbers/phases stay
+    # in _core. Explicit houses and reviewed separate projects keep their IDs.
+    identity_groups = defaultdict(set)
+    for cid in eligible:
+        # A recorded house relationship supplies distinct parent context. Do
+        # not collapse or quarantine those houses as same-name root projects.
+        if basic[cid].get("parent_complex_id") is None:
+            identity_groups[_core(basic[cid]["name"])].add(cid)
+    separate_neighbours = defaultdict(set)
+    for a, b in separated:
+        separate_neighbours[a].add(b)
+        separate_neighbours[b].add(a)
+    ambiguous_names, ambiguous_groups = set(), 0
+    for group in identity_groups.values():
+        unresolved = {cid for cid in group
+                      if len((separate_neighbours[cid] & group) - {cid}) < len(group) - 1}
+        if unresolved:
+            ambiguous_groups += 1
+            ambiguous_names.update(unresolved)
+    if ambiguous_names:
+        held.update(ambiguous_names)
+        eligible.clear()
+        for cid in basic:
+            include(cid)
     names = defaultdict(set)
     for cid, row in basic.items():
         names[norm_name(row["name"])].add(cid)
@@ -229,7 +280,7 @@ def build_comparison_complexes(complexes, *, aliases=(), addresses=(), links=(),
         owner = catalog.get(row.get("complex_id"), {})
         cid = roots.get(row.get("complex_id"))
         name = _text(row.get("name"))
-        if row.get("status") == "verified" and cid in basic and name and not owner.get("is_garbage") and not owner.get("is_street") and owner.get("canonical_reason") != "junk_unmatched":
+        if row.get("status") == "verified" and cid in basic and _public_project_name(name) and not owner.get("is_garbage") and not owner.get("is_street") and owner.get("canonical_reason") != "junk_unmatched":
             names[norm_name(name)].add(cid)
             accepted_aliases[cid].add(name)
     children = defaultdict(list)
@@ -258,6 +309,8 @@ def build_comparison_complexes(complexes, *, aliases=(), addresses=(), links=(),
                 "garbage_rows": sum(bool(x.get("is_garbage")) for x in catalog.values()),
                 "street_rows": sum(bool(x.get("is_street")) for x in catalog.values()),
                 "junk_rows": sum(x.get("canonical_reason") == "junk_unmatched" for x in catalog.values()),
+                "public_name_policy": PUBLIC_NAME_POLICY, "name_junk_roots": len(name_junk),
+                "ambiguous_name_roots": len(ambiguous_names), "ambiguous_name_groups": ambiguous_groups,
                 "basic_eligible_roots": len(basic), "city_conflict_roots": len(city_conflict),
                 "unknown_city_roots": len(set(basic) - city_positive - city_conflict),
                 "pending_duplicate_roots": len(pending & set(basic)),
@@ -282,13 +335,13 @@ def validate_comparison_complexes(data, *, now=None, check_age=True):
     items, coverage = data.get("items"), data.get("coverage")
     if not isinstance(items, list) or not 0 < len(items) <= MAX_ROWS or data.get("count") != len(items):
         raise ValueError("Empty or incomplete complex catalog")
-    if not isinstance(coverage, dict) or coverage.get("all_catalog_rows_read") is not True or coverage.get("city_registry_verified") is not False or coverage.get("selectable_rows") != len(items):
+    if not isinstance(coverage, dict) or coverage.get("public_name_policy") != PUBLIC_NAME_POLICY or coverage.get("all_catalog_rows_read") is not True or coverage.get("city_registry_verified") is not False or coverage.get("selectable_rows") != len(items):
         raise ValueError("Invalid coverage receipt")
     safe, by_id = [], {}
     for row in items:
         if not isinstance(row, dict) or set(row) != _ITEM_KEYS or not _id(row.get("id")) or row["id"] in by_id:
             raise ValueError("Invalid catalog item")
-        if (not isinstance(row.get("name"), str) or not _text(row["name"])
+        if (not isinstance(row.get("name"), str) or not _public_project_name(row["name"])
                 or _text(row["name"]) != row["name"]
                 or not isinstance(row.get("label"), str) or _text(row["label"], 550) != row["label"]
                 or row.get("city_evidence") not in _EVIDENCE):
@@ -297,7 +350,7 @@ def validate_comparison_complexes(data, *, now=None, check_age=True):
             raise ValueError("Invalid catalog address")
         if type(row.get("is_umbrella")) is not bool or not isinstance(row.get("aliases"), list) or len(row["aliases"]) > 100:
             raise ValueError("Invalid aliases or umbrella")
-        if any(not isinstance(a, str) or not _text(a) or _text(a) != a for a in row["aliases"]) or len(set(row["aliases"])) != len(row["aliases"]):
+        if any(not isinstance(a, str) or not _public_project_name(a) or _text(a) != a for a in row["aliases"]) or len(set(row["aliases"])) != len(row["aliases"]):
             raise ValueError("Invalid catalog alias")
         if not isinstance(row.get("child_ids"), list) or any(not _id(x) for x in row["child_ids"]) or row["child_ids"] != sorted(set(row["child_ids"])):
             raise ValueError("Invalid child IDs")

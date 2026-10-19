@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from bot.core.comparison_complexes import (
-    build_comparison_complexes, load_comparison_complexes,
+    PUBLIC_NAME_POLICY, build_comparison_complexes, complex_catalog_path, load_comparison_complexes,
     publish_comparison_complexes, validate_comparison_complexes,
 )
 from scripts.publish_comparison_complexes import READS, read_catalog
@@ -48,6 +48,107 @@ def test_includes_catalog_without_any_current_listing_or_newbuild_unit():
     assert data["coverage"]["all_catalog_rows_read"] is True
     assert data["coverage"]["city_registry_verified"] is False
     assert data["coverage"]["city_evidence_counts"] == {"catalog_coordinate_area": 3}
+
+
+@pytest.mark.parametrize("name", [
+    "Aisar 3 От Bi Group Сервер", "Akjol От Хозяев", "Apple City - Заезжай И Живи!",
+    "Aiqyn 🏡", "Aiqyn:", "Amanat ✨", "Amanat!", "Akbulak Premium Город Астана",
+    "13 магистраль", "Sandi Qala 2 Продается 3-Комнат", "Имеется Тёплый Паркинг",
+    "Sunrise +7 (700) 123-45-67", "Sunrise whatsapp", "Sunrise https://example.com",
+])
+def test_public_name_quality_excludes_fragments_even_when_stored_as_trusted(name):
+    data = build([project(1), project(2, name=name, is_newbuild=True, housing_class="бизнес",
+                                      krisha_url="https://krisha.kz/complex/show/astana/p/")])
+    assert [row["id"] for row in data["items"]] == [1]
+    assert data["coverage"]["name_junk_roots"] == 1
+    assert data["coverage"]["public_name_policy"] == PUBLIC_NAME_POLICY
+
+
+def test_real_project_names_numbers_phases_and_fractional_houses_are_preserved():
+    names = ["Aisar 3", "Aisar", "GreenLine. Garden", "GreenLine. Headliner", "Нурсая 2",
+             "Нурсая", "O'NER", "Дом 17/2А", "Garden", "River Park"]
+    data = build([project(i, name=name) for i, name in enumerate(names, 1)])
+    assert {row["name"] for row in data["items"]} == set(names)
+    assert data["coverage"]["name_junk_roots"] == 0
+    assert data["coverage"]["ambiguous_name_roots"] == 0
+
+
+def test_exact_normalized_nonhouse_name_ambiguity_is_held_without_merging_ids():
+    rows = [project(1), project(2, name='ЖК «Aiqyn»'), project(3, name="AIQYN"),
+            project(4, name="Aiqyn 2"), project(5, parent_complex_id=2)]
+    before = deepcopy(rows)
+    data = build(rows)
+    assert rows == before
+    assert {row["id"] for row in data["items"]} == {1, 4}
+    assert data["coverage"]["ambiguous_name_roots"] == 2
+    assert data["coverage"]["ambiguous_name_groups"] == 1
+
+
+def test_exact_known_brand_variant_is_withheld_but_prefix_neighbours_are_not():
+    data = build([project(1), project(2, name="Garden"), project(3, name="Бигвилль Garden"),
+                  project(4, name="Garden Towers"), project(5, name="Garden 2")])
+    assert {row["id"] for row in data["items"]} == {1, 4, 5}
+    assert data["coverage"]["ambiguous_name_roots"] == 2
+
+
+def test_reviewed_separate_equal_names_and_explicit_houses_remain_distinct():
+    data = build([project(1, name="Garden"), project(2, name="Garden"),
+                  project(3, name="Дом 17/2А", parent_complex_id=1),
+                  project(4, name="Дом 17/2А", parent_complex_id=2)],
+                 relations=[{"complex_id_a": 1, "complex_id_b": 2,
+                             "relation_type": "separate_neighbor_complex"}])
+    assert data["count"] == 4
+    assert data["coverage"]["ambiguous_name_roots"] == 0
+    assert {row["parent_id"] for row in data["items"] if row["id"] in {3, 4}} == {1, 2}
+
+
+def test_reviewed_separation_on_redirected_id_resolves_root_pair():
+    data = build([project(1, name="Garden"), project(2, name="Garden"),
+                  project(3, canonical_id=1)],
+                 reviews=[{"complex_id_a": 1, "complex_id_b": 2}],
+                 relations=[{"complex_id_a": 3, "complex_id_b": 2, "relation_type": "sibling_phase"}])
+    assert {row["id"] for row in data["items"]} == {1, 2}
+
+
+def test_name_junk_parent_does_not_silently_detach_its_house():
+    data = build([project(1), project(2, name="Amanat!"),
+                  project(3, name="Дом 17/2А", parent_complex_id=2)])
+    assert [row["id"] for row in data["items"]] == [1]
+
+
+def test_all_name_junk_fails_closed_instead_of_falling_back_to_raw_inventory():
+    with pytest.raises(ValueError, match="Empty or incomplete"):
+        build([project(1, name="Amanat!"), project(2, name="Aiqyn 🏡")])
+
+
+def test_verified_alias_status_does_not_expose_contact_or_marketing_fragment():
+    data = build(aliases=[{"complex_id": 1, "name": "Amanat!", "status": "verified"},
+                          {"complex_id": 1, "name": "Старое имя", "status": "verified"}])
+    assert data["items"][0]["aliases"] == ["Старое имя"]
+
+
+def test_new_policy_uses_a_new_default_file_and_respects_explicit_environment(monkeypatch):
+    monkeypatch.delenv("HATULI_COMPARISON_COMPLEXES_PATH", raising=False)
+    assert complex_catalog_path().name == "comparison-complexes-v2.json"
+    monkeypatch.setenv("HATULI_COMPARISON_COMPLEXES_PATH", "private/explicit.json")
+    assert complex_catalog_path() == Path("private/explicit.json")
+
+
+def test_v1_receipt_and_name_junk_cannot_be_loaded_as_new_policy():
+    data = build()
+    old = deepcopy(data)
+    old["schema_version"] = 1
+    with pytest.raises(ValueError):
+        validate_comparison_complexes(old, now=NOW)
+    missing_policy = deepcopy(data)
+    missing_policy["coverage"].pop("public_name_policy")
+    with pytest.raises(ValueError, match="coverage receipt"):
+        validate_comparison_complexes(missing_policy, now=NOW)
+    for field, value in (("name", "Amanat!"), ("aliases", ["Aiqyn 🏡"])):
+        changed = deepcopy(data)
+        changed["items"][0][field] = value
+        with pytest.raises(ValueError):
+            validate_comparison_complexes(changed, now=NOW)
 
 
 def test_existing_redirect_chain_is_not_extra_choice_or_unreviewed_alias():
