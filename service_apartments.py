@@ -218,15 +218,6 @@ async def _collect_sale_catalog(app_settings, analyze, *, now=None):
         await app_settings.set(STATE_KEY, state.dumps())
         await app_settings.set("DEEP_SWEEP_CIRCLE_STARTED_AT", state.started_at)
         log.info("Deep sweep: new evidence journal from page 1 (legacy cursor is not proof)")
-    from bot.core.detail_cooldown import read_cooldown, record_block
-    try:
-        shared_remaining, _ = read_cooldown(now=now)
-    except (OSError, ValueError, KeyError, TypeError):
-        log.warning("Shared source cooldown unreadable; no sale requests")
-        return [], state, [], {"blocked": True, "paused": True}, {}
-    if shared_remaining:
-        log.warning("Shared source cooldown: sale requests paused for %.0f seconds", shared_remaining)
-        return [], state, [], {"blocked": True, "paused": True}, {}
     blocked = utc(state.blocked_until)
     if blocked and blocked > now:
         log.warning("Sale catalog paused until %s after source block", state.blocked_until)
@@ -271,15 +262,6 @@ async def _collect_sale_catalog(app_settings, analyze, *, now=None):
     elapsed = head_stats.get("page_elapsed_sec", 0) + deep_stats.get("page_elapsed_sec", 0)
     stats = {"blocked": bool(head_stats.get("blocked") or deep_stats.get("blocked")),
              "page_elapsed_sec": elapsed, "deep_pages_ok": deep_stats.get("pages_ok", 0)}
-    if stats["blocked"]:
-        try:
-            block_time = max([now, *(utc(p["checked_at"]) for p in reports if p.get("blocked"))])
-            shared_remaining, _ = record_block(now=block_time)
-            for report in reports:
-                if report.get("blocked"):
-                    report["retry_after_seconds"] = max(report.get("retry_after_seconds", 0), shared_remaining)
-        except (OSError, ValueError, KeyError, TypeError):
-            log.warning("Could not persist shared source block; sale work remains stopped")
     log.info("Deep sweep: page %d, batch %d, remaining ETA %s h, 24h/configured deadline feasible=%s",
              cursor, plan["batch"], plan["estimated_remaining_hours"], plan["deadline_feasible"])
     return results, state, reports, stats, plan

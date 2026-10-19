@@ -14,11 +14,6 @@ from service_apartments import _collect_sale_catalog, _commit_sale_catalog
 NOW = datetime(2026, 10, 19, 9, tzinfo=timezone.utc)
 
 
-@pytest.fixture(autouse=True)
-def isolated_shared_cooldown(monkeypatch, tmp_path):
-    monkeypatch.setenv('HATULI_DETAIL_COOLDOWN_PATH', str(tmp_path / 'source-cooldown.json'))
-
-
 def receipt(page, *, count=20, total=60, terminal=False, error=None, blocked=False):
     ids = [str(100000 + (page - 1) * 20 + i) for i in range(count)]
     return {"page": page, "ids": ids, "accepted_ids": ids,
@@ -389,31 +384,12 @@ async def test_sparse_database_retry_does_not_refetch_already_saved_pages(monkey
 
 
 @pytest.mark.asyncio
-async def test_shared_durable_source_block_prevents_sale_head_request_after_restart():
-    from bot.core.detail_cooldown import record_block
-    record_block(now=NOW)
-    analyze = AsyncMock(side_effect=AssertionError('must respect the shared source block'))
-    result = await _collect_sale_catalog(Settings(), analyze, now=NOW + timedelta(minutes=1))
-    assert result[3]['paused'] and not analyze.called
-
-
-@pytest.mark.asyncio
 async def test_new_round_carries_recent_unsaved_presence_from_last_completed_journal():
     proof = completed_journal()
     proof.recent_unsaved = {'999999': NOW.isoformat()}
     settings = Settings({STATE_KEY: proof.dumps(), COMPLETED_KEY: proof.dumps()})
     result = await _collect_sale_catalog(settings, AsyncMock(return_value=[]), now=NOW + timedelta(hours=1))
     assert result[1].recent_unsaved == {'999999': NOW.isoformat()}
-
-
-@pytest.mark.asyncio
-async def test_corrupt_shared_source_block_fails_closed(monkeypatch, tmp_path):
-    path = tmp_path / 'bad-cooldown.json'
-    path.write_text('not json', encoding='utf-8')
-    monkeypatch.setenv('HATULI_DETAIL_COOLDOWN_PATH', str(path))
-    analyze = AsyncMock(side_effect=AssertionError('must not ignore a broken shared cooldown'))
-    result = await _collect_sale_catalog(Settings(), analyze, now=NOW)
-    assert result[3]['paused'] and not analyze.called
 
 
 @pytest.mark.asyncio
