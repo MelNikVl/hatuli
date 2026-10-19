@@ -23,7 +23,8 @@ from bot.core.apartment_selection_reasons import (
 )
 from bot.core.daily_pick_identity import validate_public_daily_identity
 from bot.core.comparison_rental_estimate import validate_rental_estimate
-from bot.core.investment_strategies import calculate_strategy_comparison
+from bot.core.automatic_investment import calculate_automatic_investment, select_complex
+from bot.core.comparison_complexes import load_comparison_complexes
 
 
 # Labels and constraints are presentation only: the pure calculation validates
@@ -69,22 +70,17 @@ STRATEGY_LABELS = {"monthly": "Месячная аренда", "daily": "Пос�
 
 
 def _strategy_form(selected_offer=None, payload=None):
-    """Keep only bounded, public calculator inputs, never arbitrary POST keys."""
+    """Only an amount and an optional catalogue ID remain public inputs."""
     payload = payload if isinstance(payload, dict) else {}
     selected_offer = selected_offer or {}
     selected_price = selected_offer.get("price", "")
-    values = {"budget": payload.get("budget", selected_price)}
-    for key, fields in STRATEGY_FIELDS.items():
-        row = payload.get(key)
-        values[key + "_enabled"] = isinstance(row, dict)
-        row = row if isinstance(row, dict) else {}
-        for field, _label, _low, _high, _step, default, _extra in fields:
-            value = row.get(field, selected_price if field == "purchase_price" else default)
-            values[key + "__" + field] = str(value)[:100] if isinstance(value, (str, int, float)) and not isinstance(value, bool) else ""
+    values = {"budget": payload.get("budget", selected_price), "complex_id": payload.get("complex_id", "")}
     if not isinstance(values["budget"], (str, int, float)) or isinstance(values["budget"], bool):
         values["budget"] = ""
     else:
         values["budget"] = str(values["budget"])[:100]
+    value = values["complex_id"]
+    values["complex_id"] = str(value)[:20] if isinstance(value, (str, int)) and not isinstance(value, bool) else ""
     return values
 
 
@@ -339,10 +335,19 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
 
 def register_public_comparison_routes(app, templates) -> None:
     def render(request: Request, context: dict, status_code: int = 200):
-        context.setdefault("strategy_form", _strategy_form(context.get("selected_offer")))
+        context.setdefault("complex_catalog", load_comparison_complexes())
+        explicit_offer = bool(request.query_params.get("listing") or request.query_params.get("unit"))
+        context.setdefault("strategy_form", _strategy_form(context.get("selected_offer") if explicit_offer else None))
         context.setdefault("strategy_result", None)
         context.setdefault("strategy_chart", None)
         context.setdefault("strategy_error", "")
+        if context["strategy_result"] is None and context["strategy_form"].get("budget") and not context["strategy_error"]:
+            try:
+                context["strategy_result"] = calculate_automatic_investment(
+                    context["strategy_form"], catalog=load_deposit_catalog(), market=load_market_snapshot(),
+                    picks=load_daily_picks(), complexes=context["complex_catalog"])
+            except (ValueError, TypeError, OverflowError) as exc:
+                context["strategy_error"] = str(exc)
         return templates.TemplateResponse(request=request, name="market_comparison.html",
             context={"request": request, "strategy_fields": STRATEGY_FIELDS,
                      "strategy_labels": STRATEGY_LABELS, **context}, status_code=status_code,
@@ -355,7 +360,9 @@ def register_public_comparison_routes(app, templates) -> None:
                              area: float = Query(default=60, ge=20, le=300),
                              scope: str = Query(default="hex", pattern="^(hex|ring1|ring2|ring4|ring8|city)$"),
                              listing: str = Query(default="", max_length=20, pattern="^(\\d{0,20}|newbuild:\\d{1,10})$"),
-                             unit: int | None = Query(default=None, ge=1, le=2_147_483_647)):
+                             unit: int | None = Query(default=None, ge=1, le=2_147_483_647),
+                             budget: str | None = Query(default=None, max_length=80),
+                             complex_id: int | None = Query(default=None, ge=1, le=2_147_483_647)):
         if hex is not None and not valid_hex(hex):
             return JSONResponse({"error": "Неверный участок карты"}, status_code=400)
         manual = "listing" in request.query_params and not listing and unit is None
@@ -363,10 +370,19 @@ def register_public_comparison_routes(app, templates) -> None:
             unit, listing = int(listing.split(":", 1)[1]), ""
             if not 1 <= unit <= 2_147_483_647:
                 return JSONResponse({"error": "Неверный номер квартиры"}, status_code=422)
-        if complex is not None and not any(offer["market_type"] == "primary" and offer["complex_id"] == complex for offer in load_market_snapshot().get("offers", [])):
-            return not_found_page(templates, request, "Для этого ЖК пока нет свежих данных сравнения", back_url="/compare", back_label="Выбрать другой ЖК")
+        complexes = load_comparison_complexes()
+        auto_complex_id = complex_id if complex_id is not None else complex
+        try:
+            select_complex(auto_complex_id, complexes, datetime.now(timezone.utc))
+        except ValueError as error:
+            return JSONResponse({"error": str(error)}, status_code=422, headers={"Cache-Control": "no-store"})
         context = comparison_context(hex_id=hex, complex_id=complex, rooms=rooms,
                       area=area, scope=scope, listing=listing, unit=unit, manual=manual)
+        selected = context.get("selected_offer") if (listing or unit) else None
+        values = {"complex_id": auto_complex_id or ""}
+        if budget is not None:
+            values["budget"] = budget
+        context.update(complex_catalog=complexes, strategy_form=_strategy_form(selected, values))
         return render(request, context, status_code=400 if context["errors"] else 200)
 
     @app.post("/compare/calculate", response_class=HTMLResponse)
@@ -420,27 +436,10 @@ def register_public_comparison_routes(app, templates) -> None:
                 data = {}
             else:
                 data = dict(await request.form(max_fields=80, max_files=0))
-                payload = {"budget": data.get("budget", "")}
-                for key, fields in STRATEGY_FIELDS.items():
-                    if data.get(key + "_enabled") == "on":
-                        payload[key] = {field: data.get(key + "__" + field, "") for field, *_rest in fields}
-            result = calculate_strategy_comparison(payload, catalog=load_deposit_catalog())
-            for diagnostic in result.get("diagnostics", []):
-                labels = {field[0]: field[1] for field in STRATEGY_FIELDS.get(diagnostic["key"], [])}
-                if diagnostic.get("status") == "incomplete":
-                    missing = [labels[field] for field in diagnostic.get("fields", []) if field in labels]
-                    diagnostic["message"] = "Заполните: " + "; ".join(missing) if missing else diagnostic["message"]
-                elif diagnostic.get("status") == "invalid":
-                    for field, label in labels.items():
-                        if diagnostic["message"].startswith(field + ":"):
-                            diagnostic["message"] = label + diagnostic["message"][len(field):]
-                            break
-                if diagnostic.get("status") in {"unaffordable", "insufficient_reserve"}:
-                    shortfall, required = diagnostic.get("shortfall"), diagnostic.get("required_budget")
-                    if all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-                           for value in (shortfall, required)):
-                        amounts = [f"{value:,.0f}".replace(",", " ") for value in (shortfall, required)]
-                        diagnostic["message"] += f". Не хватает {amounts[0]} ₸; необходимый бюджет — {amounts[1]} ₸."
+                payload = {"budget": data.get("budget", ""), "complex_id": data.get("complex_id", "")}
+            result = calculate_automatic_investment(
+                payload, catalog=load_deposit_catalog(), market=load_market_snapshot(),
+                picks=load_daily_picks(), complexes=load_comparison_complexes())
             error = ""
         except (ValueError, TypeError, OverflowError) as exc:
             result, error = None, str(exc)
@@ -450,29 +449,19 @@ def register_public_comparison_routes(app, templates) -> None:
                 error = "Срок сравнения:" + error[len("horizon_months:"):]
             if wants_json:
                 return JSONResponse({"error": error}, status_code=422, headers=headers)
-        chart = _strategy_chart(result) if result else None
+        chart = None
         if wants_json:
             html = templates.env.get_template("_investment_strategy_results.html").render(
                 strategy_result=result, strategy_chart=chart)
-            return JSONResponse({"result": result, "html": html}, headers=headers)
+            return JSONResponse({"result": result, "html": html, "results_html": html}, headers=headers)
         # Rebuild the existing selected-offer context through the same public
         # snapshot gate as GET. A calculator submission cannot forge a receipt.
         identifier = str(data.get("listing", ""))
         listing = identifier if identifier.isdecimal() and len(identifier) <= 20 else ""
         unit = int(identifier.split(":", 1)[1]) if identifier.startswith("newbuild:") and identifier.split(":", 1)[1].isdecimal() and len(identifier) <= 20 else None
-        try:
-            if identifier and not listing and (unit is None or not 1 <= unit <= 2_147_483_647):
-                raise ValueError
-            hex_id = data.get("hex") or None
-            rooms, area = int(data.get("rooms", 2)), float(data.get("area", 60))
-            scope = data.get("scope", "hex")
-            if ((hex_id is not None and not valid_hex(hex_id)) or not 1 <= rooms <= 6
-                    or not math.isfinite(area) or not 20 <= area <= 300 or scope not in SCOPE_RADII):
-                raise ValueError
-        except (ValueError, TypeError, OverflowError):
-            return JSONResponse({"error": "Неверные параметры области сравнения"}, status_code=422, headers=headers)
-        context = comparison_context(hex_id=hex_id, rooms=rooms, area=area, scope=scope,
-                                     listing=listing, unit=unit, manual=not identifier)
+        if identifier and not listing and (unit is None or not 1 <= unit <= 2_147_483_647):
+            return JSONResponse({"error": "Неверный номер квартиры"}, status_code=422, headers=headers)
+        context = comparison_context(listing=listing, unit=unit, manual=not identifier)
         context.update(strategy_form=_strategy_form(context.get("selected_offer"), payload),
                        strategy_result=result, strategy_chart=chart, strategy_error=error)
         return render(request, context, status_code=400 if error else 200)
