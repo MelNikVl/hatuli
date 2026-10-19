@@ -20,8 +20,8 @@
     <p class="ha-published">Hatuli · Опубликовано <time datetime="{{ article.edition_date }}">{{ article.published_label }}</time></p>
     {% if article.modified_label %}<p class="ha-modified">Обновлено {{ article.modified_label }}{% if article.revision_reason %} · {{ article.revision_reason }}{% endif %}</p>{% endif %}
   </header>
-  {% if brief %}<div class="ha-brief-charts">{% for chart in article.charts %}{{ render_analytics_chart(chart) }}{% endfor %}</div>{% endif %}
   {% if article.key_points %}<aside class="ha-takeaways" aria-labelledby="ha-takeaways-title"><h2 id="ha-takeaways-title">Главное за минуту</h2><ul>{% for point in article.key_points %}<li>{{ point }}</li>{% endfor %}</ul></aside>{% endif %}
+  {% if brief %}<div class="ha-brief-charts{% if article.charts|length == 1 %} ha-brief-charts-single{% endif %}">{% for chart in article.charts %}{{ render_analytics_chart(chart) }}{% endfor %}</div>{% endif %}
   {% if article.comparisons %}<div class="ha-editorial-comparisons">
     {% for block in article.comparisons %}<section class="ha-editorial-comparison" aria-labelledby="comparison-{{ loop.index }}" data-editorial-comparison="{{ block.topic }}">
       <p class="ha-eyebrow">{{ block.topic_label }} · Данные на <time datetime="{{ block.as_of }}">{{ block.as_of_label }}</time></p>

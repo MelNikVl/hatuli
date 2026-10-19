@@ -8,6 +8,7 @@
   </figcaption>
   <div class="ha-chart-context"><div class="ha-chart-unit">{{ chart.unit }}</div>{% if chart.plot %}<span class="ha-chart-period">{{ chart.plot.period_label }}</span>{% endif %}</div>
   {% if chart.plot %}
+  {% if chart.plot.series %}<ul class="ha-time-legend" aria-label="Линии графика">{% for line in chart.plot.series %}<li data-series-index="{{ line.color }}"><span class="ha-time-legend-swatch" aria-hidden="true"></span><span><strong>{{ line.label }}</strong><small>{{ line.points[-1].month_label }} {{ line.points[-1].year_label }}: {{ line.points[-1].value_label }}</small></span></li>{% endfor %}</ul>{% endif %}
   <div class="ha-timechart" data-analytics-timeline>
     <div class="ha-time-scale" aria-hidden="true">{% for tick in chart.plot.ticks %}<span style="top:{{ tick.top }}%">{{ tick.label }}</span>{% endfor %}</div>
     <div class="ha-time-main">
@@ -17,14 +18,14 @@
           <desc id="{{ title_id }}-plot-description">{{ chart.plot.description }}{% if chart.plot.has_gaps %}. Пропущенные месяцы не соединены.{% endif %}</desc>
           {% for tick in chart.plot.ticks %}<line class="ha-time-grid" x1="8" x2="992" y1="{{ tick.y }}" y2="{{ tick.y }}" vector-effect="non-scaling-stroke"/>{% endfor %}
           {% if chart.plot.zero_y is not none %}<line class="ha-time-zero" x1="8" x2="992" y1="{{ chart.plot.zero_y }}" y2="{{ chart.plot.zero_y }}" vector-effect="non-scaling-stroke"/>{% endif %}
-          {% for segment in chart.plot.segments %}<polyline class="ha-time-line" points="{{ segment }}" fill="none" vector-effect="non-scaling-stroke"/>{% endfor %}
+          {% if chart.plot.series %}{% for line in chart.plot.series %}{% for segment in line.segments %}<polyline class="ha-time-line" data-series-index="{{ line.color }}" points="{{ segment }}" fill="none" vector-effect="non-scaling-stroke"/>{% endfor %}{% endfor %}{% else %}{% for segment in chart.plot.segments %}<polyline class="ha-time-line" points="{{ segment }}" fill="none" vector-effect="non-scaling-stroke"/>{% endfor %}{% endif %}
         </svg>
-        {% for point in chart.plot.points %}<span class="ha-time-point" style="left:{{ point.left }}%;top:{{ point.top }}%" title="{{ point.label }}: {{ point.value_label }}{% if point.n is not none %} · {{ point.n }} наблюдений{% endif %}" aria-hidden="true"></span>{% endfor %}
+        {% if chart.plot.series %}{% for line in chart.plot.series %}{% for point in line.points %}<span class="ha-time-point" data-series-index="{{ line.color }}" style="left:{{ point.left }}%;top:{{ point.top }}%" title="{{ line.label }} · {{ point.label }}: {{ point.value_label }}{% if point.n is not none %} · {{ point.n }} наблюдений{% endif %}" aria-hidden="true"></span>{% endfor %}{% endfor %}{% else %}{% for point in chart.plot.points %}<span class="ha-time-point" style="left:{{ point.left }}%;top:{{ point.top }}%" title="{{ point.label }}: {{ point.value_label }}{% if point.n is not none %} · {{ point.n }} наблюдений{% endif %}" aria-hidden="true"></span>{% endfor %}{% endif %}
       </div>
-      <div class="ha-time-labels" aria-hidden="true">{% for point in chart.plot.points %}<span class="{% if loop.first %}ha-time-first{% elif loop.last %}ha-time-last{% endif %}" style="left:{{ point.left }}%">{{ point.month_label }}{% if point.year_label %}<small>{{ point.year_label }}</small>{% endif %}</span>{% endfor %}</div>
+      <div class="ha-time-labels" aria-hidden="true">{% for point in chart.plot.label_points or chart.plot.points %}<span class="{% if loop.first %}ha-time-first{% elif loop.last %}ha-time-last{% endif %}" style="left:{{ point.left }}%">{{ point.month_label }}{% if point.year_label %}<small>{{ point.year_label }}</small>{% endif %}</span>{% endfor %}</div>
     </div>
   </div>
-  <div class="ha-time-summary"><span>{{ chart.plot.scale_label }} {{ chart.unit }}</span><strong>{{ chart.rows[-1].label }}: {{ chart.rows[-1].value_label }}</strong></div>
+  <div class="ha-time-summary"><span>{{ chart.plot.scale_label }} {{ chart.unit }}</span>{% if not chart.plot.series %}<strong>{{ chart.rows[-1].label }}: {{ chart.rows[-1].value_label }}</strong>{% endif %}</div>
   {% else %}
   <ol class="ha-chart-rows" role="list">
     {% for row in chart.rows %}
@@ -34,7 +35,7 @@
   <p class="ha-chart-axis"><span>{% if chart.signed %}← Снижение · 0 · Рост →{% else %}0{% endif %}</span><span>{{ chart.axis_label }}</span></p>
   {% endif %}
   {% if not compact %}
-  <details class="ha-chart-data"><summary>Данные графика</summary><div class="ha-chart-table-wrap"><table><caption>{{ chart.title }} · {{ chart.unit }}</caption><thead><tr><th scope="col">{% if chart.plot %}Период{% else %}Группа{% endif %}</th><th scope="col">Значение</th>{% if chart.has_samples %}<th scope="col">Наблюдений</th>{% endif %}</tr></thead><tbody>{% for row in chart.rows %}<tr><th scope="row">{{ row.label }}</th><td>{{ row.value_label }}</td>{% if chart.has_samples %}<td>{{ row.n if row.n is not none else '' }}</td>{% endif %}</tr>{% endfor %}</tbody></table></div></details>
+  <details class="ha-chart-data"><summary>Данные графика</summary><div class="ha-chart-table-wrap"><table><caption>{{ chart.title }} · {{ chart.unit }}</caption>{% if chart.plot and chart.plot.series %}<thead><tr><th scope="col">Период</th>{% for line in chart.plot.series %}<th scope="col">{{ line.label }}</th>{% endfor %}</tr></thead><tbody>{% for row in chart.plot.table_rows %}<tr><th scope="row">{{ row.label }}</th>{% for cell in row.cells %}<td>{% if cell %}{{ cell.value_label }}{% if cell.n is not none %}<small class="ha-time-table-sample">{{ cell.n }} наблюдений</small>{% endif %}{% else %}<span aria-label="Нет наблюдения">—</span>{% endif %}</td>{% endfor %}</tr>{% endfor %}</tbody>{% else %}<thead><tr><th scope="col">{% if chart.plot %}Период{% else %}Группа{% endif %}</th><th scope="col">Значение</th>{% if chart.has_samples %}<th scope="col">Наблюдений</th>{% endif %}</tr></thead><tbody>{% for row in chart.rows %}<tr><th scope="row">{{ row.label }}</th><td>{{ row.value_label }}</td>{% if chart.has_samples %}<td>{{ row.n if row.n is not none else '' }}</td>{% endif %}</tr>{% endfor %}</tbody>{% endif %}</table></div></details>
   {% endif %}
 </figure>
 {% endif %}

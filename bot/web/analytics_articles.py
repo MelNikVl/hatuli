@@ -48,7 +48,7 @@ def _axis_number(value, step):
     return rendered.replace(",", " ").replace(".", ",")
 
 
-def _timeline_plot(rows):
+def _timeline_plot(rows, *, domain=None, extent=None):
     """Plot reviewed monthly observations without sorting or bridging gaps."""
     months = []
     for row in rows:
@@ -65,7 +65,8 @@ def _timeline_plot(rows):
     if len(months) < 2:
         return None
     values = [row["value"] for row in rows]
-    low, high = min(values), max(values)
+    low, high = extent if extent is not None else (min(values), max(values))
+    first_month, last_month = domain if domain is not None else (months[0], months[-1])
     padding = max((high - low) * .12, abs(high) * .002, .01)
     span = high - low + 2 * padding
     raw_step = span / 4
@@ -82,9 +83,9 @@ def _timeline_plot(rows):
     points, segments, current = [], [], []
     month_labels = ("янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
     for index, (month, row) in enumerate(zip(months, rows)):
-        x = round(8 + 984 * (month - months[0]) / (months[-1] - months[0]), 3)
+        x = round(8 + 984 * (month - first_month) / (last_month - first_month), 3)
         position = {**row, "x": x, "y": y(row["value"]), "left": round(x / 10, 3),
-                    "top": round(y(row["value"]) / 2.4, 3), "month_label": month_labels[month % 12],
+                    "top": round(y(row["value"]) / 2.4, 3), "month": month, "month_label": month_labels[month % 12],
                     "year_label": str(month // 12) if index in (0, len(months) - 1) or month // 12 != months[index - 1] // 12 else ""}
         points.append(position)
         if index and month != months[index - 1] + 1:
@@ -95,11 +96,40 @@ def _timeline_plot(rows):
     if len(current) > 1:
         segments.append(" ".join(current))
     return {"points": points, "segments": segments, "ticks": ticks,
-            "period_label": f"{points[0]['month_label']} {months[0] // 12} — {points[-1]['month_label']} {months[-1] // 12}",
+            "period_label": f"{month_labels[first_month % 12]} {first_month // 12} — {month_labels[last_month % 12]} {last_month // 12}",
             "zero_y": y(0) if minimum <= 0 <= maximum else None,
             "scale_label": f"Шкала: {_axis_number(minimum, step)}–{_axis_number(maximum, step)}",
             "has_gaps": any(b != a + 1 for a, b in zip(months, months[1:])),
             "description": "; ".join(f"{row['label']}: {row['value_label']}" for row in rows)}
+
+
+def _multi_timeline_plot(series):
+    """Give independently validated lines one calendar and one value scale."""
+    initial = [_timeline_plot(line["rows"]) for line in series]
+    if not initial or any(plot is None for plot in initial):
+        return None
+    month_points = {point["month"]: point for plot in initial for point in plot["points"]}
+    months = sorted(month_points)
+    values = [row["value"] for line in series for row in line["rows"]]
+    lines = []
+    for index, line in enumerate(series):
+        plot = _timeline_plot(line["rows"], domain=(months[0], months[-1]), extent=(min(values), max(values)))
+        lines.append({"id": line["id"], "label": line["label"], "color": index, **plot})
+    base = lines[0]
+    positions = []
+    visible_months = months if len(months) <= 7 else [months[round(index*(len(months)-1)/6)] for index in range(7)]
+    for index, month in enumerate(visible_months):
+        point = month_points[month]
+        year_label = str(month // 12) if index in (0, len(visible_months)-1) or month // 12 != visible_months[index-1] // 12 else ""
+        positions.append({"month_label": point["month_label"], "year_label": year_label,
+                          "left": round((8 + 984 * (month-months[0])/(months[-1]-months[0]))/10, 3)})
+    by_month = [{point["month"]: point for point in line["points"]} for line in lines]
+    return {"series": lines, "ticks": base["ticks"], "zero_y": base["zero_y"],
+            "period_label": base["period_label"], "scale_label": base["scale_label"],
+            "has_gaps": any(line["has_gaps"] for line in lines), "label_points": positions,
+            "table_rows": [{"label": f"{month_points[month]['month_label']} {month // 12}",
+                            "cells": [observations.get(month) for observations in by_month]} for month in months],
+            "description": "; ".join(f"{line['label']}: {line['description']}" for line in lines)}
 
 
 def _display_article(article):
@@ -107,7 +137,16 @@ def _display_article(article):
     public = deepcopy(article)
     charts = []
     for chart in public.get("charts", []):
-        rows = chart.get("rows", [])
+        series = chart.get("series")
+        if series is not None:
+            if (not isinstance(series, list) or not 1 <= len(series) <= 6
+                    or any(not isinstance(line, dict) or not isinstance(line.get("rows"), list)
+                           or not line["rows"] for line in series)):
+                continue
+            rows = [row for line in series for row in line["rows"]]
+            chart["rows"] = rows
+        else:
+            rows = chart.get("rows", [])
         if not rows:
             continue
         valid = True
@@ -128,7 +167,9 @@ def _display_article(article):
                 row["negative"] = row["value"] < 0
                 row["bar_width"] = round(row["bar_pct"] / (2 if chart["signed"] else 1), 3)
                 row["dot_position"] = round(50 + (-1 if row["negative"] else 1) * row["bar_pct"] / 2, 3) if chart["signed"] else row["bar_pct"]
-            chart["plot"] = _timeline_plot(rows) if chart.get("mode") == "timeline" else None
+            chart["plot"] = (_multi_timeline_plot(series) if series is not None else _timeline_plot(rows)) if chart.get("mode") == "timeline" else None
+            if series is not None and chart["plot"] is None:
+                continue
             charts.append(chart)
     public["charts"] = charts
     return public
