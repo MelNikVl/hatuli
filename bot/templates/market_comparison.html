@@ -7,6 +7,8 @@
 <link rel="stylesheet" href="/static/hatuli-price-history.css?v=20261013">
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261013">
 <script src="/static/hatuli-comparison.js?v=20261013.5" defer></script>
+<link rel="stylesheet" href="/static/hatuli-strategies.css?v=20261019.1">
+<script src="/static/hatuli-strategies.js?v=20261019.1" defer></script>
 {% endblock %}
 {% macro money(value, suffix='₸') -%}{% if value is not none and value is defined %}{{ value|fmt_num }} {{ suffix }}{% else %}—{% endif %}{%- endmacro %}
 {% macro pct(value) -%}{% if value is not none and value is defined %}{{ value|fmt_num(1)|replace(',0', '') }}%{% else %}—{% endif %}{%- endmacro %}
@@ -75,7 +77,7 @@
       <div><strong>От вашего двора до всего города</strong><p>Один участок → участок и 6 соседних → более широкий район → вся Астана.</p></div>
     </aside>
   </section>
-  <nav class="mc-stepnav" aria-label="Шаги сравнения"><a href="#market"><span>1</span> Рынок вокруг</a><a href="#investment"><span>2</span> Деньги через год</a><a href="#comparison-method">Как считаем →</a></nav>
+  <nav class="mc-stepnav" aria-label="Шаги сравнения"><a href="#market"><span>1</span> Рынок вокруг</a><a href="#strategies"><span>2</span> Четыре стратегии</a><a href="#investment"><span>3</span> Покупка для жизни</a><a href="#comparison-method">Как считаем →</a></nav>
 
   <section class="mc-section" id="market" aria-labelledby="mc-market-title">
     <div class="mc-heading"><div><p class="mc-eyebrow">Шаг 1 · сравним соседей</p><h2 id="mc-market-title">Где выгоднее искать квартиру?</h2></div><p>Сравниваем одинаковое количество комнат и близкую площадь. Начните с небольшого участка и расширяйте поиск.</p></div>
@@ -130,6 +132,8 @@
     </div></div>
     {% endif %}
   </section>
+
+  {% include '_investment_strategies.html' %}
 
   <section class="mc-section" id="investment" aria-labelledby="mc-investment-title">
     <div class="mc-heading"><div><p class="mc-eyebrow">Шаг 2 · одинаковая стартовая сумма</p><h2 id="mc-investment-title">Купить сейчас или подождать год?</h2></div><p>Результат зависит от роста цены, ремонта и аренды. Измените их и посмотрите, при каких условиях квартира обгонит вклад.</p></div>

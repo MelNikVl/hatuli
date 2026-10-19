@@ -1,0 +1,75 @@
+/* Isolated comparison strategies: inherits the Hatuli light/dark design tokens. */
+.hs-section { --hs-line-0: #006aff; --hs-line-1: #18835b; --hs-line-2: #9a4bcb; }
+.hs-form { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 24px; }
+.hs-budget { display: grid; grid-template-columns: minmax(0, 520px) 1fr; gap: 28px; align-items: center; }
+.hs-budget input { font-size: 24px; font-weight: 650; letter-spacing: -.5px; min-height: 56px; }
+.hs-horizon { display: flex; align-items: center; justify-content: end; gap: 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.hs-horizon strong { font-size: 42px; color: var(--accent); font-weight: 700; letter-spacing: -2px; }
+.hs-selected { margin-top: 15px !important; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.hs-options { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; gap: 14px; margin-top: 24px; }
+.hs-option { min-width: 0; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.hs-option:has(.hs-toggle input:checked) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.hs-toggle { display: flex; align-items: center; gap: 12px; min-height: 88px; padding: 16px; cursor: pointer; }
+.hs-toggle input { flex: 0 0 19px; width: 19px; height: 19px; accent-color: var(--accent-fill); margin: 0; }
+.hs-toggle strong, .hs-bank-option strong { display: block; color: var(--heading); font-size: 15px; font-weight: 650; }
+.hs-toggle small { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; margin-top: 5px; }
+.hs-toggle-mark { color: var(--accent); margin-left: auto; font-size: 24px; font-weight: 400; }
+.hs-toggle:has(input:checked) .hs-toggle-mark { transform: rotate(45deg); }
+.hs-option-fields { padding: 0 16px 18px; }
+.hs-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+.hs-fields label { min-height: 31px; line-height: 1.4; }
+.hs-help { color: var(--muted); font-size: 11px; line-height: 1.6; margin-top: 10px !important; }
+.hs-source { display: inline-block; font-size: 12px; margin-top: 10px; font-weight: 600; }
+.hs-costs { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+.hs-costs summary, .hs-assumptions summary, .hs-chart-data summary { cursor: pointer; color: var(--accent); font-size: 12px; font-weight: 600; }
+.hs-costs .hs-fields { border: 0; }
+.hs-field-error, .hs-diagnostic { font-size: 12px; color: var(--red); line-height: 1.6; margin-top: 14px !important; }
+.hs-field-error:empty { display: none; }
+.hs-fields input[aria-invalid="true"] { border-color: var(--red); }
+.hs-bank-option { display: flex; gap: 14px; padding: 22px 18px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--border); }
+.hs-bank-option p { font-size: 12px; line-height: 1.65; color: var(--muted); margin-top: 7px; }
+.hs-bank-symbol { display: grid; place-items: center; width: 35px; height: 40px; flex-shrink: 0; color: var(--accent); font-size: 25px; font-weight: 650; }
+.hs-submit-row { display: flex; align-items: center; gap: 20px; margin-top: 22px; }
+.hs-submit-row button { flex-shrink: 0; }
+.hs-submit-row p { max-width: 600px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.hs-results { margin-top: 26px; scroll-margin-top: 24px; }
+.hs-result-heading { display: flex; gap: 20px; justify-content: space-between; align-items: end; margin-bottom: 18px; }
+.hs-result-heading h3 { font-size: 22px; letter-spacing: -.4px; margin-top: 7px; line-height: 1.3; }
+.hs-result-heading > p { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.hs-result-cards { display: grid; grid-template-columns: repeat(auto-fit,minmax(235px,1fr)); gap: 14px; }
+.hs-result-card { min-width: 0; padding: 21px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.hs-result-card h4 { font-size: 16px; line-height: 1.4; margin-top: 6px; }
+.hs-result-kind { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; font-weight: 650; }
+.hs-result-main { color: var(--accent); font-size: 32px; line-height: 1.1; font-weight: 700; letter-spacing: -1px; margin-block: 19px !important; }
+.hs-result-main span { display: block; font-size: 11px; color: var(--muted); letter-spacing: 0; font-weight: 450; margin-top: 6px; }
+.hs-result-card dl { display: grid; gap: 11px; }
+.hs-result-card dl > div { display: grid; gap: 3px; }
+.hs-result-card dt { font-size: 11px; color: var(--muted); line-height: 1.5; }
+.hs-result-card dd { margin: 0; font-size: 15px; font-weight: 650; color: var(--heading); overflow-wrap: anywhere; }
+.hs-result-card .hs-wealth { padding-top: 12px; border-top: 1px solid var(--border); }
+.hs-result-card .hs-wealth dd { font-size: 19px; }
+.hs-break-even { padding: 12px; background: var(--surface2); border-radius: 8px; color: var(--text); font-size: 11px; line-height: 1.65; margin-top: 13px !important; }
+.hs-assumptions { padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--border); }
+.hs-assumptions ul { color: var(--muted); font-size: 11px; line-height: 1.65; padding-left: 15px; margin-top: 10px; }
+.hs-assumptions dl { margin-top: 10px; }
+.hs-result-note { font-size: 11px; color: var(--muted); line-height: 1.65; margin-top: 15px !important; max-width: 900px; }
+.hs-chart { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; margin: 22px 0 0; }
+.hs-chart figcaption strong { display: block; font-size: 16px; color: var(--heading); line-height: 1.4; }
+.hs-chart figcaption span { display: block; font-size: 11px; line-height: 1.65; color: var(--muted); max-width: 780px; margin-top: 7px; }
+.hs-chart svg { display: block; width: 100%; max-width: 100%; height: auto; margin-top: 15px; overflow: visible; }
+.hs-chart-axis { font-size: 10px; fill: var(--muted); }
+.hs-chart-zero { stroke: var(--border); stroke-width: 1; stroke-dasharray: 4 4; }
+.hs-chart-line { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.hs-line-0 { stroke: var(--hs-line-0); }.hs-line-1 { stroke: var(--hs-line-1); }.hs-line-2 { stroke: var(--hs-line-2); }
+.hs-chart-legend { display: flex; flex-wrap: wrap; gap: 15px; padding: 0; list-style: none; margin-top: 13px !important; }
+.hs-chart-legend li { display: flex; gap: 7px; align-items: center; font-size: 11px; color: var(--text); }
+.hs-chart-legend span { width: 20px; height: 3px; background: var(--hs-line-0); border-radius: 2px; }
+.hs-legend-1 span { background: var(--hs-line-1); }.hs-legend-2 span { background: var(--hs-line-2); }
+.hs-chart-data { margin-top: 18px; }
+.hs-table-wrap { max-width: 100%; overflow-x: auto; margin-top: 12px; }
+.hs-table-wrap table { width: 100%; border-collapse: collapse; font-size: 11px; text-align: right; }
+.hs-table-wrap :is(th,td) { padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.hs-table-wrap th:first-child { text-align: left; }
+.hs-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+@media(max-width: 760px) { .hs-options { grid-template-columns: 1fr; }.hs-budget { grid-template-columns: minmax(0,1fr) 80px; gap: 14px; }.hs-horizon { justify-content: end; }.hs-horizon strong { font-size: 33px; }.hs-submit-row,.hs-result-heading { align-items: stretch; flex-direction: column; gap: 12px; }.hs-result-heading > p { white-space: normal; }.hs-form { padding: 18px; }.hs-result-cards { grid-template-columns: repeat(2,minmax(0,1fr)); }.hs-result-card { padding: 16px; } }
+@media(max-width: 480px) { .hs-budget { grid-template-columns: minmax(0,1fr); }.hs-horizon { display: none; }.hs-result-cards { grid-template-columns: 1fr; }.hs-form { padding: 15px; }.hs-chart { padding: 15px; }.hs-chart-axis { font-size: 18px; }.hs-fields { gap: 14px 10px; }.hs-fields input { padding: 10px 8px; font-size: 13px; }.hs-fields label { font-size: 11px; min-height: 32px; }.hs-toggle { padding: 14px; }.hs-option-fields { padding-inline: 13px; }.hs-toggle strong { font-size: 14px; } }
