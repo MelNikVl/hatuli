@@ -9,6 +9,12 @@ from __future__ import annotations
 import re
 
 
+def _eligible_complex_sql(alias: str) -> str:
+    return (f"COALESCE({alias}.is_garbage, FALSE) = FALSE "
+            f"AND COALESCE({alias}.is_street, FALSE) = FALSE "
+            f"AND COALESCE({alias}.canonical_reason, '') <> 'junk_unmatched'")
+
+
 def listing_complex_match_sql(complex_param: str = "$1", listing_alias: str | None = None,
                               *, include_children: bool = False) -> str:
     """Return a predicate for apartment_listings and a canonical complex ID.
@@ -22,10 +28,7 @@ def listing_complex_match_sql(complex_param: str = "$1", listing_alias: str | No
         raise ValueError("listing_alias must be a SQL identifier")
     prefix = (listing_alias + ".") if listing_alias else "apartment_listings."
 
-    def eligible(alias: str) -> str:
-        return (f"COALESCE({alias}.is_garbage, FALSE) = FALSE "
-                f"AND COALESCE({alias}.is_street, FALSE) = FALSE "
-                f"AND COALESCE({alias}.canonical_reason, '') <> 'junk_unmatched'")
+    eligible = _eligible_complex_sql
 
     def name_matches(alias: str) -> str:
         return (f"(complex_name_key({alias}.name) = complex_name_key({prefix}complex_name) "
@@ -67,6 +70,56 @@ def listing_complex_column_match_sql(complex_column: str, listing_alias: str | N
     if not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*\.[A-Za-z_][A-Za-z_0-9]*", complex_column):
         raise ValueError("complex_column must be a qualified SQL identifier")
     return listing_complex_match_sql("$1", listing_alias, include_children=include_children).replace("$1", complex_column)
+
+
+def active_sale_membership_ctes_sql(*, include_children: bool = False) -> str:
+    """Bulk equivalent of listing_complex_match_sql for eligible canonical pages.
+
+    Resolve active, nonduplicate listings once instead of running a correlated
+    identity predicate for every listing/page pair. Keep the existing one-hop
+    canonical semantics, explicit FK priority and unique verified-name fallback.
+    Returns a WITH clause exposing listing_membership(listing_id, complex_id).
+    """
+    parents = """
+        UNION
+        SELECT owner.listing_id, page.id AS complex_id
+        FROM membership_owners owner
+        JOIN membership_complexes child ON child.id = owner.cid
+        JOIN membership_complexes parent ON parent.id = child.parent_complex_id
+        JOIN membership_complexes page ON page.id = parent.cid AND page.canonical_id IS NULL
+    """ if include_children else ""
+    return f"""WITH membership_complexes AS MATERIALIZED (
+        SELECT c.id, c.name, c.canonical_id, COALESCE(c.canonical_id, c.id) AS cid,
+               c.parent_complex_id
+        FROM complexes c WHERE {_eligible_complex_sql('c')}
+    ), membership_names AS (
+        SELECT complex_name_key(c.name) AS n, c.cid FROM membership_complexes c
+        UNION
+        SELECT ca.normalized_name, c.cid
+        FROM complex_aliases ca JOIN membership_complexes c ON c.id = ca.complex_id
+        WHERE ca.status = 'verified'
+    ), membership_unique_names AS MATERIALIZED (
+        SELECT n, min(cid) AS cid FROM membership_names
+        WHERE n <> '' GROUP BY n HAVING count(DISTINCT cid) = 1
+    ), membership_owners AS MATERIALIZED (
+        SELECT a.id AS listing_id,
+               CASE WHEN a.complex_id IS NOT NULL THEN explicit.cid
+                    WHEN a.complex_resolution = 'unbound' THEN NULL
+                    WHEN a.resolved_house_id IS NOT NULL THEN house.cid
+                    ELSE name.cid END AS cid
+        FROM apartment_listings a
+        LEFT JOIN membership_complexes explicit ON explicit.id = a.complex_id
+        LEFT JOIN membership_complexes house ON house.id = a.resolved_house_id
+        LEFT JOIN membership_unique_names name
+          ON name.n = complex_name_key(a.complex_name)
+         AND NULLIF(btrim(a.complex_name), '') IS NOT NULL
+        WHERE a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
+    ), listing_membership AS (
+        SELECT owner.listing_id, page.id AS complex_id
+        FROM membership_owners owner
+        JOIN membership_complexes page ON page.id = owner.cid AND page.canonical_id IS NULL
+        {parents}
+    )"""
 
 
 def rental_identity_ctes_sql(*, materialize_roots: bool = False) -> str:
