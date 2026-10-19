@@ -37,13 +37,13 @@ def observation(candidate=None, **changes):
             "document_title": f"Продажа квартиры — объявление № {candidate['id']}",
             "main_visible": True, "title": "2-комнатная квартира, 60,4 м², 5/12 этаж",
             "price_text": "30 000 000 ₸", "main_text": "Квартира в продаже", "body_text": "Квартира в продаже",
-            "captcha_visible": False, "breadcrumbs": ["/prodazha/kvartiry/astana/"], **changes}
+            "source_complex_name": None, "captcha_visible": False, "breadcrumbs": ["/prodazha/kvartiry/astana/"], **changes}
 
 
 def test_source_facts_are_observed_and_accepted_by_existing_publisher(tmp_path):
     candidate = item()
     record = worker.source_record(candidate, observation(), NOW)
-    assert record == {**candidate, "status": "active", "checked_at": NOW.isoformat(), "sale_astana": True}
+    assert record == {**candidate, "status": "active", "checked_at": NOW.isoformat(), "sale_astana": True, "source_complex_name": None}
     path = tmp_path / "checks.json"
     worker.atomic_private_json(path, {"method": "normal_browser", "items": [record]})
     loaded = worker.publisher.load_source_checks(str(path), NOW)
@@ -162,8 +162,10 @@ const ceiling = element('Высота потолков\n3 м', shown);
 ceiling.tagName = 'DL';
 const title = element('2-комнатная квартира · 60,4 м² · 5/12 этаж');
 const price = element('30 000 000 ₸');
+const complex = element('Акерке 2', shown);
 const offer = element('Квартира в продаже');
 offer.querySelectorAll = selector => {
+  if (selector.includes('[data-name="map.complex"]')) return [complex];
   if (selector.includes('.offer__info-item')) return [author, kitchen, ceiling];
   if (selector === '.offer__parameters-mortgaged') return [pledge];
   if (selector === '*') return [author, kitchen, ceiling];
@@ -184,6 +186,8 @@ process.stdout.write(JSON.stringify(read()));
     assert observed["is_pledged"] is (True if visible else None)
     assert observed.get("kitchen_area") == (14.4 if visible else None)
     assert observed.get("ceiling_height") == (3 if visible else None)
+    assert observed["source_complex_name"] == ("Акерке 2" if visible else None)
+    assert observed["source_complex_name_conflict"] is False
     assert "PRIVATE" not in json.dumps(observed["author_labels"])
 
 
@@ -459,7 +463,8 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
                  resolved_house_id=None, identity_house_id=None, identity_house_name=None,
                  identity_house_valid=False, identity_house_is_umbrella=False, identity_house_parent_id=None,
                  identity_complex_review_pending=False, identity_property_match_pending=False,
-                 identity_name_ambiguous=False,
+                 identity_name_ambiguous=False, identity_source_name_conflict=False,
+                 identity_source_name_keys=["тестовый жк"],
                  approved_photo_urls=["https://krisha-photos.kcdn.online/webp/c7/c70532b0-9310-4f48-bc2d-e59a83f9f345/1-full.jpg"])
             for index, row in enumerate(item(i, price=30_000_000 if i <= 30 else 36_000_000)
                                         for i in range(1, 91))]
@@ -471,7 +476,7 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
         return snapshot, len(snapshot["items"])
     path = tmp_path / "checks.json"
     worker.atomic_private_json(path, {"method": "normal_browser", "items": [
-        worker.source_record(item(i), observation(item(i)), now) for i in range(1, 31)]})
+        worker.source_record(item(i), observation(item(i), source_complex_name=rows[0]["identity_complex_name"]), now) for i in range(1, 31)]})
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused:unused@127.0.0.1:1/hatuli_test_daily_picks")
     monkeypatch.setattr("dotenv.load_dotenv", lambda *args: False)
     monkeypatch.setattr(worker.publisher, "read_candidates", read)

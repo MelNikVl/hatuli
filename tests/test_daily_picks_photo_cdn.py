@@ -244,6 +244,7 @@ async def test_full_generation_preserves_observed_urls_quality_policy_and_head_o
         source.update(candidate_photo_urls=[old], approved_photo_urls=[])
     checks = [{"id": source["id"], "source_url": source["url"], "status": "active", "sale_astana": True,
                "checked_at": now.isoformat(), "interior_photo_urls": [observed],
+               "source_complex_name": "Тестовый ЖК",
                "photo_review": {"method": "normal_browser_visual", "photo_type": "interior", "checked_at": now.isoformat()},
                **{field: source[field] for field in ("price", "rooms", "area", "floor", "floors_total")}}
               for source in rows[:10]]

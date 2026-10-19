@@ -274,7 +274,7 @@ async def test_raw_photos_never_reach_real_generation_without_each_fresh_visual_
     for source in rows:
         source.update(candidate_photo_urls=[PHOTO_A], approved_photo_urls=[])
     records = [{"id": source["id"], "source_url": source["url"], "status": "active", "sale_astana": True,
-                "checked_at": now.isoformat(),
+                "checked_at": now.isoformat(), "source_complex_name": "Тестовый ЖК",
                 **{field: source[field] for field in ("price", "rooms", "area", "floor", "floors_total")}}
                for source in rows[:10]]
     path = tmp_path / "source-checks.json"
@@ -418,7 +418,8 @@ async def test_source_facts_survive_real_generation_and_its_final_rebuild(tmp_pa
     records = [{"id": item["id"], "source_url": item["source_url"], "status": "active",
                 "checked_at": now.isoformat(), "sale_astana": True, "price": item["price"],
                 "rooms": item["rooms"], "area": item["area"], "floor": item["floor"],
-                "floors_total": item["floors_total"], "is_pledged": item["id"] == pledge_id}
+                "floors_total": item["floors_total"], "is_pledged": item["id"] == pledge_id,
+                "source_complex_name": "Тестовый ЖК"}
                for item in confirmed["items"]]
     for source_row in rows:
         if source_row["id"] == pledge_id:
