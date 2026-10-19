@@ -1,33 +1,20 @@
 <section class="mc-section hs-section ym-hide-content" id="strategies" aria-labelledby="hs-title">
-  <div class="mc-heading"><div><p class="mc-eyebrow">Одна сумма · 12 месяцев · тенге</p><h2 id="hs-title">Что принесёт ваш капитал?</h2></div><p>Месячная аренда, посуточная, стройка и вклады. Укажите свои условия — сравним деньги от работы объекта и изменение его стоимости отдельно.</p></div>
+  <div class="mc-heading"><div><p class="mc-eyebrow">Ваш бюджет · Астана · 12 месяцев</p><h2 id="hs-title">Введите сумму. Остальное посчитаем.</h2></div><p>Сравним подходящие вклады в тенге и квартиры в вашем бюджете. ЖК можно выбрать по желанию.</p></div>
   <form class="hs-form" action="/compare/strategies/calculate#strategies" method="post" data-strategy-form>
     <div class="hs-budget">
-      <div class="mc-field"><label for="hs-budget">Ваш общий бюджет, ₸</label><input id="hs-budget" name="budget" type="number" min="1" max="1000000000" step="1" inputmode="numeric" value="{{ strategy_form.budget }}" required><small>Одна стартовая сумма для всех вариантов. Остаток после покупки сохраняется деньгами, без начисления процентов.</small></div>
-      <div class="hs-horizon"><strong>12</strong><span>месяцев<br>без ипотеки</span></div>
+      <div class="mc-field hs-budget-field"><label for="hs-budget">Сколько хотите вложить?</label><div class="hs-money-input"><input id="hs-budget" name="budget" type="number" min="1" max="1000000000" step="1" inputmode="numeric" value="{{ strategy_form.budget }}" placeholder="Например, 30 000 000" required aria-describedby="hs-budget-help"><span aria-hidden="true">₸</span></div><small id="hs-budget-help">Одна сумма для всех вариантов. Расчёт на год, без ипотеки.</small></div>
+      <button type="submit" class="mc-button hs-calculate" data-strategy-submit><span data-strategy-submit-label>Рассчитать</span><span aria-hidden="true">→</span></button>
     </div>
-    {% if selected_offer %}<p class="hs-selected">Цена выбранной квартиры: <strong>{{ selected_offer.price|fmt_num }} ₸</strong>{% if selected_offer.address %} · {{ selected_offer.address }}{% endif %}{% if selected_offer.observed_at_label %} · наблюдалась {{ selected_offer.observed_at_label }}{% endif %}. Ремонт и расходы в неё не входят.</p>{% endif %}
-    <input type="hidden" name="listing" value="{{ form.listing or '' }}"><input type="hidden" name="hex" value="{{ cmp.selected_hex or '' }}"><input type="hidden" name="rooms" value="{{ cmp.rooms or 2 }}"><input type="hidden" name="area" value="{{ cmp.area or 60 }}"><input type="hidden" name="scope" value="{{ cmp.scope or 'hex' }}">
-    <div class="hs-options">
-      {% for key, label in strategy_labels.items() %}
-      <fieldset class="hs-option" data-strategy="{{ key }}">
-        <legend class="hs-sr-only">{{ label }}</legend>
-        <label class="hs-toggle" for="hs-enable-{{ key }}"><input type="checkbox" name="{{ key }}_enabled" id="hs-enable-{{ key }}"{% if strategy_form[key + '_enabled'] %} checked{% endif %}><span><strong>{{ label }}</strong><small>{% if key == 'monthly' %}Ставка, простой и расходы{% elif key == 'daily' %}Оплаченные ночи, комиссии и уборка{% else %}Цена входа, срок и стоимость выхода{% endif %}</small></span><span class="hs-toggle-mark" aria-hidden="true">+</span></label>
-        <div class="hs-option-fields" data-strategy-fields>
-          <div class="hs-fields">{% for field, label, low, high, step, default, extra in strategy_fields[key] %}{% if not extra %}
-            <div class="mc-field"><label for="hs-{{ key }}-{{ field }}">{{ label }}</label><input id="hs-{{ key }}-{{ field }}" name="{{ key }}__{{ field }}" type="number" min="{{ low }}" max="{{ high }}" step="{{ step }}" inputmode="decimal" value="{{ strategy_form[key + '__' + field] }}" data-strategy-input></div>
-          {% endif %}{% endfor %}</div>
-          {% if key == 'daily' %}<p class="hs-help">Ставка в объявлении не показывает загрузку. Введите фактическую или сценарную долю оплаченных ночей и комиссии своего тарифа.</p>{% endif %}
-          {% if key == 'construction' %}<p class="hs-help">Стоимость через год — ваше предположение. Если стройка займёт больше года, оценивается право на объект; возможность и расходы переуступки нужно проверить в договоре.</p><a class="hs-source" href="https://homeportal.kz/" target="_blank" rel="noopener noreferrer">Проверить разрешение или гарантию проекта ↗</a><p class="hs-help">Проверка проекта не подтверждает доходность вложения.</p>{% endif %}
-          {% if key == 'monthly' %}<p class="hs-help">Укажите месяцы без арендатора после готовности. Будущая стоимость квартиры — ваш сценарий, а не прогноз Hatuli.</p>{% endif %}
-          <details class="hs-costs"{% if strategy_form[key + '_enabled'] %} open{% endif %}><summary>Расходы и срок готовности</summary><div class="hs-fields">{% for field, label, low, high, step, default, extra in strategy_fields[key] %}{% if extra %}
-            <div class="mc-field"><label for="hs-{{ key }}-{{ field }}">{{ label }}</label><input id="hs-{{ key }}-{{ field }}" name="{{ key }}__{{ field }}" type="number" min="{{ low }}" max="{{ high }}" step="{{ step }}" inputmode="decimal" value="{{ strategy_form[key + '__' + field] }}" data-strategy-input></div>
-          {% endif %}{% endfor %}</div></details>
-          <p class="hs-field-error" id="hs-error-{{ key }}" data-strategy-error="{{ key }}" role="status">{% if strategy_result %}{% for diagnostic in strategy_result.diagnostics or [] %}{% if diagnostic.key == key %}{{ diagnostic.message }}{% endif %}{% endfor %}{% endif %}</p>
-        </div>
-      </fieldset>{% endfor %}
-      <div class="hs-bank-option"><span class="hs-bank-symbol" aria-hidden="true">₸</span><div><strong>Банковские вклады</strong><p>Подходящие программы в тенге на 12 месяцев добавятся по проверенным условиям банков. Доход считается на весь общий бюджет.</p></div></div>
-    </div>
-    <div class="hs-submit-row"><button type="submit" class="mc-button" data-strategy-submit>Сравнить варианты <span aria-hidden="true">→</span></button><p>Заполните только интересующие варианты. Нулевые расходы означают, что вы их не включили. Расчёт не является прогнозом цены или загрузки.</p></div>
+    {% set complexes = complex_catalog['items'] if complex_catalog else [] %}
+    {% if complexes %}
+    <details class="hs-complex-filter"{% if strategy_form.complex_id %} open{% endif %}>
+      <summary>Хочу выбрать ЖК <span>необязательно</span></summary>
+      <div class="hs-complex-fields">
+        <div class="mc-field" data-complex-search-field hidden><label for="hs-complex-search">Поиск по названию</label><input id="hs-complex-search" type="search" placeholder="Начните вводить название ЖК" autocomplete="off" data-complex-search aria-controls="hs-complex"><small data-complex-match-count role="status" aria-live="polite"></small></div>
+        <div class="mc-field"><label for="hs-complex">Жилой комплекс</label><select id="hs-complex" name="complex_id" data-complex-select><option value="">Вся Астана</option>{% for complex in complexes %}<option value="{{ complex.id }}" data-search-text="{{ complex.name }} {{ complex.label }} {{ (complex.aliases or [])|join(' ') }} {{ complex.parent_name or '' }} {{ complex.address or '' }}"{% if strategy_form.complex_id|string == complex.id|string %} selected{% endif %}>{{ complex.label or complex.name }}</option>{% endfor %}</select><small>По всему каталогу ЖК Hatuli: комплексы и отдельные дома.</small></div>
+      </div>
+    </details>
+    {% endif %}
     <p class="mc-error" data-strategy-error-global role="alert"{% if not strategy_error %} hidden{% endif %}>{{ strategy_error or '' }}</p>
   </form>
   <div data-strategy-results aria-live="polite" aria-atomic="false">{% include '_investment_strategy_results.html' %}</div>
