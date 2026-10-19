@@ -90,6 +90,12 @@ async def bind_by_address(target_table: str) -> int:
     соседних, но РАЗНЫХ ЖК с разными адресами не перепутаются."""
     if target_table not in ("apartment_listings", "rental_listings"):
         raise ValueError(target_table)
+    if target_table == "rental_listings":
+        # complex_name is an observed source field, not a catalog display label.
+        # An apartment-derived address rule has no source-name provenance and
+        # would make an invented rental value pass later identity checks.
+        # Fresh rental details resolve the FK separately from the raw fields.
+        return 0
     from bot.db.pg import fetch as pg_fetch, execute as pg_exec
 
     addr_rules_rows = await pg_fetch(r"""
