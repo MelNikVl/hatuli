@@ -147,6 +147,7 @@ def main(argv=None):
     result['implementation_sha256'] = {
         str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest()
         for p in (Path(__file__), ROOT/'bot/core/sale_editorial_slice.py',
+                  ROOT/'bot/core/sale_source_quarantine.py',
                   ROOT/'bot/core/daily_pick_identity.py', ROOT/'bot/core/complex_membership.py',
                   ROOT/'scripts/publish_daily_picks.py')}
     result["exported_at"] = datetime.now(timezone.utc).isoformat()

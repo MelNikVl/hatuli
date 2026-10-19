@@ -17,6 +17,21 @@ sys.path.insert(0, str(ROOT))
 from bot.core.market_comparison import build_market_snapshot, publish_market_snapshot, snapshot_path
 from bot.core.daily_picks import load_daily_picks
 from bot.core.comparison_rental_estimate import RENTAL_COMPARISON_SQL, estimate_rental_offer
+from bot.core.sale_source_quarantine import QUARANTINED_SOURCE_IDS, QUARANTINED_PROPERTY_IDS, quarantine_sale_rows
+
+MAX_QUARANTINE_LINKS = 100_000
+# No activity/freshness filter: a conflict must still hold its relists when the
+# original source is absent from the current observation window. Database links
+# are used only to exclude; they do not establish a verified physical identity.
+QUARANTINED_LINKS_SQL = """
+WITH held_properties AS (
+ SELECT DISTINCT property_id FROM property_listings WHERE listing_id=ANY($1::text[])
+ UNION SELECT unnest($2::bigint[])
+)
+SELECT DISTINCT p.listing_id AS id
+FROM property_listings p JOIN held_properties h ON h.property_id=p.property_id
+ORDER BY p.listing_id LIMIT $3
+"""
 
 PRIMARY_SQL = """
 SELECT u.id, coalesce(c.canonical_id,c.id) AS complex_id, canonical.name AS complex_name,
@@ -105,6 +120,16 @@ async def read_market_rows(dsn: str, now: datetime) -> tuple[list[dict], list[di
             primary = [dict(row) for row in await connection.fetch(PRIMARY_SQL, now)]
             secondary = [dict(row) for row in await connection.fetch(SECONDARY_SQL, now)]
             details = [dict(row) for row in await connection.fetch(COMPARISON_DETAILS_SQL, public_ids)] if public_ids else []
+            holds = await connection.fetch(QUARANTINED_LINKS_SQL, sorted(QUARANTINED_SOURCE_IDS),
+                                           sorted(QUARANTINED_PROPERTY_IDS), MAX_QUARANTINE_LINKS + 1)
+            if len(holds) > MAX_QUARANTINE_LINKS:
+                raise ValueError("Incomplete bounded source quarantine")
+            linked_ids = {row["id"] for row in holds}
+            # Compute the closure before splitting supplemental details, so a
+            # detail without a property key cannot restore a held source.
+            safe_ids = {str(row["id"]) for row in quarantine_sale_rows(secondary + details, linked_listing_ids=linked_ids)}
+            secondary = [row for row in secondary if str(row["id"]) in safe_ids]
+            details = [row for row in details if str(row["id"]) in safe_ids]
             primary_history = await connection.fetch(PRIMARY_HISTORY_SQL, [row["id"] for row in primary], now)
             secondary_history = await connection.fetch(SECONDARY_HISTORY_SQL,
                 sorted({row["id"] for row in secondary + details}), now)

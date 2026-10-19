@@ -17,6 +17,7 @@ from bot.core.apartment_selection_reasons import FINISH_LEVELS
 from bot.core.daily_pick_identity import normalize_daily_pick_identity, _single_source_house
 from bot.core.daily_picks import _valid_source
 from bot.core.house_resolution import _address_street_key, _extract_house_number
+from bot.core.sale_source_quarantine import KNOWN_SOURCE_CONFLICTS, QUARANTINED_PROPERTY_IDS
 from scripts.publish_daily_picks import source_identity_rows
 
 MAX_ROWS = 100_000
@@ -43,22 +44,6 @@ def district_key(value):
     if not isinstance(value, str):
         return None
     return _DISTRICT_ALIASES.get(" ".join(value.casefold().split()))
-
-
-# A negative observation never expires merely because a stored name was later
-# overwritten. Removing this hold requires a separately reviewed correction.
-KNOWN_SOURCE_CONFLICTS = ({
-    "id": "1012143050", "source_url": "https://krisha.kz/a/show/1012143050",
-    "source_complex_name": "Акерке 2", "catalog_name": "Возрождение",
-    "catalog_id": 3119, "observed_date": "2026-10-19",
-    "time_precision": "date_only_for_source_complex_name",
-    "listing_checked_at": "2026-10-19T03:18:21.462+00:00",
-    "listing_receipt_sha256": "fc643f2f23cf867827bce9331a22abdf71c64c093732e9e835b6295de661e05b",
-    "listing_receipt_contains_source_complex_name": False,
-    "issue_url": "https://github.com/MelNikVl/hatuli/issues/81",
-    "review_document": "docs/source_complex_guard_20261019.md",
-    "status": "unresolved_negative_evidence", "method": "normal_browser",
-},)
 
 
 def _time(value):
@@ -244,7 +229,7 @@ def build_sale_editorial_slice(rows, *, now, browser_checks=None, minimum=10, he
             accepted.append(safe)
     # Remove all other publications of a known conflicting physical ID too.
     held_properties = ({r.get("property_id") for r in rows if str(r["id"]) in known_ids}
-                       | set(held_property_ids)) - {None}
+                       | set(held_property_ids) | QUARANTINED_PROPERTY_IDS) - {None}
     dedup, seen = [], set()
     decision_by_id = {r['id']:r for r in decisions}
     for row in sorted(accepted, key=lambda r: (-_time(r["last_seen"]).timestamp(), str(r["id"]))):

@@ -121,6 +121,16 @@ def test_conflict_hold_survives_original_source_leaving_active_slice():
     assert 'known_source_conflict_property' in d['decisions'][-1]['reasons']
 
 
+def test_frozen_conflict_property_key_cannot_return_when_original_link_disappears():
+    good=[row(i) for i in range(12)]
+    d=build_sale_editorial_slice(good+[row(99,property_id=12014,price=90_000_000)],now=NOW)
+    expected=build_sale_editorial_slice(good,now=NOW)
+    assert d['held_property_ids']==[12014]
+    assert d['decisions'][-1]['reasons']==['known_source_conflict_property']
+    assert d['ready_profiles']==expected['ready_profiles']
+    assert d['descriptive_cohorts']==expected['descriptive_cohorts']
+
+
 def test_confirmed_status_without_physical_key_does_not_make_ready_profile():
     d=build_sale_editorial_slice([row(i,property_id=None) for i in range(12)],now=NOW)
     assert not d['ready_profiles']
