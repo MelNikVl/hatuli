@@ -1,0 +1,16 @@
+[Unit]
+Description=Publish the public Hatuli Astana complex selector from the catalog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=nik
+Group=nik
+WorkingDirectory=/home/nik/krisha_bot
+ExecStart=/home/nik/krisha_bot/venv/bin/python scripts/publish_comparison_complexes.py
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=90
+

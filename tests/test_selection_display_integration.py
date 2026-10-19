@@ -183,15 +183,15 @@ async def test_compare_why_shows_price_cash_gap_ceiling_kitchen_and_distinct_cut
 
 
 @pytest.mark.asyncio
-async def test_no_js_rental_calculator_compares_income_to_short_maximum_without_growth(public_app):
+async def test_legacy_rental_post_does_not_restore_unverified_manual_income_or_growth(public_app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=public_app), base_url="http://test") as client:
         response = await client.post("/compare/calculate", data={"listing": "1000000001", "price": 32_000_000,
             "mode": "rent_out", "monthly_rent": 500_000, "annual_growth_pct": 50,
             "repair_cost": 0, "buy_cost": 0, "annual_owner_cost": 0, "vacancy_months": 0, "wait_months": 0})
     assert response.status_code == 200
-    assert "Доход от аренды после расходов" in response.text
-    assert "18,8% за первый год" in response.text
-    assert "выше 520 000" in response.text
+    assert 'data-strategy-form' in response.text
+    assert 'data-mc-calculator' not in response.text
+    assert "18,8% за первый год" not in response.text
     assert "В вашем сценарии доходность аренды выше этой ставки." not in response.text
     assert "3 мес." in response.text
 
@@ -311,7 +311,8 @@ async def test_unavailable_or_invalid_rental_estimate_has_no_guide_or_placeholde
     assert "Доход от квартиры" not in response.text
     assert "надёжной оценки аренды" not in response.text
     assert "Выберите «Для сдачи в аренду»" not in response.text
-    assert 'data-mc-calculator' in response.text  # Explicit manual scenarios remain usable.
+    assert 'data-strategy-form' in response.text  # The budget flow remains usable without inventing rents.
+    assert 'data-mc-calculator' not in response.text
 
 
 @pytest.mark.asyncio
@@ -341,7 +342,7 @@ async def test_ready_rental_estimate_shows_asking_range_without_unavailable_bank
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bank_count", [0, 3])
-async def test_ready_manual_rent_income_survives_missing_banks_without_maximum_claim(public_app, monkeypatch, bank_count):
+async def test_manual_rent_cannot_leak_into_automatic_results_when_banks_are_missing(public_app, monkeypatch, bank_count):
     catalog = full_deposits(NOW)
     catalog["offers"] = catalog["offers"][:bank_count]
     monkeypatch.setattr("bot.public_comparison_routes.load_deposit_catalog", lambda: catalog)
@@ -349,9 +350,9 @@ async def test_ready_manual_rent_income_survives_missing_banks_without_maximum_c
         response = await client.post("/compare/calculate", data={"price": 32_000_000,
             "mode": "rent_out", "monthly_rent": 500_000})
     assert response.status_code == 200
-    assert "Доход от аренды после расходов" in response.text
-    assert "18,8% за первый год" in response.text
-    assert "6 000 000 ₸" in response.text
+    assert 'data-strategy-form' in response.text
+    assert 'data-mc-calculator' not in response.text
+    assert "18,8% за первый год" not in response.text
     assert "Нет свежей подтверждённой ставки" not in response.text
     assert "Для сравнения нужен подтверждённый вклад" not in response.text
     assert "самый доходный подходящий вклад" not in response.text

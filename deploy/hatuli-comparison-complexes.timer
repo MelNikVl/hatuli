@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh the complete eligible Hatuli complex selector daily
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 Asia/Qyzylorda
+RandomizedDelaySec=5m
+Persistent=true
+Unit=hatuli-comparison-complexes.service
+
+[Install]
+WantedBy=timers.target
