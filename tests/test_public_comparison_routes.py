@@ -104,7 +104,8 @@ async def test_anonymous_page_uses_public_snapshots_and_no_private_secondary_row
     assert 'href="/admin/analysis-requests"' not in response.text
     assert "Freedom Bank" in response.text and "Home Credit Bank" in response.text
     forms = Forms(response.text).forms
-    assert any(form.get("action", "").split("#", 1)[0] == "/compare/calculate" and form.get("method") == "post" for form in forms)
+    assert any(form.get("action", "").split("#", 1)[0] == "/compare/strategies/calculate" and form.get("method") == "post" for form in forms)
+    assert 'data-mc-calculator' not in response.text
     assert any(form.get("action") == "/compare" and form.get("method") == "get" for form in forms)
 
 
@@ -122,7 +123,7 @@ async def test_empty_sources_do_not_invent_rates_or_recommendations(app, monkeyp
     assert 'class="mc-rental-guide' not in response.text
     assert 'class="mc-bank-section"' not in response.text
     assert 'id="mc-initial-calculation"' not in response.text
-    assert Forms(response.text).inputs["price"]["value"] == ""
+    assert Forms(response.text).inputs["budget"]["value"] == ""
     assert "Базовая цена первички ниже" not in response.text
     assert "16,87%" not in response.text
 
@@ -139,48 +140,48 @@ async def test_unknown_or_nonpublic_listing_is_explicit_not_a_different_offer(ap
 
 
 @pytest.mark.asyncio
-async def test_selected_source_defaults_primary_wait_but_does_not_infer_keys_from_old_year(app):
+async def test_selected_source_prefills_only_budget_without_inventing_building_readiness(app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         primary = await client.get("/compare?unit=1")
         secondary = await client.get("/compare?listing=1000000001")
     assert primary.status_code == secondary.status_code == 200
-    assert Forms(primary.text).inputs["wait_months"]["value"] == "12"
-    assert Forms(secondary.text).inputs["wait_months"]["value"] == "0"
-    assert Forms(primary.text).inputs["price"]["value"] == "30000000"
-    assert Forms(secondary.text).inputs["price"]["value"] == "32000000"
-    assert "неподтверждённой готовности" in primary.text
+    assert "wait_months" not in Forms(primary.text).inputs
+    assert Forms(primary.text).inputs["budget"]["value"] == "30000000"
+    assert Forms(secondary.text).inputs["budget"]["value"] == "32000000"
+    assert 'data-mc-calculator' not in primary.text
     assert 'href="/listing/nb-1"' in primary.text
     assert any(getattr(route, "path", None) == "/listing/{listing_id}" for route in app.routes)
 
 
 @pytest.mark.asyncio
-async def test_native_offer_selector_supports_developer_ids_and_manual_mode(app):
+async def test_existing_developer_links_keep_selected_amount_without_manual_scenario(app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         primary = await client.get("/compare?listing=newbuild:2&hex=3:-2&scope=ring2")
         manual = await client.get("/compare?listing=&hex=3:-2&scope=ring2")
     assert primary.status_code == manual.status_code == 200
-    assert Forms(primary.text).inputs["listing"]["value"] == "newbuild:2"
-    assert Forms(primary.text).inputs["hex"]["value"] == "3:-2"
-    assert Forms(manual.text).inputs["listing"]["value"] == ""
-    assert Forms(manual.text).inputs["price"]["value"] == ""
+    assert Forms(primary.text).inputs["budget"]["value"] == "30000000"
+    assert 'value="3:-2" selected' in primary.text
+    assert Forms(manual.text).inputs["budget"]["value"] == ""
+    assert 'data-mc-calculator' not in manual.text
     assert "В поле цены — пример суммы" not in manual.text
     assert 'id="mc-initial-calculation"' not in manual.text
 
 
 @pytest.mark.asyncio
-async def test_no_js_form_calculates_and_keeps_market_selection(app):
+async def test_legacy_post_keeps_selected_offer_but_does_not_restore_manual_fields(app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/compare/calculate", data={
             "price": "32000000", "repair_cost": "1000000", "monthly_rent": "200000", "mode": "live",
             "hex": "3:-2", "rooms": "3", "area": "80", "scope": "ring2", "listing": "1000000001"})
     assert response.status_code == 200
-    assert "Сколько останется после расходов" in response.text
+    assert "Выбранная квартира" in response.text
     inputs = Forms(response.text).inputs
-    assert inputs["hex"]["value"] == "3:-2"
-    assert inputs["rooms"]["value"] == "3"
+    assert 'value="3:-2" selected' in response.text
+    assert 'name="rooms"' in response.text
     assert float(inputs["area"]["value"]) == 80
     assert inputs["scope"]["value"] == "ring2"
-    assert inputs["price"]["value"] == "32000000"
+    assert inputs["budget"]["value"] == "32000000"
+    assert "repair_cost" not in inputs and "annual_growth_pct" not in inputs
 
 
 @pytest.mark.asyncio
@@ -190,7 +191,7 @@ async def test_no_js_form_shows_invalid_numeric_error_and_escapes_input(app):
     assert response.status_code == 400
     assert "Цена квартиры: требуется число" in response.text
     assert '<script>EVIL</script>' not in response.text
-    assert '&lt;script&gt;EVIL&lt;/script&gt;' in response.text
+    assert 'EVIL' not in response.text  # Rejected legacy values never become public form fields.
 
 
 @pytest.mark.asyncio
@@ -312,12 +313,11 @@ async def test_invalid_nonempty_form_identifier_never_falls_back_to_another_offe
 
 
 @pytest.mark.asyncio
-async def test_unknown_complex_has_honest_public_not_found_response(app):
+async def test_unknown_complex_has_explicit_catalog_validation_response(app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/compare?complex=999999")
-    assert response.status_code == 404
-    assert "Для этого ЖК пока нет свежих данных сравнения" in response.text
-    assert 'href="/compare"' in response.text
+    assert response.status_code == 422
+    assert "ЖК" in response.json()["error"]
     assert "PRIVATE" not in response.text
 
 
@@ -341,7 +341,9 @@ async def test_source_address_and_all_price_events_visible_in_cards_and_selected
     assert 'Все изменения по датам' in response.text
     assert response.text.count('data-price-history-chart') == 2
     assert '35 000 000' in response.text and '34 000 000' in response.text and '32 000 000' in response.text
-    assert response.text.count('class="hatuli-price-chart-event"') == 4  # two events in card and selected offer
+    assert response.text.count('class="hatuli-price-chart-point"') == 4  # two dated observations in card and selected offer
+    assert response.text.count('data-price-history-line') == 2
+    assert 'class="hatuli-price-chart-event"' not in response.text
     assert 'PRIVATE' not in response.text
 
 
@@ -390,5 +392,6 @@ async def test_incomplete_history_warning_keeps_individual_events(app, monkeypat
     assert response.status_code == 200
     assert 'data-history-status="incomplete"' in response.text
     assert 'есть пропуски' in response.text
-    assert response.text.count('class="hatuli-price-chart-event"') == 4
+    assert response.text.count('class="hatuli-price-chart-point"') == 4
+    assert 'data-price-history-line' not in response.text  # gaps never get a connecting line
     assert 'class="hatuli-price-chart-connector"' not in response.text

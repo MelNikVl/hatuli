@@ -275,3 +275,7 @@
 .mc-monitor > div { font-size: 13px; line-height: 1.65; color: var(--muted); padding-top: 14px; }
 .mc-monitor p + p,.mc-monitor ul { margin-top: 12px; }
 .mc-monitor li + li { margin-top: 12px; }
+.mc-market-controls { margin: 0 0 20px; padding: 16px 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.mc-market-controls summary { cursor: pointer; color: var(--heading); font-size: 14px; font-weight: 650; }
+.mc-market-controls[open] summary { margin-bottom: 18px; }
+.mc-market-controls .mc-selector { margin-bottom: 0; }

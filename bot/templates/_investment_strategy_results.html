@@ -1,36 +1,57 @@
 {% macro hs_money(value) -%}{{ value|fmt_num }} ₸{%- endmacro %}
 {% macro hs_percent(value) -%}{{ value|fmt_num(2)|replace(',00', '') }}%{%- endmacro %}
-{% macro hs_threshold(value) -%}{{ value|round(2, 'ceil')|fmt_num(2)|replace(',00', '') }}%{%- endmacro %}
 {% if strategy_result %}
-{% set rows = (strategy_result.strategies or []) + (strategy_result.banks or []) %}
-{% if rows %}
+{% set banks = strategy_result.banks or [] %}
+{% set properties = strategy_result.properties or [] %}
+{% set purchases = strategy_result.purchases or [] %}
+{% if banks or properties or purchases %}
 <div class="hs-results" data-strategy-ready tabindex="-1">
-  <div class="hs-result-heading"><div><p class="mc-eyebrow">На ваших условиях</p><h3>Один бюджет. Разные источники дохода.</h3></div><p>{{ hs_money(strategy_result.budget) }} · 12 месяцев</p></div>
-  <div class="hs-result-cards">{% for row in rows %}
-    <article class="hs-result-card" data-strategy-result="{{ row.key }}">
-      <p class="hs-result-kind">{% if row.evidence_type == 'verified_bank_terms' %}Условия банка{% else %}Ваш сценарий{% endif %}</p><h4>{{ row.label }}</h4>
-      {% if row.evidence_type == 'verified_bank_terms' %}<p class="hs-help">{{ row.product }} · {{ row.term_months|int }} месяцев<br>{{ hs_percent(row.effective_pct) }} ГЭСВ · {{ hs_percent(row.nominal_pct) }} номинальная</p>{% endif %}
-      <p class="hs-result-main">{{ hs_percent(row.total_return_pct) }}<span>общий результат за год</span></p>
-      <dl><div><dt>Доход после текущих расходов</dt><dd>{{ hs_money(row.net_operating_cash) }}</dd></div>{% if row.evidence_type != 'verified_bank_terms' %}<div><dt>Изменение стоимости объекта</dt><dd>{{ hs_money(row.asset_value_change) }}</dd></div><div><dt>Ремонт и расходы покупки</dt><dd>{{ hs_money(row.upfront_expenses) }}</dd></div><div><dt>Расходы выхода</dt><dd>{{ hs_money(row.exit_cost) }}</dd></div>{% if row.cash_remainder > 0 %}<div><dt>Остаток бюджета без процентов</dt><dd>{{ hs_money(row.cash_remainder) }}</dd></div>{% endif %}{% endif %}<div><dt>Итоговый доход или убыток</dt><dd>{{ hs_money(row.total_profit) }}</dd></div><div class="hs-wealth"><dt>Капитал в конце года</dt><dd>{{ hs_money(row.end_wealth) }}</dd></div></dl>
-      {% if row.evidence_type != 'verified_bank_terms' %}<p class="hs-help">Объект оценён по введённой стоимости выхода. Это не полученные деньги от продажи.</p>{% endif %}
-      {% if row.net_cash_yield_pct is number %}<p class="hs-help">{% if row.evidence_type == 'verified_bank_terms' %}ГЭСВ по договорным условиям: <strong>{{ hs_percent(row.net_cash_yield_pct) }}</strong>. Индивидуальные расходы на переводы и налоги автоматически не подставляются.{% else %}Доход от работы капитала: <strong>{{ hs_percent(row.net_cash_yield_pct) }}</strong> без изменения стоимости объекта.{% endif %}</p>{% endif %}
-      {% if row.guarantee_cap is number %}<p class="hs-help">Лимит гарантии в этом банке: {{ hs_money(row.guarantee_cap) }}.{% if row.unguaranteed_amount > 0 %} Сумма сверх гарантии с процентами: {{ hs_money(row.unguaranteed_amount) }}.{% endif %} <a href="{{ strategy_result.guarantee_source }}" target="_blank" rel="noopener noreferrer">Условия КФГД ↗</a></p>{% endif %}
-      {% if row.break_even_occupancy_pct is number %}<p class="hs-break-even">Чтобы результат не уступал самому доходному подходящему вкладу, нужна загрузка не ниже <strong>{{ hs_threshold(row.break_even_occupancy_pct) }}</strong>{% if row.break_even_occupancy_pct > 100 %} — выше доступных 100%{% endif %}. При вашей стоимости выхода, расходах и резерве бюджета.</p>{% endif %}
-      {% for threshold in row.thresholds or [] %}{% if threshold.key == 'daily_vs_monthly_cash' and threshold.value is number %}<p class="hs-break-even">Чтобы доход после текущих расходов не уступал месячной аренде и бюджета хватало до выхода, нужна загрузка не ниже <strong>{{ hs_threshold(threshold.value) }}</strong>{% if threshold.value > 100 %} — выше доступных 100%{% endif %}.</p>{% endif %}{% endfor %}
-      {% if row.minimum_exit_value_to_match_bank is number %}<p class="hs-break-even">Для итогового капитала на уровне самого доходного подходящего вклада стоимость выхода должна быть не ниже <strong>{{ hs_money(row.minimum_exit_value_to_match_bank|round(0, 'ceil')) }}</strong>. Это расчётный порог, а не оценка будущей цены.</p>{% endif %}
-      {% if row.asset_stage == 'unfinished_right_scenario' %}<p class="hs-help"><strong>К концу года проект ещё строится.</strong> В капитале учтена введённая стоимость права на объект. Возможность переуступки не подтверждена этим расчётом.</p>{% endif %}
-      {% if row.source_url %}<a class="hs-source" href="{{ row.source_url }}" target="_blank" rel="noopener noreferrer">Официальные условия ↗</a>{% endif %}
-      {% if row.checked_at_label %}<p class="hs-help">Проверено: {{ row.checked_at_label }}</p>{% endif %}
-      {% if row.conditions or row.warnings or row.assumptions %}<details class="hs-assumptions"><summary>Условия расчёта</summary>{% if row.assumptions is mapping %}<dl>{% for label, value in row.assumptions.items() %}{% if value is string %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endif %}{% endfor %}</dl>{% else %}<ul>{% for note in row.assumptions or [] %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}{% if row.conditions %}<ul>{% if row.conditions is string %}<li>{{ row.conditions }}</li>{% else %}{% for note in row.conditions %}<li>{{ note }}</li>{% endfor %}{% endif %}</ul>{% endif %}{% if row.warnings %}<ul>{% for note in row.warnings %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}</details>{% endif %}
-    </article>{% endfor %}</div>
-  {% if strategy_chart %}
-  <figure class="hs-chart"><figcaption><strong>Деньги от работы объекта по месяцам</strong><span>Накопленный доход минус текущие расходы, ₸. Равномерный сценарий по введённым условиям; не прогноз сезонности. Стоимость объекта и проценты вклада по месяцам не распределяются.</span></figcaption>
-    <svg viewBox="0 0 660 250" role="img" aria-labelledby="hs-chart-title hs-chart-desc"><title id="hs-chart-title">Накопленный денежный поток за 12 месяцев</title><desc id="hs-chart-desc">Линейный график сценария. Все значения доступны в таблице ниже.</desc><line x1="50" y1="{{ strategy_chart.zero_y }}" x2="626" y2="{{ strategy_chart.zero_y }}" class="hs-chart-zero"/><text x="50" y="16" class="hs-chart-axis">{{ strategy_chart.high|fmt_num }} ₸</text><text x="50" y="227" class="hs-chart-axis">{{ strategy_chart.low|fmt_num }} ₸</text>{% for month in [0,3,6,9,12] %}<text x="{{ 50 + month * 48 }}" y="246" text-anchor="middle" class="hs-chart-axis">{{ month }} мес.</text>{% endfor %}{% for series in strategy_chart.series %}<polyline points="{{ series.points }}" class="hs-chart-line hs-line-{{ series.color }}"/>{% endfor %}</svg>
-    <ul class="hs-chart-legend">{% for series in strategy_chart.series %}<li class="hs-legend-{{ series.color }}"><span aria-hidden="true"></span>{{ series.label }}</li>{% endfor %}</ul>
-    <details class="hs-chart-data"><summary>Значения по месяцам</summary><div class="hs-table-wrap" tabindex="0" role="region" aria-label="Денежный поток по месяцам"><table><caption class="hs-sr-only">Накопленный денежный поток в тенге</caption><thead><tr><th scope="col">Месяц</th>{% for series in strategy_chart.series %}<th scope="col">{{ series.label }}</th>{% endfor %}</tr></thead><tbody>{% for month in range(13) %}<tr><th scope="row">{{ month }}</th>{% for series in strategy_chart.series %}<td>{{ hs_money(series['values'][month]) }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div></details>
-  </figure>{% endif %}
-  <p class="hs-result-note">Остаток бюджета после покупки учтён в итоговом капитале без процентов. Общий результат включает первоначальные и выходные расходы; денежная доходность показывает только работу капитала. Налоговые и договорные условия вводятся в расходах соответствующего варианта. Вклады сравниваются среди отслеживаемых программ Freedom, Forte, Bereke и Home Credit, с учётом срока и суммы; это не весь рынок банков.</p>
+  <div class="hs-result-heading"><div><p class="mc-eyebrow">Ваш расчёт</p><h3>{{ hs_money(strategy_result.budget) }} на один год</h3></div>{% if strategy_result.location_label %}<p>{{ strategy_result.location_label }}</p>{% endif %}</div>
+  {% if banks %}
+  <section class="hs-result-group" aria-labelledby="hs-banks-title">
+    <div class="hs-group-heading"><h4 id="hs-banks-title">Деньги на вкладе</h4><p>Вся сумма и проценты остаются до конца срока.</p></div>
+    <div class="hs-bank-cards">{% for row in banks %}
+      <article class="hs-result-card{% if strategy_result.best_bank and row.key == strategy_result.best_bank.key %} hs-bank-best{% endif %}" data-strategy-result="{{ row.key }}">
+        <p class="hs-result-kind">{{ row.product }} · {{ row.term_months|int }} месяцев</p><h5>{{ row.label }}</h5>
+        <p class="hs-result-main">+{{ hs_money(row.total_profit) }}<span>проценты за год · {{ hs_percent(row.effective_pct) }} ГЭСВ</span></p>
+        <dl><div class="hs-wealth"><dt>Сумма в конце срока</dt><dd>{{ hs_money(row.end_wealth) }}</dd></div></dl>
+        {% if row.source_url %}<a class="hs-source" href="{{ row.source_url }}" target="_blank" rel="noopener noreferrer">Условия {{ row.label }} ↗</a>{% endif %}
+        <details class="hs-assumptions"><summary>На чём расчёт</summary>
+          <p>{{ hs_percent(row.nominal_pct) }} номинальная ставка · {{ hs_percent(row.effective_pct) }} ГЭСВ.</p>
+          {% if row.checked_at_label %}<p>Условия проверены: {{ row.checked_at_label }}.</p>{% endif %}
+          {% if row.guarantee_cap is number %}<p>Лимит гарантии в банке: {{ hs_money(row.guarantee_cap) }}.{% if row.unguaranteed_amount > 0 %} Сумма сверх гарантии с процентами: {{ hs_money(row.unguaranteed_amount) }}.{% endif %}{% if strategy_result.guarantee_source %} <a href="{{ strategy_result.guarantee_source }}" target="_blank" rel="noopener noreferrer">Условия КФГД ↗</a>{% endif %}</p>{% endif %}
+          {% if row.conditions %}<ul>{% if row.conditions is string %}<li>{{ row.conditions }}</li>{% else %}{% for note in row.conditions %}<li>{{ note }}</li>{% endfor %}{% endif %}</ul>{% endif %}
+          {% if row.warnings %}<ul>{% for note in row.warnings %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
+          <p>Расчёт по подтверждённой годовой программе, при сохранении суммы и процентов до конца срока. Досрочное снятие, индивидуальные налоги и расходы на переводы не учтены.</p>
+        </details>
+      </article>{% endfor %}</div>
+  </section>
+  {% endif %}
+  {% if properties %}
+  <section class="hs-result-group" aria-labelledby="hs-rentals-title">
+    <div class="hs-group-heading"><h4 id="hs-rentals-title">Квартиры для месячной аренды</h4><p>Цены покупки и аренды — из предложений рынка.{% if strategy_result.market_date_label %} Данные: {{ strategy_result.market_date_label }}.{% endif %}</p></div>
+    <div class="hs-property-cards">{% for row in properties %}
+      <article class="hs-result-card hs-property-card" data-property-result="{{ row.id }}">
+        <p class="hs-result-kind">{{ row.rooms }} комн. · {{ row.area|fmt_num(1)|replace(',0', '') }} м²</p><h5>{{ row.complex_name or row.title }}</h5>
+        {% if row.address %}<p class="hs-property-address">{{ row.address }}</p>{% endif %}
+        <p class="hs-purchase-price">{{ hs_money(row.price) }}<span>цена предложения покупки</span></p>
+        <dl class="hs-property-metrics"><div><dt>Аренда похожих квартир</dt><dd>{{ hs_money(row.rental_estimate.monthly_low) }}–{{ hs_money(row.rental_estimate.monthly_high) }}<small>в месяц · цены предложений</small></dd></div><div><dt>При ставке {{ hs_money(row.rental_estimate.monthly_median) }} в месяц</dt><dd>{{ hs_money(row.annual_gross_ceiling) }}<small>за 12 месяцев без простоя, до расходов</small></dd></div></dl>
+        {% if row.bank_threshold %}<div class="hs-bank-comparison"><strong>Вклад {{ row.bank_threshold.bank }}: +{{ hs_money(row.bank_threshold.annual_income) }} за год</strong><p>Чтобы получить столько же от аренды, после всех расходов нужно {{ hs_money(row.bank_threshold.minimum_monthly_net_cash) }} в месяц.</p></div>{% endif %}
+        <div class="hs-property-actions">{% if row.href %}<a href="{{ row.href }}">Подробнее о квартире →</a>{% endif %}{% if row.url %}<a href="{{ row.url }}" target="_blank" rel="noopener noreferrer nofollow">Объявление ↗</a>{% endif %}</div>
+        <details class="hs-assumptions"><summary>На чём расчёт</summary><p>Диапазон и срединная ставка — по сопоставимым предложениям аренды. Это ориентир цены, а не подтверждённый договор.</p>{% if row.rental_estimate.date_label %}<p>Аренда: {{ row.rental_estimate.date_label }}.</p>{% endif %}{% if row.observed_at_label %}<p>Цена покупки наблюдалась: {{ row.observed_at_label }}.</p>{% endif %}<p>Годовая сумма — ставка × 12. Простой, ремонт, налоги, содержание и расходы сделки её уменьшают. Рост цены и будущая продажа квартиры не включены.</p>{% if row.cash_remainder > 0 %}<p>После покупки остаётся {{ hs_money(row.cash_remainder) }} из бюджета, до оформления и ремонта.</p>{% endif %}</details>
+      </article>{% endfor %}</div>
+  </section>
+  {% endif %}
+  {% if purchases %}
+  <section class="hs-result-group" aria-labelledby="hs-purchases-title">
+    <div class="hs-group-heading"><h4 id="hs-purchases-title">{% if properties %}Ещё квартиры{% else %}Квартиры{% endif %} в вашем бюджете</h4><p>Цена покупки — без ремонта и расходов сделки.</p></div>
+    <div class="hs-purchase-cards">{% for row in purchases %}
+      <article class="hs-result-card hs-purchase-card" data-purchase-result="{{ row.id }}"><p class="hs-result-kind">{{ row.rooms }} комн. · {{ row.area|fmt_num(1)|replace(',0', '') }} м²</p><h5>{{ row.complex_name or row.title }}</h5>{% if row.address %}<p class="hs-property-address">{{ row.address }}</p>{% endif %}<p class="hs-purchase-price">{{ hs_money(row.price) }}<span>цена предложения</span></p>{% if row.observed_at_label %}<p class="hs-help">Наблюдалась: {{ row.observed_at_label }}</p>{% endif %}<div class="hs-property-actions">{% if row.href %}<a href="{{ row.href }}">Подробнее →</a>{% endif %}{% if row.url %}<a href="{{ row.url }}" target="_blank" rel="noopener noreferrer nofollow">Объявление ↗</a>{% endif %}</div></article>
+    {% endfor %}</div>
+  </section>
+  {% endif %}
+  {% if banks %}<p class="hs-result-note">Вклады — среди отслеживаемых программ Freedom, Forte, Bereke и Home Credit с подходящими сроком и суммой. Это не весь рынок банков.</p>{% endif %}
 </div>
 {% endif %}
-{% for diagnostic in strategy_result.diagnostics or [] %}{% if diagnostic.key in ['monthly', 'daily', 'construction'] %}<p class="hs-diagnostic" data-strategy-diagnostic="{{ diagnostic.key }}">{{ diagnostic.message }}</p>{% endif %}{% endfor %}
 {% endif %}
+{% if strategy_result and strategy_result.empty_message %}<p class="hs-result-note" role="status" data-strategy-empty>{{ strategy_result.empty_message }}</p>{% endif %}

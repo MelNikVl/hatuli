@@ -1,8 +1,8 @@
-"""SVG coordinates for recorded asking-price events, without invented dates.
+"""Linear SVG series of dated asking-price observations, without invented dates.
 
-Both ends of a change share its recorded timestamp. A connector is drawn only
-when consecutive events agree on price, and is styled as an observation gap by
-the template. No first price is extended into an unobserved past.
+An event dates its NEW price only. Its old price remains change evidence, not
+a second observation at that timestamp or a price on an invented earlier day.
+Lines join dated new prices only across a continuous recorded event chain.
 """
 from __future__ import annotations
 
@@ -64,14 +64,16 @@ Do not copy arbitrary text, stored SVG, or asserted point coordinates into HTML.
                 raise ValueError("Unknown later chart price")
             new = _price(event["new_price"])
             safe.append({"at": at.isoformat(), "date_label": at.astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y"),
+                         "observation_label": at.astimezone(LOCAL_TIMEZONE).strftime("%d.%m.%Y, %H:%M"),
                          "stamp": at.timestamp(), "old_price": old, "new_price": new,
                          "delta": new-old if old is not None else None,
-                         "direction": "down" if old is not None and new < old else "up" if old is not None and new > old else "unknown"})
+                         "direction": "down" if old is not None and new < old else "up" if old is not None and new > old else "same" if old is not None else "unknown"})
             previous_at = at
     except (TypeError, ValueError, KeyError, OverflowError):
         return None
 
-    prices = [value for event in safe for value in (event["old_price"], event["new_price"]) if value is not None]
+    # The undated baseline must not become a plotted observation or axis point.
+    prices = [event["new_price"] for event in safe]
     low, high = min(prices), max(prices)
     padding = max((high-low)*.09, high*.004, 10_000)
     floor, ceiling = low-padding, high+padding
@@ -83,20 +85,34 @@ Do not copy arbitrary text, stored SVG, or asserted point coordinates into HTML.
     def y(price):
         return round(BOTTOM-(price-floor)/(ceiling-floor)*(BOTTOM-TOP), 2)
 
-    connectors, changes, points = [], [], []
+    segments, points, run = [], [], []
+
+    def finish_run():
+        if len(run) > 1:
+            segments.append({"points": " ".join(f'{point["x"]},{point["y"]}' for point in run)})
+        run.clear()
+
+    # Multiple values recorded at the exact same instant remain markers. Their
+    # shared x-coordinate cannot establish a linear time interval or a unique
+    # price for connecting the surrounding observations.
+    stamp_counts = {}
+    for event in safe:
+        stamp_counts[event["stamp"]] = stamp_counts.get(event["stamp"], 0)+1
     for index, event in enumerate(safe):
         position = x(event)
-        if index and event["old_price"] is not None and safe[index-1]["new_price"] == event["old_price"]:
-            connectors.append({"x1": x(safe[index-1]), "x2": position,
-                               "y": y(event["old_price"])})
-        if event["old_price"] is not None:
-            changes.append({"x": position, "y1": y(event["old_price"]), "y2": y(event["new_price"]),
-                            "direction": event["direction"], "old_price": event["old_price"],
-                            "new_price": event["new_price"], "date_label": event["date_label"]})
-            points.append({"x": position, "y": y(event["old_price"]), "price": event["old_price"],
-                           "date_label": event["date_label"], "kind": "before", "direction": event["direction"]})
-        points.append({"x": position, "y": y(event["new_price"]), "price": event["new_price"],
-                       "date_label": event["date_label"], "kind": "after", "direction": event["direction"]})
+        point = {"x": position, "y": y(event["new_price"]), "price": event["new_price"],
+                 "old_price": event["old_price"], "at": event["at"],
+                 "date_label": event["observation_label"],
+                 "kind": "observed", "direction": event["direction"],
+                 "undated_baseline": index == 0 and event["old_price"] is not None}
+        points.append(point)
+        continuous = (index > 0 and safe[index-1]["new_price"] == event["old_price"]
+                      and stamp_counts[event["stamp"]] == 1
+                      and stamp_counts[safe[index-1]["stamp"]] == 1)
+        if not continuous:
+            finish_run()
+        run.append(point)
+    finish_run()
 
     has_gap = any(safe[index-1]["new_price"] != event["old_price"] for index, event in enumerate(safe) if index)
     first = safe[0]["old_price"] if safe[0]["old_price"] is not None else safe[0]["new_price"]
@@ -111,7 +127,7 @@ Do not copy arbitrary text, stored SVG, or asserted point coordinates into HTML.
             ticks.insert(1, {"x": x(middle), "label": middle["date_label"], "anchor": "middle"})
     axis = [{"y": y(high), "label": _million(high, high-low)}, {"y": y(low), "label": _million(low, high-low)}] if high != low else [{"y": y(high), "label": _million(high, 0)}]
     return {"width": WIDTH, "height": HEIGHT, "axis": axis, "date_ticks": ticks,
-            "connectors": connectors, "changes": changes, "points": points,
+            "segments": segments, "points": points,
             "net_change": net, "net_pct": round(net/first*100, 2) if net is not None else None,
             "has_gap": has_gap, "events_count": len(safe),
             "summary": f"История цены предложения: {len(safe)} наблюдений, с {safe[0]['date_label']} по {safe[-1]['date_label']}."}
