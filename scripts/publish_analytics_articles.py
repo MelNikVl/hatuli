@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from bot.core.analytics_articles import (
     LOCAL_TIMEZONE, MAX_FILE_BYTES, MAX_SCAN, build_digest, build_edition,
-    load_article, publish_edition, validate_digest,
+    load_article, publish_edition, validate_digest, normalize_local_edition,
 )
 
 SALES_SQL = """
@@ -100,8 +100,9 @@ def main(argv=None):
     parser.add_argument("--articles", type=Path, help="Reviewed editorial pair with dated fact references")
     parser.add_argument("--digest", type=Path, help="Reviewed aggregate digest, including official publications")
     parser.add_argument("--check", "--check-only", action="store_true", help="Validate the reviewed pair without writing files or connecting to DB")
+    parser.add_argument("--local", action="store_true", help="Publish a separate immutable pair of reviewed local research; retain the original daily edition")
     args = parser.parse_args(argv)
-    if args.export_digest and (args.articles or args.digest or args.check) or not args.export_digest and not (args.articles and args.digest):
+    if args.export_digest and (args.articles or args.digest or args.check or args.local) or not args.export_digest and not (args.articles and args.digest):
         parser.error("Choose --export-digest PATH or both --articles PATH --digest PATH")
     now = datetime.now(timezone.utc)
     day = now.astimezone(LOCAL_TIMEZONE).date().isoformat()
@@ -117,15 +118,18 @@ def main(argv=None):
         return 0
     # No DB/environment loading in the publication branch. A complete existing
     # edition is immutable and idempotent, even when new input paths disappear.
-    if not args.check and all(load_article(f"{day}-{kind}", root=args.root, now=now) for kind in ("market", "rent")):
+    suffix = "-local" if args.local else ""
+    if not args.check and all(load_article(f"{day}-{kind}{suffix}", root=args.root, now=now) for kind in ("market", "rent")):
         print(json.dumps({"status": "already_published", "edition_date": day, "articles": 2, "database_writes": 0}))
         return 0
     digest = validate_digest(read_input(args.digest), published_at=now)
     edition = build_edition(read_input(args.articles), digest, now=now)
+    if args.local:
+        normalize_local_edition(edition, now=now)
     if args.check:
         print(json.dumps({"status": "validated", "edition_date": day, "articles": 2, "file_writes": 0, "database_writes": 0}))
         return 0
-    result = publish_edition(edition, root=args.root, now=now)
+    result = publish_edition(edition, root=args.root, now=now, local=args.local)
     print(json.dumps({**result, "database_writes": 0}))
     return 0
 

@@ -77,6 +77,98 @@ def edition():
     return articles.build_edition(draft(), digest(), now=NOW)
 
 
+def observed_edition():
+    value = edition()
+    source = value["digest"]["sources"]["bns.housing"]
+    source.update(kind="hatuli_observations", rights_status="operator_authorized",
+                  url="https://hatuli.ai-groundtruth.com/how-it-works",
+                  reuse_url="https://hatuli.ai-groundtruth.com/how-it-works")
+    for fact in value["digest"]["facts"].values():
+        fact["n"] = 30
+    return value
+
+
+def test_local_research_is_separate_immutable_pair_with_original_bytes_preserved(tmp_path):
+    articles.publish_edition(edition(), root=tmp_path, now=NOW)
+    original = articles.archive_directory(tmp_path) / "2026-10-16.json"
+    original_bytes, original_mtime = original.read_bytes(), original.stat().st_mtime_ns
+    value = observed_edition()
+    assert articles.publish_edition(value, root=tmp_path, now=NOW, local=True)["status"] == "published"
+    local = articles.archive_directory(tmp_path, local=True) / "2026-10-16.json"
+    before, mtime = local.read_bytes(), local.stat().st_mtime_ns
+    assert articles.publish_edition(value, root=tmp_path, now=NOW, local=True)["status"] == "already_published"
+    assert (local.read_bytes(), local.stat().st_mtime_ns) == (before, mtime)
+    assert (original.read_bytes(), original.stat().st_mtime_ns) == (original_bytes, original_mtime)
+    items = articles.list_articles(root=tmp_path, now=NOW)
+    assert len(items) == 4
+    assert items[0]["slug"].endswith("-local")
+    assert len(articles.list_articles(root=tmp_path, category="rent", now=NOW)) == 2
+    assert articles.load_article("2026-10-16-market-local", root=tmp_path, now=NOW)["url"].endswith("-market-local")
+    assert articles.load_article("2026-10-16-market", root=tmp_path, now=NOW)["url"].endswith("-market")
+
+
+def test_local_research_requires_approved_observed_source_and_retains_fail_closed_reader(tmp_path):
+    with pytest.raises(ValueError, match="Hatuli observations"):
+        articles.publish_edition(edition(), root=tmp_path, now=NOW, local=True)
+    value = observed_edition()
+    value["digest"]["sources"]["bns.housing"]["rights_status"] = "not_cleared"
+    with pytest.raises(ValueError, match="reuse"):
+        articles.publish_edition(value, root=tmp_path, now=NOW, local=True)
+    directory = articles.archive_directory(tmp_path, local=True)
+    directory.mkdir(parents=True)
+    (directory / "2026-10-16.json").write_text(json.dumps(edition()), encoding="utf-8")
+    assert articles.load_article("2026-10-16-market-local", root=tmp_path, now=NOW) is None
+    assert articles.list_articles(root=tmp_path, now=NOW) == []
+
+
+def test_unused_observation_source_cannot_relabel_official_pair_as_local():
+    value = edition()
+    value["digest"]["sources"]["hatuli.unused"] = deepcopy(observed_edition()["digest"]["sources"]["bns.housing"])
+    with pytest.raises(ValueError, match="used numeric Hatuli observations"):
+        articles.normalize_local_edition(value, now=NOW)
+
+
+@pytest.mark.parametrize("label", ["Скидка 90% и доходность 50%", "ЖК Скидка 90%", "ЖК {fact:sales.rooms_2}", "ЖК Цена 5 млн"])
+def test_bound_place_labels_cannot_hide_claims_or_nested_tokens(label):
+    value = observed_edition()
+    value["digest"]["facts"]["sales.rooms_1"]["label"] = label
+    value["articles"][0]["lead"] += " Рассматриваем {label:sales.rooms_1}."
+    with pytest.raises(ValueError, match="place name"):
+        articles.normalize_local_edition(value, now=NOW)
+
+
+def test_bound_place_labels_allow_digit_in_complex_name_but_not_unbound_numeric_claims():
+    value = observed_edition()
+    value["digest"]["facts"]["sales.rooms_1"]["label"] = "ЖК Geneva 4"
+    value["articles"][0]["lead"] += " В сравнении рассматривается {label:sales.rooms_1}, а цена показана отдельно."
+    normalized = articles.normalize_local_edition(value, now=NOW)
+    assert "ЖК Geneva 4" in normalized[0]["lead"]
+    value["articles"][0]["lead"] += " Скидка 20 процентов."
+    with pytest.raises(ValueError, match="fact tokens"):
+        articles.normalize_local_edition(value, now=NOW)
+
+
+def test_place_labels_support_kazakh_catalog_names():
+    value = observed_edition()
+    value["digest"]["facts"]["sales.rooms_1"]["label"] = "ЖК Арғымақ"
+    value["articles"][0]["lead"] += " В сравнении есть {label:sales.rooms_1}."
+    assert "ЖК Арғымақ" in articles.normalize_local_edition(value, now=NOW)[0]["lead"]
+
+
+def test_place_label_must_exist_and_its_fact_source_must_be_cited():
+    value = observed_edition()
+    value["articles"][0]["lead"] += " Сравниваем {label:sales.unknown_place}."
+    with pytest.raises(ValueError, match="Unknown label"):
+        articles.normalize_local_edition(value, now=NOW)
+    value = observed_edition()
+    value["digest"]["sources"]["hatuli.extra"] = deepcopy(value["digest"]["sources"]["bns.housing"])
+    value["digest"]["facts"]["sales.extra_place"] = {
+        **value["digest"]["facts"]["sales.rooms_1"], "source_id": "hatuli.extra", "label": "ЖК Geneva 4"}
+    value["articles"][0]["lead"] += " Сравниваем {label:sales.extra_place}."
+    with pytest.raises(ValueError, match="cite every"):
+        articles.normalize_local_edition(value, now=NOW)
+
+
 def test_normalizes_two_ready_articles_without_fake_sample_size():
     values = articles.normalize_edition(edition(), now=NOW)
     assert {item["kind"] for item in values} == {"market", "rent"}
