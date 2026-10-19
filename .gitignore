@@ -45,3 +45,10 @@ research/phase_c/data/
 /var/gui-smoke-*.py
 # Private rental pilot inquiries and SQLite sidecars.
 /var/rental-inquiries.sqlite3*
+
+# Private full editorial audits/drafts and generated local publication archives.
+/var/rental-editorial/
+/var/editorial-audit/
+/var/analytics-editorial/
+/var/analytics-local-articles/
+/var/analytics-article-revisions/
