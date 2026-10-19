@@ -152,17 +152,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # Топ-2000 ЖК по активным объявлениям — полный список (2500+) в один
         # sitemap не кладём (мягкий лимит поисковиков — 50k URL, но страницы
         # без единого объявления малоценны для индексации).
-        rows = await pg_fetch("""
-            SELECT c.id, c.updated_at,
-                   COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE) AS active_cnt
-            FROM complexes c
-            LEFT JOIN apartment_listings a ON lower(trim(a.complex_name)) = lower(trim(c.name))
-            WHERE COALESCE(c.is_street, FALSE) = FALSE
-            GROUP BY c.id
-            HAVING COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE) > 0
-            ORDER BY active_cnt DESC
-            LIMIT 2000
-        """)
+        from bot.core.sitemap import COMPLEX_SITEMAP_SQL
+        rows = await pg_fetch(COMPLEX_SITEMAP_SQL)
         body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
         for loc, freq, prio in urls:
             body.append(f"<url><loc>{loc}</loc><changefreq>{freq}</changefreq><priority>{prio}</priority></url>")
