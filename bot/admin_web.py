@@ -119,6 +119,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "> Проверка квартиры в Астане перед покупкой: история заявленной цены, "
             "похожие предложения и признаки повторной публикации. Разбор и доступ согласуются вручную.\n\n"
             "## Ключевые страницы\n"
+            "- [Аналитика недвижимости Астаны](https://hatuli.ai-groundtruth.com/analytics): обзоры рынка жилья и аренды с графиками, периодами данных и первичными источниками\n"
             "- [Пример разбора](https://hatuli.ai-groundtruth.com/example): проверенный обезличенный снимок реального объекта\n"
             "- [ЖК и карта](https://hatuli.ai-groundtruth.com/map): публичные новостройки; частные объявления доступны после входа и ручного одобрения\n"
             "- [Жилые комплексы](https://hatuli.ai-groundtruth.com/complexes): каталог ЖК Астаны\n"
@@ -136,6 +137,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             ("https://hatuli.ai-groundtruth.com/", "weekly", "1.0"),
             ("https://hatuli.ai-groundtruth.com/example", "monthly", "0.9"),
             ("https://hatuli.ai-groundtruth.com/best-apartments", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/best-rentals", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/analytics", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/compare", "daily", "0.9"),
             ("https://hatuli.ai-groundtruth.com/rent", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/improve-listing", "monthly", "0.7"),
@@ -149,20 +152,18 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # Топ-2000 ЖК по активным объявлениям — полный список (2500+) в один
         # sitemap не кладём (мягкий лимит поисковиков — 50k URL, но страницы
         # без единого объявления малоценны для индексации).
-        rows = await pg_fetch("""
-            SELECT c.id, c.updated_at,
-                   COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE) AS active_cnt
-            FROM complexes c
-            LEFT JOIN apartment_listings a ON lower(trim(a.complex_name)) = lower(trim(c.name))
-            WHERE COALESCE(c.is_street, FALSE) = FALSE
-            GROUP BY c.id
-            HAVING COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE) > 0
-            ORDER BY active_cnt DESC
-            LIMIT 2000
-        """)
+        from bot.core.sitemap import COMPLEX_SITEMAP_SQL
+        rows = await pg_fetch(COMPLEX_SITEMAP_SQL)
         body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
         for loc, freq, prio in urls:
             body.append(f"<url><loc>{loc}</loc><changefreq>{freq}</changefreq><priority>{prio}</priority></url>")
+        from bot.core.analytics_articles import list_articles
+        for article in list_articles():
+            body.append(
+                f"<url><loc>https://hatuli.ai-groundtruth.com{article['url']}</loc>"
+                f"<lastmod>{article['edition_date']}</lastmod>"
+                "<changefreq>monthly</changefreq><priority>0.7</priority></url>"
+            )
         for r in rows:
             lastmod = r["updated_at"].strftime("%Y-%m-%d") if r["updated_at"] else ""
             body.append(
@@ -715,9 +716,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         sort: str = "score_total",
         limit: int = 10,
         seller: str = "",
+        tab: str = "",
     ):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
+
+        if tab == 'rental':
+            from bot.rental_analytics_web import render_rental_analytics
+            return await render_rental_analytics(request, templates, rooms)
 
         from bot.db.pg import fetch as pg_fetch
 
@@ -1751,7 +1757,9 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
         from bot.core.rental_data_quality import rental_live_sql
         from bot.core.comparison_rental_estimate import rental_estimate_for_listing
-        rental_estimate = await rental_estimate_for_listing(dict(listing))
+        rental_estimate = await rental_estimate_for_listing(dict(listing)) if listing.get("market_type") != "primary" else None
+        from bot.core.rental_economics import rental_economics_for_listing
+        rental_economics = await rental_economics_for_listing(dict(listing))
         rental_scope = rental_live_sql()
         rental_comps = await pg_fetch(f"""
             SELECT complex_name, district, rooms, price, area
@@ -1882,6 +1890,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "bargain": bargain,
                 "rental_comps": [dict(r) for r in rental_comps],
                 "rental_estimate": rental_estimate,
+                "rental_economics": rental_economics,
                 "reasons_list": reasons_list,
                 "negotiation_points": negotiation_points,
                 "seller_questions": seller_questions,
@@ -2278,9 +2287,19 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.include_router(make_seller_review_router(templates))
     from bot.web.rental_tools import make_rental_tools_router
     app.include_router(make_rental_tools_router(templates))
+    from bot.web.rental_picks import make_rental_picks_router
+    app.include_router(make_rental_picks_router(templates))
+    from bot.web.analytics_articles import make_analytics_articles_router
+    app.include_router(make_analytics_articles_router(templates))
+    from bot.web.rental_scanner import make_rental_scanner_router
+    app.include_router(make_rental_scanner_router(templates))
+    from bot.web.rental_economics import router as rental_economics_router
+    app.include_router(rental_economics_router)
     from bot.rental_health_web import register_rental_health_routes
     register_rental_health_routes(app, templates)
     from bot.rental_detail_web import register_rental_detail_routes
     register_rental_detail_routes(app)
+    from bot.rental_analytics_web import make_rental_analytics_router
+    app.include_router(make_rental_analytics_router(is_authed,templates))
 
     return app

@@ -238,13 +238,13 @@ def test_stale_or_future_source_and_photo_receipts_are_rejected(offset):
         publisher.photo_evidence_rows([source], {source["id"]: record}, now)
 
 
-def test_existing_approved_photos_stay_usable_and_total_photo_count_is_bounded():
+def test_fresh_visual_receipt_replaces_older_approved_frames_with_only_reviewed_photos():
     now = datetime.now(timezone.utc)
     source, record = photo_review_row(now)
     source["approved_photo_urls"] = [PHOTO_A]
     record["interior_photo_urls"] = [PHOTO_B, PHOTO_C, PHOTO_D]
     reviewed = publisher.photo_evidence_rows([source], {source["id"]: record}, now)[0]
-    assert reviewed["approved_photo_urls"] == [PHOTO_A, PHOTO_B, PHOTO_C]
+    assert reviewed["approved_photo_urls"] == [PHOTO_B, PHOTO_C, PHOTO_D]
 
 
 @pytest.mark.asyncio
@@ -274,7 +274,7 @@ async def test_raw_photos_never_reach_real_generation_without_each_fresh_visual_
     for source in rows:
         source.update(candidate_photo_urls=[PHOTO_A], approved_photo_urls=[])
     records = [{"id": source["id"], "source_url": source["url"], "status": "active", "sale_astana": True,
-                "checked_at": now.isoformat(),
+                "checked_at": now.isoformat(), "source_complex_name": "Тестовый ЖК",
                 **{field: source[field] for field in ("price", "rooms", "area", "floor", "floors_total")}}
                for source in rows[:10]]
     path = tmp_path / "source-checks.json"
@@ -418,7 +418,8 @@ async def test_source_facts_survive_real_generation_and_its_final_rebuild(tmp_pa
     records = [{"id": item["id"], "source_url": item["source_url"], "status": "active",
                 "checked_at": now.isoformat(), "sale_astana": True, "price": item["price"],
                 "rooms": item["rooms"], "area": item["area"], "floor": item["floor"],
-                "floors_total": item["floors_total"], "is_pledged": item["id"] == pledge_id}
+                "floors_total": item["floors_total"], "is_pledged": item["id"] == pledge_id,
+                "source_complex_name": "Тестовый ЖК"}
                for item in confirmed["items"]]
     for source_row in rows:
         if source_row["id"] == pledge_id:

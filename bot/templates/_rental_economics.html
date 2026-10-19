@@ -1,0 +1,12 @@
+{% if rental_economics %}
+<section class="rental-economics" aria-label="Доходность сдачи" style="margin:16px 0;padding:18px;border:1px solid var(--border);border-radius:12px;background:var(--surface);">
+  <p style="margin:0 0 6px;color:var(--muted);font-size:12px;">Доходность сдачи · сценарий по ставкам объявлений</p>
+  <strong style="font-size:26px;color:{% if rental_economics.confidence == 'low' %}var(--muted){% else %}var(--green){% endif %};">{{ rental_economics.net_yield_pct }}% в год</strong>
+  <p>После принятых в сценарии расходов. Аренда: {{ rental_economics.rent_range[0]|fmt_num }}–{{ rental_economics.rent_range[1]|fmt_num }} ₸/мес.</p>
+  <p style="font-size:12px;color:var(--muted);">{{ rental_economics.rent_source.level }} · {{ rental_economics.rent_source.n }} предложений · обновлено {{ rental_economics.rent_source.updated_at[:10] }}{% if rental_economics.confidence == 'low' %}. Мало данных по ЖК; использован более широкий срез.{% endif %}</p>
+  {% if rental_economics.benchmark %}<p>Медиана среза: {{ rental_economics.benchmark.median_net|round(1) }}%; верхние 10% — от {{ rental_economics.benchmark.p90_net|round(1) }}%.</p>{% endif %}
+  <p style="font-size:12px;color:var(--muted);">Допущения: аренда {{ (rental_economics.params_used.occupancy_share * 100)|round(1) }}% времени; расходы {{ (rental_economics.params_used.opex_share * 100)|round(1) }}% плановой аренды; покупка +{{ ((rental_economics.params_used.purchase_cost_multiplier - 1) * 100)|round(1) }}%. Это не определение налогового режима и не подтверждённый доход.</p>
+  <details><summary>Расшифровка расчёта</summary><p>До расходов: {{ rental_economics.gross_yield_pct }}% в год.{% if rental_economics.payback_years %} Сценарная окупаемость после расходов: {{ rental_economics.payback_years }} лет.{% endif %}</p></details>
+  {% if rental_economics.rental_comps %}<details><summary>Похожие предложения аренды</summary><ul>{% for comp in rental_economics.rental_comps %}<li><a href="{{ comp.url }}" target="_blank" rel="noopener noreferrer">{% if comp.address %}{{ comp.address }} · {% endif %}{{ comp.rooms }} комн. · {{ comp.area }} м² · {{ comp.price|fmt_num }} ₸/мес.</a></li>{% endfor %}</ul></details>{% endif %}
+</section>
+{% endif %}

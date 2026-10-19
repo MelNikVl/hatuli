@@ -23,7 +23,7 @@ def verified_snapshot():
         resolved_house_id=None, identity_house_id=None, identity_house_name=None,
         identity_house_valid=False, identity_house_is_umbrella=False, identity_house_parent_id=None,
         identity_complex_review_pending=False, identity_property_match_pending=False,
-        identity_name_ambiguous=False) for index in range(8)]
+        identity_name_ambiguous=False, identity_source_name_conflict=False) for index in range(8)]
     snapshot = dp.build_daily_picks(rows, NOW)
     for item in snapshot["items"]:
         item.update(source_status="active", source_checked_at=NOW.isoformat())

@@ -577,8 +577,12 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                     INSERT INTO rental_listings
                         (id, url, title, price, area, rooms, floor, floors_total,
                          address, district, complex_name, city, prop_type,
-                         published_at, found_at, last_seen, complex_url, photo_url, rent_period, complex_id, rent_period_conflict)
-                    SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15,$16,$17,$18,$19,$20
+                         published_at, found_at, last_seen, complex_url, photo_url, rent_period, complex_id, rent_period_conflict,
+                         rental_episode_started_at,rental_episode_last_seen_at)
+                    SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::timestamptz,$15::timestamptz,
+                           $16,$17,$18::text,$19,$20::boolean,
+                           CASE WHEN $18::text IN ('monthly','daily') AND NOT $20::boolean THEN $15::timestamptz ELSE NULL END,
+                           CASE WHEN $18::text IN ('monthly','daily') AND NOT $20::boolean THEN $15::timestamptz ELSE NULL END
                       FROM (SELECT count(*) FROM previous) previous_observation
                      WHERE TRUE
                     ON CONFLICT (id) DO UPDATE SET
@@ -600,6 +604,24 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                             AND EXCLUDED.rent_period IN ('daily','monthly')
                             AND rental_listings.rent_period <> EXCLUDED.rent_period),
                         complex_id = COALESCE(rental_listings.complex_id, EXCLUDED.complex_id),
+                        rental_episode_started_at = CASE
+                            WHEN rental_listings.rent_period_conflict OR EXCLUDED.rent_period_conflict
+                              OR EXCLUDED.rent_period NOT IN ('monthly','daily')
+                              OR (rental_listings.rent_period IN ('monthly','daily')
+                                  AND rental_listings.rent_period <> EXCLUDED.rent_period) THEN NULL
+                            WHEN rental_listings.rent_period=EXCLUDED.rent_period
+                              AND rental_listings.is_active IS TRUE AND rental_listings.archived_at IS NULL
+                              AND rental_listings.rental_episode_started_at IS NOT NULL
+                              AND rental_listings.rental_episode_started_at<=EXCLUDED.last_seen
+                              AND rental_listings.rental_episode_last_seen_at
+                                  BETWEEN EXCLUDED.last_seen-interval '72 hours' AND EXCLUDED.last_seen
+                            THEN rental_listings.rental_episode_started_at ELSE EXCLUDED.last_seen END,
+                        rental_episode_last_seen_at = CASE
+                            WHEN rental_listings.rent_period_conflict OR EXCLUDED.rent_period_conflict
+                              OR EXCLUDED.rent_period NOT IN ('monthly','daily')
+                              OR (rental_listings.rent_period IN ('monthly','daily')
+                                  AND rental_listings.rent_period <> EXCLUDED.rent_period) THEN NULL
+                            ELSE EXCLUDED.last_seen END,
                         url = EXCLUDED.url,
                         title = EXCLUDED.title,
                         area = EXCLUDED.area,
@@ -614,7 +636,7 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                         is_active = TRUE,
                         archived_at = NULL,
                         archive_reason = NULL
-                    RETURNING id, price, (xmax = 0) AS is_new
+                    RETURNING rental_listings.*, (xmax = 0) AS is_new
                 ), changed AS (
                     INSERT INTO rental_price_history (listing_id, old_price, new_price)
                     SELECT observed.id, previous.price, observed.price
@@ -623,6 +645,21 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                        AND previous.rent_period = $18 AND $18 IN ('daily','monthly')
                        AND NOT previous.rent_period_conflict AND NOT $20
                        AND previous.price <> observed.price
+                    RETURNING listing_id
+                ), captured AS (
+                    INSERT INTO rental_observations
+                      (listing_id,observed_at,observed_on,source,rent_period,period_source_checked,episode_started_at,
+                       city,district,rooms,price,area,complex_name,complex_url,complex_id,
+                       hex_id,hex_edge_m,furnishing,furnishing_version)
+                    SELECT o.id,$15::timestamptz,($15::timestamptz AT TIME ZONE 'UTC')::date,'krisha',o.rent_period,TRUE,o.rental_episode_started_at,
+                           o.city,o.district,o.rooms,o.price,o.area,o.complex_name,o.complex_url,o.complex_id,
+                           o.hex_id,o.hex_edge_m,o.furnishing,o.furnishing_version
+                    FROM observed o WHERE o.city='astana' AND o.prop_type='apartment'
+                      AND o.rent_period IN ('monthly','daily') AND NOT o.rent_period_conflict
+                      AND o.rental_episode_started_at IS NOT NULL
+                      AND NOT coalesce(o.is_duplicate,FALSE) AND NOT coalesce(o.dup_needs_review,FALSE)
+                      AND nullif(btrim(o.duplicate_of),'') IS NULL AND o.rooms BETWEEN 1 AND 6 AND o.price>0
+                    ON CONFLICT(listing_id,observed_on,source,rent_period) DO NOTHING
                     RETURNING listing_id
                 )
                 SELECT observed.is_new,
@@ -642,8 +679,9 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
             new += int(outcome["is_new"])
             updated += int(not outcome["is_new"])
             reactivated += int(outcome["reactivated"])
-        except asyncpg.UndefinedColumnError as exc:
-            raise RentalStage0MigrationRequired() from exc
+        except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError) as exc:
+            from bot.core.rental_furnishing import RentalStage2MigrationRequired
+            raise RentalStage2MigrationRequired() from exc
         except Exception as exc:
             logger.warning("Save error %s: %s", listing.id, type(exc).__name__)
     return RentalSaveCount(saved, new=new, updated=updated, reactivated=reactivated)
@@ -850,6 +888,8 @@ async def rebuild_rental_index() -> None:
                 VALUES ('RENTAL_INDEX_POLICY_VERSION',$1,now())
                 ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()
             """, RENTAL_INDEX_POLICY_VERSION)
+            from bot.core.rental_stage2_index import rebuild_rental_stage2_index
+            await rebuild_rental_stage2_index(connection, rebuilt_at)
     logger.info("rental_index rebuilt: %d monthly groups", len(records))
 
 
@@ -997,6 +1037,10 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
         return report
     deadline = time.monotonic() + budget_seconds
     from bot.db import settings as app_settings
+    from bot.core.rental_furnishing import classify_furnishing, compile_custom_rules, version_tag
+    raw_furnishing_rules = app_settings.get('RENTAL_FURNISHING_RULES_JSON', '{}')
+    furnishing_rules = compile_custom_rules(raw_furnishing_rules)
+    furnishing_version = version_tag(raw_furnishing_rules)
     edge_m = app_settings.get("HEX_EDGE_M", "50")
     edge_probe = observed_hex(51.128, 71.430, edge_m)
     expected_edge = edge_probe["hex_edge_m"] if edge_probe else None
@@ -1004,10 +1048,13 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
     try:
         rows = await fetch("""
         SELECT id, url, lat, lon, complex_name, complex_url, address, title,
-               complex_id, hex_id, hex_edge_m, rent_period, rent_period_conflict FROM rental_listings
+               complex_id, hex_id, hex_edge_m, rent_period, rent_period_conflict,
+               description, description_checked_at, furnishing_version FROM rental_listings
         WHERE (lat IS NULL OR complex_name IS NULL OR btrim(complex_name) = ''
                OR complex_url IS NULL OR btrim(complex_url) = '' OR complex_id IS NULL
                OR hex_id IS NULL OR hex_edge_m IS NULL
+               OR (NULLIF(btrim(description),'') IS NULL AND description_checked_at IS NULL)
+               OR (description_checked_at IS NOT NULL AND furnishing_version IS DISTINCT FROM $3::text)
                OR ($2::real IS NOT NULL AND hex_edge_m IS DISTINCT FROM $2))
           AND is_active IS NOT FALSE
           AND COALESCE(is_duplicate, FALSE) = FALSE
@@ -1018,9 +1065,10 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
                OR coord_fetch_attempted_at < now() - interval '3 days')
         ORDER BY coord_fetch_attempted_at ASC NULLS FIRST, found_at DESC
         LIMIT $1
-        """, batch, expected_edge)
+        """, batch, expected_edge, furnishing_version)
     except asyncpg.UndefinedColumnError as exc:
-        raise RentalStage0MigrationRequired() from exc
+        from bot.core.rental_furnishing import RentalStage2MigrationRequired
+        raise RentalStage2MigrationRequired() from exc
     if not rows:
         return report
 
@@ -1030,13 +1078,20 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
 
     got_geo = got_cx = 0
     for r in rows:
+        if r.get('description_checked_at') is not None and r.get('furnishing_version') != furnishing_version:
+            await execute('UPDATE rental_listings SET furnishing=$2,furnishing_version=$3 WHERE id=$1',
+                          r['id'], classify_furnishing(r.get('title'),r.get('description'),furnishing_rules),furnishing_version)
+            if (r.get('lat') is not None and r.get('lon') is not None and r.get('complex_id')
+                    and r.get('complex_url') and r.get('hex_id') and r.get('hex_edge_m') == expected_edge):
+                continue
         # Existing source coordinates can acquire their grid projection
         # without another source request. This is never a complex guess.
         known_hex = observed_hex(r.get("lat"), r.get("lon"), edge_m)
         if known_hex and (r.get("hex_id") != known_hex["hex_id"] or r.get("hex_edge_m") != known_hex["hex_edge_m"]):
             await execute("UPDATE rental_listings SET hex_id=$2,hex_edge_m=$3 WHERE id=$1",
                           r["id"], known_hex["hex_id"], known_hex["hex_edge_m"])
-            if r.get("complex_name") and r.get("complex_url") and r.get("complex_id"):
+            if (r.get("complex_name") and r.get("complex_url") and r.get("complex_id")
+                    and r.get('description_checked_at') is not None):
                 continue
         if detail_fetch_cooldown_remaining():
             report["cooldown"] = True
@@ -1089,6 +1144,15 @@ async def backfill_rental_details(batch: int = 8, *, budget_seconds: float = 30,
                 cx = None  # ЖК-улица / мусорное имя — не привязываем
 
         sets, params, i = ["coord_fetch_attempted_at=now()"], [], 1
+        description = details.get('description')
+        description = description.strip()[:10000] if isinstance(description, str) else None
+        for field, value in (
+            ('description', description),
+            ('furnishing', classify_furnishing(r.get('title'), description, furnishing_rules)),
+            ('furnishing_version', furnishing_version),
+        ):
+            sets.append(f'{field}=${i}'); params.append(value); i += 1
+        sets.append('description_checked_at=now()')
         projected = observed_hex(details.get("lat"), details.get("lon"), edge_m)
         if projected:
             for field in ("lat", "lon", "hex_id", "hex_edge_m"):

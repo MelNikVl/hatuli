@@ -1,0 +1,4 @@
+<nav class="picks-kind-switch" aria-label="Тип лучших предложений">
+  <a href="/best-apartments"{% if picks_kind == 'sale' %} aria-current="page"{% endif %}>Продажа</a>
+  <a href="/best-rentals"{% if picks_kind == 'rental' %} aria-current="page"{% endif %}>Аренда</a>
+</nav>

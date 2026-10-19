@@ -170,7 +170,8 @@
     <div class="row"><span class="key">📌 Зона</span><span class="val" style="color:{{ '#ef4444' if listing.zone_bonus and listing.zone_bonus < 0 else '#16a34a' }};">{{ listing.zone_name }} ({{ '%+d'|format(listing.zone_bonus or 0) }} к скору)</span></div>
     {% endif %}
     <div class="row"><span class="key">🗺 Привязка к карте</span><span class="val">{% if listing.lat %}точные координаты{% else %}<span style="color:#f59e0b;">нет координат</span>{% endif %}</span></div>
-    {% if rental_estimate %}
+    {% include "_rental_economics.html" %}
+    {% if rental_estimate and not rental_economics %}
     <div class="row"><span class="key">Похожие квартиры предлагают в аренду</span><span class="val">{{ rental_estimate.monthly_low|fmt_num }}–{{ rental_estimate.monthly_high|fmt_num }} ₸/мес</span></div>
     <p style="font-size:12px;color:var(--muted);">Тот же подтверждённый ЖК · {{ rental_estimate.date_label }}. Это цены объявлений, фактический доход и сдача не подтверждены.</p>
     {% else %}<p style="font-size:12px;color:var(--muted);">Для оценки аренды недостаточно свежих подтверждённых аналогов этой квартиры.</p>{% endif %}

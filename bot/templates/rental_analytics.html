@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "_analytics_tabs.html" with context %}
+<link rel="stylesheet" href="/static/hatuli-rental-analytics.css">
+<section class="rental-market">
+  <div class="page-title">Аренда <small>Астана · цены предложений Krisha</small></div>
+  <p class="rental-market-intro">Месяц и сутки считаются отдельно. Для района — от {{ minimum_area }} разных объявлений, для гекса — от {{ minimum_hex }}. Цены не означают состоявшуюся аренду.</p>
+  {% if segments %}
+  <div class="rental-market-table-wrap">
+  <table class="rental-market-table">
+    <thead><tr><th>Район · комнаты</th>{% if has_monthly %}<th>Месяц</th>{% endif %}{% if has_daily %}<th>Сутки</th>{% endif %}{% if has_ratio %}<th>Сутки / месяц</th>{% endif %}{% if has_removal %}<th>До снятия с источника</th>{% endif %}</tr></thead>
+    <tbody>{% for row in segments %}<tr>
+      <th scope="row">{{ row.district }} <span>{{ row.rooms }} комн.</span></th>
+      {% for period in ['monthly','daily'] %}{% if (period == 'monthly' and has_monthly) or (period == 'daily' and has_daily) %}
+      <td>{% if row[period] is defined %}{% set index = row[period] %}
+        <strong>{{ '{:,}'.format(index.median_price).replace(',', ' ') }} ₸/{{ 'мес' if period == 'monthly' else 'сут' }}</strong>
+        <small>P25–P75: {{ '{:,}'.format(index.p25_price).replace(',', ' ') }}–{{ '{:,}'.format(index.p75_price).replace(',', ' ') }} ₸</small>
+        <small>n={{ index.sample_count }} · окно {{ index.window_days }} дн. · активно {{ index.active_supply }}</small>
+        <small>Сохранённые наблюдения: {{ index.source_range_label }}</small>
+        <small title="Последнее реальное наблюдение источника">Источник: {{ index.source_newest_label }}</small>
+      {% endif %}</td>{% endif %}{% endfor %}
+      {% if has_ratio %}<td>{% if row.price_ratio_pct is not none %}{{ row.price_ratio_pct }}%{% endif %}</td>{% endif %}
+      {% if has_removal %}<td>{% if row.removal_days is defined and row.removal_days is not none %}<strong>{{ row.removal_days }} дн.</strong><small>{{ row.gone_30d }} подтверждённых снятий за 30 дней</small>{% endif %}</td>{% endif %}
+    </tr>{% endfor %}</tbody>
+  </table></div>
+  {% if has_ratio %}<p class="rental-market-caption">Отношение — цена одних суток к цене месяца. Оно не учитывает занятость и расходы.</p>{% endif %}
+  {% endif %}
+  <form method="get" action="/admin/analytics" class="rental-market-controls">
+    <input type="hidden" name="tab" value="rental">
+    <label>Комнат на карте <select name="rooms">{% for value in range(1,7) %}<option value="{{ value }}" {{ 'selected' if rooms == value }}>{{ value }}</option>{% endfor %}</select></label>
+    <button type="submit">Показать</button>
+    {% if hex_layers %}<label>Слой <select id="rental-layer-select">{% if 'monthly' in hex_layers %}<option value="monthly">Месячная цена</option>{% endif %}{% if 'daily' in hex_layers %}<option value="daily">Посуточная цена</option>{% endif %}</select></label>{% endif %}
+  </form>
+  {% if hex_layers %}
+    <div id="rental-market-map" aria-label="Гексы с достаточным числом наблюдений"></div>
+    <p class="rental-market-caption">Ребро {{ edge_m|int }} м. Пустые гексы и выборки ниже порога не закрашиваются. Карта показывает медиану цены, n и окно наблюдений.</p>
+    <script id="rental-market-data" type="application/json">{{ hex_layers|tojson }}</script>
+    <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="/static/hatuli-rental-analytics.js" defer></script>
+  {% endif %}
+  <details class="rental-market-method"><summary>Как читать эти данные</summary>
+    <p>Посуточный индекс использует по одному последнему сохранённому наблюдению каждого объявления: сначала за 30 дней, затем за 90, если выборки не хватило. Свежая дата обхода не создаёт прошлую историю. У индекса должно быть наблюдение за последние 72 часа и свежее активное предложение.</p>
+    <p>Месячные цены берутся только из активных объявлений, проверенных за 72 часа. Срок до снятия — от первого сохранённого подтверждения месячного периода в текущем непрерывном эпизоде до удаления на источнике. Реактивация или перерыв наблюдений более 72 часов начинают новый эпизод. Дубли, интервалы менее двух дней, старые архивы без доказательств периода и автоматический архив по давности исключены. Снятие объявления не подтверждает сдачу квартиры и не определяет вакантность.</p>
+    <p>Загрузка посуточной квартиры — вводимый пользователем сценарий. По объявлениям Krisha её измерить нельзя. Разбивка по мебели включается отдельно после ручной проверки минимум 50 реальных источников.</p>
+  </details>
+</section>
+{% endblock %}

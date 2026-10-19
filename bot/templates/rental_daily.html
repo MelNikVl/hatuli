@@ -1,0 +1,45 @@
+{% extends "base_public.html" %}
+{% block title %}Посуточная аренда по районам Астаны — Hatuli{% endblock %}
+{% block meta_description %}Медиана и диапазон посуточных цен по районам и комнатности в Астане. Сохранённые цены предложений Krisha, размер выборки, период и даты источника.{% endblock %}
+{% block og_title %}Посуточная аренда в Астане — Hatuli{% endblock %}
+{% block og_description %}Цены предложений по районам и комнатности: медиана, диапазон, число объявлений и даты наблюдений.{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/hatuli-rental-daily.css?v=20261015-1">{% endblock %}
+{% block content %}
+<div class="rental-daily">
+  <a class="rental-daily-back" href="/rent">← Аренда</a>
+  <section class="rental-daily-hero" aria-labelledby="rental-daily-title">
+    <p class="rental-daily-eyebrow">Hatuli · Астана · Krisha</p>
+    <h1 id="rental-daily-title">Сколько просят<br>за сутки в вашем районе</h1>
+    <p class="rental-daily-lead">Сравните цены по районам и комнатности, затем проверьте расходы и загрузку в своём сценарии субаренды.</p>
+    <a class="btn btn-primary rental-daily-cta" href="/rental/scanner#sublease-form">Рассчитать субаренду →</a>
+  </section>
+  {% if segments %}
+  <section class="rental-daily-results" aria-labelledby="rental-daily-results-title">
+    <div class="rental-daily-heading"><h2 id="rental-daily-results-title">Цены предложений</h2><p>От {{ minimum_area }} разных объявлений в каждом срезе</p></div>
+    <div class="rental-daily-table-wrap" tabindex="0" role="region" aria-label="Цены по районам и комнатности">
+      <table class="rental-daily-table">
+        <thead><tr><th scope="col">Район · комнаты</th><th scope="col">Посуточно</th>{% if has_monthly %}<th scope="col">В месяц</th>{% endif %}{% if has_ratio %}<th scope="col">Сутки / месяц</th>{% endif %}</tr></thead>
+        <tbody>{% for row in segments %}<tr data-daily-segment>
+          <th scope="row">{{ row.district }}<span>{{ row.rooms }} комн.</span></th>
+          {% for period in ['daily','monthly'] %}{% if period == 'daily' or has_monthly %}<td>{% if row[period] is defined %}{% set value = row[period] %}
+            <strong>{{ '{:,}'.format(value.median_price).replace(',', ' ') }} <span>₸/{{ 'сут' if period == 'daily' else 'мес' }}</span></strong>
+            <small>Типичный диапазон: {{ '{:,}'.format(value.p25_price).replace(',', ' ') }}–{{ '{:,}'.format(value.p75_price).replace(',', ' ') }} ₸</small>
+            {% set count = value.sample_count %}<small>{{ count }} {{ 'объявлений' if count % 100 in range(11,15) else 'объявление' if count % 10 == 1 else 'объявления' if count % 10 in [2,3,4] else 'объявлений' }} · активно {{ value.active_supply }}</small>
+            <small>Окно {{ value.window_days }} дн. · наблюдения {{ value.source_range_label }}</small>
+            <small>Источник: {{ value.source_newest_label }}</small>
+            <small>Индекс: {{ value.updated_at_label }}</small>
+          {% endif %}</td>{% endif %}{% endfor %}
+          {% if has_ratio %}<td>{% if row.price_ratio_pct is not none %}<strong>{{ row.price_ratio_pct }}%</strong>{% endif %}</td>{% endif %}
+        </tr>{% endfor %}</tbody>
+      </table>
+    </div>
+    {% if has_ratio %}<p class="rental-daily-caption">Сутки / месяц — отношение двух запрашиваемых ставок. Оно не показывает доходность или число занятых дней.</p>{% endif %}
+  </section>
+  <details class="rental-daily-method"><summary>Как читать индекс</summary>
+    <p>Один исходный ID учитывается один раз. Посуточные наблюдения берём за 30 дней; если выборки не хватает — за 90. У каждого показанного среза есть реальное наблюдение за последние 72 часа и свежее активное предложение. Даты выше показывают фактически сохранённую историю внутри выбранного окна.</p>
+    <p>Месячная цена появляется рядом только при отдельной готовой выборке: активные объявления, проверенные за 72 часа. Типичный диапазон охватывает средние 50% запрашиваемых ставок: от 25-го до 75-го процентиля. Число объявлений не измеряет спрос; запрашиваемая ставка не подтверждает договор аренды.</p>
+    <p>Загрузку и срок заселения по объявлениям измерить нельзя. В калькуляторе загрузку задаёте вы; расходы учитываются по выбранному сценарию.</p>
+  </details>
+  {% endif %}
+</div>
+{% endblock %}

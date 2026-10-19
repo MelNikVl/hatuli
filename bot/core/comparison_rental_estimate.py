@@ -28,8 +28,8 @@ log = logging.getLogger(__name__)
 # The FK is authoritative, including a canonical alias or an explicitly
 # resolved child under a source umbrella. Names only identify unbound legacy
 # rows; both branches require an unambiguous structural source URL.
-RENTAL_COMPARISON_SQL = rental_identity_ctes_sql() + """
-SELECT r.id,r.price,r.area,r.rooms,r.floor,r.floors_total,r.last_seen,
+_RENTAL_COMPARISON_BODY_SQL = """
+SELECT r.id,r.address,r.district,r.price,r.area,r.rooms,r.floor,r.floors_total,r.last_seen,
        r.city,r.prop_type,r.is_active,r.is_duplicate,r.dup_needs_review,r.duplicate_of,
        r.archived_at,r.title,canonical.id AS complex_id,r.rent_period,
        TRUE AS complex_binding_verified
@@ -53,9 +53,16 @@ WHERE r.city='astana' AND r.prop_type='apartment' AND r.is_active IS TRUE
 ORDER BY r.last_seen DESC,r.id
 """
 
+# This CTE is referenced once in the bulk query, so PostgreSQL otherwise
+# inlines its correlated umbrella-child check into the listing joins.
+# Materialization computes the identical identity set once per statement.
+RENTAL_COMPARISON_SQL = rental_identity_ctes_sql(materialize_roots=True) + _RENTAL_COMPARISON_BODY_SQL
+
 # An explicit sale FK can refer to an alias; resolve that FK to one eligible
 # physical canonical project in SQL. No fallback to a sale's textual name.
-SINGLE_OFFER_RENTAL_SQL = RENTAL_COMPARISON_SQL.replace(
+# Preserve the existing selective request-time plan; only the bulk publisher
+# needs to evaluate the complete physical-project set before its listing join.
+SINGLE_OFFER_RENTAL_SQL = (rental_identity_ctes_sql() + _RENTAL_COMPARISON_BODY_SQL).replace(
     "ORDER BY r.last_seen DESC,r.id", """
   AND canonical.id = (
       SELECT bound.cid FROM rental_canonical_map bound JOIN rental_roots target ON target.id=bound.cid

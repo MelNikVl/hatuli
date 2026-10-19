@@ -24,9 +24,9 @@ sys.path.insert(0, str(ROOT))
 
 from bot.core.daily_picks import (
     LOCAL_TIMEZONE, MAX_PICKS, build_daily_picks, load_daily_picks,
-    publish_snapshot, safe_photo_url, snapshot_path, validate_snapshot,
+    publish_snapshot, safe_photo_url, photo_asset_key, snapshot_path, validate_snapshot,
 )
-from bot.core.daily_pick_identity import annotate_daily_pick_identity_rows
+from bot.core.daily_pick_identity import annotate_daily_pick_identity_rows, matching_source_complex_name
 from bot.core.apartment_selection_reasons import best_apartment_factors, validate_selection_facts
 
 DEFAULT_QUALITY_POLICY = "discounted_four_factors"
@@ -58,7 +58,7 @@ SELECT a.id, a.url, a.price, a.area, a.rooms, a.floor, a.floors_total, a.distric
        a.complex_id, a.complex_resolution, a.lat, a.lon, a.finish_level,
        a.ceiling_height, a.kitchen_area, pl.property_id,a.photos AS candidate_photo_urls,
        c.name AS canonical_complex_name, c.year_built AS complex_year_built,
-       CASE WHEN a.complex_resolution='name' THEN complex_name_key(a.complex_name) END AS identity_raw_name_key,
+       complex_name_key(a.complex_name) AS identity_raw_name_key,
        p.approved_photo_urls, coalesce(h.price_events,'[]'::jsonb) AS price_events
 FROM apartment_listings a
 LEFT JOIN property_listings pl ON pl.listing_id = a.id
@@ -80,7 +80,7 @@ SELECT id,name,complex_name_key(name) AS name_key,canonical_id,canonical_reason,
 FROM complexes ORDER BY id LIMIT $1
 """
 IDENTITY_ALIASES_SQL = """
-SELECT complex_id,normalized_name FROM complex_aliases WHERE status='verified' LIMIT $1
+SELECT complex_id,normalized_name,status FROM complex_aliases WHERE status='verified' LIMIT $1
 """
 IDENTITY_COMPLEX_REVIEWS_SQL = """
 SELECT complex_id_a,complex_id_b FROM complex_duplicate_candidates WHERE status='review' LIMIT $1
@@ -306,6 +306,17 @@ def matching_browser_offer(row: dict, record) -> bool:
     )
 
 
+def source_identity_rows(rows: list[dict], checks: dict[str, dict]) -> list[dict]:
+    """Exclude observed conflicts from both ranking and the comparable pool.
+
+    Unvisited peers retain the catalog/raw-source consistency gate; they are
+    not claimed to have received today's browser verification.
+    """
+    return [row for row in rows if str(row.get("id")) not in checks or (
+        matching_browser_offer(row, checks[str(row["id"])])
+        and matching_source_complex_name(row, checks[str(row["id"])]))]
+
+
 def browser_measurements(record: dict, area) -> dict:
     """Only two optional numeric facts; missing/null remains unknown."""
     measurements = {field: record[field] for field in ("kitchen_area", "ceiling_height")
@@ -347,7 +358,9 @@ def photo_evidence_rows(rows: list[dict], checks: dict[str, dict] | None, now: d
 
     Existing fingerprint-approved photos stay usable. Additional interiors
     require an owner-created receipt tied to the same fresh source visit and
-    exact URLs in the current listing. Nothing is written back to PostgreSQL.
+    actual URLs seen in the current listing. A known CDN/format derivative
+    must match the same stored UUID and frame index; no URL is constructed.
+    Nothing is written back to PostgreSQL.
     """
     from datetime import timedelta
     result = []
@@ -373,10 +386,16 @@ def photo_evidence_rows(rows: list[dict], checks: dict[str, dict] | None, now: d
                     fresh = checked.tzinfo is not None and now - timedelta(hours=2) <= checked <= now
                 except (ValueError, TypeError, KeyError, AttributeError):
                     fresh = False
-                if not fresh or any(safe_photo_url(url) is None or url not in current for url in interiors):
+                current_assets = {photo_asset_key(url) for url in current}
+                reviewed_assets = [photo_asset_key(url) for url in interiors]
+                if (not fresh or None in reviewed_assets or len(set(reviewed_assets)) != len(reviewed_assets)
+                        or any(key not in current_assets for key in reviewed_assets)):
                     raise ValueError("Interior photo proof is stale or not part of the current source listing")
-                approved.extend(url for url in interiors if url not in approved)
-        result.append({**row, "approved_photo_urls": approved[:3]})
+                # A fresh visual receipt replaces the entire photo selection.
+                # Older fingerprint approvals must neither add unseen frames
+                # nor displace today's actually inspected interior URLs.
+                approved = list(interiors)
+        result.append({**row, "approved_photo_urls": list(dict.fromkeys(approved))[:3]})
     return result
 
 
@@ -476,7 +495,11 @@ async def generate(args, now: datetime) -> dict:
     if not dsn:
         raise RuntimeError("DATABASE_URL is required")
     source_checks = load_source_checks(args.source_checks, now) if getattr(args, "source_checks", None) else None
-    rows = owner_evidence_rows(await read_candidates(dsn, now), source_checks)
+    if source_checks is None and not args.skip_photo_check:
+        raise ValueError("Fresh normal-browser source confirmations are required")
+    candidates = await read_candidates(dsn, now)
+    candidates = source_identity_rows(candidates, source_checks) if source_checks is not None else candidates
+    rows = owner_evidence_rows(candidates, source_checks)
     rows = photo_evidence_rows(rows, source_checks, now)
     snapshot = build_daily_picks(rows, now)
     head_count = 0
