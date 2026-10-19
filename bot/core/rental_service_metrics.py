@@ -35,6 +35,24 @@ def bounded_number(value: Any, default: float, minimum: float, maximum: float) -
     return max(minimum, min(maximum, number))
 
 
+def rental_list_batch_size(expected_pages: Any, visit_interval_seconds: Any = None,
+                           *, maximum: int = 8, target_hours: float = 24.) -> int:
+    """Weight durable work by catalog size, within the unchanged request pace.
+
+    Unknown catalog: one discovery batch at the cap. Otherwise the observed
+    interval includes other scopes, source/SQL time, maintenance and sleeping.
+    The initial 15-minute visit allowance is deliberately conservative. This
+    is a scheduling target, never evidence that a pass has been completed.
+    """
+    maximum = int(bounded_number(maximum, 8, 1, 8))
+    pages = bounded_number(expected_pages, 0, 0, 1000000)
+    if not pages:
+        return maximum
+    interval = bounded_number(visit_interval_seconds, 900, 1, 86400)
+    hours = bounded_number(target_hours, 24, 1, 24)
+    return max(1, min(maximum, math.ceil(pages * interval / (hours * 3600))))
+
+
 @dataclass(frozen=True)
 class RentalCyclePlan:
     """Upper bounds prevent enrichment from consuming the next list step."""

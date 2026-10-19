@@ -9,13 +9,14 @@ import random
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Callable
 
 from dotenv import load_dotenv
 from bot.core.rental_service_metrics import (
     MaintenanceBudget, RentalCyclePlan, record_rental_cycle, source_failure_counters,
+    rental_list_batch_size,
 )
 
 load_dotenv()
@@ -399,6 +400,12 @@ async def main() -> None:
             await settings.load()
             plan = RentalCyclePlan.from_settings(settings.get)
             path, prop_type = paths[path_idx]
+            from bot.core.rental_period import catalog_cursor_key
+            prefix = catalog_cursor_key(prop_type, path)
+            scope = prefix.removeprefix("RENTAL_CRAWL_V1_").lower()
+            plan = replace(plan, list_batch_pages=rental_list_batch_size(
+                settings.get(f"{prefix}_EXPECTED_LAST_PAGE", "0"),
+                state.visit_intervals.get(scope), maximum=plan.list_batch_pages))
             async with httpx.AsyncClient(
                     headers=DEFAULT_HEADERS, follow_redirects=True, timeout=20) as client:
                 await run_one_cycle(client, path, prop_type, state, operations, plan,

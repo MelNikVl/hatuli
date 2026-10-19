@@ -8,12 +8,22 @@ import pytest
 
 from bot.core import apartment_details as details, complex_audit, detail_cooldown
 from bot.core import rental_parser as parser
-from bot.core.rental_service_metrics import RentalCyclePlan
+from bot.core.rental_service_metrics import RentalCyclePlan, rental_list_batch_size
 from bot.db import pg, settings
 import service_rental as service
 
 PATH = "/arenda/kvartiry/astana/"
 KEY = "RENTAL_CRAWL_V1_APARTMENT"
+
+
+@pytest.mark.parametrize("pages,interval,maximum,expected", [
+    (None,None,8,8), ("unknown",None,8,8), (216,None,8,3),
+    (575,None,8,6), (30,None,8,1), (575,1200,8,8),
+    (575,1200,4,4), (575,600,8,4), (216,800,8,2),
+    (575,float("nan"),8,6), (575,600,999,4),
+])
+def test_adaptive_batch_weights_catalog_size_without_changing_request_pace(pages,interval,maximum,expected):
+    assert rental_list_batch_size(pages,interval,maximum=maximum) == expected
 
 
 @pytest.fixture(autouse=True)
