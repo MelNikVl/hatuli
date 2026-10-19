@@ -18,6 +18,10 @@ OBSERVED = "https://astps-photos-kr.kcdn.kz/webp/97/975ab662-be68-44d9-9ab1-9af3
 ALAPS_OLD = "https://krisha-photos.kcdn.online/webp/6a/6a1e2d8e-e8f2-4a2e-8b80-cf28b6aea53c/1-full.jpg"
 # Literal URL inspected by the parent in listing 1015074964 on 2026-10-17.
 ALAPS_OBSERVED = "https://alaps-photos-kr.kcdn.kz/webp/6a/6a1e2d8e-e8f2-4a2e-8b80-cf28b6aea53c/1-full.webp"
+KZALA2_OLD = "https://krisha-photos.kcdn.online/webp/61/611a773c-1099-47fb-845c-10ff530c773c/1-full.jpg"
+# Literal gallery URL inspected by the parent in listing 1013704636 on 2026-10-19.
+KZALA2_OBSERVED = "https://kzala2-photos-kr.kcdn.kz/webp/61/611a773c-1099-47fb-845c-10ff530c773c/1-full.webp"
+OBSERVED_CDNS = [(OLD, OBSERVED), (ALAPS_OLD, ALAPS_OBSERVED), (KZALA2_OLD, KZALA2_OBSERVED)]
 
 
 @pytest.fixture(autouse=True)
@@ -30,10 +34,10 @@ def no_live_database(monkeypatch):
     monkeypatch.setattr("bot.db.pg.init_pool", reject)
 
 
-def checked_photo(now):
+def checked_photo(now, old=OLD, observed=OBSERVED):
     source, check = photo_review_row(now)
-    source.update(candidate_photo_urls=[OLD], approved_photo_urls=[])
-    check.update(interior_photo_urls=[OBSERVED])
+    source.update(candidate_photo_urls=[old], approved_photo_urls=[])
+    check.update(interior_photo_urls=[observed])
     check["photo_review"]["photo_type"] = "interior"
     return source, check
 
@@ -59,6 +63,47 @@ def test_alaps_literal_url_keeps_asset_identity_and_requires_its_own_fresh_recei
     check["interior_photo_urls"] = [ALAPS_OBSERVED.replace("/1-full", "/2-full")]
     with pytest.raises(ValueError, match="current source listing"):
         publisher.photo_evidence_rows([source], {source["id"]: check}, now)
+
+
+def test_kzala2_literal_url_matches_only_its_stored_uuid_and_frame_without_rewriting():
+    assert dp.safe_photo_url(KZALA2_OBSERVED) == KZALA2_OBSERVED
+    assert dp.photo_asset_key(KZALA2_OBSERVED) == dp.photo_asset_key(KZALA2_OLD) == ("611a773c-1099-47fb-845c-10ff530c773c", "1")
+    now = datetime.now(timezone.utc)
+    source, check = checked_photo(now, KZALA2_OLD, KZALA2_OBSERVED)
+    older = [KZALA2_OLD.replace("1-full", f"{index}-full") for index in (2, 3, 4)]
+    source.update(candidate_photo_urls=[*older, KZALA2_OLD], approved_photo_urls=older)
+    before = copy.deepcopy((source, check))
+    result = publisher.photo_evidence_rows([source], {source["id"]: check}, now)[0]
+    assert result["approved_photo_urls"] == [KZALA2_OBSERVED]
+    assert (source, check) == before
+    for wrong in (KZALA2_OBSERVED.replace("/1-full", "/5-full"),
+                  KZALA2_OBSERVED.replace("611a773c", "611a773d")):
+        check["interior_photo_urls"] = [wrong]
+        with pytest.raises(ValueError, match="current source listing"):
+            publisher.photo_evidence_rows([source], {source["id"]: check}, now)
+
+
+@pytest.mark.parametrize("url", [
+    KZALA2_OBSERVED.replace("https://", "http://"),
+    KZALA2_OBSERVED.replace("kzala2-photos-kr.kcdn.kz", "kzala2-photos-kr.kcdn.kz.evil.test"),
+    KZALA2_OBSERVED.replace("kzala2-photos-kr.kcdn.kz", "kzala3-photos-kr.kcdn.kz"),
+    KZALA2_OBSERVED.replace("https://", "https://user:pass@"),
+    KZALA2_OBSERVED.replace("https://", "https://@"),
+    KZALA2_OBSERVED.replace(".kz/", ".kz:443/"),
+    KZALA2_OBSERVED.replace(".kz/", ".kz:invalid/"),
+    KZALA2_OBSERVED + "?", KZALA2_OBSERVED + "?token=private",
+    KZALA2_OBSERVED + "#", KZALA2_OBSERVED + "#image",
+    KZALA2_OBSERVED + "\n", KZALA2_OBSERVED.replace("/1-full", "/-1-full"),
+    KZALA2_OBSERVED.replace("/1-full.webp", "/1-full.png"),
+    KZALA2_OBSERVED.replace("/1-full.webp", "/1-750x470.webp"),
+    KZALA2_OBSERVED.replace("611a773c-1099-47fb-845c-10ff530c773c", "611a773c1099-47fb-845c-10ff530c773cc"),
+    KZALA2_OBSERVED.replace("/webp/61/", "/webp/../61/"),
+])
+def test_kzala2_sale_and_rental_do_not_allow_lookalikes_or_unsafe_url_shapes(url):
+    from bot.core.rental_parser import _rental_card_photo_url
+    assert dp.safe_photo_url(url) is None
+    assert dp.photo_asset_key(url) is None
+    assert _rental_card_photo_url(url) is None
 
 
 @pytest.mark.parametrize("url", [
@@ -135,12 +180,13 @@ def test_three_older_approved_frames_cannot_displace_todays_reviewed_interior():
 
 @pytest.mark.parametrize("field,value", [
     ("source_url", "https://krisha.kz/a/show/9999999999"), ("id", "9999999999"),
-    ("price", 99_000_000), ("rooms", 6), ("floor", 40), ("floors_total", 40),
+    ("price", 99_000_000), ("rooms", 6), ("area", 99.0), ("floor", 40), ("floors_total", 40),
     ("sale_astana", False), ("status", "unknown"),
 ])
-def test_new_cdn_does_not_bypass_fresh_offer_identity(field, value):
+@pytest.mark.parametrize("old,observed", OBSERVED_CDNS)
+def test_new_cdn_does_not_bypass_fresh_offer_identity(field, value, old, observed):
     now = datetime.now(timezone.utc)
-    source, check = checked_photo(now)
+    source, check = checked_photo(now, old, observed)
     check[field] = value
     with pytest.raises(ValueError):
         publisher.photo_evidence_rows([source], {source["id"]: check}, now)
@@ -163,18 +209,20 @@ def test_different_uuid_or_frame_never_borrows_another_gallery_asset(url):
     {"method": "automatic"}, {"photo_type": "exterior"},
     {"checked_at": "2026-01-01T00:00:00+00:00"},
 ])
-def test_new_cdn_requires_the_same_interior_visual_receipt_contract(change):
+@pytest.mark.parametrize("old,observed", OBSERVED_CDNS)
+def test_new_cdn_requires_the_same_interior_visual_receipt_contract(change, old, observed):
     now = datetime.now(timezone.utc)
-    source, check = checked_photo(now)
+    source, check = checked_photo(now, old, observed)
     check["photo_review"].update(change)
     with pytest.raises(ValueError):
         publisher.photo_evidence_rows([source], {source["id"]: check}, now)
 
 
 @pytest.mark.parametrize("offset", [timedelta(hours=-3), timedelta(seconds=1)])
-def test_new_cdn_cannot_reuse_stale_or_future_visual_proof(offset):
+@pytest.mark.parametrize("old,observed", OBSERVED_CDNS)
+def test_new_cdn_cannot_reuse_stale_or_future_visual_proof(offset, old, observed):
     now = datetime.now(timezone.utc)
-    source, check = checked_photo(now + offset)
+    source, check = checked_photo(now + offset, old, observed)
     with pytest.raises(ValueError):
         publisher.photo_evidence_rows([source], {source["id"]: check}, now)
 
@@ -188,7 +236,7 @@ def test_duplicate_asset_derivatives_do_not_count_as_multiple_reviewed_photos():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("old,observed", [(OLD, OBSERVED), (ALAPS_OLD, ALAPS_OBSERVED)])
+@pytest.mark.parametrize("old,observed", OBSERVED_CDNS)
 async def test_full_generation_preserves_observed_urls_quality_policy_and_head_only_checks(tmp_path, monkeypatch, old, observed):
     now = datetime.now(timezone.utc)
     rows = edition_rows(now=now)
@@ -196,6 +244,7 @@ async def test_full_generation_preserves_observed_urls_quality_policy_and_head_o
         source.update(candidate_photo_urls=[old], approved_photo_urls=[])
     checks = [{"id": source["id"], "source_url": source["url"], "status": "active", "sale_astana": True,
                "checked_at": now.isoformat(), "interior_photo_urls": [observed],
+               "source_complex_name": "Тестовый ЖК",
                "photo_review": {"method": "normal_browser_visual", "photo_type": "interior", "checked_at": now.isoformat()},
                **{field: source[field] for field in ("price", "rooms", "area", "floor", "floors_total")}}
               for source in rows[:10]]

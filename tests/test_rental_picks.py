@@ -83,11 +83,42 @@ def test_ready_offer_uses_exact_monthly_rooms_area_local_peers_and_four_facts():
     assert all('между первым' not in reason for reason in item['reasons'])
 
 
-def test_actual_browser_photo_can_replace_outdated_cached_cover():
+@pytest.mark.parametrize('photo',[
+    'https://astps-photos-kr.kcdn.kz/webp/53/53a2b935-0b39-4f66-a35b-c51a5965a3b1/72-750x470.webp',
+    # Literal gallery URL observed in a normal browser on 2026-10-19.
+    'https://kzala2-photos-kr.kcdn.kz/webp/61/611a773c-1099-47fb-845c-10ff530c773c/1-full.webp',
+])
+def test_actual_browser_photo_can_replace_outdated_cached_cover(photo):
     value=row(photo_url=None,photos=[])
-    photo='https://astps-photos-kr.kcdn.kz/webp/53/53a2b935-0b39-4f66-a35b-c51a5965a3b1/72-750x470.webp'
     result=select(value,check=checked(value,photo_urls=[photo]))
     assert result['items'][0]['photo_urls']==[photo]
+
+
+@pytest.mark.asyncio
+async def test_observed_kzala2_full_photo_survives_rental_validation_and_mocked_head_preflight(monkeypatch):
+    import httpx
+    photo='https://kzala2-photos-kr.kcdn.kz/webp/61/611a773c-1099-47fb-845c-10ff530c773c/1-full.webp'
+    values=[row(i+1) for i in range(10)]
+    peers=[row(100+i,price=300000) for i in range(11)]
+    checks={value['id']:checked(value,photo_urls=[photo]) for value in values}
+    edition=picks.build_rental_picks([*values,*peers],now=NOW,checks=checks)
+    assert len(edition['items'])==10
+    assert all(item['photo_urls']==[photo] and len(item['reasons'])==4 for item in edition['items'])
+    assert picks.validate_snapshot(deepcopy(edition))==edition
+    requests=[]
+    def handler(request):
+        requests.append((request.method,str(request.url)))
+        assert str(request.url)==photo
+        return httpx.Response(200,headers={'content-type':'image/webp'})
+    original_client=httpx.AsyncClient
+    def client(**kwargs):
+        assert kwargs['follow_redirects'] is False
+        return original_client(transport=httpx.MockTransport(handler),**kwargs)
+    monkeypatch.setattr(httpx,'AsyncClient',client)
+    assert await publisher.verified_photos(edition)==edition
+    assert requests==[('HEAD',photo)]*10
+    stale={key:{**check,'checked_at':(NOW-timedelta(hours=3)).isoformat()} for key,check in checks.items()}
+    assert picks.build_rental_picks([*values,*peers],now=NOW,checks=stale)['items']==[]
 
 
 def test_source_checked_photo_never_expands_allowed_cdn_or_follows_private_urls():

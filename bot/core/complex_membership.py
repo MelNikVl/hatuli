@@ -73,13 +73,26 @@ def listing_complex_column_match_sql(complex_column: str, listing_alias: str | N
 
 
 def active_sale_membership_ctes_sql(*, include_children: bool = False) -> str:
+    """Current active nonduplicate membership for sitemap/aggregate consumers."""
+    return sale_membership_ctes_sql(include_children=include_children, active_only=True,
+                                   nonduplicate_only=True)
+
+
+def sale_membership_ctes_sql(*, include_children: bool = False, active_only: bool = False,
+                            nonduplicate_only: bool = False) -> str:
     """Bulk equivalent of listing_complex_match_sql for eligible canonical pages.
 
-    Resolve active, nonduplicate listings once instead of running a correlated
+    Resolve listing identities once instead of running a correlated
     identity predicate for every listing/page pair. Keep the existing one-hop
     canonical semantics, explicit FK priority and unique verified-name fallback.
     Returns a WITH clause exposing listing_membership(listing_id, complex_id).
     """
+    filters = []
+    if active_only:
+        filters.append("a.is_active IS NOT FALSE")
+    if nonduplicate_only:
+        filters.append("COALESCE(a.is_duplicate, FALSE) = FALSE")
+    where = "WHERE " + " AND ".join(filters) if filters else ""
     parents = """
         UNION
         SELECT owner.listing_id, page.id AS complex_id
@@ -113,12 +126,26 @@ def active_sale_membership_ctes_sql(*, include_children: bool = False) -> str:
         LEFT JOIN membership_unique_names name
           ON name.n = complex_name_key(a.complex_name)
          AND NULLIF(btrim(a.complex_name), '') IS NOT NULL
-        WHERE a.is_active IS NOT FALSE AND COALESCE(a.is_duplicate, FALSE) = FALSE
+        {where}
     ), listing_membership AS (
         SELECT owner.listing_id, page.id AS complex_id
         FROM membership_owners owner
         JOIN membership_complexes page ON page.id = owner.cid AND page.canonical_id IS NULL
         {parents}
+    )"""
+
+
+def listing_complex_page_match_sql(complex_param: str = "$1", *, include_children: bool = False) -> str:
+    """Uncorrelated ID set for a canonical page; keep archived/duplicate rows.
+
+    The caller retains its own activity/duplicate filters, just as with the
+    single-row predicate. This is current membership, not an as_of feature.
+    """
+    if not re.fullmatch(r"\$[1-9][0-9]*", complex_param):
+        raise ValueError("complex_param must be a PostgreSQL parameter")
+    return f"""apartment_listings.id IN (
+        {sale_membership_ctes_sql(include_children=include_children)}
+        SELECT listing_id FROM listing_membership WHERE complex_id = {complex_param}
     )"""
 
 
@@ -209,6 +236,28 @@ def rental_complex_match_sql(complex_param: str = "$1", listing_alias: str | Non
             OR ({prefix}complex_id IS NULL AND canonical.id=(
                 SELECT cid FROM name_keys WHERE n=complex_name_key({prefix}complex_name)))
         ) AND ({family})
+    )"""
+
+
+def rental_complex_page_match_sql(complex_param: str = "$1", *, include_children: bool = False) -> str:
+    """Uncorrelated source-gated rental ID set, equivalent to the page predicate."""
+    if not re.fullmatch(r"\$[1-9][0-9]*", complex_param):
+        raise ValueError("complex_param must be a PostgreSQL parameter")
+    target = f"(SELECT cid FROM rental_canonical_map WHERE id={complex_param})"
+    family = f"canonical.id={target}"
+    if include_children:
+        family += f" OR canonical.parent_id={target}"
+    return f"""rental_listings.id IN (
+        {rental_identity_ctes_sql(materialize_roots=True)}
+        SELECT r.id FROM rental_listings r
+        LEFT JOIN rental_canonical_map bound ON bound.id=r.complex_id
+        LEFT JOIN name_keys nk ON r.complex_id IS NULL AND nk.n=complex_name_key(r.complex_name)
+        JOIN rental_roots canonical ON canonical.id=coalesce(bound.cid,nk.cid)
+        JOIN rental_source_keys source ON
+          r.complex_url ~ '^https://krisha[.]kz/complex/show/[^/?#]+(/[^/?#]+)?/?$'
+          AND source.url=rtrim(r.complex_url,'/')
+          AND (source.cid=canonical.id OR (r.complex_id IS NOT NULL AND source.cid=canonical.parent_id))
+        WHERE {family}
     )"""
 
 
