@@ -4,29 +4,36 @@
 {% block description %}{{ article.summary }}{% endblock %}
 {% block footer_note %}Hatuli · Астана. Источники, даты данных и методика указаны в статье. Рыночная статистика описывает выборку и не заменяет оценку конкретной квартиры.{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="/static/hatuli-articles.css?v=20261016.2">
+<link rel="stylesheet" href="/static/hatuli-articles.css?v=20261019.1">
 <script type="application/ld+json">{{ article_schema|tojson }}</script>
 {% endblock %}
 {% block content %}
-<article class="ha-article" data-analytics-article>
+{% set brief = article.editorial_format|default('standard') == 'brief' %}
+<article class="ha-article{% if brief %} ha-article-brief{% endif %}" data-analytics-article>
   <nav class="ha-breadcrumb" aria-label="Навигационная цепочка"><a href="/analytics">Аналитика</a><span aria-hidden="true">/</span><a href="/analytics?category={{ article.kind }}">{{ article.category_label }}</a></nav>
   <header class="ha-article-header">
     <div class="ha-story-meta"><span class="ha-category{% if article.kind == 'rent' %} ha-category-rent{% endif %}">{{ article.category_label }}</span><span>{{ article.reading_minutes }} мин. чтения</span></div>
     <h1>{{ article.title }}</h1>
     <p class="ha-article-lead">{{ article.lead }}</p>
     <p class="ha-published">Hatuli · Опубликовано <time datetime="{{ article.edition_date }}">{{ article.published_label }}</time></p>
+    {% if article.modified_label %}<p class="ha-modified">Обновлено {{ article.modified_label }}{% if article.revision_reason %} · {{ article.revision_reason }}{% endif %}</p>{% endif %}
   </header>
   {% if article.key_points %}<aside class="ha-takeaways" aria-labelledby="ha-takeaways-title"><h2 id="ha-takeaways-title">Главное за минуту</h2><ul>{% for point in article.key_points %}<li>{{ point }}</li>{% endfor %}</ul></aside>{% endif %}
+  {% if not brief %}
+  <div class="ha-article-charts">{% for chart in article.charts %}{{ render_analytics_chart(chart) }}{% endfor %}</div>
+  <details class="ha-extended"><summary>Читать полный разбор</summary>
   {% if article.sections|length > 2 %}<nav class="ha-contents" aria-label="В этой статье"><span>В этой статье</span>{% for section in article.sections %}<a href="#section-{{ loop.index }}">{{ section.heading }}</a>{% endfor %}</nav>{% endif %}
+  {% endif %}
   <div class="ha-article-body">
     {% for section in article.sections %}
     <section class="ha-article-section" id="section-{{ loop.index }}">
       <h2>{{ section.heading }}</h2>
       {% for paragraph in section.paragraphs %}<p>{{ paragraph }}</p>{% endfor %}
-      {% if section.chart_id %}{% for chart in article.charts if chart.id == section.chart_id %}{{ render_analytics_chart(chart) }}{% endfor %}{% endif %}
+      {% if brief and section.chart_id %}{% for chart in article.charts if chart.id == section.chart_id %}{{ render_analytics_chart(chart) }}{% endfor %}{% endif %}
     </section>
     {% endfor %}
   </div>
+  {% if not brief %}</details>{% endif %}
   {% if article.sources or article.methodology %}
   <footer class="ha-article-evidence">
     {% if article.sources %}<section aria-labelledby="ha-sources-title"><h2 id="ha-sources-title">Источники и даты данных</h2><ul class="ha-sources">{% for source in article.sources %}<li><a href="{{ source.url }}" {% if source.url.startswith('https://') %}target="_blank" rel="noopener noreferrer"{% endif %}>{{ source.label }} <span aria-hidden="true">↗</span></a><span>{{ source.as_of_label }}</span></li>{% endfor %}</ul></section>{% endif %}

@@ -120,3 +120,63 @@
   .ha-chart-label strong { font-size: 13px; }
   .ha-article-next { gap: 8px; }
 }
+
+/* Short articles lead with the useful result; older full text stays available. */
+.ha-article { max-width: 820px; }
+.ha-article-header h1 { font-size: clamp(29px,3.2vw,40px); margin: 16px 0; }
+.ha-article-lead { font-size: 17px; line-height: 1.65; margin-bottom: 16px; }
+.ha-published { padding-bottom: 18px; }
+.ha-modified { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 10px 0 0; }
+.ha-takeaways { padding: 18px 21px; margin: 22px 0; }
+.ha-takeaways ul { font-size: 14px; gap: 8px; line-height: 1.6; }
+.ha-article-section { margin-bottom: 25px; }
+.ha-article-section > h2 { font-size: 23px; margin-bottom: 10px; }
+.ha-article-section > p { line-height: 1.7; margin-bottom: 13px; }
+.ha-extended { border-top: 1px solid var(--border); padding-top: 17px; margin-top: 26px; }
+.ha-extended > summary { color: var(--accent); cursor: pointer; font-size: 14px; font-weight: 650; min-height: 32px; }
+.ha-extended[open] > summary { margin-bottom: 20px; }
+.ha-chart { padding: 20px; margin: 20px 0; }
+.ha-chart figcaption p { margin-bottom: 12px; }
+.ha-chart-unit { margin: 11px 0 13px; }
+.ha-chart-rows { gap: 13px; padding: 0 4px; }
+.ha-chart-track { position: relative; height: 2px; margin: 10px 0 5px; background: var(--border); }
+.ha-chart-track > .ha-chart-dot { position: absolute; display: block; width: 8px; height: 8px; top: 50%; border-radius: 50%; transform: translate(-50%,-50%); background: var(--accent-fill); }
+.ha-chart-signed .ha-chart-track::before { top: -3px; bottom: -3px; }
+.ha-chart-signed .ha-chart-track > .ha-chart-negative { right: auto; background: var(--red-fill); border-radius: 50%; }
+.ha-chart-compact { padding: 14px; margin: 0; }
+.ha-chart-compact .ha-chart-track { height: 2px; }
+.ha-timechart { display: grid; grid-template-columns: max-content minmax(0,1fr); gap: 12px; min-width: 0; }
+.ha-time-scale { position: relative; height: 220px; min-width: 48px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ha-time-scale > span { position: absolute; right: 0; transform: translateY(-50%); white-space: nowrap; }
+.ha-time-main { min-width: 0; }
+.ha-time-canvas { position: relative; height: 220px; margin: 0 4px; }
+.ha-time-canvas svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: visible; }
+.ha-time-grid { stroke: var(--border); stroke-width: 1; }
+.ha-time-zero { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
+.ha-time-line { stroke: var(--accent-fill); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.ha-time-point { position: absolute; width: 7px; height: 7px; border: 2px solid var(--accent-fill); border-radius: 50%; background: var(--surface); transform: translate(-50%,-50%); }
+.ha-time-labels { position: relative; height: 35px; margin: 9px 4px 0; color: var(--muted); font-size: 11px; line-height: 1.3; }
+.ha-time-labels > span { position: absolute; top: 0; transform: translateX(-50%); text-align: center; white-space: nowrap; }
+.ha-time-labels > .ha-time-first { transform: none; text-align: left; }
+.ha-time-labels > .ha-time-last { transform: translateX(-100%); text-align: right; }
+.ha-time-labels small { display: block; font-size: 10px; margin-top: 2px; }
+.ha-time-summary { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 10px; line-height: 1.5; margin-top: 5px; }
+.ha-time-summary strong { color: var(--heading); font-size: 12px; font-weight: 650; }
+.ha-chart-compact .ha-time-canvas, .ha-chart-compact .ha-time-scale { height: 135px; }
+.ha-chart-compact .ha-time-scale { font-size: 10px; min-width: 43px; }
+.ha-chart-compact .ha-timechart { gap: 8px; }
+.ha-chart-compact .ha-time-labels { font-size: 10px; }
+.ha-chart-compact .ha-time-summary > span { display: none; }
+@media (max-width: 700px) {
+  .ha-story-card { padding: 18px; }
+  .ha-story-summary { line-height: 1.6; margin-bottom: 16px; }
+  .ha-article-header h1 { font-size: 30px; }
+  .ha-article-lead { font-size: 16px; }
+  .ha-takeaways { padding: 16px; }
+  .ha-chart { padding: 16px; }
+  .ha-chart-compact { padding: 12px; }
+  .ha-timechart { gap: 8px; }
+  .ha-time-canvas, .ha-time-scale { height: 190px; }
+  .ha-time-scale { font-size: 10px; min-width: 43px; }
+  .ha-time-summary { display: grid; }
+}
