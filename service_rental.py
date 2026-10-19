@@ -167,8 +167,9 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
             "unpriced_cards": step.get("unpriced_cards", 0),
         })
     except Exception as exc:
-        list_status = "blocked" if source_failure_counters(exc)["blocked"] else "error"
-        counters.update(source_failure_counters(exc))
+        cooling_down = bool(getattr(exc, "source_cooldown", False))
+        list_status = "cooldown" if cooling_down else "blocked" if source_failure_counters(exc)["blocked"] else "error"
+        counters.update({"list_cooldown_cycles":1} if cooling_down else source_failure_counters(exc))
         partial = getattr(exc, "rental_metrics", {})
         step = partial
         counters.update({key: partial.get(key, 0) for key in (
@@ -322,6 +323,7 @@ async def run_one_cycle(client, path: str, prop_type: str, state: RentalServiceS
              "head_refresh_seconds": plan.head_refresh_seconds,
              "detail": detail_report,
              "list_seconds": round(list_seconds, 3), "stages": budget.stages,
+             "list_cooldown_remaining_seconds": step.get("cooldown_remaining_seconds", 0),
              "maintenance_seconds": round(maintenance_seconds, 3),
              "index": {
                  "due_reason": index_reason,

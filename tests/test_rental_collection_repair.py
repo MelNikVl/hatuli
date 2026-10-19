@@ -247,7 +247,7 @@ async def test_scoped_fifo_and_success_replaces_disproved_fk_without_inventing_f
     assert read.await_args.args[-2:] == ("apartment","monthly")
     assert "found_at ASC NULLS FIRST, id" in read.await_args.args[0]
     sql = write.await_args.args[0]
-    assert "complex_id=COALESCE" not in sql and "description_checked_at=now()" in sql
+    assert "complex_id=COALESCE" not in sql and "description_checked_at=$" in sql
     assert "last_seen=" not in sql and None in write.await_args.args
 
 

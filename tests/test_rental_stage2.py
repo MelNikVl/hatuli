@@ -307,7 +307,7 @@ async def test_description_reuses_single_budgeted_detail_response(monkeypatch):
     result=await parser.backfill_rental_details(1,budget_seconds=30)
     assert fetch.await_count==1 and result['requests']==1 and result['checked']==1
     sql,*params=write.await_args.args
-    assert 'description_checked_at=now()' in sql and 'Полностью меблирована' in params and 'full' in params
+    assert 'description_checked_at=$' in sql and 'Полностью меблирована' in params and 'full' in params
     assert 'complex_id=' in sql and 'complex_id=COALESCE' not in sql
     assert 'last_seen=' not in sql  # enrichment cannot pretend a fresh catalog observation
 

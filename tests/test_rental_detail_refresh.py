@@ -79,7 +79,7 @@ async def test_stale_description_fetches_even_when_catalog_filled_or_locally_rep
     assert fetch.await_args.kwargs["raise_on_error"] is True
     assert 0 < fetch.await_args.kwargs["request_timeout_seconds"] <= 23
     assert result["checked"]==result["detail_attempts"]==result["requests"]==1
-    successful=[c for c in write.await_args_list if "description_checked_at=now()" in c.args[0]]
+    successful=[c for c in write.await_args_list if "description_checked_at=$" in c.args[0]]
     assert len(successful)==1 and "Без мебели" in successful[0].args and "none" in successful[0].args
     assert all("last_seen=" not in c.args[0] for c in write.await_args_list)
     assert not any("SET furnishing=$2,furnishing_version=$3" in c.args[0] for c in write.await_args_list)

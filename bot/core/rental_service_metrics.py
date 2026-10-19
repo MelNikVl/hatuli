@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 COUNTERS = (
     "cycles", "pages", "head_pages", "saved_observations", "raw_cards", "accepted_cards", "unpriced_cards",
     "list_requests", "detail_requests", "archive_requests",
+    "list_cooldown_cycles",
     "detail_checked", "detail_success", "detail_errors", "detail_blocked",
     "detail_cooldown_cycles", "detail_budget_exhausted_cycles",
     "new", "updated", "reactivated", "archived", "blocked", "http_468",
