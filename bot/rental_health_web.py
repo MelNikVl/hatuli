@@ -162,7 +162,7 @@ def _safe_cycle(value) -> dict | None:
     statuses = ("ok", "error", "timeout", "budget_exhausted")
     output = {"at": _iso(raw.get("at")),
               "type": raw.get("type") if isinstance(raw.get("type"), str) and raw.get("type") in TYPES else None,
-              "list_status": raw.get("list_status") if isinstance(raw.get("list_status"), str) and raw.get("list_status") in ("ok", "error", "blocked") else None,
+              "list_status": raw.get("list_status") if isinstance(raw.get("list_status"), str) and raw.get("list_status") in ("ok", "error", "blocked", "cooldown") else None,
               "geo_complex_guess_enabled": raw.get("geo_complex_guess_enabled") is True,
               "stages": {}}
     catalog = next((item for item in CATALOGS
@@ -174,7 +174,7 @@ def _safe_cycle(value) -> dict | None:
     for key in ("cycle", "page", "saved", "head_pages", "durable_pages", "page_interval_samples"):
         output[key] = _number(raw.get(key), integer=True)
     for key in ("list_seconds", "maintenance_seconds", "work_seconds", "sleep_seconds",
-                "page_interval_seconds", "estimated_circle_hours"):
+                "page_interval_seconds", "estimated_circle_hours", "list_cooldown_remaining_seconds"):
         output[key] = _number(raw.get(key))
     index = raw.get("index")
     if isinstance(index, dict):
@@ -203,7 +203,7 @@ def _safe_cycle(value) -> dict | None:
             "scope_label": scopes.get(scope) if isinstance(scope, str) else None,
             "status": status if isinstance(status, str) and status in allowed_statuses else "unknown",
         }
-        for key in ("selected", "checked", "success", "detail_attempts", "requests", "blocked", "errors"):
+        for key in ("selected", "eligible_due", "checked", "success", "detail_attempts", "requests", "blocked", "errors"):
             output["detail"][key] = _number(detail.get(key), integer=True)
         for key in ("cooldown_remaining_seconds", "oldest_due_age_hours"):
             output["detail"][key] = _number(detail.get(key))

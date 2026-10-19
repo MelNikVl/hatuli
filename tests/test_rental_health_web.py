@@ -295,6 +295,18 @@ def test_detail_cooldown_is_a_distinct_result_and_private_evidence_is_filtered()
     assert safe['detail']['scope_label'] is None and safe['detail']['status'] == 'unknown'
 
 
+def test_list_pause_and_queue_size_are_allowlisted_without_raw_evidence():
+    raw = {'list_status':'cooldown', 'list_cooldown_remaining_seconds':920,
+           'detail':{'status':'cooldown','eligible_due':3914}, 'headers':{'cookie':'secret'}}
+    safe = health._safe_cycle(json.dumps(raw))
+    assert safe['list_status'] == 'cooldown' and safe['list_cooldown_remaining_seconds'] == 920
+    assert safe['detail']['eligible_due'] == 3914 and 'secret' not in json.dumps(safe)
+    raw.update(list_cooldown_remaining_seconds=-1)
+    raw['detail']['eligible_due'] = True
+    safe = health._safe_cycle(json.dumps(raw))
+    assert safe['list_cooldown_remaining_seconds'] is None and safe['detail']['eligible_due'] is None
+
+
 def test_admin_html_separates_full_pages_from_list_updates(monkeypatch):
     client, _ = make_client(monkeypatch, admin=True)
     page = client.get('/admin/rental-health')

@@ -141,7 +141,8 @@
   <section class="rh-section">
     <h2>Последний цикл</h2>
     {% if health.latest_cycle %}{% set cycle = health.latest_cycle %}
-    <p class="rh-muted">{{ cycle.at or 'Дата неизвестна' }} · {{ cycle.scope_label or cycle.type or 'Каталог неизвестен' }} · список: {{ cycle.list_status or 'неизвестно' }}</p>
+    <p class="rh-muted">{{ cycle.at or 'Дата неизвестна' }} · {{ cycle.scope_label or cycle.type or 'Каталог неизвестен' }} · список: {{ {'ok':'страницы получены','error':'ошибка','blocked':'ограничение источника','cooldown':'ожидание после ограничения'}.get(cycle.list_status,'неизвестно') }}</p>
+    {% if cycle.list_status == 'cooldown' and cycle.list_cooldown_remaining_seconds %}<p class="rh-muted">Повтор этого каталога не раньше чем через {{ cycle.list_cooldown_remaining_seconds }} с. Новых запросов в эту паузу нет.</p>{% endif %}
     <p>Список: <strong>{{ cycle.list_seconds if cycle.list_seconds is not none else '—' }} с</strong> · обогащение: <strong>{{ cycle.maintenance_seconds if cycle.maintenance_seconds is not none else '—' }} с</strong> · пауза: {{ cycle.sleep_seconds if cycle.sleep_seconds is not none else '—' }} с</p>
     <p class="rh-muted">Привязка к ЖК только по близости на карте: {% if cycle.geo_complex_guess_enabled %}включена — результат требует проверки{% else %}отключена{% endif %}.</p>
     {% if cycle.detail %}{% set detail = cycle.detail %}
