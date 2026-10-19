@@ -6,7 +6,7 @@
   <title>{% block title %}Hatuli — проверь квартиру в Астане перед покупкой{% endblock %}</title>
   <meta name="description" content="{% block description %}История заявленной цены, похожие предложения и признаки повторной публикации. Реальный пример разбора квартиры в Астане и ручной запрос своего разбора.{% endblock %}">
   <meta property="og:site_name" content="Hatuli">
-  <meta property="og:type" content="website">
+  <meta property="og:type" content="{% block og_type %}website{% endblock %}">
   <meta property="og:locale" content="ru_KZ">
   <meta property="og:title" content="{{ self.title()|striptags|trim }}">
   <meta property="og:description" content="{{ self.description()|striptags|trim }}">
@@ -27,6 +27,7 @@
   {% block head %}{% endblock %}
 </head>
 <body class="hatuli-site hatuli-public">
+  {% include "_hatuli_metrika.html" %}
   {% include "_hatuli_header.html" %}
   <main id="main-content" class="hp-shell">{% block content %}{% endblock %}</main>
   <footer class="hp-footer">

@@ -7,6 +7,8 @@
 <link rel="stylesheet" href="/static/hatuli-price-history.css?v=20261013">
 <link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261013">
 <script src="/static/hatuli-comparison.js?v=20261013.5" defer></script>
+<link rel="stylesheet" href="/static/hatuli-strategies.css?v=20261019.1">
+<script src="/static/hatuli-strategies.js?v=20261019.1" defer></script>
 {% endblock %}
 {% macro money(value, suffix='₸') -%}{% if value is not none and value is defined %}{{ value|fmt_num }} {{ suffix }}{% else %}—{% endif %}{%- endmacro %}
 {% macro pct(value) -%}{% if value is not none and value is defined %}{{ value|fmt_num(1)|replace(',0', '') }}%{% else %}—{% endif %}{%- endmacro %}
@@ -67,7 +69,7 @@
     <div>
       <p class="mc-eyebrow">Астана · выбор с понятной ценой</p>
       <h1 id="mc-title">Первичка, вторичка.<br><span>Или пока вклад?</span></h1>
-      <p class="mc-lead">Сначала сравните квартиры рядом. Затем проверьте, что останется через год: если купить сейчас или оставить ту же сумму в банке.</p>
+      <p class="mc-lead">Сначала сравните квартиры рядом. Затем — месячную и посуточную аренду, вложение в стройку и вклад в тенге на одну сумму и срок.</p>
       <p class="mc-hero-note"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m4 10 4 4 8-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Открыто для всех. Ваши расчёты не требуют регистрации.</p>
     </div>
     <aside class="mc-intro-card" aria-label="От одного участка до города">
@@ -75,7 +77,7 @@
       <div><strong>От вашего двора до всего города</strong><p>Один участок → участок и 6 соседних → более широкий район → вся Астана.</p></div>
     </aside>
   </section>
-  <nav class="mc-stepnav" aria-label="Шаги сравнения"><a href="#market"><span>1</span> Рынок вокруг</a><a href="#investment"><span>2</span> Деньги через год</a><a href="#comparison-method">Как считаем →</a></nav>
+  <nav class="mc-stepnav" aria-label="Шаги сравнения"><a href="#market"><span>1</span> Рынок вокруг</a><a href="#strategies"><span>2</span> Четыре стратегии</a><a href="#investment"><span>3</span> Покупка для жизни</a><a href="#comparison-method">Как считаем →</a></nav>
 
   <section class="mc-section" id="market" aria-labelledby="mc-market-title">
     <div class="mc-heading"><div><p class="mc-eyebrow">Шаг 1 · сравним соседей</p><h2 id="mc-market-title">Где выгоднее искать квартиру?</h2></div><p>Сравниваем одинаковое количество комнат и близкую площадь. Начните с небольшого участка и расширяйте поиск.</p></div>
@@ -131,8 +133,10 @@
     {% endif %}
   </section>
 
-  <section class="mc-section" id="investment" aria-labelledby="mc-investment-title">
-    <div class="mc-heading"><div><p class="mc-eyebrow">Шаг 2 · одинаковая стартовая сумма</p><h2 id="mc-investment-title">Купить сейчас или подождать год?</h2></div><p>Результат зависит от роста цены, ремонта и аренды. Измените их и посмотрите, при каких условиях квартира обгонит вклад.</p></div>
+  {% include '_investment_strategies.html' %}
+
+  <section class="mc-section ym-hide-content" id="investment" aria-labelledby="mc-investment-title">
+    <div class="mc-heading"><div><p class="mc-eyebrow">Шаг 3 · покупка для жизни</p><h2 id="mc-investment-title">Купить сейчас или подождать год?</h2></div><p>Результат зависит от роста цены, ремонта и аренды. Измените их и посмотрите, при каких условиях квартира обгонит вклад.</p></div>
     {% if offer_choices %}<form class="mc-offer-selector" action="/compare#investment" method="get"><div class="mc-field"><label for="mc-offer-choice">Выберите квартиру или введите свою цену ниже</label><select name="listing" id="mc-offer-choice"><option value="" {% if not selected_offer %}selected{% endif %}>Своя цена · ручной сценарий</option>{% for offer in offer_choices %}<option value="{{ offer.id }}" {% if form.listing|string == offer.id|string %}selected{% endif %}>{% if offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %} · {{ offer.title or offer.complex_name }}{% if offer.address %} · {{ offer.address }}{% endif %}{% if offer.building %} · корпус {{ offer.building }}{% endif %} · {{ money(offer.price) }}{% if offer.price_history and offer.price_history.events %} · изменение {{ offer.price_history.events[-1].date_label }}{% endif %}</option>{% endfor %}</select><small>Доступные предложения по Астане. Выбор квартиры не меняет область сравнения выше.</small></div><input type="hidden" name="hex" value="{{ cmp.selected_hex or '' }}"><input type="hidden" name="rooms" value="{{ cmp.rooms or 2 }}"><input type="hidden" name="area" value="{{ cmp.area or 60 }}"><input type="hidden" name="scope" value="{{ cmp.scope or 'hex' }}"><button class="mc-button" type="submit">Выбрать →</button></form>{% endif %}
     {% if selected_offer %}{% with price_forecast=selected_offer.price_forecast, forecast_compact=true %}{% include '_price_forecast.html' %}{% endwith %}{% endif %}
     {% if selected_offer and selected_offer.rental_estimate %}

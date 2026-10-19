@@ -1,10 +1,11 @@
 {% extends "buyer_public_base.html" %}
 {% from '_analytics_chart.html' import render_analytics_chart %}
-{% block title %}{{ article.title }} — Hatuli{% endblock %}
-{% block description %}{{ article.summary }}{% endblock %}
+{% block title %}{{ article_seo.title }}{% endblock %}
+{% block description %}{{ article_seo.description }}{% endblock %}
+{% block og_type %}article{% endblock %}
 {% block footer_note %}Hatuli · Астана. Источники, даты данных и методика указаны в статье. Рыночная статистика описывает выборку и не заменяет оценку конкретной квартиры.{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="/static/hatuli-articles.css?v=20261019.1">
+<link rel="stylesheet" href="/static/hatuli-articles.css?v=20261019.2">
 <script type="application/ld+json">{{ article_schema|tojson }}</script>
 {% endblock %}
 {% block content %}
@@ -13,6 +14,7 @@
   <nav class="ha-breadcrumb" aria-label="Навигационная цепочка"><a href="/analytics">Аналитика</a><span aria-hidden="true">/</span><a href="/analytics?category={{ article.kind }}">{{ article.category_label }}</a></nav>
   <header class="ha-article-header">
     <div class="ha-story-meta"><span class="ha-category{% if article.kind == 'rent' %} ha-category-rent{% endif %}">{{ article.category_label }}</span><span>{{ article.reading_minutes }} мин. чтения</span></div>
+    {% if article.topics %}<nav class="ha-story-topics" aria-label="Подтемы статьи">{% for item in article.topics %}<a href="/analytics?topic={{ item.id }}">{{ item.label }}</a>{% endfor %}</nav>{% endif %}
     <h1>{{ article.title }}</h1>
     <p class="ha-article-lead">{{ article.lead }}</p>
     <p class="ha-published">Hatuli · Опубликовано <time datetime="{{ article.edition_date }}">{{ article.published_label }}</time></p>
@@ -20,6 +22,18 @@
   </header>
   {% if brief %}<div class="ha-brief-charts">{% for chart in article.charts %}{{ render_analytics_chart(chart) }}{% endfor %}</div>{% endif %}
   {% if article.key_points %}<aside class="ha-takeaways" aria-labelledby="ha-takeaways-title"><h2 id="ha-takeaways-title">Главное за минуту</h2><ul>{% for point in article.key_points %}<li>{{ point }}</li>{% endfor %}</ul></aside>{% endif %}
+  {% if article.comparisons %}<div class="ha-editorial-comparisons">
+    {% for block in article.comparisons %}<section class="ha-editorial-comparison" aria-labelledby="comparison-{{ loop.index }}" data-editorial-comparison="{{ block.topic }}">
+      <p class="ha-eyebrow">{{ block.topic_label }} · Данные на <time datetime="{{ block.as_of }}">{{ block.as_of_label }}</time></p>
+      <h2 id="comparison-{{ loop.index }}">{{ block.title }}</h2>
+      <p class="ha-comparison-profile">{{ block.profile_label }}{% if block.capital_label %} · Капитал: {{ block.capital_label }} · Горизонт: 12 месяцев{% endif %}</p>
+      <div class="ha-comparison-scroll" role="region" aria-label="{{ block.title }}" tabindex="0"><table><thead><tr><th scope="col">Вариант</th><th scope="col">{{ block.metric_label }}</th><th scope="col">Основание</th></tr></thead><tbody>
+      {% for row in block.rows %}<tr><th scope="row">{{ row.entity_name }}</th><td>{{ row.value_label }}</td><td><a href="{{ row.source_url }}" target="_blank" rel="noopener noreferrer">{{ row.basis_label }}</a>{% if row.n is not none %}<span class="ha-comparison-sample">{{ row.n }} наблюдений</span>{% endif %}<span class="ha-comparison-checked">{{ row.checked_label }}</span></td></tr>{% endfor %}
+      </tbody></table></div>
+      <p class="ha-comparison-conclusion">{{ block.conclusion }}</p><p class="ha-comparison-tradeoff">{{ block.tradeoff }}</p>
+    </section>{% endfor %}
+    <a class="ha-comparison-cta" href="/compare#strategies">Посчитать для своего бюджета <span aria-hidden="true">→</span></a>
+  </div>{% endif %}
   {% if not brief %}
   <div class="ha-article-charts">{% for chart in article.charts %}{{ render_analytics_chart(chart) }}{% endfor %}</div>
   <details class="ha-extended"><summary>Читать полный разбор</summary>
@@ -42,6 +56,6 @@
     {% if brief %}</details>{% endif %}
   </footer>
   {% endif %}
-  <nav class="ha-article-next" aria-label="Продолжить просмотр"><a href="/analytics">← Вся аналитика</a><a href="{% if article.kind == 'rent' %}/best-rentals{% else %}/best-apartments{% endif %}">Посмотреть квартиры <span aria-hidden="true">→</span></a></nav>
+  <nav class="ha-article-next" aria-label="Продолжить просмотр"><a href="/analytics">← Вся аналитика</a><a href="/compare#strategies">Сравнить вложения <span aria-hidden="true">→</span></a><a href="{% if article.kind == 'rent' %}/best-rentals{% else %}/best-apartments{% endif %}">Посмотреть квартиры <span aria-hidden="true">→</span></a></nav>
 </article>
 {% endblock %}

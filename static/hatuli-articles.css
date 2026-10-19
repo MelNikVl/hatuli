@@ -8,6 +8,26 @@
 .ha-filters a { color: var(--text); background: var(--surface); border: 1px solid var(--border); padding: 10px 17px; min-height: 44px; border-radius: 7px; font-size: 14px; font-weight: 600; text-decoration: none; }
 .ha-filters a:hover { background: var(--surface2); }
 .ha-filters a[aria-current="page"] { color: #fff; background: var(--accent-fill); border-color: var(--accent-fill); }
+.ha-topic-filters { margin-top: -12px; }
+.ha-story-topics { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 14px; font-size: 12px; }
+.ha-story-topics a { color: var(--accent); text-underline-offset: 3px; }
+.ha-editorial-comparisons { margin: 26px 0; }
+.ha-editorial-comparison { min-width: 0; padding: 22px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.ha-editorial-comparison h2 { margin: 0 0 10px; color: var(--heading); font-size: 21px; line-height: 1.35; }
+.ha-comparison-profile { color: var(--muted); font-size: 13px; line-height: 1.6; }
+.ha-comparison-scroll { max-width: 100%; overflow-x: auto; margin: 18px 0; }
+.ha-comparison-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.ha-comparison-scroll table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.ha-comparison-scroll th, .ha-comparison-scroll td { padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: top; line-height: 1.55; }
+.ha-comparison-scroll thead th { color: var(--muted); font-size: 11px; font-weight: 600; }
+.ha-comparison-scroll tbody th { color: var(--heading); font-weight: 600; }
+.ha-comparison-scroll td:nth-child(2) { white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 700; }
+.ha-comparison-scroll a { color: var(--accent); text-underline-offset: 3px; }
+.ha-comparison-sample, .ha-comparison-checked { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.ha-comparison-conclusion { font-size: 15px; line-height: 1.7; color: var(--text); }
+.ha-comparison-tradeoff { font-size: 13px; line-height: 1.65; color: var(--muted); }
+.ha-comparison-cta { display: inline-flex; align-items: center; gap: 16px; min-height: 44px; color: var(--accent); font-size: 14px; font-weight: 700; text-underline-offset: 4px; }
+@media (max-width: 520px) { .ha-editorial-comparison { padding: 16px 12px; } .ha-comparison-scroll th, .ha-comparison-scroll td { padding: 10px 6px; } }
 .ha-editions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; }
 .ha-story-card { display: flex; flex-direction: column; min-width: 0; padding: 26px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow-wrap: anywhere; }
 .ha-story-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; color: var(--muted); font-size: 12px; }

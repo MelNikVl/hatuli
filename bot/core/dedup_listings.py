@@ -31,6 +31,8 @@ from __future__ import annotations
 import logging
 import re
 
+from bot.core.house_resolution import conflicting_house_addresses
+
 logger = logging.getLogger(__name__)
 
 
@@ -95,6 +97,11 @@ def find_duplicates(listings: list[dict],
         af, bf = a.get("floor"), b.get("floor")
         if af is not None and bf is not None and af != bf:
             return False
+        ar, br = a.get("rooms"), b.get("rooms")
+        if ar is not None and br is not None and ar != br:
+            return False
+        if conflicting_house_addresses(a.get("address"), b.get("address")):
+            return False
         aa, ba = float(a.get("area") or 0), float(b.get("area") or 0)
         if aa > 0 and ba > 0 and abs(aa - ba) > 3:
             return False
@@ -138,7 +145,7 @@ def find_duplicates(listings: list[dict],
         matched_rule = ""
 
         # 1. UUID фото
-        if uuid and uuid in photo_idx and photo_idx[uuid] != lid:
+        if uuid and uuid in photo_idx and photo_idx[uuid] != lid and _compatible(lid, photo_idx[uuid]):
             matched_primary = photo_idx[uuid]
             matched_rule = "photo"
 
@@ -151,6 +158,8 @@ def find_duplicates(listings: list[dict],
             for ex_id in addr_idx.get(key, []):
                 ex = by_id.get(ex_id)
                 if not ex or abs(float(ex.get("area") or 0) - area) > 3:
+                    continue
+                if not _compatible(lid, ex_id):
                     continue
                 ex_floor = ex.get("floor")
                 if floor is not None and ex_floor is not None and floor != ex_floor:
@@ -178,6 +187,8 @@ def find_duplicates(listings: list[dict],
                     continue
                 ex2 = by_id.get(cand2)
                 if not ex2:
+                    continue
+                if not _compatible(lid, cand2):
                     continue
                 ex2_price = int(ex2.get("price") or 0)
                 if ex2_price <= 0 or abs(ex2_price - price) > PRICE_TOLERANCE:
@@ -209,6 +220,8 @@ def find_duplicates(listings: list[dict],
             for ex_id in geo_idx.get((rooms, floor), []):
                 ex = by_id.get(ex_id)
                 if not ex:
+                    continue
+                if not _compatible(lid, ex_id):
                     continue
                 ex_lat, ex_lon = ex.get("lat"), ex.get("lon")
                 if ex_lat is None or ex_lon is None:

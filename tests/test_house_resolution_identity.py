@@ -52,13 +52,21 @@ async def test_bare_house_number_is_not_enough():
 
 
 @pytest.mark.asyncio
-async def test_unmatched_address_can_fall_back_to_explicit_block_token():
+async def test_conflicting_full_house_number_blocks_even_explicit_block_token():
     result = await resolve(
         [child(1, address="Анет баба, 4"), child(2, address="Туркестан, 6")],
         address="Туркестан, 4", description="Продажа в блоке, корпус 2",
     )
-    assert result["house_id"] == 2
-    assert result["method"] == "token"
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_unresolved_street_can_still_use_explicit_block_token():
+    result = await resolve(
+        [child(1, address="Анет баба, 4"), child(2, address="Туркестан, 6")],
+        address="Неизвестная улица, 4", description="Продажа в блоке, корпус 2",
+    )
+    assert result["house_id"] == 2 and result["method"] == "token"
 
 
 @pytest.mark.asyncio

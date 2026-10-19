@@ -6661,36 +6661,8 @@ def make_extras_router(templates) -> APIRouter:
         dev = await fetchrow("SELECT * FROM developers WHERE id = $1", dev_id)
         if not dev:
             return not_found_page(templates, request, 'Застройщик не найден', '/developers', 'К застройщикам')
-        _developer_listing_match = listing_complex_column_match_sql('c.id', 'al', include_children=True)
-        complexes = await fetch(f"""
-            SELECT c.id, c.name, c.district, c.year_built, c.housing_class,
-                   c.photo_url, c.lat, c.lon,
-                   COALESCE(c.listings_count, 0) AS active_cnt,
-                   COALESCE(c.sold_count, 0) AS sold_cnt,
-                   c.avg_price_m2,
-                   g.avg_days_to_sell, a.address
-            FROM complexes c
-            LEFT JOIN LATERAL (
-                SELECT AVG(EXTRACT(EPOCH FROM (al.archived_at - al.first_seen))/86400)
-                         FILTER (WHERE al.archived_at IS NOT NULL) AS avg_days_to_sell
-                FROM apartment_listings al
-                WHERE {_developer_listing_match}
-                  AND COALESCE(al.is_duplicate, FALSE) = FALSE
-            ) g ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT al.address, COUNT(*) AS cnt
-                FROM apartment_listings al
-                WHERE {_developer_listing_match}
-                  AND al.address IS NOT NULL AND al.address != ''
-                GROUP BY al.address ORDER BY cnt DESC LIMIT 1
-            ) a ON TRUE
-            WHERE c.developer_id = $1
-              AND COALESCE(c.is_street, FALSE) = FALSE
-              AND COALESCE(c.is_garbage, FALSE) = FALSE
-              AND c.canonical_id IS NULL
-              AND COALESCE(c.canonical_reason, '') <> 'junk_unmatched'
-            ORDER BY active_cnt DESC, sold_cnt DESC
-        """, dev_id)
+        from bot.core.developer_detail import DEVELOPER_COMPLEXES_SQL
+        complexes = await fetch(DEVELOPER_COMPLEXES_SQL, dev_id)
         # Официальные данные homeportal.kz: контакты + проекты застройщика
         # (раньше не передавались, блоки «Официальные контакты» и «Проекты
         # по данным homeportal.kz» не рендерились).
@@ -6720,7 +6692,7 @@ def make_extras_router(templates) -> APIRouter:
             "FROM developer_programs WHERE developer_id = $1 "
             "ORDER BY sort_order, title", dev_id)
 
-        return templates.TemplateResponse("developer_detail.html", {
+        return templates.TemplateResponse(request=request, name="developer_detail.html", context={
             "request": request,
             "dev": dict(dev),
             "complexes": [dict(r) for r in complexes],

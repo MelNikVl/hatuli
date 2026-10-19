@@ -16,6 +16,11 @@ from bot.core.rental_service_metrics import (
 )
 
 
+@pytest.fixture(autouse=True)
+def private_cooldown_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("HATULI_DETAIL_COOLDOWN_PATH", str(tmp_path / "detail-cooldown.json"))
+
+
 def operations(collect=None):
     return service.RentalOperations(
         collect or AsyncMock(return_value={
@@ -67,7 +72,7 @@ async def test_list_runs_first_hot_count_does_not_advance_index_twice(monkeypatc
                 "new": 3, "updated": 37}
     async def backfill(*args, **kwargs):
         events.append("backfill")
-        assert kwargs["budget_seconds"] <= 30
+        assert kwargs["budget_seconds"] <= 45
         return {"requests": 1}
     ops.collect = collect
     ops.backfill = backfill

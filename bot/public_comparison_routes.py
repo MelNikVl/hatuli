@@ -23,6 +23,96 @@ from bot.core.apartment_selection_reasons import (
 )
 from bot.core.daily_pick_identity import validate_public_daily_identity
 from bot.core.comparison_rental_estimate import validate_rental_estimate
+from bot.core.investment_strategies import calculate_strategy_comparison
+
+
+# Labels and constraints are presentation only: the pure calculation validates
+# every enabled strategy again. Zeroes are visible, editable user assumptions.
+STRATEGY_FIELDS = {
+    "monthly": [
+        ("purchase_price", "Цена покупки, ₸", 1, 1000000000, 1, "", False),
+        ("monthly_rent", "Аренда за месяц, ₸", 0, 10000000, 1, "", False),
+        ("exit_value", "Стоимость объекта через год, ₸", 0, 1000000000, 1, "", False),
+        ("vacancy_months", "Простой после готовности, месяцев", 0, 12, .1, "", False),
+        ("repair_cost", "Ремонт и обустройство, ₸", 0, 500000000, 1, 0, True),
+        ("buy_cost", "Оформление и покупка, ₸", 0, 100000000, 1, 0, True),
+        ("annual_owner_cost", "Содержание, налоги и обслуживание за год, ₸", 0, 100000000, 1, "", True),
+        ("wait_months", "До готовности к сдаче, месяцев", 0, 60, .1, 0, True),
+        ("sell_cost_pct", "Расходы выхода из объекта, %", 0, 30, .1, 0, True),
+    ],
+    "daily": [
+        ("purchase_price", "Цена покупки, ₸", 1, 1000000000, 1, "", False),
+        ("adr", "Средняя ставка оплаченной ночи, ₸", 0, 1000000, 1, "", False),
+        ("occupancy_pct", "Доля оплаченных ночей, %", 0, 100, .1, "", False),
+        ("exit_value", "Стоимость объекта через год, ₸", 0, 1000000000, 1, "", False),
+        ("platform_fee_pct", "Комиссия площадки, % выручки", 0, 100, .1, "", True),
+        ("management_fee_pct", "Управление, % выручки", 0, 100, .1, "", True),
+        ("cleaning_cost_per_stay", "Уборка за одно заселение, ₸", 0, 1000000, 1, "", True),
+        ("stays_per_month", "Заселений за рабочий месяц", 0, 31, .1, "", True),
+        ("repair_cost", "Ремонт и оснащение, ₸", 0, 500000000, 1, 0, True),
+        ("buy_cost", "Оформление и покупка, ₸", 0, 100000000, 1, 0, True),
+        ("annual_owner_cost", "Коммунальные, налоги, обслуживание за год, ₸", 0, 100000000, 1, "", True),
+        ("wait_months", "До готовности к сдаче, месяцев", 0, 60, .1, 0, True),
+        ("sell_cost_pct", "Расходы выхода из объекта, %", 0, 30, .1, 0, True),
+    ],
+    "construction": [
+        ("entry_price", "Цена входа в проект, ₸", 1, 1000000000, 1, "", False),
+        ("wait_months", "До готовности проекта, месяцев", 0, 60, .1, "", False),
+        ("exit_value", "Стоимость объекта или права через год, ₸", 0, 1000000000, 1, "", False),
+        ("finishing_cost", "Отделка и обустройство, ₸", 0, 500000000, 1, "", True),
+        ("buy_cost", "Оформление и покупка, ₸", 0, 100000000, 1, 0, True),
+        ("annual_owner_cost", "Прочие расходы за год, ₸", 0, 100000000, 1, "", True),
+        ("sell_cost_pct", "Продажа или переуступка, %", 0, 30, .1, "", True),
+    ],
+}
+STRATEGY_LABELS = {"monthly": "Месячная аренда", "daily": "Посуточная аренда", "construction": "Вложения в стройку"}
+
+
+def _strategy_form(selected_offer=None, payload=None):
+    """Keep only bounded, public calculator inputs, never arbitrary POST keys."""
+    payload = payload if isinstance(payload, dict) else {}
+    selected_offer = selected_offer or {}
+    selected_price = selected_offer.get("price", "")
+    values = {"budget": payload.get("budget", selected_price)}
+    for key, fields in STRATEGY_FIELDS.items():
+        row = payload.get(key)
+        values[key + "_enabled"] = isinstance(row, dict)
+        row = row if isinstance(row, dict) else {}
+        for field, _label, _low, _high, _step, default, _extra in fields:
+            value = row.get(field, selected_price if field == "purchase_price" else default)
+            values[key + "__" + field] = str(value)[:100] if isinstance(value, (str, int, float)) and not isinstance(value, bool) else ""
+    if not isinstance(values["budget"], (str, int, float)) or isinstance(values["budget"], bool):
+        values["budget"] = ""
+    else:
+        values["budget"] = str(values["budget"])[:100]
+    return values
+
+
+def _strategy_chart(result):
+    """Plot operating cash only. Never interpolate asset values or bank GESV."""
+    series = []
+    for index, row in enumerate(result.get("strategies", [])):
+        timeline = row.get("timeline")
+        if not isinstance(timeline, list) or len(timeline) != 12:
+            continue
+        points = [0]
+        for month, item in enumerate(timeline, 1):
+            value = item.get("cumulative_net_cash") if isinstance(item, dict) and item.get("month") == month else None
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                break
+            points.append(value)
+        if len(points) == 13:
+            series.append({"key": row["key"], "label": row["label"], "values": points, "color": index % 3})
+    if not series:
+        return None
+    values = [value for item in series for value in item["values"]]
+    low, high = min(values), max(values)
+    span = high - low or max(abs(high), 1)
+    low, high = low - span * .08, high + span * .08
+    for item in series:
+        item["points"] = " ".join(f"{50+month*48:.2f},{208-(value-low)/(high-low)*178:.2f}" for month, value in enumerate(item["values"]))
+    return {"series": series, "low": low, "high": high,
+            "zero_y": 208-(0-low)/(high-low)*178}
 
 
 def _public_offer(offer: dict, *, daily_identity: dict | None = None,
@@ -249,8 +339,13 @@ def comparison_context(*, hex_id: str | None = None, complex_id: int | None = No
 
 def register_public_comparison_routes(app, templates) -> None:
     def render(request: Request, context: dict, status_code: int = 200):
+        context.setdefault("strategy_form", _strategy_form(context.get("selected_offer")))
+        context.setdefault("strategy_result", None)
+        context.setdefault("strategy_chart", None)
+        context.setdefault("strategy_error", "")
         return templates.TemplateResponse(request=request, name="market_comparison.html",
-            context={"request": request, **context}, status_code=status_code,
+            context={"request": request, "strategy_fields": STRATEGY_FIELDS,
+                     "strategy_labels": STRATEGY_LABELS, **context}, status_code=status_code,
             headers={"Cache-Control": "no-store"})
 
     @app.get("/compare", response_class=HTMLResponse)
@@ -308,3 +403,76 @@ def register_public_comparison_routes(app, templates) -> None:
         except (ValueError, TypeError) as error:
             return JSONResponse({"error": str(error)}, status_code=422, headers={"Cache-Control": "no-store"})
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @app.post("/compare/strategies/calculate")
+    async def strategy_comparison_calculator(request: Request):
+        headers = {"Cache-Control": "no-store"}
+        if len(await request.body()) > 16_000:
+            return JSONResponse({"error": "Слишком большой запрос"}, status_code=413, headers=headers)
+        is_json = "application/json" in request.headers.get("content-type", "")
+        wants_json = is_json or "application/json" in request.headers.get("accept", "")
+        payload, data = {}, {}
+        try:
+            if is_json:
+                payload = await request.json()
+                if not isinstance(payload, dict):
+                    raise ValueError("Требуется объект параметров")
+                data = {}
+            else:
+                data = dict(await request.form(max_fields=80, max_files=0))
+                payload = {"budget": data.get("budget", "")}
+                for key, fields in STRATEGY_FIELDS.items():
+                    if data.get(key + "_enabled") == "on":
+                        payload[key] = {field: data.get(key + "__" + field, "") for field, *_rest in fields}
+            result = calculate_strategy_comparison(payload, catalog=load_deposit_catalog())
+            for diagnostic in result.get("diagnostics", []):
+                labels = {field[0]: field[1] for field in STRATEGY_FIELDS.get(diagnostic["key"], [])}
+                if diagnostic.get("status") == "incomplete":
+                    missing = [labels[field] for field in diagnostic.get("fields", []) if field in labels]
+                    diagnostic["message"] = "Заполните: " + "; ".join(missing) if missing else diagnostic["message"]
+                elif diagnostic.get("status") == "invalid":
+                    for field, label in labels.items():
+                        if diagnostic["message"].startswith(field + ":"):
+                            diagnostic["message"] = label + diagnostic["message"][len(field):]
+                            break
+                if diagnostic.get("status") in {"unaffordable", "insufficient_reserve"}:
+                    shortfall, required = diagnostic.get("shortfall"), diagnostic.get("required_budget")
+                    if all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+                           for value in (shortfall, required)):
+                        amounts = [f"{value:,.0f}".replace(",", " ") for value in (shortfall, required)]
+                        diagnostic["message"] += f". Не хватает {amounts[0]} ₸; необходимый бюджет — {amounts[1]} ₸."
+            error = ""
+        except (ValueError, TypeError, OverflowError) as exc:
+            result, error = None, str(exc)
+            if error.startswith("budget:"):
+                error = "Общий бюджет:" + error[len("budget:"):]
+            elif error.startswith("horizon_months:"):
+                error = "Срок сравнения:" + error[len("horizon_months:"):]
+            if wants_json:
+                return JSONResponse({"error": error}, status_code=422, headers=headers)
+        chart = _strategy_chart(result) if result else None
+        if wants_json:
+            html = templates.env.get_template("_investment_strategy_results.html").render(
+                strategy_result=result, strategy_chart=chart)
+            return JSONResponse({"result": result, "html": html}, headers=headers)
+        # Rebuild the existing selected-offer context through the same public
+        # snapshot gate as GET. A calculator submission cannot forge a receipt.
+        identifier = str(data.get("listing", ""))
+        listing = identifier if identifier.isdecimal() and len(identifier) <= 20 else ""
+        unit = int(identifier.split(":", 1)[1]) if identifier.startswith("newbuild:") and identifier.split(":", 1)[1].isdecimal() and len(identifier) <= 20 else None
+        try:
+            if identifier and not listing and (unit is None or not 1 <= unit <= 2_147_483_647):
+                raise ValueError
+            hex_id = data.get("hex") or None
+            rooms, area = int(data.get("rooms", 2)), float(data.get("area", 60))
+            scope = data.get("scope", "hex")
+            if ((hex_id is not None and not valid_hex(hex_id)) or not 1 <= rooms <= 6
+                    or not math.isfinite(area) or not 20 <= area <= 300 or scope not in SCOPE_RADII):
+                raise ValueError
+        except (ValueError, TypeError, OverflowError):
+            return JSONResponse({"error": "Неверные параметры области сравнения"}, status_code=422, headers=headers)
+        context = comparison_context(hex_id=hex_id, rooms=rooms, area=area, scope=scope,
+                                     listing=listing, unit=unit, manual=not identifier)
+        context.update(strategy_form=_strategy_form(context.get("selected_offer"), payload),
+                       strategy_result=result, strategy_chart=chart, strategy_error=error)
+        return render(request, context, status_code=400 if error else 200)

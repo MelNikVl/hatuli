@@ -87,11 +87,14 @@ async def resolve_ingest_complex(source: str, source_id: str, name: str, *, conn
     return await resolve_complex_name(name, connection=db, strict=True)
 
 
-async def resolve_complex_name(name: str | None, *, connection=None, strict: bool = False) -> int | None:
+async def resolve_complex_name(name: str | None, *, connection=None, strict: bool = False,
+                               canonical_names_only: bool = False) -> int | None:
     """Safe name-only fallback; strict imports report ambiguity instead of seeding.
 
     Other consumers receive None for empty, ambiguous or invalid names. Exact
     normalized catalog names and verified aliases share the same candidate set.
+    Source observations can require canonical_names_only: a redirected row's
+    label is not a reviewed alias, while explicitly verified aliases still work.
     """
     db = _database(connection)
     key = normalize_complex_name(name)
@@ -99,9 +102,11 @@ async def resolve_complex_name(name: str | None, *, connection=None, strict: boo
         if strict:
             raise InvalidComplexIdentity("An empty normalized complex name cannot create an identity")
         return None
-    candidates = await db.fetch("""
+    own_name_gate = "AND c.canonical_id IS NULL" if canonical_names_only else ""
+    candidates = await db.fetch(f"""
         SELECT c.id FROM complexes c
          WHERE complex_name_key(c.name) = complex_name_key($1)
+           {own_name_gate}
            AND COALESCE(c.is_garbage, FALSE) = FALSE
            AND COALESCE(c.is_street, FALSE) = FALSE
            AND COALESCE(c.canonical_reason, '') <> 'junk_unmatched'

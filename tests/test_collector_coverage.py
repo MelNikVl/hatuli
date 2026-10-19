@@ -17,6 +17,9 @@ def card(lid, price="200 000"):
 
 @pytest.mark.asyncio
 async def test_unbounded_rental_scan_passes_page_10_and_stops_on_confirmed_last_page(monkeypatch):
+    from bot.db import settings
+    monkeypatch.setattr(settings,"load",AsyncMock())
+    monkeypatch.setattr(settings,"get",lambda key,default="":default)
     pages = []
     def serve(request):
         page = int(request.url.params.get("page", "1"))

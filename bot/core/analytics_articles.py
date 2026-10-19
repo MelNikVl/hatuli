@@ -20,6 +20,8 @@ import tempfile
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
+from bot.core.analytics_comparisons import TOPICS, normalize_comparisons, validate_comparison_fact
+
 LOCAL_TIMEZONE = ZoneInfo("Asia/Almaty")
 KINDS = {"market": "Рынок жилья", "rent": "Аренда"}
 SLUG = re.compile(r"(?P<day>\d{4}-\d{2}-\d{2})-(?P<kind>market|rent)(?P<local>-local)?\Z")
@@ -28,6 +30,7 @@ FACT_TOKEN = re.compile(r"\{fact:([a-z][a-z0-9_.]{1,79})\}")
 LABEL_TOKEN = re.compile(r"\{label:([a-z][a-z0-9_.]{1,79})\}")
 SOURCE_HOSTS = {"hatuli.ai-groundtruth.com", "stat.gov.kz", "nationalbank.kz", "gov.kz",
                 "adilet.zan.kz", "egov.kz", "kdif.kz"}
+BANK_TERMS_HOSTS = {"bankffin.kz", "bank.forte.kz", "berekebank.kz", "home.kz"}
 UNITS = {"объявлений", "₸", "₸/м²", "₸/м²/мес.", "₸/мес.", "₸/сутки", "%", "м²", "сделок", "индекс", "единиц"}
 MONTHS = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля",
           "августа", "сентября", "октября", "ноября", "декабря")
@@ -66,11 +69,12 @@ def _date_label(value):
     return f"{value.day} {MONTHS[value.month - 1]} {value.year}"
 
 
-def _source_url(value):
+def _source_url(value, *, bank_terms=False):
     if not isinstance(value, str) or len(value) > 600:
         raise ValueError("Invalid source URL")
     parsed = urlsplit(value)
-    if (parsed.scheme != "https" or parsed.hostname not in SOURCE_HOSTS
+    hosts = BANK_TERMS_HOSTS if bank_terms else SOURCE_HOSTS
+    if (parsed.scheme != "https" or parsed.hostname not in hosts
             or parsed.username or parsed.password or parsed.port or parsed.fragment
             or any(ord(c) < 32 for c in value)):
         raise ValueError("Only approved official or Hatuli HTTPS sources are permitted")
@@ -87,7 +91,9 @@ def _plain(value, minimum=1, maximum=2000):
 
 
 def number_label(value, unit):
-    digits = f"{value:,.1f}".rstrip("0").rstrip(".") if not float(value).is_integer() else f"{int(value):,}"
+    # Contract rates can differ by hundredths; rounding a checked ГЭСВ to one
+    # decimal silently changes the tariff in prose and comparison tables.
+    digits = f"{value:,.{2 if unit == '%' else 1}f}".rstrip("0").rstrip(".") if not float(value).is_integer() else f"{int(value):,}"
     digits = digits.replace(",", " ").replace(".", ",")
     return f"{digits}{unit}" if unit == "%" else f"{digits} {unit}"
 
@@ -122,25 +128,37 @@ def validate_digest(raw, *, published_at=None):
     for key, source in sources.items():
         if (not FACT_ID.fullmatch(key) or not isinstance(source, dict)
                 or set(source) != {"kind", "label", "url", "as_of", "published_at", "retrieved_at", "reuse_url", "rights_status"}
-                or source["kind"] not in {"official_publication", "hatuli_observations"}
-                or source["rights_status"] not in {"official_reuse_permitted", "not_cleared", "operator_authorized"}):
+                or source["kind"] not in {"official_publication", "hatuli_observations", "official_terms", "calculation_scenario"}
+                or source["rights_status"] not in {"official_reuse_permitted", "not_cleared", "operator_authorized", "factual_terms_only"}):
             raise ValueError("Invalid source")
         _plain(source["label"], 10, 220)
-        _source_url(source["url"])
-        observed, released, retrieved = [utc(source[field]) for field in ("as_of", "published_at", "retrieved_at")]
-        if not generated - timedelta(days=1830) <= observed <= released <= retrieved <= generated:
-            raise ValueError("Invalid source observation time")
+        terms = source["kind"] == "official_terms"
+        _source_url(source["url"], bank_terms=terms)
+        observed, retrieved = [utc(source[field]) for field in ("as_of", "retrieved_at")]
+        if terms:
+            if (not generated - timedelta(hours=24) <= observed <= retrieved <= generated
+                    or source["published_at"] is not None and not utc(source["published_at"]) <= observed
+                    or source["rights_status"] != "factual_terms_only"):
+                raise ValueError("Official bank terms require a fresh actual check; unknown release date stays null")
+        else:
+            released = utc(source["published_at"])
+            if not generated - timedelta(days=1830) <= observed <= released <= retrieved <= generated:
+                raise ValueError("Invalid source observation time")
         if retrieved < generated - timedelta(hours=24):
             raise ValueError("Sources must have been checked within 24 hours of digest creation")
-        _source_url(source["reuse_url"])
+        _source_url(source["reuse_url"], bank_terms=terms)
         if source["kind"] == "official_publication" and urlsplit(source["url"]).hostname == "hatuli.ai-groundtruth.com":
             raise ValueError("An official publication must link to the official source")
+        if source["kind"] == "calculation_scenario" and (
+                urlsplit(source["url"]).hostname != "hatuli.ai-groundtruth.com"
+                or not generated - timedelta(hours=24) <= observed <= generated):
+            raise ValueError("A calculation scenario must be explicit, local and dated")
     facts = raw["facts"]
     if not isinstance(facts, dict) or not 4 <= len(facts) <= 500:
         raise ValueError("Aggregate facts required")
     for key, fact in facts.items():
         if (not FACT_ID.fullmatch(key) or not isinstance(fact, dict)
-                or set(fact) - {"label", "value", "unit", "n", "as_of", "source_id", "series_id"}
+                or set(fact) - {"label", "value", "unit", "n", "as_of", "source_id", "series_id", "comparison"}
                 or not {"label", "value", "unit", "n", "as_of", "source_id"} <= set(fact)
                 or type(fact["value"]) not in (int, float) or not math.isfinite(fact["value"])
                 or fact["unit"] not in UNITS or fact["source_id"] not in sources
@@ -151,15 +169,23 @@ def validate_digest(raw, *, published_at=None):
             raise ValueError("Invalid dated fact series identity")
         if utc(fact["as_of"]) != utc(sources[fact["source_id"]]["as_of"]):
             raise ValueError("Fact and source dates must agree")
-        official = sources[fact["source_id"]]["kind"] == "official_publication"
-        if not (official and fact["n"] is None) and (type(fact["n"]) is not int or not 0 <= fact["n"] <= MAX_SCAN):
+        official = sources[fact["source_id"]]["kind"] in {"official_publication", "official_terms"}
+        if sources[fact["source_id"]]["kind"] == "official_terms" and fact["unit"] not in {"%", "₸"}:
+            raise ValueError("Bank factual terms cannot represent market observations")
+        scenario = sources[fact["source_id"]]["kind"] == "calculation_scenario"
+        if scenario and fact["unit"] not in {"%", "₸", "₸/мес.", "₸/сутки", "м²", "единиц"}:
+            raise ValueError("Scenario assumptions are not market sample observations")
+        if (sources[fact["source_id"]]["kind"] == "official_terms" or scenario) and fact["n"] is not None:
+            raise ValueError("Terms and scenarios have no observed sample count")
+        if not ((official or scenario) and fact["n"] is None) and (type(fact["n"]) is not int or not 0 <= fact["n"] <= MAX_SCAN):
             raise ValueError("Official undisclosed sample size may be null; observed sample size must be explicit")
-        if not official and fact["unit"] != "объявлений" and fact["n"] < 10:
+        if not official and not scenario and fact["unit"] != "объявлений" and fact["n"] < 10:
             raise ValueError("Price distributions require at least ten observations")
         if fact["unit"] == "объявлений" and (not float(fact["value"]).is_integer() or not official and fact["value"] > fact["n"]):
             raise ValueError("Invalid count denominator")
         if fact["unit"] == "%" and fact["value"] > 100:
             raise ValueError("Invalid percentage")
+        validate_comparison_fact(fact, plain=_plain)
     return raw
 
 
@@ -189,9 +215,9 @@ def _text_list(value, facts, count_min, count_max, text_min=20, text_max=1200):
     return [_resolve(item, facts, text_min, text_max) for item in value]
 
 
-def _normalize_article(raw, digest, edition_day, published):
+def _normalize_article(raw, digest, edition_day, published, *, checked_at=None):
     required = {"kind", "title", "summary", "lead", "key_points", "sections", "charts", "source_ids", "methodology"}
-    if (not isinstance(raw, dict) or set(raw) - (required | {"editorial_format"})
+    if (not isinstance(raw, dict) or set(raw) - (required | {"editorial_format", "comparisons"})
             or not required <= set(raw) or raw.get("kind") not in KINDS
             or raw.get("editorial_format", "standard") not in {"standard", "brief"}):
         raise ValueError("Invalid article schema")
@@ -204,12 +230,17 @@ def _normalize_article(raw, digest, edition_day, published):
     points = _text_list(raw["key_points"], facts, 2 if brief else 3, 3 if brief else 5, 20 if brief else 30, 500)
     methodology = _text_list(raw["methodology"], facts, 2, 6, 30, 900)
     source_ids = raw["source_ids"]
-    if (not isinstance(source_ids, list) or not 1 <= len(source_ids) <= 8
+    if (not isinstance(source_ids, list) or not 1 <= len(source_ids) <= 12
             or len(set(source_ids)) != len(source_ids) or any(key not in digest["sources"] for key in source_ids)):
         raise ValueError("Every article needs dated sources")
     charts = []
     serialized = json.dumps(raw, ensure_ascii=False)
     used_facts = set(FACT_TOKEN.findall(serialized)) | set(LABEL_TOKEN.findall(serialized))
+    comparisons, comparison_facts = normalize_comparisons(
+        raw.get("comparisons"), digest, published=checked_at or published,
+        resolve=_resolve, plain=_plain, utc=utc, number_label=number_label,
+    )
+    used_facts.update(comparison_facts)
     if not isinstance(raw["charts"], list) or not 2 <= len(raw["charts"]) <= 4:
         raise ValueError("Each article needs two to four fact-backed charts")
     if brief and len(raw["charts"]) != 2:
@@ -275,7 +306,8 @@ def _normalize_article(raw, digest, edition_day, published):
     if kind == "rent" and not any(key.startswith(("rent_", "rent.")) for key in used_facts):
         raise ValueError("Rental articles require rental observations")
     words = len(re.findall(r"[А-Яа-яЁёA-Za-z]+(?:[-’][А-Яа-яЁёA-Za-z]+)?", " ".join(
-        [lead, *points, *(paragraph for section in sections for paragraph in section["paragraphs"])])))
+        [lead, *points, *(paragraph for section in sections for paragraph in section["paragraphs"]),
+         *(text for block in comparisons for text in (block["conclusion"], block["tradeoff"]))])))
     if not (120 <= words <= 350 if brief else 350 <= words <= 850):
         raise ValueError(f"Brief length must be 120–350 words (editorial target 150–250), got {words}" if brief else f"Article length must be 350–850 words, got {words}")
     slug = f"{edition_day.isoformat()}-{kind}"
@@ -287,20 +319,26 @@ def _normalize_article(raw, digest, edition_day, published):
             "date_label": _date_label(edition_day),
             "published_label": f"{_date_label(published)}, {published.astimezone(LOCAL_TIMEZONE):%H:%M} UTC+5",
             "reading_minutes": max(1 if brief else 2, math.ceil(words / 180)), "lead": lead, "key_points": points,
-            "sections": sections, "charts": charts, "sources": [
+            "sections": sections, "charts": charts, "comparisons": comparisons,
+            "topics": [{"id": key, "label": label} for key, label in TOPICS.items()
+                       if any(block["topic"] == key for block in comparisons)], "sources": [
                 {"label": digest["sources"][key]["label"], "url": digest["sources"][key]["url"],
-                 "as_of_label": f"Период: {_date_label(utc(digest['sources'][key]['as_of']))}. "
-                 f"Опубликовано: {_date_label(utc(digest['sources'][key]['published_at']))}. "
+                 "as_of_label": ("Условия на: " if digest['sources'][key]['kind'] == 'official_terms' else "Период: ")
+                + f"{_date_label(utc(digest['sources'][key]['as_of']))}. "
+                + (f"Опубликовано: {_date_label(utc(digest['sources'][key]['published_at']))}. "
+                   if digest['sources'][key]['published_at'] is not None else "")
+                +
                  f"Проверено: {_date_label(utc(digest['sources'][key]['retrieved_at']))}."}
                 for key in source_ids], "methodology": methodology}
 
 
 def _normalize_pair(articles, digest, day, published, checked_at):
     validate_digest(digest, published_at=checked_at)
-    if any(source["rights_status"] != ("official_reuse_permitted" if source["kind"] == "official_publication"
-                                        else "operator_authorized") for source in digest["sources"].values()):
+    statuses = {"official_publication": "official_reuse_permitted", "official_terms": "factual_terms_only",
+                "hatuli_observations": "operator_authorized", "calculation_scenario": "operator_authorized"}
+    if any(source["rights_status"] != statuses[source["kind"]] for source in digest["sources"].values()):
         raise ValueError("Source reuse must be cleared before public publication")
-    result = [_normalize_article(article, digest, day, published) for article in articles]
+    result = [_normalize_article(article, digest, day, published, checked_at=checked_at) for article in articles]
     if {article["kind"] for article in result} != set(KINDS):
         raise ValueError("The daily pair must contain one market and one rental article")
     return result
@@ -528,8 +566,10 @@ def publish_edition(edition, *, root=None, now=None, local=False):
     return {"status": "published", "edition_date": day.isoformat(), "articles": len(normalized)}
 
 
-def list_articles(root=None, category=None, now=None):
+def list_articles(root=None, category=None, now=None, topic=None):
     if category is not None and category not in KINDS:
+        return []
+    if topic is not None and topic not in TOPICS:
         return []
     now = utc(now or datetime.now(timezone.utc))
     result = []
@@ -548,7 +588,9 @@ def list_articles(root=None, category=None, now=None):
                     values = normalize_local_edition(raw, now=now)
                 else:
                     values = _effective_articles(path, root=root, now=now)
-                result.extend(article for article in values if category is None or article["kind"] == category)
+                result.extend(article for article in values
+                              if (category is None or article["kind"] == category)
+                              and (topic is None or any(item["id"] == topic for item in article["topics"])))
             except (ValueError, TypeError, KeyError, OSError, OverflowError):
                 continue
     return sorted(result, key=lambda article: (article["edition_date"], article["slug"].endswith("-local")), reverse=True)

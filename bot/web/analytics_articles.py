@@ -7,6 +7,9 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
+from bot.core.analytics_comparisons import TOPICS
+from bot.core.article_seo import article_seo
+
 
 PAGE_SIZE = 12
 SITE_URL = "https://hatuli.ai-groundtruth.com"
@@ -24,10 +27,12 @@ def _load_article(slug):
     return load_article(slug)
 
 
-def _page_url(category, page):
+def _page_url(category, page, topic=None):
     query = {}
     if category:
         query["category"] = category
+    if topic:
+        query["topic"] = topic
     if page > 1:
         query["page"] = page
     return "/analytics" + ("?" + urlencode(query) if query else "")
@@ -137,9 +142,15 @@ def make_analytics_articles_router(templates):
     async def archive(
         request: Request,
         category: str | None = Query(default=None, pattern="^(market|rent)$"),
+        topic: str | None = Query(default=None, pattern="^(places|complexes|banks|developers|strategies)$"),
         page: int = Query(default=1, ge=1, le=10000),
     ):
         articles = _load_articles(category=category)
+        available = {value["id"] for item in articles for value in item.get("topics", []) if value.get("id") in TOPICS}
+        topics = [{"id": key, "label": label, "url": _page_url(category, 1, key)}
+                  for key, label in TOPICS.items() if key in available]
+        if topic:
+            articles = [item for item in articles if any(value.get("id") == topic for value in item.get("topics", []))]
         page_count = max(1, (len(articles) + PAGE_SIZE - 1) // PAGE_SIZE)
         if page > page_count:
             raise HTTPException(status_code=404, detail="Страница не найдена")
@@ -151,10 +162,14 @@ def make_analytics_articles_router(templates):
                 "request": request,
                 "articles": [_display_article(item) for item in articles[start:start + PAGE_SIZE]],
                 "category": category,
+                "topic": topic,
+                "topic_label": TOPICS.get(topic),
+                "topics": topics,
+                "all_topics_url": _page_url(category, 1),
                 "page": page,
                 "page_count": page_count,
-                "previous_url": _page_url(category, page - 1) if page > 1 else None,
-                "next_url": _page_url(category, page + 1) if page < page_count else None,
+                "previous_url": _page_url(category, page - 1, topic) if page > 1 else None,
+                "next_url": _page_url(category, page + 1, topic) if page < page_count else None,
             },
             headers=headers,
         )
@@ -165,11 +180,12 @@ def make_analytics_articles_router(templates):
         if not article:
             raise HTTPException(status_code=404, detail="Статья не найдена")
         article = _display_article(article)
+        seo = article_seo(article)
         schema = {
             "@context": "https://schema.org",
             "@type": "Article",
             "headline": article["title"],
-            "description": article["summary"],
+            "description": seo["description"],
             "datePublished": article.get("published_at", article["edition_date"]),
             "dateModified": article.get("date_modified", article.get("published_at", article["edition_date"])),
             "inLanguage": "ru-KZ",
@@ -181,7 +197,7 @@ def make_analytics_articles_router(templates):
         return templates.TemplateResponse(
             request=request,
             name="analytics_article.html",
-            context={"request": request, "article": article, "article_schema": schema},
+            context={"request": request, "article": article, "article_schema": schema, "article_seo": seo},
             headers=headers,
         )
 

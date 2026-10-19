@@ -17,6 +17,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def private_cooldown_state(monkeypatch, tmp_path):
+    from bot.core import apartment_details
+    monkeypatch.setenv("HATULI_DETAIL_COOLDOWN_PATH", str(tmp_path / "detail-cooldown.json"))
+    monkeypatch.setattr(apartment_details, "_BLOCKED_UNTIL", 0.)
+    monkeypatch.setattr(apartment_details, "_BLOCKED_STREAK", 0)
+
+
 def _html(info_items: list[str], title: str = "1-комнатная квартира") -> str:
     items_html = "".join(f'<div class="offer__info-item">{t}</div>' for t in info_items)
     return f'<html><body><h1>{title}</h1>{items_html}</body></html>'
