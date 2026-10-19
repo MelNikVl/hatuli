@@ -390,6 +390,7 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
         or soup.select_one("div.offer__description div.text")
         or soup.select_one("div.offer__description")
     )
+    result["description_observed"] = desc_el is not None
     if desc_el:
         for br in desc_el.find_all("br"):
             br.replace_with("\n")
