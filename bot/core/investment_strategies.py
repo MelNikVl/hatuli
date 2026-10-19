@@ -140,6 +140,11 @@ def _property_strategy(key: str, values: dict, budget: float) -> tuple[dict | No
     profit = wealth - budget
     minimum_cash = min(remainder, *(remainder + item["cumulative_net_cash"] for item in timeline))
     funding_gap = max(0, -minimum_cash)
+    if funding_gap > 0:
+        diagnostic = _diagnostic(key, "insufficient_reserve", [],
+                                 "Остатка общего бюджета не хватает на расходы до выхода; увеличьте бюджет или измените сценарий")
+        diagnostic.update(required_budget=_money(budget + funding_gap), shortfall=_money(funding_gap))
+        return None, diagnostic
     assumptions = [
         "Все параметры недвижимости введены пользователем; это сценарий, а не прогноз.",
         "Остаток бюджета хранится без процентов; ипотека и заёмные деньги не учитываются.",
@@ -164,8 +169,6 @@ def _property_strategy(key: str, values: dict, budget: float) -> tuple[dict | No
             "Если готовность позже года, цена выхода относится к праву требования или переуступке по вашему сценарию, а не к готовой квартире.",
             "Возможность и условия переуступки, согласие застройщика и доступность покупателя этим расчётом не проверяются.",
         ])
-    if funding_gap > 0:
-        assumptions.append("Остатка общего бюджета не хватает для промежуточных расходов: требуется дополнительный резерв. Его финансирование и проценты не моделируются.")
     row = {"key": key, "label": _LABELS[key], "status": "ready", "evidence_type": "user_scenario",
            "initial_outlay": _money(initial), "cash_remainder": _money(remainder),
            "gross_income": _money(gross), "operating_expenses": _money(expenses),
@@ -176,7 +179,7 @@ def _property_strategy(key: str, values: dict, budget: float) -> tuple[dict | No
            "total_return_pct": round(profit / budget * 100, 4),
            "net_cash_yield_pct": round(operating / budget * 100, 4),
            "ready_months": round(ready_months, 4), "inputs": dict(values),
-           "minimum_cash_balance": _money(minimum_cash), "additional_funding_required": _money(funding_gap),
+           "minimum_cash_balance": _money(minimum_cash), "additional_funding_required": 0,
            "assumptions": assumptions, "timeline": timeline}
     if key == "construction":
         row["asset_stage"] = "ready_scenario" if values["wait_months"] <= HORIZON_MONTHS else "unfinished_right_scenario"

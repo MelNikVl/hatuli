@@ -305,10 +305,21 @@ def test_construction_full_exit_fee_has_no_solvable_value_threshold():
     assert row["thresholds"][0]["status"] == "not_calculable"
 
 
-def test_interim_cash_reserve_shortage_is_explicit_and_does_not_create_loan_income():
-    row = calculate_strategy_comparison({"budget": 32_300_000, "monthly": monthly()}, catalog(offer()), NOW)["strategies"][0]
-    assert row["cash_remainder"] == 0
-    assert row["minimum_cash_balance"] == -40_000
-    assert row["additional_funding_required"] == 40_000
-    assert row["total_profit"] == 90_000
-    assert any("дополнительный резерв" in text for text in row["assumptions"])
+def test_interim_cash_reserve_shortage_excludes_row_instead_of_borrowing_extra_money():
+    result = calculate_strategy_comparison({"budget": 32_300_000, "monthly": monthly()}, catalog(offer()), NOW)
+    assert result["strategies"] == []
+    diagnostic = next(item for item in result["diagnostics"] if item["key"] == "monthly")
+    assert diagnostic["status"] == "insufficient_reserve"
+    assert diagnostic["required_budget"] == 32_340_000
+    assert diagnostic["shortfall"] == 40_000
+    assert len(result["banks"]) == 1
+    funded = calculate_strategy_comparison({"budget": diagnostic["required_budget"], "monthly": monthly()}, catalog(offer()), NOW)
+    assert funded["strategies"][0]["minimum_cash_balance"] == 0
+    assert funded["strategies"][0]["total_profit"] == 90_000
+
+
+def test_reserve_excluded_monthly_is_not_used_as_daily_threshold_benchmark():
+    result = calculate_strategy_comparison({"budget": 32_300_000, "monthly": monthly(),
+                                            "daily": daily(repair_cost=0)}, catalog(offer()), NOW)
+    assert [row["key"] for row in result["strategies"]] == ["daily"]
+    assert not any(item["key"] == "daily_vs_monthly_cash" for item in result["strategies"][0]["thresholds"])
