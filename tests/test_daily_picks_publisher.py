@@ -28,7 +28,15 @@ def candidate_rows():
         resolved_house_id=None, identity_house_id=None, identity_house_name=None,
         identity_house_valid=False, identity_house_is_umbrella=False, identity_house_parent_id=None,
         identity_complex_review_pending=False, identity_property_match_pending=False,
-        identity_name_ambiguous=False) for index in range(160)]
+        identity_name_ambiguous=False, identity_source_name_conflict=False,
+        identity_source_name_keys=["тестовый жк"]) for index in range(160)]
+
+
+def browser_checks(rows):
+    return {row['id']: {'id': row['id'], 'source_url': row['url'], 'status': 'active',
+            'checked_at': NOW.isoformat(), 'sale_astana': True,
+            'source_complex_name': row['canonical_complex_name'],
+            **{k: row[k] for k in ('price','rooms','area','floor','floors_total')}} for row in rows[:60]}
 
 
 @pytest.fixture(autouse=True)
@@ -186,7 +194,8 @@ async def test_refill_replaces_failed_cards_without_changing_comparable_pool(mon
     monkeypatch.setattr(publisher, "read_candidates", read)
     monkeypatch.setattr(publisher, "verify_sources", verify_sources)
     monkeypatch.setattr(publisher, "verify_photos", verify)
-    result = await publisher.generate(SimpleNamespace(skip_photo_check=False), NOW)
+    monkeypatch.setattr(publisher, "load_source_checks", lambda *args: browser_checks(rows))
+    result = await publisher.generate(SimpleNamespace(skip_photo_check=False, source_checks="mock.json"), NOW)
     items = result["snapshot"]["items"]
     assert len(batches) == 2 and len(items) == 30
     assert len({item["id"] for item in items}) == 30
@@ -328,34 +337,26 @@ async def test_source_verification_rejects_archived_deleted_changed_and_generic_
 @pytest.mark.asyncio
 async def test_confirmed_archived_sources_are_removed_from_final_comparison_pool(monkeypatch):
     rows = candidate_rows()
-    source_batches = []
-    archived = set()
-
+    checks = browser_checks(rows)
+    archived = {row['id'] for row in rows[:5]}
+    for lid in archived:
+        checks[lid]['status'] = 'archived'
     async def read(dsn, now):
         return rows
-
-    async def verify_sources(snapshot, deadline):
-        source_batches.append(snapshot)
-        rejected = {item["id"] for item in snapshot["items"][:5]} if len(source_batches) == 1 else set()
-        archived.update(rejected)
-        confirmed = [{**item, "source_status": "active", "source_checked_at": NOW.isoformat()} for item in snapshot["items"] if item["id"] not in rejected]
-        return {**snapshot, "items": confirmed}, len(snapshot["items"]), rejected
-
     async def verify_photos(snapshot, deadline):
-        return snapshot, len(snapshot["items"])
-
-    monkeypatch.setattr("dotenv.load_dotenv", lambda *args, **kwargs: False)
-    monkeypatch.setenv("DATABASE_URL", TEST_DSN)
-    monkeypatch.setattr(publisher, "read_candidates", read)
-    monkeypatch.setattr(publisher, "verify_sources", verify_sources)
-    monkeypatch.setattr(publisher, "verify_photos", verify_photos)
-    result = await publisher.generate(SimpleNamespace(skip_photo_check=False), NOW)
-    items = result["snapshot"]["items"]
-    assert len(items) == 30 and len(source_batches) == 2
-    assert not archived.intersection(item["id"] for item in items)
-    assert all(item["price_comparison"]["comparable_count"] == 154 for item in items)
-    assert all(len(item["reasons"]) == 4 for item in items)
-    assert all(item["source_status"] == "active" for item in items)
+        return snapshot, len(snapshot['items'])
+    monkeypatch.setattr('dotenv.load_dotenv', lambda *args, **kwargs: False)
+    monkeypatch.setenv('DATABASE_URL', TEST_DSN)
+    monkeypatch.setattr(publisher, 'read_candidates', read)
+    monkeypatch.setattr(publisher, 'load_source_checks', lambda *args: checks)
+    monkeypatch.setattr(publisher, 'verify_photos', verify_photos)
+    result = await publisher.generate(SimpleNamespace(skip_photo_check=False, source_checks='mock.json'), NOW)
+    items = result['snapshot']['items']
+    assert len(items) == 30 and result['source_gets'] == 0
+    assert not archived.intersection(item['id'] for item in items)
+    assert all(item['price_comparison']['comparable_count'] == 154 for item in items)
+    assert all(len(item['reasons']) == 4 for item in items)
+    assert all(item['source_status'] == 'active' for item in items)
 
 
 def test_blocked_daily_job_retains_previous_file_without_claiming_success(tmp_path, monkeypatch, capsys):
