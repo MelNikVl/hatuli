@@ -17,3 +17,16 @@ def site_origin() -> str:
 def telegram_return_url(token: str) -> str:
     # Fragments aren't sent to the server, access logs or a Telegram URL preview.
     return site_origin() + "/auth/telegram#" + urlencode({"token": token})
+
+
+def login_request_origin(request) -> str:
+    """Use the configured HTTPS origin behind a TLS-terminating proxy.
+
+    Only the exact configured public authority receives this correction. Never
+    trust client-supplied Forwarded/X-Forwarded-* headers or accept arbitrary
+    origins merely because a proxy may be present.
+    """
+    public_origin = site_origin()
+    if request.url.netloc == urlsplit(public_origin).netloc:
+        return public_origin
+    return f"{request.url.scheme}://{request.url.netloc}"
