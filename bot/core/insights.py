@@ -1,15 +1,16 @@
 """
 Инвест-инсайты для алертов и карточек объектов.
 
-Всё считается из данных, которые УЖЕ есть в БД — без новых парсеров:
-  - Полная доходность = аренда + рост цены (а не только rental yield)
-  - Сравнение с банковским депозитом (главный конкурент недвижимости в KZ)
-  - Ипотечный платёж (аннуитет) и покрывает ли его аренда
+Текущие карточки используют только проверяемые сведения:
+  - Свежий диапазон заявленных ставок похожих квартир в том же ЖК
+  - Ипотечный платёж по явно заданным настройкам (аннуитет)
   - Красные флаги из описания: залог, аукцион, обременение
   - Зелёные флаги: торг уместен, срочная продажа (мотивированный продавец)
   - Сводка истории цен: сколько раз снижали и на сколько
   - Владелец vs риелтор (комиссия риелтора ~1-3% — влияет на реальную цену)
 
+Старый total_return_pct сохранён для совместимости расчётов сценариев;
+карточки его не вызывают и не выводят вердикт по ручному росту/ставке вклада.
 Настройки читаются из app_settings (БД, правятся ползунками в /admin/settings),
 fallback — переменные окружения, потом дефолты:
   DEPOSIT_RATE=14.0        # ставка по депозиту KZT, % годовых
@@ -218,33 +219,28 @@ def build_insights_block(row: dict, price_changes: list[dict] | None = None) -> 
     lines: list[str] = []
     price = row.get("price") or 0
     area = row.get("area")
-    est_rent = row.get("est_rent")
+    from bot.core.comparison_rental_estimate import validate_rental_estimate
+    rental_estimate = validate_rental_estimate(row.get("rental_estimate"))
 
     # Цена за м²
     if price and area:
         lines.append(f"📐 {_fmt(price / area)}/м² · {area:.0f} м²")
 
-    # Полная доходность vs депозит
-    if price:
-        tr = total_return_pct(price, est_rent)
-        if tr["rental_yield"] > 0:
-            verdict = ("выгоднее депозита" if tr["vs_deposit"] > 0
-                       else "депозит доходнее — брать только с дисконтом")
-            lines.append(
-                f"💹 Аренда {tr['rental_yield']:.1f}% + рост ~{tr['appreciation']:.0f}% "
-                f"= <b>{tr['total']:.1f}%/год</b> против депозита {tr['deposit_rate']:.0f}% — {verdict}"
-            )
+    # Fresh asking rents are evidence of advertised rates, not achieved
+    # income. Manual appreciation/deposit defaults cannot establish benefit.
+    if rental_estimate:
+        lines.append(
+            f"📈 Похожие квартиры в этом ЖК предлагают в аренду за "
+            f"<b>{_fmt(rental_estimate['monthly_low'])}–{_fmt(rental_estimate['monthly_high'])}/мес</b>. "
+            f"Это заявленные ставки, а не подтверждённый доход."
+        )
 
     # Ипотека: платёж и покрывает ли его аренда
     if price:
         m = mortgage_estimate(price)
-        cover = ""
-        if est_rent:
-            ratio = est_rent / m["monthly"] * 100
-            cover = f", аренда покрывает {ratio:.0f}% платежа"
         lines.append(
             f"🏦 Ипотека {m['rate']:.0f}%/{m['years']}л: взнос {_fmt(m['down_payment'])}, "
-            f"платёж ~{_fmt(m['monthly'])}/мес{cover}"
+            f"платёж ~{_fmt(m['monthly'])}/мес"
         )
 
     # Владелец / риелтор

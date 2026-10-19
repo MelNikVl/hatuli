@@ -1,0 +1,23 @@
+{# Only ready predictions may reach this view; defend missing fields as well. #}
+{% set rf = rental_forecast or {} %}
+{% set asking = rf.asking_price or {} %}
+{% set removal = rf.removal or {} %}
+{% set valid = namespace(asking=true, removal=true) %}
+{% for value in [asking.estimate, asking.low, asking.high, asking.horizon_days] %}
+  {% if value is not number or value is boolean or value - value != 0 %}{% set valid.asking = false %}{% endif %}
+{% endfor %}
+{% for value in [removal.median_days, removal.low_days, removal.high_days] %}
+  {% if value is not number or value is boolean or value - value != 0 %}{% set valid.removal = false %}{% endif %}
+{% endfor %}
+{% set asking_ready = valid.asking and asking.low > 0 and asking.low <= asking.estimate <= asking.high and asking.horizon_days > 0 and asking.as_of_label and asking.target_date_label %}
+{% set removal_ready = valid.removal and removal.low_days > 0 and removal.low_days <= removal.median_days <= removal.high_days and removal.as_of_label %}
+{% if asking_ready or removal_ready %}
+<section class="hatuli-forecast hatuli-forecast--compact" aria-label="Прогноз аренды" data-rental-forecast-status="ready">
+  <div class="pf-heading"><h4>Цена и срок публикации</h4></div>
+  <dl class="pf-values">
+    {% if asking_ready %}<div class="pf-value"><dt>Прогноз цены объявления через {{ asking.horizon_days }} дней</dt><dd><strong class="pf-amount">{{ asking.estimate|fmt_num }} ₸/мес</strong><span class="pf-range">80% расчётный диапазон: {{ asking.low|fmt_num }}–{{ asking.high|fmt_num }} ₸/мес</span><p class="pf-caption">К {{ asking.target_date_label }} · расчёт от {{ asking.as_of_label }}</p></dd></div>{% endif %}
+    {% if removal_ready %}<div class="pf-value"><dt>Ожидаемое снятие объявления через</dt><dd><strong class="pf-amount">{{ removal.median_days|fmt_num }} дн.</strong><span class="pf-range">80% расчётный диапазон: {{ removal.low_days|fmt_num }}–{{ removal.high_days|fmt_num }} дн.</span><p class="pf-caption">Расчёт от {{ removal.as_of_label }}</p></dd></div>{% endif %}
+  </dl>
+  <p class="pf-footnote">{% if asking_ready %}Прогноз относится к цене предложения, если объявление останется опубликованным.{% endif %}{% if asking_ready and removal_ready %} {% endif %}{% if removal_ready %}Снятие объявления с публикации не означает, что квартира сдана.{% endif %}</p>
+</section>
+{% endif %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Заявки по аренде — Hatuli{% endblock %}
+{% block head %}<meta name="robots" content="noindex,nofollow">{% endblock %}
+{% block content %}
+<div class="hatuli-requests">
+<nav><a href="/admin-panel">Админка</a> · <a href="/rent">Публичная аренда</a> · <a href="/admin/rental-health">Работа сбора</a></nav>
+<h1>Заявки по аренде</h1>
+<p>Собственники, агентства и компании. Отправка заявки не оформляет оплаченный заказ; состав и стоимость работы согласуются вручную.</p>
+{% for item in requests %}
+<article style="margin:20px 0;padding:22px;border:1px solid var(--border);border-radius:14px;background:var(--surface);overflow-wrap:anywhere;">
+  <p><strong>{{ item.kind_label }}</strong> · {{ item.created_at_label }}</p>
+  <p>Номер: {{ item.reference }}</p><p><strong>Контакт для ответа:</strong> {{ item.contact }}</p>
+  <p style="white-space:pre-wrap;">{{ item.brief }}</p>
+  <form method="post" action="/admin/rental-requests/{{ item.reference }}/status">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="version" value="{{ item.version }}">
+    <label>Статус <select name="status">{% for value in statuses %}<option value="{{ value }}" {% if item.status == value %}selected{% endif %}>{{ status_labels[value] }}</option>{% endfor %}</select></label>
+    <button type="submit">Сохранить</button>
+  </form>
+</article>
+{% else %}<p>Заявок пока нет.</p>{% endfor %}
+<p>Показаны последние 100 заявок. Контакты доступны только администратору.</p>
+</div>
+{% endblock %}

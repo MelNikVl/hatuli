@@ -404,12 +404,27 @@ async def check_archived(limit: int = 20) -> dict:
     return result
 
 
-async def check_archived_rentals(limit: int = 20) -> dict:
+async def check_archived_rentals(limit: int = 20, *, budget_seconds: float | None = None,
+                                progress: dict | None = None) -> dict:
     """Аналог check_archived, но для rental_listings — до миграции 040 у
     аренды не было понятия "в архиве" вообще: пропавшее объявление просто
     переставало обновлять last_seen. Нужно для тепловой карты аренды за
     последний месяц (см. archived-rental-points): без этой проверки "ушло
     в архив недавно" — не отличить от "просто давно не перепарсивали"."""
+    import time
+    from bot.core.apartment_details import (
+        detail_fetch_cooldown_remaining, _record_detail_block,
+    )
+
+    started = time.monotonic()
+    deadline = started + max(0.0, budget_seconds) if budget_seconds is not None else None
+    report = progress if progress is not None else {}
+    report.update({"checked": 0, "archived": 0, "requests": 0,
+                   "blocked": 0, "http_468": 0, "errors": 0})
+    if limit <= 0 or detail_fetch_cooldown_remaining():
+        report["skipped_cooldown"] = bool(detail_fetch_cooldown_remaining())
+        return report
+
     rows = await fetch("""
         SELECT id, url FROM rental_listings
         WHERE is_active IS NOT FALSE
@@ -419,38 +434,82 @@ async def check_archived_rentals(limit: int = 20) -> dict:
         LIMIT $1
     """, limit)
 
-    checked = archived = 0
+    # Rental-only response recorder. _check_one and all sale call sites retain
+    # their existing contract, while a rental 468/challenge stops this batch.
+    class RentalRequest:
+        response = None
+
+        async def get(self, url):
+            self.response = None
+            allowance = max(0.1, deadline - time.monotonic()) if deadline is not None else 25.0
+            report["requests"] += 1
+            self.response = await client.get(url, timeout=min(25.0, allowance))
+            return self.response
+
     async with httpx.AsyncClient(headers=HEADERS, timeout=25.0, follow_redirects=True) as client:
+        request = RentalRequest()
         for r in rows:
+            if detail_fetch_cooldown_remaining():
+                report["skipped_cooldown"] = True
+                break
+            if deadline is not None and deadline - time.monotonic() < 5.0:
+                report["budget_exhausted"] = True
+                break
             await asyncio.sleep(random.uniform(2.5, 5.0))
             try:
-                result = await _check_one(client, r["url"])
+                result = await _check_one(request, r["url"])
             except RuntimeError:
-                break  # заблокировали — не продолжаем в этом цикле
+                response = request.response
+                status = response.status_code if response is not None else 403
+                report["blocked"] += 1
+                report["http_468"] += int(status == 468)
+                _record_detail_block(status, r["url"])
+                break
+            response = request.response
+            if response is not None:
+                status = response.status_code
+                text = response.text.lower() if status == 200 else ""
+                challenge = any(marker in text for marker in (
+                    "подтвердите, что вы не робот", "подтвердите что вы не робот",
+                    "just a moment", "cf-chl-", "проверка браузера",
+                )) and not any(marker in text for marker in ("offer__price", "offer__title"))
+                if status in (403, 429, 468) or challenge:
+                    report["blocked"] += 1
+                    report["http_468"] += int(status == 468)
+                    _record_detail_block(status, r["url"])
+                    break
+                if result == "alive" and status == 200 and not any(marker in text for marker in (
+                        "offer__price", "offer__title", "offer__advert-short-info")):
+                    # A blank/upstream HTML response is not a verified live ad.
+                    report["errors"] += 1
+                    continue
             if result is None:
+                report["errors"] += 1
                 continue
-            checked += 1
+            report["checked"] += 1
             if result in ("deleted", "archived"):
                 # Тот же фикс, что check_archived() выше (задача 2026-08-17,
                 # "никаких физических DELETE — только архивирование, вся
                 # история сохраняется") — тот же класс потери истории
                 # возможен и здесь, хотя у rental_listings нет property_
                 # listings, принцип "не удалять безвозвратно" тот же.
-                archived += 1
                 archive_reason = "confirmed_gone" if result == "deleted" else "archived_badge"
                 # Тот же archived_at = COALESCE(...) идемпотентности фикс,
                 # что check_archived() выше — та же причина.
-                await execute("""
+                update_result = await execute("""
                     UPDATE rental_listings
                     SET is_active = FALSE, archived_at = COALESCE(archived_at, now()),
                         archive_checked_at = now(), archive_reason = $2
-                    WHERE id = $1
+                    WHERE id = $1 AND is_active IS NOT FALSE
                 """, r["id"], archive_reason)
+                # Count transitions, not repeated confirmations after a race.
+                report["archived"] += int(update_result != "UPDATE 0")
                 logger.info("rental archived (%s): %s", archive_reason, r["url"])
             else:
                 await execute(
                     "UPDATE rental_listings SET archive_checked_at = now() WHERE id = $1",
                     r["id"],
                 )
-    logger.info("rental archive check: %d checked, %d archived/deleted", checked, archived)
-    return {"checked": checked, "archived": archived}
+    logger.info("rental archive check: %d checked, %d archived/deleted, %d requests, blocked=%d",
+                report["checked"], report["archived"], report["requests"], report["blocked"])
+    return report

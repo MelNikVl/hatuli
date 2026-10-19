@@ -16,3 +16,32 @@ research/phase_c/data/
 
 # Live identity audit/rollout manifests contain private production records.
 /artifacts/
+
+# Runtime publication; refreshed atomically by the daily selection service.
+/var/daily-picks.json
+/var/daily-picks.json.lock
+/var/.daily-picks.json.*.tmp
+/var/daily-picks-*.json
+/var/market-comparison.json
+/var/market-comparison.json.lock
+/var/.market-comparison.json.*.tmp
+/var/deposit-catalog.json
+/var/deposit-catalog.json.lock
+/var/.deposit-catalog.json.*.tmp
+/var/.deposit-catalog-*.json
+/var/price-forecast-observations/
+/var/price-forecast-model.json
+/var/price-forecasts.json
+/var/.price-forecast*.tmp
+/var/browser-source-checks.json
+/var/browser-listing-*.json
+/var/complex-identity-review-*.json
+
+# Dedicated server browser profiles, cookies, evidence and private run status.
+/var/browser-picks/
+/var/daily-picks-browser/
+/var/server-browser-probe-*
+/var/browser-smoke-*.py
+/var/gui-smoke-*.py
+# Private rental pilot inquiries and SQLite sidecars.
+/var/rental-inquiries.sqlite3*

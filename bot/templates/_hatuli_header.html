@@ -1,0 +1,30 @@
+{% set header_admin = is_admin(request) %}
+{% set header_path = request.url.path %}
+<a class="hatuli-skip" href="#main-content">К содержанию</a>
+<header class="pub-header">
+  <div class="pub-row1">
+    <a href="/" class="pub-logo" aria-label="Hatuli — главная"><svg class="hatuli-brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M4 15 16 5l12 10v12H7V15" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="m12 19 3 3 7-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Hatuli</a>
+    <nav class="pub-nav" id="hatuli-main-nav" aria-label="Основная навигация">
+      {% if header_admin %}<a href="/admin-panel" class="admin-panel-link" {% if header_path.startswith('/admin') and header_path not in ('/admin', '/admin/login', '/admin/logout') %}aria-current="page"{% endif %}>Админка</a>{% endif %}
+      <a href="/best-apartments" {% if header_path == '/best-apartments' %}aria-current="page"{% elif header_path == '/best-rentals' %}class="active"{% endif %}>Лучшие варианты</a>
+      <a href="/compare" {% if header_path == '/compare' %}aria-current="page"{% endif %}>Сравнение</a>
+      <a href="/rent" {% if header_path == '/rent' or header_path.startswith('/rental/') %}aria-current="page"{% endif %}>Аренда</a>
+      <a href="/analytics" {% if header_path == '/analytics' %}aria-current="page"{% elif header_path.startswith('/analytics/') %}class="active"{% endif %}>Аналитика</a>
+      <a href="/example" {% if header_path == '/example' %}aria-current="page"{% endif %}>Пример разбора</a>
+      <a href="/map" {% if header_path == '/map' or 'complex' in header_path or 'developer' in header_path %}aria-current="page"{% endif %}>ЖК и карта</a>
+      <a href="/improve-listing" {% if header_path == '/improve-listing' %}aria-current="page"{% endif %}>Продавцу</a>
+      <a href="/how-it-works" {% if header_path == '/how-it-works' %}aria-current="page"{% endif %}>Как считаем</a>
+      {% if header_admin %}
+      <a href="/info" {% if header_path == '/info' %}aria-current="page"{% endif %}>Обзор данных</a>
+      {% endif %}
+    </nav>
+    <div class="pub-row1-right">
+      <button class="hatuli-menu-toggle" id="hatuli-menu-toggle" type="button" aria-controls="hatuli-main-nav" aria-expanded="false" aria-label="Открыть меню"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span>Меню</span></button>
+      <button class="pub-theme-btn" id="hatuli-theme-toggle" onclick="toggleHatuliTheme()" type="button" aria-label="Переключить тему" title="Переключить тему"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20.8 13.4A8.8 8.8 0 0 1 10.6 3.2a8.8 8.8 0 1 0 10.2 10.2Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg></button>
+      {% if site_user or header_admin %}<a href="/favorites" class="pub-fav-icon" aria-label="Избранное" title="Избранное">♡</a>{% endif %}
+      {% if header_admin %}<a href="/admin/logout" class="pub-login-btn">Выйти</a>
+      {% elif site_user %}<a href="/cabinet" class="pub-user-chip">Кабинет</a>
+      {% else %}<a href="/cabinet" class="pub-login-btn" {% if header_path == '/cabinet' %}aria-current="page"{% endif %}>Войти</a>{% endif %}
+    </div>
+  </div>
+</header>

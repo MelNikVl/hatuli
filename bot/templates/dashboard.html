@@ -1,16 +1,20 @@
 {% extends "base_public.html" %}
-{% if listing_meta %}
-{% block title %}{{ listing_meta.title }}{% endblock %}
-{% block meta_description %}{{ listing_meta.description }}{% endblock %}
-{% block og_title %}{{ listing_meta.title }}{% endblock %}
-{% block og_description %}{{ listing_meta.description }}{% endblock %}
-{% if listing_meta.image %}{% block og_image %}<meta property="og:image" content="{{ listing_meta.image }}"/>{% endblock %}{% endif %}
-{% endif %}
+{% block title %}{{ listing_meta.title if listing_meta else 'ЖК и карта Астаны — Hatuli' }}{% endblock %}
+{% block meta_description %}{{ listing_meta.description if listing_meta else 'Жилые комплексы и новостройки Астаны: карта, застройщики и характеристики домов.' }}{% endblock %}
+{% block og_title %}{{ listing_meta.title if listing_meta else 'ЖК и карта Астаны — Hatuli' }}{% endblock %}
+{% block og_description %}{{ listing_meta.description if listing_meta else 'Жилые комплексы и новостройки Астаны: карта, застройщики и характеристики домов.' }}{% endblock %}
+{% block og_image %}{% if listing_meta and listing_meta.image %}<meta property="og:image" content="{{ listing_meta.image }}"/>{% else %}{{ super() }}{% endif %}{% endblock %}
+{% block twitter_image %}{% if listing_meta and listing_meta.image %}<meta name="twitter:image" content="{{ listing_meta.image }}"/>{% else %}{{ super() }}{% endif %}{% endblock %}
 {% block content %}
 {% set admin = is_admin(request) %}
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="/static/yield-heat.js?v=20261008"></script>
+<script src="/static/hatuli-rental-economics.js?v=20261016-1"></script>
+<link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261014">
+<script src="/static/hatuli-forecast.js?v=20261014-ready-only"></script>
+<link rel="stylesheet" href="/static/hatuli-journey.css?v=20261013">
+<script src="/static/hatuli-journey.js?v=20261013-2"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"/>
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
@@ -121,10 +125,11 @@ html, body { overflow: hidden !important; }
 .filterbar #load-progress-pct { font-size:11px; color:#888; flex-shrink:0; min-width:2.5em; text-align:right; }
 .year-chip.active { background:#2563eb !important; color:#fff !important; border-color:#2563eb !important; }
 </style>
-<nav aria-label="Каталог и справочники" style="display:flex;gap:18px;flex-wrap:wrap;padding:0 0 10px;font-size:13px;">
-  <a href="/complexes">Каталог ЖК</a><a href="/developers">Застройщики</a>
-</nav>
 <div class="filterbar">
+<nav class="hatuli-catalog-nav" aria-label="Каталог и справочники">
+  <a href="/complexes">Каталог ЖК <span aria-hidden="true">↗</span></a>
+  <a href="/developers">Застройщики <span aria-hidden="true">↗</span></a>
+</nav>
 <div class="filterbar-inner">
   <!-- "Новостройки" физически убраны из этого select (см. задачу) — теперь
        только отдельная кнопка в главном меню (base_public.html,
@@ -299,6 +304,14 @@ html, body { overflow: hidden !important; }
         <input id="f-floorplan" type="checkbox" onchange="applyFilters()"> Только с планом</label></div>
     <div id="f-score-wrap"><label style="font-size:13.5px;color:var(--text);font-weight:700;display:block;margin-bottom:6px;">Минимальный смарт рейтинг</label>
       <input id="f-score" type="number" min="0" max="100" step="5" onchange="applyFilters()" style="width:80px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);"></div>
+    <fieldset id="f-rental-economics-wrap" style="border:1px solid var(--border);border-radius:10px;padding:12px;">
+      <legend>Сценарная чистая доходность от аренды</legend>
+      <label for="f-net-yield">От, % в год</label> <input id="f-net-yield" type="number" min="0" max="100" step="0.1" onchange="applyFilters()" style="width:80px;">
+      <label for="f-rent-confidence">Основа расчёта</label><select id="f-rent-confidence" onchange="applyFilters()"><option value="medium">ЖК или район с той же комнатностью</option><option value="high">Только подтверждённый ЖК</option><option value="low">Включая более широкие срезы</option></select>
+      <label for="f-rent-sort">Сортировка</label><select id="f-rent-sort" onchange="applyFilters()"><option value="">По рейтингу</option><option value="net_yield_pct">По чистой доходности</option></select>
+      <label style="display:block;margin-top:8px;"><input id="f-high-yield" type="checkbox" onchange="applyFilters()"> Высокая доходность — верхние 10% своего среза</label>
+      <p style="font-size:11px;color:var(--muted);">По ставкам объявлений и явным допущениям. Учитываются только свежие расчёты.</p>
+    </fieldset>
 
     <button onclick="closeMoreFilters()" style="padding:11px 26px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-weight:700;font-size:15px;cursor:pointer;">Показать</button>
   </div>
@@ -322,11 +335,8 @@ html, body { overflow: hidden !important; }
 #side-panel-head.has-count { display:flex; }
 #side-panel-body { flex:1; overflow-y:auto; overflow-x:hidden; padding:14px 16px 24px; display:grid; grid-template-columns:1fr; gap:14px; align-content:start; }
 .side-card { background:var(--bg); border:1px solid var(--border); border-radius:11px; overflow:clip; min-width:0; transition:box-shadow .2s ease; }
-/* Карточки объявлений на главной (светлая тема): текст чёрный, ссылки
-   подчёркнуты (задача 2026-08-13). В тёмной теме не трогаем — чёрный текст
-   на тёмном фоне нечитаем. !important перебивает инлайновые цвета карточек. */
-:root[data-theme="light"] #side-panel-body .side-card,
-:root[data-theme="light"] #side-panel-body .side-card * { color:#000 !important; }
+/* Inherit readable text without erasing status badges or white photo controls. */
+:root[data-theme="light"] #side-panel-body .side-card { color:var(--text); }
 :root[data-theme="light"] #side-panel-body .side-card a { text-decoration:underline; }
 .side-card-flash { animation: sideCardFlash 0.6s ease-in-out 5; border-color:#2563eb !important; }
 /* Персистентное selected-состояние карточки (задача 2026-08-21: "клик по
@@ -359,6 +369,7 @@ html, body { overflow: hidden !important; }
   #side-panel { width:100%; }
 }
 </style>
+<link rel="stylesheet" href="/static/buyer-map.css?v=20261016-zillow">
 <div id="map-wrap" style="background:var(--surface);margin:0 -24px -32px -24px;position:relative;display:flex;">
   <div id="objects-map"></div>
   <div id="split-map-pane" style="display:none;flex:1;min-width:0;border-left:2px solid var(--accent);position:relative;">
@@ -662,6 +673,52 @@ function cachedFetchJson(url, signal) {
     return data;
   });
 }
+// Rental pages contain both mappable and unbound rows. Advance by raw rows,
+// never by the number of pins, so an entirely unbound page cannot hide a tail.
+async function loadAllRentalPoints(baseParams, options) {
+  options = options || {};
+  const params = new URLSearchParams(baseParams || {});
+  params.set('type', 'rental');
+  // Rental coordinates may be approximate; this endpoint covers the city.
+  ['min_lat', 'max_lat', 'min_lon', 'max_lon', 'offset', 'limit'].forEach(k => params.delete(k));
+  const batch = 300;
+  const all = [], seen = new Set();
+  const progress = {raw_loaded:0, no_geo:0, total_matching:null, market_coverage:'unknown', geo_scope:'city'};
+  let offset = 0;
+  const checkCurrent = () => {
+    if ((options.signal && options.signal.aborted) || (options.isCurrent && !options.isCurrent())) {
+      const error = new Error('Rental load superseded'); error.name = 'AbortError'; throw error;
+    }
+  };
+  for (let pages = 0; pages < 1000; pages++) {
+    checkCurrent();
+    const pageParams = new URLSearchParams(params);
+    pageParams.set('offset', offset); pageParams.set('limit', batch);
+    const data = await cachedFetchJson('/admin/api/map-points?' + pageParams.toString(), options.signal);
+    checkCurrent();
+    if (!data || !Array.isArray(data.points) || data.error || !Number.isInteger(data.batch_rows)
+        || data.batch_rows < 0 || data.batch_rows > batch) throw new Error('Invalid rental page');
+    const fresh = [];
+    data.points.forEach(pt => {
+      if (!pt || pt.id == null) return;
+      const id = String(pt.id);
+      if (seen.has(id)) return;
+      seen.add(id); all.push(pt); fresh.push(pt);
+    });
+    progress.raw_loaded += data.batch_rows;
+    progress.no_geo += Number.isInteger(data.no_geo) && data.no_geo >= 0 ? data.no_geo : 0;
+    if (progress.total_matching == null && Number.isInteger(data.total_matching) && data.total_matching >= 0) {
+      progress.total_matching = data.total_matching;
+    }
+    if (options.onBatch) options.onBatch({...data, points:fresh}, {...progress});
+    if (!data.has_more) return {...progress, points:all, mode:'rental'};
+    if (!Number.isInteger(data.next_offset) || data.next_offset <= offset || data.batch_rows === 0) {
+      throw new Error('Rental pagination did not advance');
+    }
+    offset = data.next_offset;
+  }
+  throw new Error('Rental pagination limit reached');
+}
 // Один AbortController на "поколение" батчей карты (см. applyFiltersSeq) —
 // при смене фильтра/новой области панорамирования старый реально обрывается,
 // а не просто игнорируется после ответа (см. комментарий у cachedFetchJson).
@@ -692,6 +749,7 @@ function getFilterType() {
 function updateNewbuildChip() {
   const btn = document.getElementById('f-newbuild-btn');
   if (!btn) return;
+  btn.dataset.active = String(forcedNewbuildType);
   btn.style.background = forcedNewbuildType ? '#84cc16' : 'var(--bg)';
   btn.style.color = forcedNewbuildType ? '#fff' : 'var(--text)';
   btn.style.borderColor = forcedNewbuildType ? '#84cc16' : 'var(--border)';
@@ -815,7 +873,8 @@ function observeSideCards() {
         loadListingExtras(id);
         checkFavoriteState(id);
         const photos = ptPhotos[id];
-        if (photos) photos.forEach(url => { const im = new Image(); im.src = proxyImg(url); });
+        // ЖК previews load extra frames only after a failure, not the whole gallery.
+        if (photos && !id.startsWith('nb-cx-')) photos.forEach(url => { const im = new Image(); im.src = proxyImg(url); });
       });
     }, {root: document.getElementById('side-panel-body'), rootMargin: '300px 0px'});
   }
@@ -1202,14 +1261,27 @@ function carImgError(cardId) {
   const img = document.getElementById('car-' + cardId);
   if (!img) return;
   const photos = ptPhotos[cardId] || [];
-  const cur = carIdx[cardId] || 0;
-  const next = cur + 1;
-  if (next < photos.length) {
-    carIdx[cardId] = next;
-    img.src = proxyImg(photos[next]);
+  const source = img.getAttribute('src');
+  const sourceIdx = photos.findIndex(photo => proxyImg(photo) === source);
+  const cur = sourceIdx >= 0 ? sourceIdx : (carIdx[cardId] || 0);
+  carIdx[cardId] = cur;
+  const failed = new Set(JSON.parse(img.dataset.failedPhotos || '[]'));
+  failed.add(source);
+  img.dataset.failedPhotos = JSON.stringify(Array.from(failed));
+  let step = 1;
+  while (step < photos.length && failed.has(proxyImg(photos[(cur + step) % photos.length]))) step++;
+  if (step < photos.length) {
+    carNav(cardId, step);
   } else {
-    img.parentNode.style.display = 'none';
-    img.parentNode.innerHTML = '<div style="width:100%;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:var(--bg);color:#999;font-size:13px;">пока нет фото</div>';
+    const frame = img.closest('.hatuli-card-media') || img.parentNode;
+    img.onerror = null;
+    img.remove();
+    frame.classList.add('hatuli-card-media--empty');
+    const placeholder = document.createElement('span');
+    placeholder.textContent = 'пока нет фото';
+    frame.prepend(placeholder);
+    // Keep the frame and its badges; navigation has no usable photos left.
+    frame.querySelectorAll('button[onclick*="carNav("], [id^="car-dots-"]').forEach(el => el.remove());
   }
 }
 // preferCanvas: тепловые карты — это тысячи гекс-полигонов (особенно шум:
@@ -1246,7 +1318,7 @@ function resizeMapToViewport() {
   // карта (flex:1, height:100%), и правая панель (#side-panel, height:100%)
   // всегда ровно одной высоты, панель статична рядом с картой и со своим
   // скроллом (#side-panel-body overflow-y:auto), если объявлений много.
-  const h = Math.max(320, window.innerHeight - top) / zoomLevel;
+  const h = Math.max(140, window.innerHeight - top) / zoomLevel;
   wrap.style.height = h + 'px';
   mapEl.style.height = '100%';
   // #side-panel больше не position:fixed с отдельным top — это flex-сиблинг
@@ -1272,6 +1344,11 @@ window.addEventListener('load', () => setTimeout(resizeMapToViewport, 50));
 const filterbarEl = document.querySelector('.filterbar');
 if (window.ResizeObserver && filterbarEl) {
   new ResizeObserver(() => resizeMapToViewport()).observe(filterbarEl);
+}
+// The shared mobile menu changes the map's top without resizing the window.
+const mapHeaderEl = document.querySelector('.pub-header');
+if (window.ResizeObserver && mapHeaderEl) {
+  new ResizeObserver(() => resizeMapToViewport()).observe(mapHeaderEl);
 }
 
 const map = L.map('objects-map', {preferCanvas: true}).setView([51.128, 71.43], 13);
@@ -1430,12 +1507,12 @@ function loadViewportIncremental() {
 const MapButtons = L.Control.extend({
   options: {position: 'topleft'},
   onAdd: function() {
-    const box = L.DomUtil.create('div', '');
+    const box = L.DomUtil.create('div', 'hatuli-map-tools');
     // position:absolute вместо обычного стека Leaflet-контролов — так кнопки
     // встают СПРАВА от зум-контрола (+/-) на той же строке, а не под ним.
     box.style.cssText = 'position:absolute;top:0;left:44px;display:flex;flex-direction:column;gap:4px;';
     box.innerHTML = `
-      <div style="display:flex;gap:8px;white-space:nowrap;">
+      <div class="hatuli-map-tools-row" style="display:flex;gap:8px;white-space:nowrap;">
         <button id="btn-schools" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;display:inline-flex;align-items:center;padding:0 11px;border:1.5px solid #2563eb;border-radius:13px;background:#fff;color:#2563eb;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">Школы и садики</button>
         <button id="btn-draw" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;display:inline-flex;align-items:center;padding:0 11px;border:1.5px solid #2563eb;border-radius:13px;background:#fff;color:#2563eb;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">Нарисовать область</button>
         <button id="btn-draw-clear" type="button" style="flex-shrink:0;white-space:nowrap;height:26px;align-items:center;padding:0 11px;border:none;border-radius:13px;background:#ef4444;color:#fff;font-weight:700;font-size:10.5px;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.25);">✕ Убрать все области</button>
@@ -1557,22 +1634,30 @@ function resizeHeatControlsBox() {
   if (!zoomCtl || !mapBtns || !hc) return;
   const zr = zoomCtl.getBoundingClientRect(), br = mapBtns.getBoundingClientRect();
   hc.style.width = Math.max(110, Math.round((br.right - zr.left) / 2)) + 'px';
-  // В режиме «Новостройки» панель застройщиков (#nb-dev-panel, top:60px)
-  // перекрывает настройки тепловой карты (top:80px) — настройки уходят «за»
-  // неё и не видны. Опускаем их ПОД панель (пользователь: «либо ниже, либо
-  // выше, но не за»).
   const dev = document.getElementById('nb-dev-panel');
   const mapEl = document.getElementById('objects-map');
+  if (!mapEl) return;
+  const mapTop = mapEl.getBoundingClientRect().top;
+  const toolbar = document.querySelector('.hatuli-map-tools');
+  const toolsBottom = toolbar ? toolbar.getBoundingClientRect().bottom - mapTop : 60;
+  // Wrapped tools and newly shown clear buttons determine overlay positions.
+  if (dev) dev.style.top = Math.max(60, Math.ceil(toolsBottom + 6)) + 'px';
+  let controlsTop = Math.max(80, toolsBottom + 6);
   if (dev && mapEl && dev.style.display !== 'none' && dev.offsetHeight > 0) {
     const devBottom = dev.getBoundingClientRect().bottom;
-    const mapTop = mapEl.getBoundingClientRect().top;
-    hc.style.top = Math.round(devBottom - mapTop + 6) + 'px';
-  } else {
-    hc.style.top = '80px';
+    controlsTop = Math.max(controlsTop, devBottom - mapTop + 6);
   }
+  hc.style.top = Math.ceil(controlsTop) + 'px';
 }
 setTimeout(resizeHeatControlsBox, 300);
 window.addEventListener('resize', resizeHeatControlsBox);
+if (window.ResizeObserver) {
+  const controlsObserver = new ResizeObserver(resizeHeatControlsBox);
+  ['.hatuli-map-tools', '#nb-dev-panel'].forEach(selector => {
+    const control = document.querySelector(selector);
+    if (control) controlsObserver.observe(control);
+  });
+}
 function setHeatOpacity(v) {
   const op = (parseFloat(v) || 40) / 100;
   heatLayer.eachLayer(l => { if (l.setStyle) l.setStyle({fillOpacity: op}); });
@@ -1611,6 +1696,7 @@ function clearRuler() {
 }
 document.getElementById('btn-ruler').addEventListener('click', function() {
   rulerOn = !rulerOn;
+  this.setAttribute('aria-pressed', String(rulerOn));
   this.style.background = rulerOn ? '#ef4444' : '#fff';
   this.style.color = rulerOn ? '#fff' : '#2563eb';
   this.style.borderColor = rulerOn ? '#ef4444' : '#2563eb';
@@ -1671,6 +1757,7 @@ function removeDrawnPolygon(id) {
 function armFreehandDraw() {
   if (drawnPolygons.length >= MAX_DRAWN_AREAS) return;
   freehandDrawArmed = true;
+  document.getElementById('btn-draw').setAttribute('aria-pressed', 'true');
   map.getContainer().style.cursor = 'crosshair';
 }
 function onFreehandMouseDown(e) {
@@ -1687,6 +1774,7 @@ function onFreehandMouseMove(e) {
   freehandPolyline.setLatLngs(freehandLatLngs);
 }
 function onFreehandMouseUp() {
+  document.getElementById('btn-draw').setAttribute('aria-pressed', 'false');
   map.off('mousemove', onFreehandMouseMove);
   map.dragging.enable();
   map.getContainer().style.cursor = '';
@@ -1883,6 +1971,7 @@ function newbuildComplexPopupHtml(p, photoIdx) {
       ${yearTxt ? `<span style="display:inline-block;background:#e5e7eb;color:#374151;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;">${escapeHtml(yearTxt)}</span>` : ''}
     </div>
     <a href="/complex/${p.id}" style="display:inline-block;margin-top:9px;padding:6px 12px;border-radius:8px;background:#16a34a;color:#fff;font-size:12.5px;font-weight:700;text-decoration:none;">Подробнее про ЖК</a>
+    <a href="/compare?complex=${encodeURIComponent(p.id)}" style="display:block;margin-top:8px;color:var(--accent);font-size:12px;font-weight:650;text-decoration:none;">Сравнить первичку и вторичку рядом →</a>
   </div>
 </div>`;
 }
@@ -1897,8 +1986,10 @@ let selectedNewbuildComplex = null;  // id выбранного ЖК (null = р�
 // Карточка ЖК для панели в режиме «все ЖК» (до выбора конкретного).
 function newbuildComplexCardHtml(pt) {
   const photos = (pt.photos || []).filter(Boolean);
+  const cardId = 'nb-cx-' + pt.id;
+  if (photos.length) { ptPhotos[cardId] = photos; carIdx[cardId] = 0; }
   const img = photos.length
-    ? `<img src="${proxyImg(photos[0])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border:none;" onerror="carImgError('nb-cx-${pt.id}')">`
+    ? `<img id="car-${cardId}" src="${proxyImg(photos[0])}" alt="Фото ЖК" onerror="carImgError('${cardId}')">`
     : `<div style="width:100%;aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:var(--bg);color:#999;font-size:13px;">пока нет фото</div>`;
   const devHtml = pt.logo
     ? `<img src="${pt.logo}" style="width:18px;height:18px;border-radius:4px;object-fit:contain;background:#fff;vertical-align:-4px;margin-right:5px;padding:1px;">${escapeHtml(pt.developer || '')}`
@@ -1908,11 +1999,11 @@ function newbuildComplexCardHtml(pt) {
     : '';
   return `
 <div class="side-card-inner" style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="selectNewbuildFromCard(${pt.id}, event)">
-  <div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);aspect-ratio:16/10;border-radius:11px 11px 0 0;overflow:hidden;">
+  <div class="hatuli-card-media">
     ${img}
     <span style="position:absolute;top:8px;right:8px;background:#16a34a;color:#fff;border-radius:9px;padding:2px 8px;font-size:11.5px;font-weight:800;">${pt.units_count} кв.</span>
   </div>
-  <div style="padding:5px 10px 10px;">
+  <div class="hatuli-side-body" style="padding:5px 10px 10px;">
     <div style="font-size:16px;font-weight:800;line-height:1.15;">${escapeHtml(pt.name)}</div>
     <div style="font-size:12.5px;color:#888;margin-top:4px;">${devHtml}</div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:7px;">
@@ -2017,8 +2108,8 @@ function buildNewbuildUnitCardHtml(d, u) {
   const carHtml = photos.length ? (() => {
     ptPhotos[cardId] = photos; carIdx[cardId] = 0;
     return `
-<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);aspect-ratio:16/10;border-radius:11px 11px 0 0;overflow:hidden;background:#f7f7f7;">
-  <img id="car-${cardId}" src="${proxyImg(photos[0])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#f7f7f7;display:block;border:none;" onerror="carImgError('${cardId}')">
+<div class="hatuli-card-media hatuli-card-media--contain">
+  <img id="car-${cardId}" src="${proxyImg(photos[0])}" alt="Фото или планировка объявления" onerror="carImgError('${cardId}')">
   ${photos.length > 1 ? `
   <button onclick="carNav('${cardId}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
   <button onclick="carNav('${cardId}',1,event)" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">›</button>
@@ -2060,18 +2151,18 @@ function buildNewbuildUnitCardHtml(d, u) {
   return `
 <div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;position:relative;" onclick="openDetailModal('${cardId}', event)">
   <div style="position:relative;">${carHtml}${badgeHtml}</div>
-  <div style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
-    <div style="font-size:23px;font-weight:800;line-height:1.05;">${u.price ? (u.price/1e6).toFixed(1) + ' млн ₸' : 'цена по запросу'}</div>
+  <div class="hatuli-side-body" style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
+    <div class="hatuli-side-price" style="font-size:23px;font-weight:800;line-height:1.05;">${u.price ? (u.price/1e6).toFixed(1) + ' млн ₸' : 'цена по запросу'}</div>
     <div style="margin-top:4px;">
-      <span style="${pillStyle}">${u.rooms || '?'}-комн</span>
-      <span style="${pillStyle}">${u.area ? Math.round(u.area) : '?'} м²</span>
-      <span style="${pillStyle}">${u.floor || '?'}/${u.floors_total || '?'} эт.</span>
+      <span class="hatuli-side-fact" style="${pillStyle}">${u.rooms || '?'}-комн</span>
+      <span class="hatuli-side-fact" style="${pillStyle}">${u.area ? Math.round(u.area) : '?'} м²</span>
+      <span class="hatuli-side-fact" style="${pillStyle}">${u.floor || '?'}/${u.floors_total || '?'} эт.</span>
     </div>
     ${tagHtml}
     ${deltaHtml}
     ${d.address ? `<div style="font-size:12.5px;color:var(--text);margin-top:6px;">📍 Адрес: ${escapeHtml(d.address)}</div>` : ''}
     <div style="font-size:12.5px;color:var(--text);margin-top:2px;">Год сдачи: ${escapeHtml(String(sdача))}</div>
-    <div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/${d.id}" onclick="event.stopPropagation()" style="font-weight:600;">ЖК ${escapeHtml(d.name)}</a> · ${devHtml}</div>
+    <div class="hatuli-side-location" style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/${d.id}" onclick="event.stopPropagation()" style="font-weight:600;">ЖК ${escapeHtml(d.name)}</a> · ${devHtml}</div>
     ${(!isPerson && d.sales_phone) ? `<div onclick="event.stopPropagation()" style="margin-top:8px;">${contactDevBtnHtml(d, u.id)}</div>` : ''}
   </div>
 </div>`;
@@ -2110,11 +2201,12 @@ function fmtPriceShort(v) {
 // developers), поэтому пока значок текстовый (SD) — если появится файл
 // логотипа, можно заменить badgeHtml на <img>.
 const SVOY_DOM_DEV_IDS = new Set([56, 72]);
-function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
-  const priceTxt = fmtPriceShort(pt.price);
-  const roomsTxt = pt.rooms ? pt.rooms + 'к' : '?';
+function buildPricePinHtml(pt, pinBg, isTop, sellerTxt, rental) {
+  const rentalPriceKnown = !rental || (Number.isFinite(pt.price) && pt.price > 0);
+  const priceTxt = rental && !rentalPriceKnown ? 'Цена не указана' : fmtPriceShort(pt.price);
+  const roomsTxt = rental && pt.rooms === 0 ? 'Студия' : (pt.rooms ? pt.rooms + 'к' : '?');
   let trendHtml = '';
-  if (pt.prev_price && pt.prev_price !== pt.price) {
+  if (rentalPriceKnown && pt.prev_price && pt.prev_price !== pt.price) {
     const down = pt.price < pt.prev_price;
     const color = down ? '#16a34a' : '#ef4444';
     trendHtml = `<span class="price-trend-arrow" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:4px;font-size:11px;color:${color};background:#fff;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">${down ? '▼' : '▲'}</span>`;
@@ -2123,7 +2215,7 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
   // Недооценено/высокая доходность (топ-10% по городу, см. map_points на
   // бэкенде) — маленькие бейджи прямо на пине, чтобы было видно без клика.
   const underpricedBadge = pt.underpriced_pct != null ? `<span title="Недооценено на ${pt.underpriced_pct}%" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:9px;color:#fff;background:#ef4444;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">🔥</span>` : '';
-  const highYieldBadge = pt.high_yield ? `<span title="Высокая доходность (≥13.9%)" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:9px;color:#fff;background:#16a34a;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">💰</span>` : '';
+  const highYieldBadge = pt.high_yield ? `<span title="Чистая доходность сценария — в верхних 10% своего среза" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:16px;height:16px;margin-left:3px;font-size:9px;color:#fff;background:#16a34a;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);">💰</span>` : '';
   // Топ-10 по умному рейтингу: единая овальная плашка с градиентом
   // красный→тёмно-синий, звезда и цена внутри одного пилла (раньше были
   // раздельные звезда-бейдж + обычная синяя плашка — просили слить в одно).
@@ -2146,15 +2238,18 @@ function buildPricePinHtml(pt, pinBg, isTop, sellerTxt) {
 // карточки продажи: у аренды нет фото-модалки/торга/ипотеки/скора — только
 // то, что реально есть в rental_listings.
 function buildRentalCardHtml(pt) {
-  const priceTxt = pt.price ? Math.round(pt.price / 1000).toLocaleString('ru') + ' тыс ₸/мес' : '—';
+  const priceKnown = Number.isFinite(pt.price) && pt.price > 0;
+  const priceTxt = priceKnown ? Math.round(pt.price / 1000).toLocaleString('ru') + ' тыс ₸/мес' : 'Цена не указана';
   const photos = pt.photos || [];
   if (photos.length) { ptPhotos[pt.id] = photos; carIdx[pt.id] = 0; }
-  const favStarHtml = `<span id="fav-${pt.id}" onclick="toggleFavorite('${pt.id}', event)" title="В избранное" data-active="0" style="position:absolute;top:8px;left:8px;font-size:28px;line-height:1;cursor:pointer;color:rgba(255,255,255,.85);text-shadow:0 1px 2px rgba(0,0,0,.6),0 0 3px rgba(0,0,0,.6);z-index:2;">♡</span>`;
+  // The existing favorites table references sales; a rental ID must not be
+  // stored there and resolve to an unrelated sale with the same source ID.
+  const favStarHtml = '';
   // Тот же carNav/точки-пагинация, что у продажи — клик по фото открывает
   // большой попап (не лайтбокс), стрелки только листают (stopPropagation).
   const carHtml = photos.length ? `
-<div style="position:relative;height:190px;overflow:hidden;">
-  <img id="car-${pt.id}" src="${proxyImg(photos[0])}" style="width:100%;height:100%;object-fit:cover;display:block;">
+<div class="hatuli-card-media">
+  <img id="car-${pt.id}" src="${proxyImg(photos[0])}" alt="Фото объявления" onerror="carImgError('${pt.id}')">
   ${favStarHtml}
   ${photos.length > 1 ? `
   <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:4px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
@@ -2168,29 +2263,30 @@ function buildRentalCardHtml(pt) {
   // карты (задача 2026-08-21) — единый визуальный язык вместо прежнего
   // текстового "▲ 12 тыс".
   let priceTrend = '';
-  if (pt.prev_price && pt.prev_price !== pt.price) {
+  if (priceKnown && pt.prev_price && pt.prev_price !== pt.price) {
     const down = pt.price < pt.prev_price;
     const deltaAbs = Math.abs(pt.price - pt.prev_price);
     const deltaTxt = Math.round(deltaAbs / 1000) + ' тыс ₸';
     priceTrend = `<span title="Цена ${down ? 'снизилась' : 'выросла'} на ${deltaTxt}" style="display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:20px;height:20px;border-radius:50%;color:${down ? '#16a34a' : '#ef4444'};background:${down ? '#dcfce7' : '#fee2e2'};font-size:12px;font-weight:900;line-height:1;">${down ? '↓' : '↑'}</span>`;
   }
-  const ownerPillHtml = `<span style="${pillStyle}margin:0;background:${pt.is_owner ? '#dcfce7' : '#e5e7eb'};color:${pt.is_owner ? '#166534' : '#374151'};">${pt.is_owner ? 'собственник' : 'риелтор'}</span>`;
+  const ownerLabel = pt.is_owner === true ? 'собственник' : pt.is_owner === false ? 'риелтор' : 'Кто сдаёт — не указано';
+  const ownerPillHtml = `<span style="${pillStyle}margin:0;background:${pt.is_owner === true ? '#dcfce7' : '#e5e7eb'};color:${pt.is_owner === true ? '#166534' : '#374151'};">${ownerLabel}</span>`;
   const cxLine = pt.complex
-    ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
+    ? `<div class="hatuli-side-location" style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${escapeHtml(pt.complex)}</a></div>`
     : '';
   // Упрощённая карточка (см. B2 в задаче) — только фото/цена/пилюли/ЖК,
   // без банков/описания/кнопок отдельной строкой; вся карточка кликабельна.
   return `
-<div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
+<div style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openRentalDetailModal('${pt.id}', event)">
   ${carHtml ? `<div style="border-radius:11px 11px 0 0;overflow:hidden;">${carHtml}</div>` : `<div style="position:relative;">${favStarHtml}</div>`}
-  <div style="padding:10px 10px 0;">
-    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-      <div style="font-size:21px;font-weight:800;">${priceTxt}</div>${priceTrend}
-      <span style="${pillStyle}margin:0;">${pt.rooms || '?'}-комн</span>
-      ${pt.area ? `<span style="${pillStyle}margin:0;">${Math.round(pt.area)} м²</span>` : ''}
-      ${pt.floor ? `<span style="${pillStyle}margin:0;">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : ''}
+  <div class="hatuli-side-body" style="padding:10px 10px 0;">
+    <div class="hatuli-side-facts" style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <div class="hatuli-side-price" style="font-size:21px;font-weight:800;">${priceTxt}</div>${priceTrend}
+      <span class="hatuli-side-fact" style="${pillStyle}margin:0;">${pt.rooms === 0 ? 'Студия' : (pt.rooms || '?') + '-комн'}</span>
+      ${pt.area ? `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">${Math.round(pt.area)} м²</span>` : ''}
+      ${pt.floor ? `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : ''}
       ${ownerPillHtml}
-      ${pt.ceiling_height ? `<span style="${pillStyle}margin:0;">Потолок ${pt.ceiling_height} м</span>` : ''}
+      ${pt.ceiling_height ? `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">Потолок ${pt.ceiling_height} м</span>` : ''}
     </div>
     ${cxLine}
   </div>
@@ -2304,7 +2400,7 @@ function toggleScoreExplain(uid, ev) {
 // Фотокарусель в попапах
 const ptPhotos = {}, carIdx = {};
 function carNav(id, dir, ev) {
-  ev.stopPropagation();
+  if (ev) ev.stopPropagation();
   const ph = ptPhotos[id]; if (!ph || !ph.length) return;
   carIdx[id] = (carIdx[id] + dir + ph.length) % ph.length;
   const img = document.getElementById('car-' + id);
@@ -2346,19 +2442,19 @@ function renderLightbox() {
   if (!box) {
     box = document.createElement('div');
     box.id = 'lightbox-overlay';
-    box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;';
+    box.className = 'hatuli-lightbox';
     box.onclick = (e) => { if (e.target === box) closeLightbox(); };
     document.body.appendChild(box);
   }
   const thumbs = ph.map((p, i) => `<img src="${proxyImg(p)}" onclick="lbIdx=${i};renderLightbox();" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === lbIdx ? '1' : '.5'};border:2px solid ${i === lbIdx ? '#fff' : 'transparent'};">`).join('');
   box.innerHTML = `
-    <div style="position:relative;width:92vw;height:78vh;display:flex;align-items:center;justify-content:center;">
+    <div class="hatuli-lightbox-stage">
       <img src="${proxyImg(ph[lbIdx])}" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;">
       ${ph.length > 1 ? `
       <button onclick="lbIdx=(lbIdx-1+${ph.length})%${ph.length};renderLightbox();" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">‹</button>
       <button onclick="lbIdx=(lbIdx+1)%${ph.length};renderLightbox();" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">›</button>` : ''}
     </div>
-    <div style="display:flex;gap:6px;margin-top:14px;max-width:92vw;overflow-x:auto;padding:4px;">${thumbs}</div>
+    <div class="hatuli-lightbox-thumbs">${thumbs}</div>
     <div style="color:#ccc;font-size:13px;margin-top:6px;">${lbIdx + 1} / ${ph.length}</div>
     <button onclick="closeLightbox()" style="position:absolute;top:16px;right:20px;background:#fff;border:none;border-radius:50%;color:#000;width:38px;height:38px;font-size:24px;cursor:pointer;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.5);">×</button>
   `;
@@ -2541,15 +2637,40 @@ function applyFilters() {
   if (cheapestOnly && type === 'sale') p.set('cheapest_only', '1');
   const floorplanOnly = document.getElementById('f-floorplan').checked;
   if (floorplanOnly && type === 'sale') p.set('has_floorplan', '1');
+  if (type === 'sale') {
+    const netMin = Number(document.getElementById('f-net-yield')?.value || 0);
+    const rentSort = document.getElementById('f-rent-sort')?.value || '';
+    const highYield = document.getElementById('f-high-yield')?.checked;
+    if (netMin > 0 || rentSort === 'net_yield_pct' || highYield || document.getElementById('f-rent-confidence')?.value !== 'medium') {
+      p.set('net_yield_min', netMin);
+      p.set('rent_confidence', document.getElementById('f-rent-confidence')?.value || 'medium');
+      if (rentSort) p.set('sort', rentSort);
+      if (highYield) p.set('high_yield', '1');
+    }
+  }
 
   lastFilterParams = new URLSearchParams(p);
   ['min_lat', 'max_lat', 'min_lon', 'max_lon', 'offset', 'limit'].forEach(k => lastFilterParams.delete(k));
 
   if (type === 'rental') {
   const rentalSeq = applyFiltersSeq;  // уже увеличен в начале applyFilters()
+  const rentalSignal = newMapFetchSignal();
+  const rentalCurrent = () => rentalSeq === applyFiltersSeq && getFilterType() === 'rental';
+  const resultEl = document.getElementById('result-count');
+  let rentalProgress = {raw_loaded:0, total_matching:null, no_geo:0};
+  let rentalStarted = false;
+  const rentalCountText = progress => `Загружено ${progress.raw_loaded}`
+    + (progress.total_matching != null ? ` из ${progress.total_matching}` : '')
+    + ' свежих объявлений в базе'
+    + (progress.no_geo ? ` · ${progress.no_geo} без координат` : '')
+    + (drawnPolygons.length ? ' · на карте выбранная область' : '');
+  resultEl.textContent = 'Загружаем аренду…'; resultEl.classList.add('loading');
   map.removeLayer(liteCluster); liteCluster.clearLayers();
-  cachedFetchJson('/admin/api/map-points?' + p.toString(), newMapFetchSignal()).then(d => {
-      if (rentalSeq !== applyFiltersSeq) return;  // фильтры сменились ещё раз, пока запрос летел
+  loadAllRentalPoints(p, {signal:rentalSignal, isCurrent:rentalCurrent, onBatch:(d, progress) => {
+      if (!rentalCurrent()) return;
+      rentalProgress = progress;
+      if (!rentalStarted) {
+      rentalStarted = true;
       map.removeLayer(pointsLayer);
       map.removeLayer(topLayer);
       map.removeLayer(liteCluster);
@@ -2559,10 +2680,13 @@ function applyFilters() {
       if (!map.hasLayer(saleCluster)) saleCluster.addTo(map);
       saleCluster.clearLayers();
       Object.keys(MINI_PIN_MARKERS).forEach(k => delete MINI_PIN_MARKERS[k]);
-      lastPoints = d.points || [];
-      if (drawnPolygons.length) lastPoints = lastPoints.filter(pt => pointInAnyDrawnPolygon(pt.lat, pt.lon));
-      lastPoints.forEach(pt => {
-        const pinHtml = buildPricePinHtml(pt, '#0077FF', false, '');
+      lastPoints = [];
+      }
+      const batchPoints = (d.points || []).filter(pt => !drawnPolygons.length || pointInAnyDrawnPolygon(pt.lat, pt.lon));
+      batchPoints.forEach(pt => {
+        if (MINI_PIN_MARKERS[pt.id]) return;
+        lastPoints.push(pt);
+        const pinHtml = buildPricePinHtml(pt, '#0077FF', false, '', true);
         const m = L.marker([pt.lat, pt.lon], {
           icon: L.divIcon({className:'', html: pinHtml, iconSize:[0,0], iconAnchor:[0,0]}),
           pinMeta: {pt, pinBg: '#0077FF', isTop: false},
@@ -2573,10 +2697,17 @@ function applyFilters() {
         // отдельно жила на старом Leaflet-попапе прямо над пином).
         m.on('click', () => { selectPin(pt.id); openSidePanel([pt.id]); });
       });
-      document.getElementById('result-count').classList.remove('loading');
-      document.getElementById('result-count').textContent = (d.no_geo ? `ещё ${d.no_geo} совсем без привязки` : '') + (drawnPolygons.length ? ' · в области' : '');
+      resultEl.textContent = rentalCountText(progress) + (d.has_more ? ' · подгружаем…' : '');
       if (hexOn) drawHexGrid();
       refreshSidePanelList();
+  }}).then(progress => {
+    if (!rentalCurrent()) return;
+    resultEl.classList.remove('loading');
+    resultEl.textContent = rentalCountText(progress);
+  }).catch(error => {
+    if (!rentalCurrent() || error.name === 'AbortError') return;
+    resultEl.classList.remove('loading');
+    resultEl.textContent = 'Не удалось загрузить всю аренду. ' + rentalCountText(rentalProgress);
   });
     return;
   }
@@ -2764,7 +2895,7 @@ function renderSaleBatch(d, opts) {
       else { pendingClusterAdds.push(m); }
       MINI_PIN_MARKERS[pt.id] = m;
       const priceM = pt.price ? (pt.price/1e6).toFixed(1) : '—';
-      const areaTxt = pt.area ? Math.round(pt.area) : '?';
+      const areaTxt = fmtArea(pt.area);
       const ageText = pt.age === 0 ? 'сегодня' : pt.age + ' дн.';
       // Стрелка тренда цены (задача 2026-08-21: "зелёная стрелочка вниз
       // если снизилась, красная вверх если поднялась", минималистично) —
@@ -2788,8 +2919,8 @@ function renderSaleBatch(d, opts) {
       // остальной карточке (см. задачу); стрелки/точки — только листалка,
       // сами по себе клик не пробрасывают дальше (stopPropagation внутри carNav).
       const carHtml = pt.photos && pt.photos.length ? `
-<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);aspect-ratio:16/10;border-radius:11px 11px 0 0;overflow:hidden;">
-  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border:none;" onerror="carImgError('${pt.id}')">
+<div class="hatuli-card-media">
+  <img id="car-${pt.id}" src="${proxyImg(pt.photos[0])}" alt="Фото объявления" onerror="carImgError('${pt.id}')">
   ${favStarHtml}
   ${pt.photos.length > 1 ? `
   <button onclick="carNav('${pt.id}',-1,event)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.35);color:#fff;border:none;border-radius:50%;width:26px;height:26px;cursor:pointer;font-size:16px;line-height:1;opacity:.85;">‹</button>
@@ -2798,7 +2929,7 @@ function renderSaleBatch(d, opts) {
     ${pt.photos.map((_, i) => `<span class="car-dot" style="width:6px;height:6px;border-radius:50%;background:${i === 0 ? '#fff' : 'rgba(255,255,255,.45)'};box-shadow:0 0 2px rgba(0,0,0,.7);flex-shrink:0;"></span>`).join('')}
   </div>` : ''}
 </div>` : `
-<div style="position:relative;margin:-13px -24px 8px -20px;width:calc(100% + 44px);aspect-ratio:16/10;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:11px 11px 0 0;border-bottom:1px solid var(--border);color:#999;font-size:13px;">
+<div class="hatuli-card-media hatuli-card-media--empty">
   <span>пока нет фото</span>
   ${favStarHtml}
 </div>`;
@@ -2813,8 +2944,8 @@ function renderSaleBatch(d, opts) {
             : ` · <span style="color:#888;font-weight:600;">${devLogoHtml}${escapeHtml(pt.developer_name)}</span>`)
         : '';
       const cxLine = pt.complex
-        ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
-        : (pt.address ? `<div style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">📍 <span style="font-weight:600;">${escapeHtml(pt.address.replace(/\s*—.*$/, '').trim())}</span>${devTxt}</div>`
+        ? `<div class="hatuli-side-location" style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🏢 <a href="/complex/find?name=${encodeURIComponent(pt.complex)}" onclick="event.stopPropagation()" style="font-weight:600;">${cxLabel}</a>${pt.year_built ? ` <span style="color:#888;font-weight:400;">· ${pt.year_built} г.</span>` : ''}${devTxt}</div>`
+        : (pt.address ? `<div class="hatuli-side-location" style="font-size:1em;margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">📍 <span style="font-weight:600;">${escapeHtml(pt.address.replace(/\s*—.*$/, '').trim())}</span>${devTxt}</div>`
            : (devTxt ? `<div style="font-size:1em;margin-top:7px;">${devTxt.replace(/^ · /, '')}</div>` : ''));
       const pillStyle = 'display:inline-block;background:#dbeafe;color:#000;border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;';
       // Скоринг доверия (задача 2026-08-13) — раньше пилюля знала только
@@ -2829,14 +2960,14 @@ function renderSaleBatch(d, opts) {
       };
       const sellerInfo = SELLER_PILL[pt.seller_type] || (isOwner ? SELLER_PILL.owner : SELLER_PILL.realtor);
       const ownerPillStyle = `display:inline-block;background:${sellerInfo.bg};color:${sellerInfo.color};border-radius:999px;padding:3px 11px;font-size:13px;font-weight:600;margin:0 5px 5px 0;white-space:nowrap;`;
-      const roomsPillHtml = `<span style="${pillStyle}margin:0;">${pt.rooms || '?'}-комн</span>`;
-      const areaPillHtml = `<span style="${pillStyle}margin:0;">${areaTxt} м²</span>`;
-      const floorPillHtml = pt.floor ? `<span style="${pillStyle}">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : '';
+      const roomsPillHtml = `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">${pt.rooms || '?'}-комн</span>`;
+      const areaPillHtml = `<span class="hatuli-side-fact" style="${pillStyle}margin:0;">${areaTxt} м²</span>`;
+      const floorPillHtml = pt.floor ? `<span class="hatuli-side-fact" style="${pillStyle}">${pt.floor}/${pt.floors_total || '?'} эт.</span>` : '';
       const ownerPillHtml = `<span style="${ownerPillStyle}" title="${pt.trust_score != null ? 'Скоринг доверия: ' + pt.trust_score : ''}">${sellerInfo.label}</span>`;
       // Высота потолка — теперь обязательная пилюля в общем ряду (раньше
       // была условной среди метража/кухни/отделки, см. задачу "упростить
       // карточку до фото/цены/комнатности/площади/этажа/продавца/потолка").
-      const ceilingPillHtml = pt.ceiling_height ? `<span style="${pillStyle}">Потолок ${pt.ceiling_height} м</span>` : '';
+      const ceilingPillHtml = pt.ceiling_height ? `<span class="hatuli-side-fact" style="${pillStyle}">Потолок ${pt.ceiling_height} м</span>` : '';
       // Упрощённая карточка (см. B2 в задаче): фото-карусель, цена, пилюли,
       // строка ЖК, строка "реальная цена" (#bg-, см. loadListingExtras) —
       // и больше ничего (без банков/описания/кнопок Подробнее+Крыша отдельной
@@ -2844,9 +2975,9 @@ function renderSaleBatch(d, opts) {
       CARD_HTML[pt.id] = (`
 <div class="side-card-inner" style="width:100%;font-family:inherit;box-sizing:border-box;cursor:pointer;" onclick="openDetailModal('${pt.id}', event)">
   ${carHtml}
-  <div style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
-      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-        <div style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
+  <div class="hatuli-side-body" style="${carHtml ? 'padding:5px 10px 0;' : 'border-radius:11px;padding:0 6px;'}">
+      <div class="hatuli-side-facts" style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+        <div class="hatuli-side-price" style="font-size:23px;font-weight:800;line-height:1.05;">${priceM} <span style="font-size:16px;font-weight:700;">млн ₸</span></div>
         ${priceTrendBadge}
         ${roomsPillHtml}
         ${areaPillHtml}
@@ -2888,6 +3019,9 @@ function mkStats(items) {
 // Мини-график истории цены (SVG) — подгружается при открытии попапа.
 // Значения точек — только по наведению (нативный <title> тултип браузера),
 // в обычном виде линия без подписей (см. п.4 ТЗ).
+function fmtArea(v) {
+  return v && Number.isFinite(Number(v)) ? new Intl.NumberFormat('ru-RU', {maximumFractionDigits:1}).format(Number(v)) : '?';
+}
 function fmtMln(v) {
   const r = Math.round(v / 1e6 * 10) / 10;
   return (r % 1 === 0 ? r.toFixed(0) : r.toFixed(1)) + ' М';
@@ -2934,7 +3068,7 @@ function sparklineSVG(points, w, h) {
     return `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="8" fill="transparent" stroke="none" style="cursor:pointer;"><title>${p.at}: ${(p.price/1e6).toFixed(2)} млн ₸</title></circle>` +
            `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="4.5" fill="#2563eb" stroke="#fff" stroke-width="1.5" style="pointer-events:none;"/>`;
   }).join('');
-  return `<svg width="${w}" height="${h}" style="display:block;overflow:visible;">` +
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" style="display:block;max-width:100%;height:auto;overflow:visible;">` +
          `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">` +
          `<stop offset="0%" stop-color="#2563eb" stop-opacity="0.45"/>` +
          `<stop offset="100%" stop-color="#2563eb" stop-opacity="0.03"/></linearGradient></defs>` +
@@ -2946,7 +3080,7 @@ function loadPriceHistory(id) {
   if (!el || el.dataset.loaded) return;
   el.dataset.loaded = '1';
   fetch('/admin/api/price-history/' + encodeURIComponent(id)).then(r => r.json()).then(d => {
-    // <=1 точка значит реальных изменений цены не было (только стартовая) — блок вообще не показываем
+    if (d.history_warning) { el.textContent = d.history_warning; return; }
     if (!d.points || d.points.length <= 1) { el.innerHTML = ''; return; }
     const w = Math.max(220, el.clientWidth || 220);  // почти вся ширина карточки, а не фикс. 220px
     el.innerHTML = sparklineSVG(d.points, w, 58);
@@ -3245,7 +3379,7 @@ function loadListingExtras(id) {
       // вместе с ним убрали Смарт рейтинг/Deal Score из превью (просили
       // короче), поэтому объяснение теперь только на странице объявления.
       el.innerHTML = `<div>
-        <span style="color:#16a34a;font-weight:800;white-space:nowrap;">реальная цена ${targetM} млн ₸</span>
+        <span style="color:#16a34a;font-weight:800;white-space:nowrap;">ценовой ориентир ${targetM} млн ₸</span>
         <a href="javascript:void(0)" onclick="event.stopPropagation();openDetailModal('${id}', event, true)" style="display:inline-block;padding:1px 8px;border-radius:10px;background:#e5e7eb;color:#555;font-size:11.5px;font-weight:700;text-decoration:none;">почему?</a>
       </div>`;
     } else {
@@ -4328,7 +4462,7 @@ async function loadHeatData(mode) {
     heatCache.saleArchived = archived.points || [];
   } else if (mode === 'rental') {
     const [d, archived] = await Promise.all([
-      cachedFetchJson('/admin/api/map-points?type=rental'),
+      loadAllRentalPoints(),
       fetch('/admin/api/archived-rental-points').then(r => r.json()),
     ]);
     heatCache.rental = d.points || [];
@@ -4367,7 +4501,7 @@ async function loadHeatData(mode) {
     // что уже используются как фолбэк для тепловых карт цены).
     const [s, r, sa, ra] = await Promise.all([
       fetch('/admin/api/heat-points').then(r => r.json()),
-      cachedFetchJson('/admin/api/map-points?type=rental'),
+      loadAllRentalPoints(),
       fetch('/admin/api/archived-sale-points').then(r => r.json()),
       fetch('/admin/api/archived-rental-points').then(r => r.json()),
     ]);
@@ -4750,6 +4884,26 @@ async function loadModalPriceHeat(kind) {
 // теперь та же Zillow-галерея (большое фото + миниатюры, modalPhotoNav/
 // modalGoTo), источник фото — [планировка юнита, …фото ЖК], плюс описание
 // ЖК (complexes.description) и застройщик + кнопка "Связаться".
+function modalPriceForecastPlaceholder(kind) {
+  return `<div data-modal-price-forecast="${kind}"${kind === 'primary' ? ' style="margin-top:16px;"' : ''} hidden></div>`;
+}
+
+function mountModalPriceForecast(content, payload) {
+  const target = content.querySelector('[data-modal-price-forecast]');
+  if (!target) return;
+  target.replaceChildren();
+  target.hidden = true;
+  if (!window.HatuliPriceForecast) return;
+  try {
+    window.HatuliPriceForecast.mount(target, payload, {
+      modal: target.dataset.modalPriceForecast === 'secondary'
+    });
+  } catch (_) {
+    target.replaceChildren();
+    target.hidden = true;
+  }
+}
+
 function renderNewbuildDetail(unitId, content) {
   fetch('/admin/api/newbuild-unit/' + encodeURIComponent(unitId)).then(r => r.json()).then(d => {
     if (d.error) { content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Не найдено</div>'; return; }
@@ -4762,20 +4916,20 @@ function renderNewbuildDetail(unitId, content) {
     const thumbs = modalPhotos.slice(1, 5);
     const extraCount = modalPhotos.length - 5;
     const photoHtml = modalPhotos.length ? `
-<div style="display:flex;gap:4px;height:420px;">
-  <div style="position:relative;flex:${thumbs.length ? 2 : 1};min-width:0;background:#f7f7f7;">
-    <img id="modal-photo-img" src="${proxyImg(modalPhotos[0])}" style="width:100%;height:100%;object-fit:contain;background:#f7f7f7;display:block;">
+<div class="hatuli-photo-gallery hatuli-photo-gallery--modal ${thumbs.length ? '' : 'hatuli-photo-gallery--single'}" style="--photo-thumb-rows:${Math.ceil(thumbs.length / 2) || 1};">
+  <div class="hatuli-photo-main">
+    <img id="modal-photo-img" src="${proxyImg(modalPhotos[0])}" alt="Фото или планировка объявления">
     ${modalPhotos.length > 1 ? `
     <button onclick="modalPhotoNav(-1,event)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">‹</button>
     <button onclick="modalPhotoNav(1,event)" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">›</button>
     <span id="modal-photo-n" style="position:absolute;right:12px;bottom:10px;background:rgba(0,0,0,.55);color:#fff;font-size:13px;border-radius:6px;padding:3px 10px;">1/${modalPhotos.length}</span>` : ''}
   </div>
   ${thumbs.length ? `
-  <div style="flex:1;min-width:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:4px;">
+  <div class="hatuli-photo-thumbs">
     ${thumbs.map((ph, idx) => {
       const realIdx = idx + 1;
       const isLastCell = idx === thumbs.length - 1 && extraCount > 0;
-      return `<div onclick="modalGoTo(${realIdx},event)" style="position:relative;cursor:pointer;overflow:hidden;background:#f7f7f7;">
+      return `<div class="hatuli-photo-tile" onclick="modalGoTo(${realIdx},event)">
         <img src="${proxyImg(ph)}" style="width:100%;height:100%;object-fit:cover;display:block;">
         ${isLastCell ? `<div style="position:absolute;inset:0;background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;">+${extraCount} фото</div>` : ''}
       </div>`;
@@ -4792,11 +4946,12 @@ function renderNewbuildDetail(unitId, content) {
     ${d.price_per_m2 ? `<div style="font-size:13px;color:var(--text);margin-top:2px;">${Math.round(d.price_per_m2/1000)} тыс ₸/м²</div>` : ''}
     <div style="margin-top:10px;">
       <span style="${pillStyle}">${d.rooms || '?'}-комн</span>
-      ${d.area ? `<span style="${pillStyle}">${Math.round(d.area)} м²</span>` : ''}
+      ${d.area ? `<span style="${pillStyle}">${fmtArea(d.area)} м²</span>` : ''}
       ${d.floor ? `<span style="${pillStyle}">${d.floor}/${d.floors_total || '?'} эт.</span>` : ''}
       ${d.building ? `<span style="${pillStyle}">корпус ${escapeHtml(d.building)}</span>` : ''}
       ${d.section ? `<span style="${pillStyle}">подъезд ${escapeHtml(d.section)}</span>` : ''}
     </div>
+    ${modalPriceForecastPlaceholder('primary')}
     <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
       <div style="font-weight:800;font-size:17px;"><a href="/complex/${d.complex_id}" style="color:inherit;text-decoration:none;">🏢 ЖК ${escapeHtml(d.complex_name || '')}</a></div>
       <div style="font-size:13px;color:var(--text);margin-top:4px;">
@@ -4810,8 +4965,90 @@ function renderNewbuildDetail(unitId, content) {
     <div style="margin-top:16px;max-width:280px;">${contactDevBtnHtml({sales_phone: d.sales_phone}, d.id)}</div>
   </div>
 </div>`;
+    mountModalPriceForecast(content, d.price_forecast);
   }).catch(() => {
     content.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text);">Ошибка загрузки</div>';
+  });
+}
+
+// Rentals use their own endpoint and dialog: an equal sale ID is a different
+// record and cannot supply photos, status, history or a sales forecast here.
+let rentalDetailSeq = 0, rentalDetailAbort = null, rentalDetailPreviousFocus = null;
+function closeRentalDetailModal() {
+  rentalDetailSeq++;
+  if (rentalDetailAbort) rentalDetailAbort.abort();
+  const root = document.getElementById('rental-detail-overlay');
+  if (root) root.style.display = 'none';
+  if (rentalDetailPreviousFocus && rentalDetailPreviousFocus.focus) rentalDetailPreviousFocus.focus();
+}
+function ensureRentalDetailRoot() {
+  let root = document.getElementById('rental-detail-overlay');
+  if (root) return root;
+  root = document.createElement('div');
+  root.id = 'rental-detail-overlay';
+  root.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:10000;display:none;align-items:center;justify-content:center;padding:12px;';
+  root.innerHTML = `<section role="dialog" aria-modal="true" aria-labelledby="rental-detail-title" style="position:relative;width:min(100%,900px);max-height:calc(100vh - 24px);overflow-y:auto;background:var(--surface);color:var(--text);border-radius:14px;padding:22px;">
+    <button type="button" id="rental-detail-close" onclick="closeRentalDetailModal()" aria-label="Закрыть объявление аренды" style="position:absolute;right:12px;top:12px;border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:8px;padding:5px 12px;font-size:20px;">×</button>
+    <div id="rental-detail-content"></div></section>`;
+  root.onclick = event => { if (event.target === root) closeRentalDetailModal(); };
+  root.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.stopPropagation(); closeRentalDetailModal(); }
+    if (event.key !== 'Tab') return;
+    const focusable = [...root.querySelectorAll('button,a[href]')];
+    const first = focusable[0], last = focusable[focusable.length-1];
+    if (event.shiftKey && document.activeElement === first) {event.preventDefault(); last.focus();}
+    else if (!event.shiftKey && document.activeElement === last) {event.preventDefault(); first.focus();}
+  });
+  document.body.appendChild(root);
+  return root;
+}
+function renderRentalDetailHtml(data) {
+  const id = String(data.id || '');
+  if (!/^\d{5,20}$/.test(id)) return '<p>Не удалось прочитать объявление аренды.</p>';
+  const money = value => Number.isFinite(value) && value > 0 ? Math.round(value).toLocaleString('ru') + ' ₸' : 'Цена не указана';
+  const date = value => {
+    const parsed = new Date(value || '');
+    return Number.isFinite(parsed.getTime()) ? parsed.toLocaleString('ru', {timeZone:'Asia/Almaty'}) : 'дата не указана';
+  };
+  const photos = Array.isArray(data.photos) ? data.photos : [];
+  const history = Array.isArray(data.price_history) ? data.price_history : [];
+  const knownPeriod = data.prop_type === 'apartment' && ['monthly','daily'].includes(data.rent_period) ? data.rent_period : 'unknown';
+  const periodLabel = {monthly:'Помесячная аренда', daily:'Посуточная аренда', unknown:'Аренда · единица ставки не определена'}[knownPeriod];
+  const priceSuffix = {monthly:'/мес', daily:'/сутки', unknown:''}[knownPeriod];
+  const room = data.rooms === 0 ? 'Студия' : (data.rooms != null ? data.rooms + '-комнатная' : 'Комнаты не указаны');
+  const historyHtml = history.map(item => `<li style="margin:8px 0;">${escapeHtml(date(item.changed_at))}: ${money(item.old_price)} → ${money(item.new_price)}</li>`).join('');
+  return `<div style="padding-right:36px;"><p style="color:var(--muted);font-size:13px;">${periodLabel}</p><h2 id="rental-detail-title" style="font-size:clamp(20px,4vw,28px);margin:6px 0 14px;line-height:1.3;">${escapeHtml(data.title || 'Объявление об аренде')}</h2></div>
+    <p style="font-size:26px;font-weight:800;margin:10px 0;">${money(data.price)}${Number.isFinite(data.price) && data.price > 0 ? priceSuffix : ''}</p>
+    <p>${escapeHtml(room)}${data.area ? ' · ' + data.area + ' м²' : ''}${data.floor ? ' · этаж ' + data.floor + (data.floors_total ? '/' + data.floors_total : '') : ''}</p>
+    <p style="margin-top:10px;">Адрес из объявления: ${escapeHtml(data.address || 'не указан')}</p>
+    ${data.complex ? `<p>ЖК: ${escapeHtml(data.complex)}</p>` : ''}
+    <p style="margin:12px 0;color:var(--muted);">${escapeHtml(data.status_label || 'Актуальность требует проверки')} · ${escapeHtml(date(data.last_seen))}</p>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">${escapeHtml(data.archive_note || 'Снятие объявления не подтверждает сдачу квартиры.')}</p>
+    ${photos.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:8px;">${photos.map((photo,index) => `<img src="${escapeHtml(proxyImg(photo))}" alt="Фото аренды ${index+1}" loading="lazy" style="display:block;width:100%;aspect-ratio:4/3;object-fit:contain;background:var(--surface2);border-radius:8px;">`).join('')}</div>` : '<p style="color:var(--muted);">Фотографии ещё не сохранены.</p>'}
+    <h3 style="margin:20px 0 8px;font-size:17px;">История заявленной цены</h3>
+    ${data.history_available === false ? '<p>Историю цены сейчас не удалось загрузить.</p>' : history.length ? `<ul style="padding-left:20px;">${historyHtml}</ul>${data.history_truncated ? '<p>Показаны последние 100 записей.</p>' : ''}` : '<p>В нашей базе изменений цены пока нет.</p>'}
+    <p style="font-size:12px;color:var(--muted);margin-top:8px;">Это записи наблюдений; история может быть неполной. Фактическая ставка и сдача квартиры не подтверждены.</p>
+    <a href="https://krisha.kz/a/show/${id}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:10px 16px;margin-top:18px;background:var(--accent);color:#fff;border-radius:9px;text-decoration:none;">Открыть объявление на Krisha</a>`;
+}
+function openRentalDetailModal(id, event) {
+  if (event) event.stopPropagation();
+  id = String(id);
+  if (!/^\d{5,20}$/.test(id)) return;
+  const seq = ++rentalDetailSeq;
+  if (rentalDetailAbort) rentalDetailAbort.abort();
+  rentalDetailAbort = new AbortController();
+  rentalDetailPreviousFocus = document.activeElement;
+  const root = ensureRentalDetailRoot();
+  root.style.display = 'flex';
+  const content = document.getElementById('rental-detail-content');
+  content.innerHTML = '<h2 id="rental-detail-title">Аренда</h2><p>Загрузка…</p>';
+  document.getElementById('rental-detail-close').focus();
+  fetch('/admin/api/rental/' + encodeURIComponent(id), {signal:rentalDetailAbort.signal}).then(response => response.json()).then(data => {
+    if (seq !== rentalDetailSeq) return;
+    content.innerHTML = data.error ? `<h2 id="rental-detail-title">Аренда</h2><p>${escapeHtml(data.message || 'Объявление аренды не найдено в нашей базе.')}</p>` : renderRentalDetailHtml(data);
+  }).catch(error => {
+    if (seq !== rentalDetailSeq || error.name === 'AbortError') return;
+    content.innerHTML = '<h2 id="rental-detail-title">Аренда</h2><p>Не удалось загрузить объявление. Попробуйте ещё раз.</p>';
   });
 }
 
@@ -4851,20 +5088,20 @@ function openDetailModal(id, ev, scrollToScore) {
     const thumbs = modalPhotos.slice(1, 5);
     const extraCount = modalPhotos.length - 5;
     const photoHtml = modalPhotos.length ? `
-<div style="display:flex;gap:4px;height:420px;">
-  <div style="position:relative;flex:${thumbs.length ? 2 : 1};min-width:0;">
-    <img id="modal-photo-img" src="${proxyImg(modalPhotos[0])}" style="width:100%;height:100%;object-fit:cover;display:block;">
+<div class="hatuli-photo-gallery hatuli-photo-gallery--modal ${thumbs.length ? '' : 'hatuli-photo-gallery--single'}" style="--photo-thumb-rows:${Math.ceil(thumbs.length / 2) || 1};">
+  <div class="hatuli-photo-main">
+    <img id="modal-photo-img" src="${proxyImg(modalPhotos[0])}" alt="Фото объявления">
     ${modalPhotos.length > 1 ? `
     <button onclick="modalPhotoNav(-1,event)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">‹</button>
     <button onclick="modalPhotoNav(1,event)" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:20px;cursor:pointer;">›</button>
     <span id="modal-photo-n" style="position:absolute;right:12px;bottom:10px;background:rgba(0,0,0,.55);color:#fff;font-size:13px;border-radius:6px;padding:3px 10px;">1/${modalPhotos.length}</span>` : ''}
   </div>
   ${thumbs.length ? `
-  <div style="flex:1;min-width:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:4px;">
+  <div class="hatuli-photo-thumbs">
     ${thumbs.map((ph, idx) => {
       const realIdx = idx + 1;
       const isLastCell = idx === thumbs.length - 1 && extraCount > 0;
-      return `<div onclick="modalGoTo(${realIdx},event)" style="position:relative;cursor:pointer;overflow:hidden;">
+      return `<div class="hatuli-photo-tile" onclick="modalGoTo(${realIdx},event)">
         <img src="${proxyImg(ph)}" style="width:100%;height:100%;object-fit:cover;display:block;">
         ${isLastCell ? `<div style="position:absolute;inset:0;background:rgba(0,0,0,.55);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;">+${extraCount} фото</div>` : ''}
       </div>`;
@@ -4896,7 +5133,7 @@ function openDetailModal(id, ev, scrollToScore) {
     const bargainHtml = (d.bargain && d.bargain.discount_pct > 0) ? `
 <div style="margin:14px 22px 0;">
   <div style="color:#16a34a;font-weight:800;font-size:19px;display:inline-block;">
-    ${d.bargain.target_price ? 'реальная цена ' + (d.bargain.target_price/1e6).toFixed(1) + ' млн ₸' : 'можно торговаться на ' + d.bargain.discount_pct + '%'}
+    ${d.bargain.target_price ? 'ценовой ориентир ' + (d.bargain.target_price/1e6).toFixed(1) + ' млн ₸' : 'можно торговаться на ' + d.bargain.discount_pct + '%'}
   </div>
   ${d.bargain.recommendation ? `<div style="font-size:13.5px;color:var(--text);margin-top:4px;">${escapeHtml(d.bargain.recommendation)}</div>` : ''}
 </div>` : '';
@@ -4904,14 +5141,15 @@ function openDetailModal(id, ev, scrollToScore) {
     // То же, что на странице /admin/analytics/{id} — доходность (аренда/yield/
     // окупаемость) и разбивка Смарт рейтинга по компонентам — теперь и в
     // модалке на карте, оформлено полосками как на самой странице аналитики.
-    const yieldHtml = (d.yield_pct || d.est_rent) ? `
+    const rentalRange = d.rental_estimate;
+    const hasRentalRange = rentalRange && rentalRange.basis === 'same_complex' && rentalRange.asking_prices === true
+      && Number.isFinite(rentalRange.monthly_low) && Number.isFinite(rentalRange.monthly_high)
+      && rentalRange.monthly_low >= 50000 && rentalRange.monthly_high >= rentalRange.monthly_low
+      && rentalRange.monthly_high <= 2000000 && rentalRange.sample_count >= 5;
+    const yieldHtml = window.HatuliRentalEconomics?.render(d.rental_economics) || (hasRentalRange ? `
 <div style="margin:14px 22px 0;padding:12px 14px;background:var(--bg);border-radius:10px;display:flex;gap:22px;flex-wrap:wrap;">
-  <div><div style="font-size:11px;color:var(--text);">Аренда (оценка)</div><div style="font-weight:800;font-size:15px;color:#16a34a;">${d.est_rent ? Math.round(d.est_rent).toLocaleString('ru') + ' ₸/мес' : '—'}</div></div>
-  <div><div style="font-size:11px;color:var(--text);">Yield, gross <a href="/admin/info#general" target="_blank" title="Что такое Yield и как считается — открыть объяснение" style="display:inline-block;width:14px;height:14px;line-height:14px;border-radius:50%;background:var(--border);color:var(--text);font-size:10px;text-align:center;text-decoration:none;font-weight:700;vertical-align:2px;">?</a></div><div style="font-weight:800;font-size:15px;color:#16a34a;">${(d.yield_pct || 0).toFixed(1)}%</div></div>
-  <div><div style="font-size:11px;color:var(--text);">Yield, net</div><div style="font-weight:800;font-size:15px;color:#0d9488;" title="Аренда с поправкой на простой между жильцами (~5%), налог+мелкий ремонт (~10%) и расходы на покупку (~2%)">${d.net_yield_pct != null ? d.net_yield_pct.toFixed(1) + '%' : '—'}</div></div>
-  <div><div style="font-size:11px;color:var(--text);">Окупаемость</div><div style="font-weight:800;font-size:15px;">${d.payback_years ? d.payback_years.toFixed(1) : '—'} лет</div></div>
-  ${d.zone_name ? `<div><div style="font-size:11px;color:var(--text);">Зона</div><div style="font-weight:800;font-size:15px;color:${(d.zone_bonus||0) < 0 ? '#ef4444' : '#16a34a'};">${escapeHtml(d.zone_name)} (${d.zone_bonus > 0 ? '+' : ''}${d.zone_bonus || 0})</div></div>` : ''}
-</div>` : '';
+  <div><div style="font-size:12px;color:var(--muted);">Похожие квартиры в этом ЖК предлагают в аренду</div><div style="font-weight:800;font-size:17px;color:var(--green);">${Math.round(rentalRange.monthly_low).toLocaleString('ru')}–${Math.round(rentalRange.monthly_high).toLocaleString('ru')} ₸/мес</div><div style="font-size:12px;color:var(--muted);margin-top:5px;">${escapeHtml(rentalRange.date_label || '')} · Это ставки объявлений; фактическая сдача и доходность не подтверждены.</div></div>
+</div>` : '');
 
     // Полукруглый спидометр Deal Score: 5 цветных секторов (красный..зелёный)
     // + стрелка, повёрнутая на угол пропорционально score (0..100).
@@ -5051,12 +5289,12 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
     const modalPillsHtml = `
     <span style="${modalPillStyle}">${d.rooms || '?'}-комн</span>
     ${modalPriceM2Txt ? `<span style="${modalPillStyle}">${modalPriceM2Txt}</span>` : ''}
-    ${d.area ? `<span style="${modalPillStyle}">${Math.round(d.area)} м²</span>` : ''}
+    ${d.area ? `<span style="${modalPillStyle}">${fmtArea(d.area)} м²</span>` : ''}
     ${modalAgeTxt ? `<span style="${modalPillStyle}">на рынке: ${modalAgeTxt}</span>` : ''}
     ${d.floor ? `<span style="${modalPillStyle}">${d.floor}/${d.floors_total || '?'} эт.</span>` : ''}
     <span style="${modalPillStyle}">${d.is_owner ? 'собственник' : 'риелтор'}</span>
     ${d.ceiling_height ? `<span style="${modalPillStyle}">потолок ${d.ceiling_height} м</span>` : ''}
-    ${d.kitchen_area ? `<span style="${modalPillStyle}">кухня ${d.kitchen_area} м²</span>` : ''}
+    ${d.kitchen_area ? `<span style="${modalPillStyle}">кухня ${fmtArea(d.kitchen_area)} м²</span>` : ''}
     ${d.finish_type ? `<span style="${modalPillStyle}">${escapeHtml(d.finish_type)}</span>` : ''}
     ${d.floorplan_url ? `<a href="${d.floorplan_url}" target="_blank" onclick="event.stopPropagation()" style="${modalPillStyle}text-decoration:none;">📐 План</a>` : ''}
     ${d.views_count ? `<span style="${modalPillStyle}background:#bfdbfe;">👁 ${d.views_count.toLocaleString('ru')}</span>` : ''}`;
@@ -5135,12 +5373,12 @@ ${dealScoreGaugeSvg(d.deal_score.deal)}
       (pct >= 50 ? ` — ${more}, чем у ${Math.round(pct)}% объявлений` : ` — ${less}, чем у ${Math.round(100 - pct)}% объявлений`);
     const liquidityHtml = lq && (lq.p_exit14 != null || lq.p_cut30 != null) ? `
 <div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
-  <div style="font-size:14px;font-weight:700;margin-bottom:8px;">📈 Прогноз ликвидности <span style="font-weight:400;font-size:12px;color:var(--text2,#888);">бета</span></div>
+  <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Активность объявления <span style="font-weight:400;font-size:12px;color:var(--text2,#888);">вероятностная модель · бета</span></div>
   ${lq.p_exit14 != null ? `<div style="font-size:13.5px;">Уйдёт с Крыши в ближайшие 14 дней: <b>${lqPct(lq.p_exit14)}</b>${lqCmp(lq.exit14_pct, 'выше', 'ниже')}</div>
   ${(lq.reasons.exit14 || []).length ? `<ul style="margin:4px 0 0 18px;padding:0;font-size:12.5px;">${lqReasons(lq.reasons.exit14)}</ul>` : ''}` : ''}
   ${lq.p_cut30 != null ? `<div style="font-size:13.5px;margin-top:8px;">Снизят цену в ближайшие 30 дней: <b>${lqPct(lq.p_cut30)}</b>${lqCmp(lq.cut30_pct, 'выше', 'ниже')}</div>
   ${(lq.reasons.cut30 || []).length ? `<ul style="margin:4px 0 0 18px;padding:0;font-size:12.5px;">${lqReasons(lq.reasons.cut30)}</ul>` : ''}` : ''}
-  <div style="margin-top:8px;font-size:11.5px;color:var(--text2,#888);">Уход с Крыши ≠ продажа: около трети уходов — перевыставления. Модель — ориентир, а не гарантия (точность AUC ≈ 0,6). ↑/↓ — что сильнее всего повышает/снижает вероятность. Прогноз от ${lq.as_of}.</div>
+  <div style="margin-top:8px;font-size:11.5px;color:var(--text2,#888);">Исчезновение объявления не подтверждает продажу: квартира может быть перевыставлена. Здесь показана вероятность события, а не будущая цена квартиры. ↑/↓ — что сильнее всего повышает/снижает вероятность. Расчёт от ${escapeHtml(lq.as_of || 'дата не указана')}.</div>
 </div>` : '';
 
     const sp = d.seller_profile;
@@ -5160,13 +5398,15 @@ ${photoHtml}
   <div style="font-size:34px;font-weight:800;">${priceM} <span style="font-size:21px;">млн ₸</span></div>
   <div style="margin-top:8px;">${modalPillsHtml}${aiPlusesHtml}</div>
   ${d.seller_name ? `<div style="font-size:13px;color:var(--text);margin-top:4px;">${escapeHtml(d.seller_name)}</div>` : ''}
-  <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${d.address || d.district || 'адрес не определён'}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
-  ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${d.complex_name}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
+  <div style="font-size:16px;color:var(--text);margin-top:8px;">📍 ${escapeHtml(d.address || d.district || 'адрес не определён')}${(d.geo === 'address') ? ' <span style="color:#b45309;font-size:13px;">(≈ привязка по адресу)</span>' : ''}</div>
+  ${d.complex_name ? `<div style="font-size:18px;margin-top:6px;">🏢 <a href="/complex/find?name=${encodeURIComponent(d.complex_name)}" style="color:#d4af37;font-weight:800;text-decoration:none;border-bottom:1px solid #d4af37;">ЖК ${escapeHtml(d.complex_name)}</a>${d.year_built ? ' <span style="color:var(--text);font-weight:400;font-size:15px;">· ' + d.year_built + ' г.</span>' : ''}</div>` : ''}
 </div>
+${modalPriceForecastPlaceholder('secondary')}
 ${dealBadgesHtml}
 ${kzkBadgeHtml}
 ${bargainHtml}
 ${priceHistoryHtml}
+<section class="hatuli-journey" id="modal-buyer-journey"><h3>История квартиры и альтернативы</h3><p>Загружаем разбор…</p></section>
 ${domScenarioHtml}
 ${riskAnalysisHtml}
 ${d.description ? `<div style="margin:16px 22px 0;padding:14px 16px;background:var(--bg);border-radius:10px;">
@@ -5209,6 +5449,9 @@ ${krishaSourceFooterHtml}
   <div id="share-menu" style="display:none;position:absolute;bottom:calc(100% + 6px);left:22px;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.25);padding:6px;z-index:20;min-width:220px;"></div>
 </div>`;
 
+    mountModalPriceForecast(content, d.price_forecast);
+    if (window.HatuliBuyerJourney) window.HatuliBuyerJourney.load(content.querySelector('#modal-buyer-journey'), id);
+
     if (modalPhotos.length) {
       ptPhotos[id] = modalPhotos; carIdx[id] = 0;
       const mainImg = document.getElementById('modal-photo-img');
@@ -5235,10 +5478,16 @@ ${krishaSourceFooterHtml}
       const wrap = document.getElementById('modal-price-history-wrap');
       const el = document.getElementById('modal-price-history');
       if (!el || !wrap) return;
-      // <=1 точка = цена не менялась — блок не показываем вообще
-      if (!dh.points || dh.points.length <= 1) return;
       wrap.style.display = '';
-      const phw = Math.max(320, (el.parentElement.clientWidth || 420) - 4);
+      if (dh.history_warning || dh.integrity_status === 'incomplete') {
+        el.textContent = dh.history_warning || 'В истории есть пропуски. Итоговое изменение цены пока не подтверждено.';
+        return;
+      }
+      if (!dh.points || dh.points.length <= 1) {
+        el.textContent = 'Изменений цены пока не зафиксировано. Это не подтверждает неизменность цены с момента появления квартиры.';
+        return;
+      }
+      const phw = Math.max(180, (el.clientWidth || 420) - 4);
       el.innerHTML = sparklineSVG(dh.points, phw, 160) + '<div style="font-size:12px;color:#aaa;margin-top:2px;">наведи на точку — точная дата</div>';
     }).catch(() => {});
   }).catch(() => {
@@ -5344,6 +5593,7 @@ const poiLayer = L.layerGroup();
 let poiLoaded = false, poiOn = false;
 document.getElementById('btn-schools').addEventListener('click', function() {
   poiOn = !poiOn;
+  this.setAttribute('aria-pressed', String(poiOn));
   this.style.background = poiOn ? '#2563eb' : '#fff';
   this.style.color = poiOn ? '#fff' : '#2563eb';
   if (poiOn) {

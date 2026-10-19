@@ -27,9 +27,10 @@
   {% set t = r.catalog.rent %}
   <div style="flex:1 1 300px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;">
     <div style="display:flex;justify-content:space-between;"><b>Аренда (квартиры)</b>{{ pill(t.status) }}</div>
-    <div style="font-size:26px;font-weight:800;margin-top:6px;">{{ t.active }} <span style="font-size:13px;font-weight:400;color:var(--muted);">активных · видели за 7 дн.: {{ t.seen_7d }}</span></div>
+    <div style="font-size:26px;font-weight:800;margin-top:6px;">{{ t.active }} <span style="font-size:13px;font-weight:400;color:var(--muted);">активных без дублей · свежих за 72 ч: {{ t.seen_72h }}</span></div>
     <div style="font-size:13px;color:var(--muted);margin-top:4px;">
-      полный обход: {% if t.completed_at and t.duration_h %}{{ t.completed_at.astimezone().strftime('%d.%m %H:%M') }}, {{ '%.1f'|format(t.duration_h) }} ч, {{ t.last_pages }} стр.{% else %}ещё не замерен (замер с 03.10){% endif %} (цель ≤ 36 ч)
+      полный обход: {% if t.completed_at and t.duration_h %}{{ t.completed_at.astimezone().strftime('%d.%m %H:%M') }}, {{ '%.1f'|format(t.duration_h) }} ч, {{ t.last_pages }} стр.{% else %}ещё не подтверждён{% endif %} (цель ≤ 48 ч)
+      <p>{{ t.note }} <a href="/admin/rental-health">Подробности сбора аренды</a></p>
     </div>
   </div>
 </div>

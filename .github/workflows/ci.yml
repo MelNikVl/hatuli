@@ -19,7 +19,7 @@ on:
   push:
     branches: [master]
   pull_request:
-    branches: [master]
+    branches: [master, codex/krisha-30-complex-review, 'feat/rental-module**', feat/rental-improvements, feat/rental-best, feat/rental-strategy, feat/analytics-articles, 'feat/daily-picks**']
 
 # ВАЖНО: TEST_DB_USER обязан остаться "krisha" (или совпадать с ним),
 # если его переопределять секретом — десятки migrations/*.sql
@@ -70,6 +70,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Install dependencies
         run: |
@@ -144,7 +148,13 @@ jobs:
       # test_server_search.py не переименовывал/не трогал — не в рамках
       # "минимальный CI", отдельная мелкая находка.
       - name: pytest (полный suite, без параллельных флагов)
-        run: pytest tests/ -q --tb=short -m "not live_data"
+        run: |
+          if [ "$TEST_DB_NAME" = "hatuli_test" ]; then
+            export RENTAL_FK_TEST_DSN="$DATABASE_URL"
+            export HATULI_RENTAL_STAGE0_TEST_DATABASE_URL="$DATABASE_URL"
+            export HATULI_RENTAL_STAGE1_TEST_DATABASE_URL="$DATABASE_URL"
+          fi
+          pytest tests/ -q --tb=short -m "not live_data"
 
       - name: Import smoke test
         run: |

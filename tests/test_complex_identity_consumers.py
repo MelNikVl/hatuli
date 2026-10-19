@@ -96,10 +96,14 @@ async def test_rental_graphs_follow_aliases_umbrella_and_room_filters(client, id
     p = identity["prefix"]
     reviewed = p + "rental-reviewed"
     await _alias(identity["child"], reviewed)
+    child_url = f"https://krisha.kz/complex/show/astana/test-child-{identity['child']}"
+    root_url = f"https://krisha.kz/complex/show/astana/test-root-{identity['root']}"
+    await execute('UPDATE complexes SET krisha_url=$2 WHERE id=$1', identity['child'], child_url)
+    await execute('UPDATE complexes SET krisha_url=$2 WHERE id=$1', identity['root'], root_url)
     for index, name in enumerate([p + "child", reviewed, p + "root"]):
-        await execute("INSERT INTO rental_listings(id,complex_name,rooms,price,area,found_at,last_seen) "
-                      "VALUES($1,$2,2,200000,50,now()-interval '10 days',now()-interval '4 days')",
-                      p + str(index), name)
+        await execute("INSERT INTO rental_listings(id,complex_name,complex_url,rooms,price,area,found_at,last_seen,rent_period,city,is_active,archived_at,archive_reason) "
+                      "VALUES($1,$2,$3,2,200000,50,now()-interval '10 days',now()-interval '4 days','monthly','astana',FALSE,now()-interval '4 days','confirmed_gone')",
+                      p + str(index), name, child_url if index < 2 else root_url)
     for key, expected in [("root", 3), ("child", 2), ("alias", 2)]:
         path = f"/admin/api/complex/{identity[key]}/{endpoint}"
         result = await client.get(path, params={"kind": "rental", "rooms": "2", "days": 90})

@@ -60,11 +60,34 @@ def test_rental_health_requires_measured_cycle():
     h, _ = sa.rental_health({}, NOW)
     assert not h.healthy
     ok, days = sa.rental_health({f'{sa.RENTAL_PREFIX}_COMPLETED_AT': (NOW - timedelta(hours=3)).isoformat(),
-                                 f'{sa.RENTAL_PREFIX}_DURATION_SEC': str(26 * 3600)}, NOW)
+                                 f'{sa.RENTAL_PREFIX}_DURATION_SEC': str(26 * 3600),
+                                 f'{sa.RENTAL_PREFIX}_COMPLETED_VERIFIED': '1',
+                                 f'{sa.RENTAL_PREFIX}_LAST_PAGES': '207',
+                                 f'{sa.RENTAL_PREFIX}_UNIQUE_SEEN': '4131',
+                                 f'{sa.RENTAL_PREFIX}_TOTAL': '4131',
+                                 f'{sa.RENTAL_PREFIX}_LAST_SUCCESS_AT': NOW.isoformat()}, NOW)
     assert ok.healthy and days == 7
     stale, _ = sa.rental_health({f'{sa.RENTAL_PREFIX}_COMPLETED_AT': (NOW - timedelta(days=5)).isoformat(),
                                  f'{sa.RENTAL_PREFIX}_DURATION_SEC': str(26 * 3600)}, NOW)
     assert not stale.healthy
+
+
+def test_rental_legacy_completed_time_cannot_authorize_inferred_archiving():
+    h, _ = sa.rental_health({f'{sa.RENTAL_PREFIX}_COMPLETED_AT': NOW.isoformat(),
+                            f'{sa.RENTAL_PREFIX}_DURATION_SEC': '3600'}, NOW)
+    assert not h.healthy and 'старый курсор' in h.reason
+
+
+def test_rental_incomplete_coverage_blocks_archiving_even_if_parser_is_running():
+    settings = {f'{sa.RENTAL_PREFIX}_COMPLETED_AT': NOW.isoformat(),
+                f'{sa.RENTAL_PREFIX}_DURATION_SEC': '3600',
+                f'{sa.RENTAL_PREFIX}_COMPLETED_VERIFIED': '1',
+                f'{sa.RENTAL_PREFIX}_LAST_PAGES': '207',
+                f'{sa.RENTAL_PREFIX}_UNIQUE_SEEN': '2000',
+                f'{sa.RENTAL_PREFIX}_TOTAL': '4131',
+                f'{sa.RENTAL_PREFIX}_LAST_SUCCESS_AT': NOW.isoformat()}
+    h, _ = sa.rental_health(settings, NOW)
+    assert not h.healthy and '95%' in h.reason
 
 
 def test_half_catalog_circle_blocks_archiving():

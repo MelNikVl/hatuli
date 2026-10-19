@@ -339,14 +339,18 @@ async function toggleFavComplex() {
     {% set photos = ((cx.photos or ([cx.photo_url] if cx.photo_url else [])) | unique | list) %}
     <div id="cx-photos-view">
       {% if photos %}
-      <div style="display:flex;gap:6px;height:420px;">
-        <img id="cx-main-photo" src="{{ photos[0] }}" loading="lazy" onclick="cxOpenLightbox(0)"
-             style="flex:3;min-width:0;height:100%;object-fit:cover;border-radius:8px;cursor:zoom-in;">
+      <div class="hatuli-photo-gallery{% if photos|length <= 1 %} hatuli-photo-gallery--single{% endif %}">
+        <div class="hatuli-photo-main" style="border-radius:8px;">
+          <img id="cx-main-photo" src="{{ photos[0] }}" loading="lazy" onclick="cxOpenLightbox(0)"
+               alt="Фото ЖК {{ cx.name or '' }}" style="cursor:zoom-in;">
+        </div>
         {% if photos|length > 1 %}
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;flex:2;min-width:0;height:100%;overflow-y:auto;">
+        <div class="hatuli-photo-thumbs" style="--photo-thumb-rows:{{ ((photos[1:9]|length + 1) // 2) }};">
           {% for ph in photos[1:9] %}
-          <img src="{{ ph }}" loading="lazy" onclick="cxSetMain({{ loop.index }})"
-               style="width:100%;height:100%;min-height:95px;object-fit:cover;border-radius:6px;cursor:pointer;">
+          <div class="hatuli-photo-tile" style="border-radius:6px;">
+            <img src="{{ ph }}" loading="lazy" onclick="cxSetMain({{ loop.index }})"
+                 alt="Фото ЖК {{ loop.index + 1 }}" style="cursor:pointer;">
+          </div>
           {% endfor %}
         </div>
         {% endif %}
@@ -373,19 +377,19 @@ async function toggleFavComplex() {
       if (!box) {
         box = document.createElement('div');
         box.id = 'cx-lightbox';
-        box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;';
+        box.className = 'hatuli-lightbox';
         box.onclick = (e) => { if (e.target === box) cxCloseLightbox(); };
         document.body.appendChild(box);
       }
-      const thumbs = CX_PHOTOS.map((p, i) => `<img src="${p}" onclick="cxLbIdx=${i};cxRenderLightbox();" style="width:56px;height:42px;object-fit:cover;border-radius:5px;cursor:pointer;opacity:${i === cxLbIdx ? '1' : '.5'};border:2px solid ${i === cxLbIdx ? '#fff' : 'transparent'};">`).join('');
+      const thumbs = CX_PHOTOS.map((p, i) => `<img src="${p}" onclick="cxLbIdx=${i};cxRenderLightbox();" alt="Фото ${i + 1}" style="border-radius:5px;cursor:pointer;opacity:${i === cxLbIdx ? '1' : '.5'};border:2px solid ${i === cxLbIdx ? '#fff' : 'transparent'};">`).join('');
       box.innerHTML = `
-        <div style="position:relative;width:92vw;height:78vh;display:flex;align-items:center;justify-content:center;">
-          <img src="${CX_PHOTOS[cxLbIdx]}" style="max-width:100%;max-height:100%;border-radius:8px;object-fit:contain;">
+        <div class="hatuli-lightbox-stage">
+          <img src="${CX_PHOTOS[cxLbIdx]}" alt="Фото ЖК ${cxLbIdx + 1}" style="border-radius:8px;">
           ${CX_PHOTOS.length > 1 ? `
           <button onclick="cxLbIdx=(cxLbIdx-1+${CX_PHOTOS.length})%${CX_PHOTOS.length};cxRenderLightbox();" style="position:absolute;left:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">‹</button>
           <button onclick="cxLbIdx=(cxLbIdx+1)%${CX_PHOTOS.length};cxRenderLightbox();" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:rgba(0,0,0,.5);color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:22px;cursor:pointer;">›</button>` : ''}
         </div>
-        <div style="display:flex;gap:6px;margin-top:14px;max-width:92vw;overflow-x:auto;padding:4px;">${thumbs}</div>
+        <div class="hatuli-lightbox-thumbs">${thumbs}</div>
         <button onclick="cxCloseLightbox()" style="position:absolute;top:16px;right:20px;background:#fff;border:none;border-radius:50%;color:#000;width:38px;height:38px;font-size:24px;cursor:pointer;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.5);">×</button>
       `;
     }
@@ -917,7 +921,7 @@ function cxlBuildMapLayers(map, d) {
      тот же список в двух видах на одной странице незачем. -->
 <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;margin-bottom:14px;">
   <b style="font-size:13.5px;">📋 Объявления в этом доме <span style="font-weight:400;color:#888;">({{ house_listings|length }})</span></b>
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px;">
+  <div class="hatuli-kpi-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:10px;">
     {% for l in house_listings %}
     <a href="/listing/{{ l.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
       {% if l.photo %}<img src="{{ l.photo }}" loading="lazy" style="width:100%;height:120px;object-fit:cover;display:block;">{% else %}<div style="width:100%;height:120px;background:var(--bg);"></div>{% endif %}
@@ -1006,7 +1010,7 @@ function cxlBuildMapLayers(map, d) {
     </div>
   </div>
   {% if newbuild_units_list %}
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
+  <div class="hatuli-kpi-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
     {% for u in newbuild_units_list %}
     <a href="/listing/nb-{{ u.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
       {% if u.layout_photo_url %}<img src="{{ u.layout_photo_url }}" loading="lazy" style="width:100%;height:120px;object-fit:contain;background:#f7f7f7;display:block;">{% else %}<div style="width:100%;height:120px;background:var(--bg);"></div>{% endif %}
@@ -1053,7 +1057,7 @@ function cxlBuildMapLayers(map, d) {
     <b style="font-size:13.5px;">🧑‍🤝‍🧑 Предложения людей (Крыша) <span style="font-weight:400;color:#888;">({{ people_offers_total }})</span></b>
     <span style="font-size:11px;color:#888;" title="Индивидуальные объявления людей на Крыше по этому ЖК/дому — не официальное предложение застройщика (то — блок «Варианты квартир в доме» выше)">не путать с официальным предложением застройщика ↑</span>
   </div>
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
+  <div class="hatuli-kpi-grid" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;">
     {% for l in people_offers %}
     <a href="/listing/{{ l.id }}" style="display:block;text-decoration:none;color:inherit;border:1px solid var(--border);border-radius:8px;overflow:hidden;position:relative;">
       {% if l.tag %}
@@ -1134,7 +1138,7 @@ function cxdSetKind(kind) {
   document.getElementById('cxd-kind-rental').style.background = kind === 'rental' ? color : 'var(--bg)';
   document.getElementById('cxd-kind-rental').style.color = kind === 'rental' ? '#fff' : 'var(--text)';
   document.getElementById('cxd-title').textContent = kind === 'rental' ? '🔑 Динамика цены по комнатности (аренда)' : '📈 Динамика цены по комнатности (продажа)';
-  document.getElementById('cxd-subtitle').textContent = kind === 'rental' ? 'медиана арендной ставки по дням — своя линия на каждую комнатность' : 'медиана цены объявлений по дням — своя линия на каждую комнатность';
+  document.getElementById('cxd-subtitle').textContent = kind === 'rental' ? 'текущие арендные ставки по дате первого наблюдения — это не историческая цена рынка' : 'медиана цены объявлений по дням — своя линия на каждую комнатность';
   // активные rooms/days-кнопки перекрашиваем в цвет нового kind (активность
   // определяем из состояния, а не читая обратно computed style)
   document.querySelectorAll('.cxd-rooms-btn').forEach(b => {
@@ -1254,7 +1258,7 @@ document.addEventListener('hatuli:chart-resize', (e) => {
     {% endfor %}
   </div>
   <div id="cxt-chart" class="chart-block-inner"></div>
-  <p style="font-size:11.5px;color:#888;margin-top:6px;">«Ушло» = продажа — не в выдаче парсера &gt;3 дн. (в архиве); аренда — та же логика. Малое число дней = высокий спрос в этом ЖК. Аренда наполняется с 12.07.2026.</p>
+  <p style="font-size:11.5px;color:#888;margin-top:6px;">Для аренды показано время от первого наблюдения до подтверждения архива объявления. Это не подтверждённая сдача квартиры. Задержки обхода влияют на наблюдения; отсутствие обновлений не доказывает уход с рынка.</p>
 </div>
 
 <script>
@@ -1270,6 +1274,7 @@ function cxtSetKind(kind) {
   document.getElementById('cxt-kind-rental').style.background = kind === 'rental' ? color : 'var(--bg)';
   document.getElementById('cxt-kind-rental').style.color = kind === 'rental' ? '#fff' : 'var(--text)';
   document.getElementById('cxt-title').textContent = kind === 'rental' ? '⏱ Скорость ухода (аренда)' : '⏱ Скорость ухода (продажа)';
+  document.getElementById('cxt-subtitle').textContent = kind === 'rental' ? 'наблюдаемое время до подтверждения архива объявления — фактическая сдача неизвестна' : 'среднее число дней в экспозиции до ухода — по неделям, своя линия на каждую комнатность';
   document.querySelectorAll('.cxt-rooms-btn').forEach(b => {
     if (b.dataset.rooms === CXT_STATE.rooms) b.style.background = color;
   });
@@ -1305,6 +1310,9 @@ async function cxtLoad() {
   try {
     const r = await fetch(`/admin/api/complex/{{ cx.id }}/turnover-dynamics?kind=${st.kind}&days=${st.days}&rooms=${st.rooms}`);
     const d = await r.json();
+    if (st.kind === 'rental' && d.data_quality) {
+      document.getElementById('cxt-subtitle').textContent = d.data_quality.note + ' ' + d.data_quality.archive_note;
+    }
     cxtRender(el, d.data || {}, st.colors[st.kind]);
   } catch (e) {
     el.innerHTML = '<div style="font-size:12px;color:#888;padding:10px;">ошибка загрузки</div>';

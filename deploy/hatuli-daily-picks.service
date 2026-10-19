@@ -1,0 +1,22 @@
+[Unit]
+Description=Hatuli daily apartment selection verified in the server browser
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=nik
+WorkingDirectory=/home/nik/krisha_bot
+Environment=HATULI_DAILY_PICKS_PATH=/home/nik/krisha_bot/var/daily-picks.json
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=XDG_CACHE_HOME=/home/nik/krisha_bot/var/browser-picks/cache
+Environment=PLAYWRIGHT_BROWSERS_PATH=/home/nik/.cache/ms-playwright
+ExecStart=/bin/bash scripts/run_daily_picks_browser.sh
+TimeoutStartSec=35min
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/nik/krisha_bot/var
+MemoryMax=1536M
+Nice=10

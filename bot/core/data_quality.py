@@ -165,12 +165,14 @@ async def build_report(now: datetime | None = None) -> dict:
 
     sale_done = _ts(settings.get('DEEP_SWEEP_CIRCLE_COMPLETED_AT'))
     sale_dur_h = float(settings.get('DEEP_SWEEP_CIRCLE_DURATION_SEC') or 0) / 3600 or None
-    rent_done = _ts(settings.get('RENTAL_CRAWL_V1_APARTMENT_COMPLETED_AT'))
-    rent_dur_h = float(settings.get('RENTAL_CRAWL_V1_APARTMENT_DURATION_SEC') or 0) / 3600 or None
-    rent_active = await fetchval("""SELECT count(*) FROM rental_listings WHERE is_active IS NOT FALSE
-                                    AND prop_type = 'apartment' AND coalesce(is_duplicate, false) = false""")
-    rent_seen = await fetchval("""SELECT count(*) FROM rental_listings WHERE prop_type = 'apartment'
-                                  AND last_seen >= now() - interval '7 days'""")
+    from bot.core.rental_data_quality import rental_clean_sql, rental_live_sql, collection_health
+    rent_active = await fetchval(f"SELECT count(*) FROM rental_listings WHERE {rental_clean_sql()} AND is_active IS TRUE AND archived_at IS NULL")
+    rent_seen = await fetchval(f"SELECT count(*) FROM rental_listings WHERE {rental_live_sql()}")
+    rent_observed = await fetchval(f"SELECT max(last_seen) FROM rental_listings WHERE {rental_live_sql()}")
+    rent_health = collection_health(settings, rent_observed, now=now)
+    rent_verified = rent_health['collection_status'] == 'recent'
+    rent_done = _ts(rent_health['last_completed_at']) if rent_verified else None
+    rent_dur_h = rent_health['last_cycle_hours'] if rent_verified else None
     catalog = {
         'sale': {'live': total, 'seen_2d': cov['seen_2d'], 'primary': cov['primary_n'],
                  'completed_at': sale_done, 'duration_h': sale_dur_h,
@@ -179,9 +181,10 @@ async def build_report(now: datetime | None = None) -> dict:
                  'circle_coverage_pct': circle_coverage_pct(settings),
                  'status': worst(grade_cycle(sale_done, sale_dur_h, now, target_h=48),
                                  'ok' if (circle_coverage_pct(settings) or 0) >= 95 else 'bad')},
-        'rent': {'active': rent_active, 'seen_7d': rent_seen, 'completed_at': rent_done, 'duration_h': rent_dur_h,
+        'rent': {'active': rent_active, 'seen_7d': None, 'seen_72h': rent_seen, 'completed_at': rent_done, 'duration_h': rent_dur_h,
                  'last_pages': settings.get('RENTAL_CRAWL_V1_APARTMENT_LAST_PAGES'),
-                 'status': grade_cycle(rent_done, rent_dur_h, now, target_h=36)},
+                 'status': grade_cycle(rent_done, rent_dur_h, now, target_h=48),
+                 'market_coverage': 'unknown', 'note': rent_health['note']},
     }
 
     freshness = []

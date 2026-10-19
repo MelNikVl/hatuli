@@ -44,16 +44,42 @@ membership AS (
            avg(l.price / NULLIF(l.area, 0)) FILTER (WHERE l.is_active IS NOT FALSE) AS price_m2,
            avg(l.yield_pct) FILTER (WHERE l.is_active IS NOT FALSE AND l.yield_pct > 0) AS yield_pct
     FROM membership m JOIN listings l ON l.id = m.id GROUP BY m.cid
+), eligible_rentals AS (
+    SELECT r.id, nk.cid
+    FROM rental_listings r JOIN name_keys nk ON nk.n = complex_name_key(r.complex_name)
+    JOIN complexes canonical ON canonical.id = nk.cid
+    WHERE r.city = 'astana' AND r.prop_type = 'apartment'
+      AND r.rent_period = 'monthly' AND NOT COALESCE(r.rent_period_conflict, FALSE)
+      AND r.is_active IS TRUE AND r.archived_at IS NULL
+      AND COALESCE(r.is_duplicate, FALSE) = FALSE
+      AND COALESCE(r.dup_needs_review, FALSE) = FALSE
+      AND NULLIF(btrim(r.duplicate_of), '') IS NULL
+      AND r.last_seen BETWEEN now() - interval '72 hours' AND now()
+      AND COALESCE(r.title, '') !~* 'посуточ|сутк|почас|тәулік|сағат|per[[:space:]]+(day|night|hour)'
+      AND NOT COALESCE(canonical.is_garbage, FALSE)
+      AND NOT COALESCE(canonical.is_street, FALSE)
+      AND NOT COALESCE(canonical.is_umbrella, FALSE)
+      AND canonical.canonical_reason IS DISTINCT FROM 'junk_unmatched'
+      AND r.complex_url ~ '^https://krisha[.]kz/complex/show/[^/?#]+(/[^/?#]+)?/?$'
+      AND (
+        rtrim(r.complex_url, '/') = rtrim(split_part(split_part(canonical.krisha_url, '?', 1), '#', 1), '/')
+        OR EXISTS (
+            SELECT 1 FROM complex_source_links sl
+            JOIN cx source_complex ON source_complex.id = sl.complex_id
+            WHERE sl.source = 'krisha' AND source_complex.cid = nk.cid
+              AND rtrim(r.complex_url, '/') = rtrim(split_part(split_part(sl.url, '?', 1), '#', 1), '/')
+              AND (sl.match_method = 'manual' OR sl.confidence >= 0.85)
+        )
+      )
 ), rental_membership AS (
-    SELECT r.id, nk.cid FROM rental_listings r JOIN name_keys nk ON nk.n = complex_name_key(r.complex_name)
-    WHERE r.last_seen > now() - interval '14 days'
+    SELECT r.id, r.cid FROM eligible_rentals r
     UNION
     SELECT r.id, parent.id
-    FROM rental_listings r JOIN name_keys nk ON nk.n = complex_name_key(r.complex_name)
-    JOIN complexes child ON child.id = nk.cid
+    FROM eligible_rentals r JOIN complexes child ON child.id = r.cid
     JOIN complexes parent_alias ON parent_alias.id = child.parent_complex_id
     JOIN complexes parent ON parent.id = COALESCE(parent_alias.canonical_id,parent_alias.id)
-    WHERE r.last_seen > now() - interval '14 days' AND parent.is_umbrella
+    WHERE parent.is_umbrella AND COALESCE(parent.is_garbage, FALSE) = FALSE
+      AND COALESCE(parent.is_street, FALSE) = FALSE
 ), rentals AS (SELECT cid, count(*) AS n FROM rental_membership GROUP BY cid)
 UPDATE complexes c SET
     listings_count = COALESCE(s.active_count, 0), sold_count = COALESCE(s.sold_count, 0),

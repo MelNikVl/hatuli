@@ -1,0 +1,7 @@
+<script>
+(function () {
+  var theme = 'light';
+  try { if (localStorage.getItem('hatuli-theme') === 'dark') theme = 'dark'; } catch (_) {}
+  document.documentElement.setAttribute('data-theme', theme);
+})();
+</script>

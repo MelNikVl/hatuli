@@ -37,6 +37,11 @@
 .eid-doc-body th, .eid-doc-body td { border:1px solid var(--border); padding:5px 8px; text-align:left; }
 .eid-doc-body ul, .eid-doc-body ol { margin:8px 0 8px 22px; }
 .eid-doc-body a { color:var(--accent2,#2563eb); }
+
+.eid-card { min-width:0; }
+.eid-stat-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin-top:16px; }
+.eid-doc-body { overflow-x:auto; overflow-wrap:anywhere; }
+@media (max-width:800px) { .eid-stat-grid { grid-template-columns:minmax(0,1fr); } }
 </style>
 
 <div class="eid-docs">
@@ -196,7 +201,7 @@
     (или должна быть) отдельная запись под этот номер — отклоняй здесь и заводи/находи её, а не сливай в базу
     (см. <code>docs/entity_resolution_plan.md</code> — Дармен и sibling-sweep 2026-08-12).
   </p>
-  <table class="eid-table" style="margin-top:8px;">
+  <div class="hatuli-table-scroll"><table class="eid-table" style="margin-top:8px;">
     <tr><th>Тип</th><th>ЖК</th><th>Источник</th><th>Метод</th><th>Evidence</th><th>Confidence</th><th>Конфликт с</th><th></th></tr>
     {% for c in candidates %}
     {% set is_phase = 'phase_mismatch' in c.match_method or '1~implicit' in c.match_method %}
@@ -242,7 +247,7 @@
     {% else %}
     <tr><td colspan="8" style="color:#888;text-align:center;">пусто</td></tr>
     {% endfor %}
-  </table>
+  </table></div>
 </div>
 <script>
 async function eidResolve(id, action) {
@@ -254,28 +259,22 @@ async function eidResolve(id, action) {
   <div id="eid-duplicates" style="border-top:1px solid var(--border);margin-top:16px;padding-top:14px;">
   <b style="font-size:13.5px;">🪞 Дубли-кандидаты ({{ dup_candidates|length }})</b>
   <p style="font-size:12px;color:#888;line-height:1.6;margin-top:6px;">
-    Транслит-дубли (то же имя ЖК в двух алфавитах — Tandau/Тандау и подобные, см. <code>merge_translit_dups.py</code>,
-    <code>docs/entity_resolution_plan.md</code>), не смёрженные автоматически. <b>bulk-eligible</b> — 2+ независимых
-    подтверждающих сигнала (гео≤150м / тот же застройщик / address_match) И ни один блокирующий гвард не сработал
-    (явный номер очереди/блока, продуктовый токен вроде Gold/Comfort, расхождение застройщика, участие в сегодняшней
-    расшивке unravel_blobs.py) — для остальных сигналов не хватает, решай руками по evidence.
+    Похожие названия дают кандидатов, а не подтверждённые дубли. Откройте пару,
+    проверьте источники и предварительный список изменений. Корпуса, очереди и соседние проекты сохраняются отдельно.
+    После подтверждения старая ссылка ведёт на основную карточку; исходные имена, ID, источники и история остаются.
   </p>
   <div style="display:flex;align-items:center;gap:14px;margin:10px 0;">
-    <label style="font-size:12.5px;display:flex;align-items:center;gap:6px;cursor:pointer;">
-      <input type="checkbox" id="eid-dup-filter" onchange="eidDupFilter()"> только bulk-eligible
-    </label>
-    <a href="javascript:void(0)" onclick="eidDupBulkApprove()" style="color:#16a34a;font-size:12.5px;font-weight:600;">
-      ✅ массово подтвердить выбранные (<span id="eid-dup-selcount">0</span>)
-    </a>
+    <span style="font-size:12.5px;color:var(--muted);">Каждая пара рассматривается отдельно. Решение записывается в журнал и поддерживает проверяемый откат.</span>
   </div>
-  <table class="eid-table">
+  <div class="hatuli-table-scroll"><table class="eid-table">
     <tr><th></th><th>Причина</th><th>ЖК A</th><th>ЖК B</th><th>Сигналы</th><th></th></tr>
     {% for d in dup_candidates %}
     {% set ev = d.evidence %}
     <tr id="eid-dup-{{ d.id }}" data-bulk-eligible="{{ 'y' if d.bulk_eligible else 'n' }}">
-      <td><input type="checkbox" class="eid-dup-cb" data-id="{{ d.id }}" {{ 'checked' if d.bulk_eligible }} onchange="eidDupCount()"></td>
+      <td aria-label="Кандидат на проверку">○</td>
       <td>
-        {% if d.reason == 'no_confirming_signal' %}<span style="color:#888;">нет сигнала</span>
+        {% if d.reason == 'identity_name_variant' %}<span style="color:var(--text);">Похожие названия · проверить источники</span>
+        {% elif d.reason == 'no_confirming_signal' %}<span style="color:#888;">нет сигнала</span>
         {% elif d.reason == 'product_token_mismatch' %}<span style="color:#7c3aed;font-weight:600;">🏷 продукт.токен</span>
         {% elif d.reason == 'phase_conflict' %}<span style="color:#d97706;font-weight:600;">🔢 фаза</span>
         {% elif d.reason == 'developer_conflict' %}<span style="color:#dc2626;font-weight:600;">🏗 застройщик≠</span>
@@ -296,17 +295,61 @@ async function eidResolve(id, action) {
         <span title="address_match" style="color:{{ '#16a34a' if ev.address_match else '#888' }};">🏠{{ 'да' if ev.address_match else '—' }}</span>
       </td>
       <td style="white-space:nowrap;">
-        <a href="javascript:void(0)" onclick="eidDupResolve({{ d.id }}, 'approve')" style="color:#16a34a;font-size:12px;margin-right:8px;">слить</a>
+        <a href="javascript:void(0)" onclick="eidDupPreview({{ d.id }})" style="color:var(--accent);font-size:12px;font-weight:700;margin-right:8px;">Проверить пару</a>
         <a href="javascript:void(0)" onclick="eidDupResolve({{ d.id }}, 'reject')" style="color:#ef4444;font-size:12px;">отклонить</a>
       </td>
     </tr>
     {% else %}
     <tr><td colspan="6" style="color:#888;text-align:center;">пусто</td></tr>
     {% endfor %}
-  </table>
+  </table></div>
 </div>
+<dialog id="eid-duplicate-review" style="width:min(720px,calc(100vw - 36px));max-height:85vh;overflow:auto;padding:24px;border:1px solid var(--border);border-radius:16px;background:var(--surface);color:var(--text);">
+  <form method="dialog"><button style="float:right;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:5px 10px;" aria-label="Закрыть проверку">×</button></form>
+  <h2 style="margin:0 35px 14px 0;font-size:22px;">Проверка пары ЖК</h2>
+  <div id="eid-review-preview" style="font-size:14px;line-height:1.65;"></div>
+  <style>#eid-review-form[hidden]{display:none!important}</style>
+  <form id="eid-review-form" hidden style="display:grid;gap:12px;margin-top:18px;">
+    <label>Чем подтверждается один физический ЖК<textarea id="eid-review-note" required minlength="20" maxlength="2000" rows="3" style="display:block;width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:9px;background:var(--bg);color:var(--text);"></textarea></label>
+    <label>Проверенные ссылки на источники — по одной в строке<textarea id="eid-review-sources" required rows="3" style="display:block;width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--border);border-radius:9px;background:var(--bg);color:var(--text);"></textarea></label>
+    <p style="font-size:12px;color:var(--muted);margin:0;">Сравните адреса, корпуса и очереди. Наличие ссылки в справочнике само по себе не подтверждает совпадение.</p>
+    <button id="eid-review-apply" type="submit" style="padding:11px 16px;border:0;border-radius:10px;background:var(--accent);color:white;font-weight:700;">Подтвердить основную карточку</button>
+  </form>
+  <p id="eid-review-status" role="status" style="font-size:13px;line-height:1.6;"></p>
+</dialog>
 <script>
+let eidReviewedPair = null;
+function eidReviewText(tag,value){const el=document.createElement(tag);el.textContent=String(value??'');return el;}
+async function eidDupPreview(id){
+  const dialog=document.getElementById('eid-duplicate-review'),area=document.getElementById('eid-review-preview'),status=document.getElementById('eid-review-status');
+  eidReviewedPair=null;area.replaceChildren(eidReviewText('p','Загружаем текущие связи и изменения…'));status.textContent='';document.getElementById('eid-review-form').hidden=true;
+  if(!dialog.open)dialog.showModal();
+  try{
+    const response=await fetch(`/admin/api/entity-ids/duplicates/${id}/preview`),data=await response.json();
+    if(!response.ok)throw new Error(data.message||data.error||'Не удалось загрузить пару');
+    eidReviewedPair=data;area.replaceChildren();
+    for(const complex of data.complexes||[]){const p=eidReviewText('p',`#${complex.id} · ${complex.name}`);area.append(p);}
+    area.append(eidReviewText('strong',`При подтверждении основной станет карточка #${data.canon_id}, а ссылка #${data.dup_id} будет перенаправлена.`));
+    area.append(eidReviewText('p',`Изменятся связи объявлений: ${data.listing_changes?.rebound||0}. Изменения метода привязки: ${data.listing_changes?.method_only||0}.`));
+    area.append(eidReviewText('p','Имена объявлений, ID, ссылки источников, квартиры застройщиков, история и избранное сохраняются.'));
+    if(data.blockers?.length){const list=document.createElement('ul');for(const blocker of data.blockers)list.append(eidReviewText('li',blocker));area.append(eidReviewText('strong','Объединение сейчас заблокировано'),list);}
+    const fields=document.getElementById('eid-review-form');fields.hidden=!data.can_apply;
+    document.getElementById('eid-review-apply').disabled=!data.can_apply;
+    document.getElementById('eid-review-note').value='';
+    document.getElementById('eid-review-sources').value=[...new Set((data.complexes||[]).flatMap(c=>[c.krisha_url,c.korter_url]).filter(Boolean))].join('\n');
+  }catch(error){area.replaceChildren(eidReviewText('p',error.message));}
+}
+document.getElementById('eid-review-form').addEventListener('submit',async(event)=>{
+  event.preventDefault();if(!eidReviewedPair?.can_apply)return;
+  const pair=eidReviewedPair,button=document.getElementById('eid-review-apply'),status=document.getElementById('eid-review-status');button.disabled=true;status.textContent='Сохраняем проверенное решение…';
+  try{const response=await fetch(`/admin/api/entity-ids/duplicates/${pair.candidate_id}/approve`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fingerprint:pair.fingerprint,review_note:document.getElementById('eid-review-note').value.trim(),source_urls:document.getElementById('eid-review-sources').value.split('\n').map(v=>v.trim()).filter(Boolean)})}),data=await response.json();
+    if(!response.ok)throw new Error(data.message||data.error||'Не удалось сохранить решение');
+    const row=document.getElementById('eid-dup-'+pair.candidate_id);if(row)row.remove();eidReviewedPair=null;document.getElementById('eid-review-form').hidden=true;status.textContent='Решение сохранено. Исходные записи и журнал сохранены.';
+    if(data.review_id){const undo=eidReviewText('button','Откатить это решение');undo.type='button';undo.style.cssText='margin-left:12px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text);';status.append(undo);undo.addEventListener('click',async()=>{undo.disabled=true;try{const response=await fetch('/admin/api/entity-ids/duplicate-reviews/'+encodeURIComponent(data.review_id)+'/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}),result=await response.json();if(!response.ok)throw new Error(result.message||result.error);status.textContent='Решение откачено. Журнал сохранён.';location.reload();}catch(error){status.textContent=error.message;}});}
+  }catch(error){status.textContent=error.message;button.disabled=false;}
+});
 async function eidDupResolve(id, action) {
+  if(action==='approve'){return eidDupPreview(id);}
   const r = await fetch(`/admin/api/entity-ids/duplicates/${id}/${action}`, {method: 'POST'});
   if (r.ok) { const row = document.getElementById('eid-dup-' + id); if (row) row.remove(); eidDupCount(); }
   else { const d = await r.json().catch(() => ({})); alert('Ошибка: ' + (d.error || r.status)); }
@@ -319,7 +362,7 @@ function eidDupFilter() {
 }
 function eidDupCount() {
   const n = document.querySelectorAll('.eid-dup-cb:checked').length;
-  document.getElementById('eid-dup-selcount').textContent = n;
+  const target=document.getElementById('eid-dup-selcount');if(target)target.textContent=n;
 }
 async function eidDupBulkApprove() {
   const ids = [...document.querySelectorAll('.eid-dup-cb:checked')].map(cb => cb.dataset.id);
@@ -373,7 +416,7 @@ document.addEventListener('DOMContentLoaded', eidDupCount);
       </span>
       <span style="font-size:11px;color:#2563eb;font-weight:700;margin-left:6px;">{{ n }} {{ 'кандидат' if n == 1 else ('кандидата' if 2 <= n <= 4 else 'кандидатов') }}</span>
     </summary>
-    <table class="eid-table" style="margin:2px 0 10px;">
+    <div class="hatuli-table-scroll"><table class="eid-table" style="margin:2px 0 10px;">
       <tr><th></th><th>Юнит застройщика</th><th>Evidence</th><th></th></tr>
       {% for u in g.candidates %}
       {% set ev = u.evidence %}
@@ -409,7 +452,7 @@ document.addEventListener('DOMContentLoaded', eidDupCount);
         </td>
       </tr>
       {% endfor %}
-    </table>
+    </table></div>
   </details>
   {% else %}
   <p style="color:#888;text-align:center;">пусто</p>
@@ -483,7 +526,7 @@ function eidSourceSearch() {
     <button type="submit" style="padding:6px 14px;border-radius:6px;border:none;background:var(--accent);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;">✂️ пометить на расшивку</button>
   </form>
   <input type="text" id="eid-split-search" class="eid-ac-input" style="margin-bottom:10px;" placeholder="🔎 поиск по имени ЖК/причине/evidence…" oninput="eidSplitSearch()">
-  <table class="eid-table">
+  <div class="hatuli-table-scroll"><table class="eid-table">
     <tr><th></th><th>Причина</th><th>ЖК</th><th title="apartment_listings по имени ЖК — триаж: крупные приоритетнее">Объявл. в БД</th><th>Evidence / комментарий</th><th></th></tr>
     {% for s in split_candidates %}
     {% set ev = s.evidence %}
@@ -531,7 +574,7 @@ function eidSourceSearch() {
     {% else %}
     <tr><td colspan="6" style="color:#888;text-align:center;">пусто</td></tr>
     {% endfor %}
-  </table>
+  </table></div>
 </div>
 <script>
 async function eidSplitFlag(event) {
@@ -562,28 +605,28 @@ function eidSplitSearch() {
 }
 </script>
 
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;">
+<div class="eid-stat-grid">
   <div class="eid-card">
     <b style="font-size:14px;">По источникам</b>
-    <table class="eid-table" style="margin-top:8px;">
+    <div class="hatuli-table-scroll"><table class="eid-table" style="margin-top:8px;">
       <tr><th>Источник</th><th>Связей</th><th>Ср. confidence</th></tr>
       {% for s in by_source %}
       <tr><td>{{ s.source }}</td><td>{{ s.n }}</td><td>{{ s.avg_conf }}</td></tr>
       {% else %}
       <tr><td colspan="3" style="color:#888;text-align:center;">пока пусто — запустите backfill_entity_resolution.py</td></tr>
       {% endfor %}
-    </table>
+    </table></div>
   </div>
   <div class="eid-card">
     <b style="font-size:14px;">По методу матчинга</b>
-    <table class="eid-table" style="margin-top:8px;">
+    <div class="hatuli-table-scroll"><table class="eid-table" style="margin-top:8px;">
       <tr><th>Метод</th><th>Связей</th></tr>
       {% for m in by_method %}
       <tr><td>{{ m.match_method }}</td><td>{{ m.n }}</td></tr>
       {% else %}
       <tr><td colspan="2" style="color:#888;text-align:center;">—</td></tr>
       {% endfor %}
-    </table>
+    </table></div>
   </div>
 </div>
 

@@ -20,6 +20,11 @@ from bot.core.admin_sessions import (
     destroy_admin_session, set_admin_session_cookie, clear_admin_session_cookie,
 )
 from bot.core.public_buyer_example import load_public_example
+from bot.core.daily_picks import load_daily_picks
+from bot.core.daily_picks_display import prepare_daily_picks
+from bot.core.price_history_chart import price_history_chart
+from bot.public_comparison_routes import register_public_comparison_routes
+from bot.site_auth_routes import register_site_auth_routes
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
 _LOG_FILE = "web.log"
@@ -37,6 +42,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.state.analysis_form_secret = os.getenv("HATULI_FORM_SECRET") or admin_password
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=_TEMPLATES_DIR)
+    register_public_comparison_routes(app, templates)
+    register_site_auth_routes(app, templates)
 
     def _fmt_num(value, digits: int = 0) -> str:
         """1234567 -> '1 234 567' / 12.3 -> '12,3' — форматирование больших
@@ -67,6 +74,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     templates.env.filters["fmt_num"] = _fmt_num
     templates.env.filters["fmt_tenge"] = _fmt_tenge
+    templates.env.globals["price_history_chart"] = price_history_chart
 
     def is_authed(request: Request) -> bool:
         return is_admin(request)
@@ -111,10 +119,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             "> Проверка квартиры в Астане перед покупкой: история заявленной цены, "
             "похожие предложения и признаки повторной публикации. Разбор и доступ согласуются вручную.\n\n"
             "## Ключевые страницы\n"
+            "- [Аналитика недвижимости Астаны](https://hatuli.ai-groundtruth.com/analytics): обзоры рынка жилья и аренды с графиками, периодами данных и первичными источниками\n"
             "- [Пример разбора](https://hatuli.ai-groundtruth.com/example): проверенный обезличенный снимок реального объекта\n"
             "- [ЖК и карта](https://hatuli.ai-groundtruth.com/map): публичные новостройки; частные объявления доступны после входа и ручного одобрения\n"
             "- [Жилые комплексы](https://hatuli.ai-groundtruth.com/complexes): каталог ЖК Астаны\n"
             "- [Как считаем](https://hatuli.ai-groundtruth.com/how-it-works): источники, подбор аналогов и ограничения\n"
+            "- [Чеклист перед задатком](https://hatuli.ai-groundtruth.com/guides/check-apartment-before-deposit): вопросы о документах, доверенности и коммунальных расчётах с официальными источниками Казахстана; автоматическая юридическая проверка не предоставляется\n"
+            "- [Лучшие варианты](https://hatuli.ai-groundtruth.com/best-apartments): ежедневная публичная подборка до 30 квартир в продаже с фотографиями и объяснением выбора\n"
+            "- [Первичка, вторичка или вклад](https://hatuli.ai-groundtruth.com/compare): сравнение базовых цен от гексагона до города и сценарий покупки против вклада на 12 месяцев с официальными условиями банков\n"
+            "- [Что улучшить в объявлении](https://hatuli.ai-groundtruth.com/improve-listing): советы по предоставленному тексту и параметрам, чеклист фото и черновик описания для продавца\n"
         )
 
     @app.get("/sitemap.xml")
@@ -123,8 +136,15 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         urls = [
             ("https://hatuli.ai-groundtruth.com/", "weekly", "1.0"),
             ("https://hatuli.ai-groundtruth.com/example", "monthly", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/best-apartments", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/best-rentals", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/analytics", "daily", "0.8"),
+            ("https://hatuli.ai-groundtruth.com/compare", "daily", "0.9"),
+            ("https://hatuli.ai-groundtruth.com/rent", "daily", "0.8"),
+            ("https://hatuli.ai-groundtruth.com/improve-listing", "monthly", "0.7"),
             ("https://hatuli.ai-groundtruth.com/map", "daily", "0.8"),
             ("https://hatuli.ai-groundtruth.com/how-it-works", "monthly", "0.7"),
+            ("https://hatuli.ai-groundtruth.com/guides/check-apartment-before-deposit", "monthly", "0.7"),
             ("https://hatuli.ai-groundtruth.com/complexes", "daily", "0.9"),
             ("https://hatuli.ai-groundtruth.com/developers", "weekly", "0.6"),
             ("https://hatuli.ai-groundtruth.com/info", "monthly", "0.4"),
@@ -132,20 +152,18 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         # Топ-2000 ЖК по активным объявлениям — полный список (2500+) в один
         # sitemap не кладём (мягкий лимит поисковиков — 50k URL, но страницы
         # без единого объявления малоценны для индексации).
-        rows = await pg_fetch("""
-            SELECT c.id, c.updated_at,
-                   COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE) AS active_cnt
-            FROM complexes c
-            LEFT JOIN apartment_listings a ON lower(trim(a.complex_name)) = lower(trim(c.name))
-            WHERE COALESCE(c.is_street, FALSE) = FALSE
-            GROUP BY c.id
-            HAVING COUNT(a.id) FILTER (WHERE a.is_active IS NOT FALSE) > 0
-            ORDER BY active_cnt DESC
-            LIMIT 2000
-        """)
+        from bot.core.sitemap import COMPLEX_SITEMAP_SQL
+        rows = await pg_fetch(COMPLEX_SITEMAP_SQL)
         body = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
         for loc, freq, prio in urls:
             body.append(f"<url><loc>{loc}</loc><changefreq>{freq}</changefreq><priority>{prio}</priority></url>")
+        from bot.core.analytics_articles import list_articles
+        for article in list_articles():
+            body.append(
+                f"<url><loc>https://hatuli.ai-groundtruth.com{article['url']}</loc>"
+                f"<lastmod>{article['edition_date']}</lastmod>"
+                "<changefreq>monthly</changefreq><priority>0.7</priority></url>"
+            )
         for r in rows:
             lastmod = r["updated_at"].strftime("%Y-%m-%d") if r["updated_at"] else ""
             body.append(
@@ -219,15 +237,26 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     @app.get("/", response_class=HTMLResponse)
     async def buyer_landing(request: Request):
-        return templates.TemplateResponse("buyer_landing.html", {"request": request, "example": load_public_example()})
+        return templates.TemplateResponse(request=request, name="buyer_landing.html", context={"request": request, "example": load_public_example()})
 
     @app.get("/example", response_class=HTMLResponse)
     async def buyer_example(request: Request):
-        return templates.TemplateResponse("buyer_example.html", {"request": request, "example": load_public_example()})
+        return templates.TemplateResponse(request=request, name="buyer_example.html", context={"request": request, "example": load_public_example()})
 
     @app.get("/how-it-works", response_class=HTMLResponse)
     async def buyer_methodology(request: Request):
-        return templates.TemplateResponse("buyer_methodology.html", {"request": request, "example": load_public_example()})
+        return templates.TemplateResponse(request=request, name="buyer_methodology.html", context={"request": request, "example": load_public_example()})
+
+    @app.get("/guides/check-apartment-before-deposit", response_class=HTMLResponse)
+    async def buyer_deposit_guide(request: Request):
+        return templates.TemplateResponse(request=request, name="buyer_deposit_guide.html", context={"request": request})
+
+    @app.get("/best-apartments", response_class=HTMLResponse)
+    async def public_daily_picks(request: Request):
+        snapshot = prepare_daily_picks(load_daily_picks())
+        response = templates.TemplateResponse(request=request, name="daily_picks.html", context={"request": request, "snapshot": snapshot})
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
     @app.get("/map", response_class=HTMLResponse)
     async def public_map(request: Request):
@@ -284,7 +313,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                         "message": "Это частное объявление. Войдите и запросите расширенный доступ; он выдаётся вручную.",
                     })
                 price_txt = f"{r['price']/1e6:.1f} млн ₸" if r.get("price") else ""
-                title_bits = [f"{r.get('rooms') or '?'}-комн", f"{r.get('area') or '?'} м²", r["complex_name"]]
+                area_txt = f"{float(r['area']):.1f}".rstrip("0").rstrip(".").replace(".", ",") if r.get("area") else "?"
+                title_bits = [f"{r.get('rooms') or '?'}-комн", f"{area_txt} м²", r["complex_name"]]
                 listing_meta = {
                     "title": f"{price_txt} · {' · '.join(title_bits)} · Новостройка — Hatuli".strip(" ·"),
                     "description": f"{' · '.join(title_bits)} — цена {price_txt or 'по запросу'} на Hatuli.",
@@ -320,7 +350,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 except ValueError:
                     photos = []
             price_txt = f"{r['price']/1e6:.1f} млн ₸" if r.get("price") else ""
-            title_bits = [f"{r.get('rooms') or '?'}-комн", f"{r.get('area') or '?'} м²"]
+            area_txt = f"{float(r['area']):.1f}".rstrip("0").rstrip(".").replace(".", ",") if r.get("area") else "?"
+            title_bits = [f"{r.get('rooms') or '?'}-комн", f"{area_txt} м²"]
             if r.get("complex_name"):
                 title_bits.append(r["complex_name"])
             listing_meta = {
@@ -685,9 +716,14 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         sort: str = "score_total",
         limit: int = 10,
         seller: str = "",
+        tab: str = "",
     ):
         if not is_authed(request):
             return RedirectResponse(url="/admin/login", status_code=302)
+
+        if tab == 'rental':
+            from bot.rental_analytics_web import render_rental_analytics
+            return await render_rental_analytics(request, templates, rooms)
 
         from bot.db.pg import fetch as pg_fetch
 
@@ -774,7 +810,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
         rental_stats = await pg_fetch("""
             SELECT rooms, median_price, sample_count
             FROM rental_index
-            WHERE prop_type = 'apartment' AND rooms IN (1, 2)
+            WHERE city = 'astana' AND prop_type = 'apartment' AND rooms IN (1, 2)
+              AND district IS NULL AND complex_name IS NULL AND complex_id IS NULL AND sample_count >= 10
+              AND rent_period='monthly' AND furnishing IS NULL AND policy_version='3'
+              AND updated_at BETWEEN now() - interval '72 hours' AND now()
+              AND source_oldest_at BETWEEN now() - interval '72 hours' AND now()
+              AND source_newest_at BETWEEN source_oldest_at AND updated_at
+              AND EXISTS (SELECT 1 FROM app_settings WHERE key='RENTAL_INDEX_POLICY_VERSION' AND value='3')
             ORDER BY rooms, sample_count DESC
         """)
         rental_summary = {}
@@ -782,7 +824,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             k = int(r["rooms"])
             if k not in rental_summary:
                 rental_summary[k] = {"price": r["median_price"], "n": 0}
-            rental_summary[k]["n"] += r["sample_count"] or 0
+                rental_summary[k]["n"] = r["sample_count"] or 0
 
         # Общее покрытие данными — раньше жило тайлами на главной карте,
         # перенесено сюда (главная карта — рабочий инструмент поиска, не
@@ -1559,7 +1601,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             }
 
         sale_last = await pg_fv("SELECT MAX(first_seen) FROM apartment_listings")
-        rental_last = await pg_fv("SELECT MAX(found_at) FROM rental_listings")
+        rental_last = await pg_fv("SELECT MAX(last_seen) FROM rental_listings WHERE city='astana' AND prop_type='apartment'")
         korter_last = await pg_fv("SELECT MAX(updated_at) FROM complexes WHERE source_info->'korter' IS NOT NULL")
         homsters_last = await pg_fv("SELECT MAX(updated_at) FROM complexes WHERE source_info->'homsters' IS NOT NULL")
         homeportal_last = None
@@ -1677,12 +1719,13 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     async def _analytics_detail_inner(request: Request, listing_id: str):
         from bot.db.pg import fetchrow as pg_fetchrow, fetch as pg_fetch
         from bot.core.bargain import get_comparables, analyze_bargain
+        from bot.core.web_pages import not_found_page
 
         row = await pg_fetchrow(
             "SELECT * FROM apartment_listings WHERE id = $1", listing_id
         )
         if not row:
-            return HTMLResponse("<h2>Not found</h2>", status_code=404)
+            return not_found_page(templates, request, 'Объявление не найдено')
 
         listing = dict(row)
 
@@ -1712,26 +1755,23 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             r"(Есиль|Алматы|Сарыарка|Нура|Байконур)", _district_raw, _re_district.I)
         district_norm = _m_district.group(1).capitalize() if _m_district else None
 
-        rental_comps = await pg_fetch("""
+        from bot.core.rental_data_quality import rental_live_sql
+        from bot.core.comparison_rental_estimate import rental_estimate_for_listing
+        rental_estimate = await rental_estimate_for_listing(dict(listing)) if listing.get("market_type") != "primary" else None
+        from bot.core.rental_economics import rental_economics_for_listing
+        rental_economics = await rental_economics_for_listing(dict(listing))
+        rental_scope = rental_live_sql()
+        rental_comps = await pg_fetch(f"""
             SELECT complex_name, district, rooms, price, area
             FROM rental_listings
             WHERE ($1::text IS NULL OR district = $1)
               AND ($2::int IS NULL OR rooms = $2)
               AND price > 0
-            ORDER BY found_at DESC
+              AND {rental_scope}
+              AND ($3::float IS NULL OR area BETWEEN $3 * 0.85 AND $3 * 1.15)
+            ORDER BY last_seen DESC
             LIMIT 10
-        """, district_norm, listing.get("rooms"))
-
-        # Если по точному району+комнатам пусто — тот же район без фильтра
-        # по комнатам (лучше приблизительные соседи, чем "данных нет")
-        if not rental_comps and district_norm:
-            rental_comps = await pg_fetch("""
-                SELECT complex_name, district, rooms, price, area
-                FROM rental_listings
-                WHERE district = $1 AND price > 0
-                ORDER BY found_at DESC
-                LIMIT 10
-            """, district_norm)
+        """, district_norm, listing.get("rooms"), listing.get("area") if (listing.get("area") or 0) > 0 else None)
 
         # Аргументы для торга и вопросы продавцу
         from bot.core.listing_intel import build_negotiation_points, build_seller_questions
@@ -1849,6 +1889,8 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
                 "comps": [dict(r) for r in comps],
                 "bargain": bargain,
                 "rental_comps": [dict(r) for r in rental_comps],
+                "rental_estimate": rental_estimate,
+                "rental_economics": rental_economics,
                 "reasons_list": reasons_list,
                 "negotiation_points": negotiation_points,
                 "seller_questions": seller_questions,
@@ -1913,7 +1955,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
             rental_with_complex = await pg_fetchval(
                 "SELECT COUNT(*) FROM rental_listings WHERE complex_name IS NOT NULL AND complex_name != ''") or 0
             last_rental = await pg_fetchval(
-                "SELECT MAX(found_at) FROM rental_listings")
+                "SELECT MAX(last_seen) FROM rental_listings WHERE city='astana' AND prop_type='apartment'")
             last_rental_str = last_rental.strftime("%d.%m %H:%M") if last_rental else None
 
             # Статус: ок если последняя запись < 2 часов назад
@@ -2241,5 +2283,23 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
 
     from bot.web.analysis_requests import make_analysis_requests_router
     app.include_router(make_analysis_requests_router(templates))
+    from bot.web.seller_review import make_seller_review_router
+    app.include_router(make_seller_review_router(templates))
+    from bot.web.rental_tools import make_rental_tools_router
+    app.include_router(make_rental_tools_router(templates))
+    from bot.web.rental_picks import make_rental_picks_router
+    app.include_router(make_rental_picks_router(templates))
+    from bot.web.analytics_articles import make_analytics_articles_router
+    app.include_router(make_analytics_articles_router(templates))
+    from bot.web.rental_scanner import make_rental_scanner_router
+    app.include_router(make_rental_scanner_router(templates))
+    from bot.web.rental_economics import router as rental_economics_router
+    app.include_router(rental_economics_router)
+    from bot.rental_health_web import register_rental_health_routes
+    register_rental_health_routes(app, templates)
+    from bot.rental_detail_web import register_rental_detail_routes
+    register_rental_detail_routes(app)
+    from bot.rental_analytics_web import make_rental_analytics_router
+    app.include_router(make_rental_analytics_router(is_authed,templates))
 
     return app

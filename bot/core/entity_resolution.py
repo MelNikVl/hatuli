@@ -633,88 +633,22 @@ async def complex_data_score(cid: int) -> int:
 
 
 async def merge_complex_pair(dup_id: int, canon_id: int, *, method: str, matched_by: str) -> dict[str, int]:
-    """Слияние дубля в канон — единая реализация, переиспользуется и
-    massового скрипта (merge_translit_dups.py), и UI-approve
-    (/admin/api/entity-ids/duplicates/{id}/approve, terminal_extras.py).
-    Переносит apartment_listings (по complex_name), complex_source_links
-    (skip, если (source, source_id) уже занят другим complex_id — не
-    затираем молча), complex_favorites (PK user_id+complex_id — DELETE
-    дубль-строки, если канон уже в избранном у того же user_id, иначе
-    UPDATE). Дубль -> is_garbage=TRUE, provenance на обеих сторонах
-    (merged_into / merged_from, накопительно)."""
-    import json
-    from datetime import datetime, timezone
-    from bot.db.pg import fetchval, fetch, execute
+    """Fail closed for legacy callers that cannot supply a reviewed preview.
 
-    names = {r["id"]: r["name"] for r in
-             await fetch("SELECT id, name FROM complexes WHERE id IN ($1, $2)", dup_id, canon_id)}
-    dup_name, canon_name = names[dup_id], names[canon_id]
-
-    n_listings = await fetchval(
-        "SELECT count(*) FROM apartment_listings WHERE lower(trim(complex_name)) = lower(trim($1))", dup_name)
-    await execute(
-        "UPDATE apartment_listings SET complex_name = $2 WHERE lower(trim(complex_name)) = lower(trim($1))",
-        dup_name, canon_name)
-
-    links = await fetch("SELECT source, source_id FROM complex_source_links WHERE complex_id = $1", dup_id)
-    moved_links = 0
-    for l in links:
-        exists = await fetchval(
-            "SELECT 1 FROM complex_source_links WHERE source=$1 AND source_id=$2 AND complex_id != $3",
-            l["source"], l["source_id"], dup_id)
-        if exists:
-            continue
-        await execute("UPDATE complex_source_links SET complex_id = $2 WHERE source=$1 AND source_id=$3",
-                      l["source"], canon_id, l["source_id"])
-        moved_links += 1
-
-    fav_users = await fetch("SELECT user_id FROM complex_favorites WHERE complex_id = $1", dup_id)
-    moved_favs = 0
-    for f in fav_users:
-        exists = await fetchval(
-            "SELECT 1 FROM complex_favorites WHERE user_id=$1 AND complex_id=$2", f["user_id"], canon_id)
-        if exists:
-            await execute("DELETE FROM complex_favorites WHERE user_id=$1 AND complex_id=$2", f["user_id"], dup_id)
-        else:
-            await execute("UPDATE complex_favorites SET complex_id=$2 WHERE user_id=$1 AND complex_id=$3",
-                          f["user_id"], canon_id, dup_id)
-            moved_favs += 1
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    await execute("""
-        UPDATE complexes SET is_garbage = TRUE,
-            provenance = COALESCE(provenance, '{}'::jsonb) || $2::jsonb
-        WHERE id = $1
-    """, dup_id, json.dumps({"merged_into": canon_id, "method": method, "matched_by": matched_by, "merged_at": now_iso}))
-    await execute("""
-        UPDATE complexes SET
-            provenance = COALESCE(provenance, '{}'::jsonb) ||
-                jsonb_build_object('merged_from',
-                    COALESCE(provenance->'merged_from', '[]'::jsonb) || to_jsonb($2::int))
-        WHERE id = $1
-    """, canon_id, dup_id)
-
-    return {"listings_moved": n_listings, "links_moved": moved_links, "favorites_moved": moved_favs}
+    The former merge rewrote source names and moved the source spine. Use
+    complex_identity_review.preview_duplicate_candidate/apply_duplicate_candidate
+    with an explicit source-reviewed decision instead. No SQL runs here.
+    """
+    from bot.core.complex_identity_review import ComplexIdentityReviewError
+    raise ComplexIdentityReviewError(
+        "preview_required", "Прямое слияние отключено: нужен свежий предпросмотр и проверка источников")
 
 
 async def approve_duplicate_candidate(candidate_id: int, approved_by: str = "admin") -> dict | None:
-    """Подтвердить кандидата на дубль (complex_duplicate_candidates) —
-    считает канон тем же правилом, что massовый скрипт
-    (complex_data_score, больше данных выживает), реально мерджит
-    (merge_complex_pair), помечает кандидата status='merged'."""
-    from bot.db.pg import fetchrow, execute
-    c = await fetchrow("SELECT * FROM complex_duplicate_candidates WHERE id = $1", candidate_id)
-    if not c:
-        return None
-    score_a = await complex_data_score(c["complex_id_a"])
-    score_b = await complex_data_score(c["complex_id_b"])
-    canon_id, dup_id = (c["complex_id_a"], c["complex_id_b"]) if score_a >= score_b else (c["complex_id_b"], c["complex_id_a"])
-    result = await merge_complex_pair(dup_id, canon_id, method=c["method"], matched_by=approved_by)
-    await execute("""
-        UPDATE complex_duplicate_candidates SET status = 'merged', resolved_at = now(), resolved_by = $2
-        WHERE id = $1
-    """, candidate_id, approved_by)
-    return {"canon_id": canon_id, "dup_id": dup_id, **result}
+    """Legacy approval has no preview fingerprint or source evidence; deny it."""
+    from bot.core.complex_identity_review import ComplexIdentityReviewError
+    raise ComplexIdentityReviewError(
+        "preview_required", "Подтверждение без предпросмотра отключено: используйте проверку пары ЖК")
 
 
 async def reject_duplicate_candidate(candidate_id: int, rejected_by: str = "admin") -> None:

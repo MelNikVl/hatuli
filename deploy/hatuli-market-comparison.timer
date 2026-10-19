@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Hatuli market comparisons every six hours
+
+[Timer]
+OnCalendar=*-*-* 02,08,14,20:20:00 Asia/Almaty
+Persistent=true
+AccuracySec=1min
+Unit=hatuli-market-comparison.service
+
+[Install]
+WantedBy=timers.target

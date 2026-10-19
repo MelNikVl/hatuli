@@ -98,7 +98,7 @@ def make_analysis_requests_router(templates) -> APIRouter:
         nonce = request.cookies.get(COOKIE_NAME, '')
         if not re.fullmatch(r'[0-9a-f]{48}', nonce):
             nonce = secrets.token_hex(24)
-        response = templates.TemplateResponse('request_analysis.html', {
+        response = templates.TemplateResponse(request=request, name='request_analysis.html', context={
             'request': request, 'form_token': _token(_secret(request), nonce),
             'values': values or dict(EMPTY_VALUES), 'errors': errors or {},
             'accepted': accepted, 'reference': reference, 'ref': reference,

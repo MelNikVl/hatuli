@@ -1,0 +1,199 @@
+{% extends "buyer_public_base.html" %}
+{% from '_price_history_chart.html' import render_price_history %}
+{% block title %}Первичка, вторичка или вклад — сравнение в Астане · Hatuli{% endblock %}
+{% block description %}Сравните новостройки и вторичные квартиры рядом, расширьте поиск до города и посчитайте покупку против банковского вклада на ваших цифрах.{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/hatuli-comparison.css?v=20261016-zillow">
+<link rel="stylesheet" href="/static/hatuli-price-history.css?v=20261013">
+<link rel="stylesheet" href="/static/hatuli-forecast.css?v=20261013">
+<script src="/static/hatuli-comparison.js?v=20261013.5" defer></script>
+{% endblock %}
+{% macro money(value, suffix='₸') -%}{% if value is not none and value is defined %}{{ value|fmt_num }} {{ suffix }}{% else %}—{% endif %}{%- endmacro %}
+{% macro pct(value) -%}{% if value is not none and value is defined %}{{ value|fmt_num(1)|replace(',0', '') }}%{% else %}—{% endif %}{%- endmacro %}
+{% macro rate(value) -%}{% if value is not none and value is defined %}{{ value|fmt_num(2)|replace(',00', '') }}%{% else %}—{% endif %}{%- endmacro %}
+{% macro offer_address(offer) %}
+{% if offer.address or offer.building or offer.section or (offer.from_daily_picks and (offer.floor or offer.evidence_notices)) %}
+<div class="mc-offer-address">
+  {% if offer.address %}<p class="mc-address-line"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M15.5 8.5c0 4-5.5 8-5.5 8s-5.5-4-5.5-8a5.5 5.5 0 1 1 11 0Z" stroke="currentColor" stroke-width="1.4"/><circle cx="10" cy="8.5" r="1.8" stroke="currentColor" stroke-width="1.4"/></svg><span>{{ offer.address }}</span></p>{% endif %}
+  {% if offer.building or offer.section %}<p class="mc-address-building">{% if offer.building %}Корпус {{ offer.building }}{% endif %}{% if offer.building and offer.section %} · {% endif %}{% if offer.section %}Секция {{ offer.section }}{% endif %}</p>{% endif %}
+  {% if offer.address_note %}<p class="mc-address-note">{{ offer.address_note }}</p>{% endif %}
+  {% if offer.from_daily_picks and offer.floor %}<p class="mc-address-building" data-mc-daily-floor>{{ offer.floor }}{% if offer.floors_total %} из {{ offer.floors_total }}{% endif %} этаж</p>{% endif %}
+  {% if offer.from_daily_picks %}{% for notice in offer.evidence_notices or [] %}<p class="mc-address-note" data-mc-offer-evidence><strong>{{ notice }}</strong></p>{% endfor %}{% endif %}
+</div>
+{% endif %}
+{% endmacro %}
+{% macro offer_reasons(offer) %}
+{% if offer.reasons %}<div class="mc-reasons mc-offer-reasons"{% if offer.is_daily_pick %} data-daily-picks-reasons{% endif %}><h4>Почему в подборке</h4><ul>{% for reason in offer.reasons %}<li{% if offer.is_daily_pick %} data-daily-picks-factor{% endif %}>{% if loop.first %}<strong>{{ reason }}</strong>{% else %}{{ reason }}{% endif %}</li>{% endfor %}</ul></div>{% endif %}
+{% endmacro %}
+{% macro rental_benchmark(result) %}
+{% set rental = result.rental_benchmark or {} %}
+{% set benchmark = rental.benchmark or {} %}
+{% if result.assumptions.mode == 'rent_out' and rental.net_cash_yield_pct is number and rental.annual_net_cash is number %}
+<section class="mc-rental-result" aria-label="Доход от аренды после расходов" data-mc-rental-benchmark>
+  <p class="mc-eyebrow">Для сдачи · без роста цены</p><h4>Доход от аренды после расходов</h4>
+  <dl class="mc-rental-result-metrics"><div><dt>Доходность на вложенную сумму</dt><dd>{{ pct(rental.net_cash_yield_pct) }} за первый год</dd></div><div><dt>Деньги после расходов</dt><dd>{{ money(rental.annual_net_cash) }}</dd></div></dl>
+  <p>После ремонта, расходов при покупке, расходов владельца и месяцев без арендатора. Рост цены квартиры сюда не входит.</p>
+  {% if benchmark.coverage_complete and benchmark.effective_pct is number and benchmark.effective_pct > 0 and benchmark.bank and benchmark.product and benchmark.term_months and benchmark.source_url %}
+  <p class="mc-rental-benchmark-rate"><strong>{{ rate(benchmark.effective_pct) }} ГЭСВ</strong> · {{ benchmark.bank }} · {{ benchmark.product }} · срок {{ benchmark.term_months }} мес.</p>
+  {% if benchmark.coverage_complete and rental.above_benchmark %}<p class="mc-rental-verdict mc-rental-verdict-positive">В вашем сценарии доходность аренды выше этой ставки.</p>
+  {% elif rental.required_monthly_rent is not none and rental.required_monthly_rent is defined %}<p class="mc-rental-verdict">Чтобы доходность аренды была выше этой ставки, арендная плата должна быть <strong>выше {{ money(rental.required_monthly_rent) }} в месяц</strong> при указанных расходах.</p>
+  {% else %}<p class="mc-rental-verdict">В первом году нет месяцев для сдачи. Проверьте срок готовности квартиры и простой.</p>{% endif %}
+  <p class="mc-rental-note">{{ benchmark.comparison_note }}</p>
+  <p class="mc-rental-note">Максимум среди отслеживаемых программ Freedom, Forte, Bereke и Home Credit. Сравнение капитала через год показано выше.</p>
+  {% if benchmark.source_url %}<a href="{{ benchmark.source_url }}" target="_blank" rel="noopener noreferrer">Условия {{ benchmark.bank }} ↗</a>{% endif %}
+  {% endif %}
+</section>
+{% endif %}
+{% endmacro %}
+{% macro offer_price_history(offer) %}
+{{ render_price_history(offer.price_history) }}
+{% endmacro %}
+{% macro scenario_bank(result) %}
+<div class="mc-balance-row" data-kind="bank">
+  <div class="mc-balance-caption"><span>{{ result.bank }} · вклад</span><strong>{{ money(result.deposit_cash_after_rent) }}</strong></div>
+  <div class="mc-balance-bar" aria-hidden="true"><span data-mc-balance="{{ result.deposit_cash_after_rent }}"></span></div>
+  <small>После {% if calculation.assumptions.mode == 'live' %}аренды на время ожидания{% else %}12 месяцев{% endif %} · {{ result.product }}</small>
+  {% if result.break_even_growth_pct is not none and result.break_even_growth_pct is defined %}<small>Порог роста цены квартиры: {{ pct(result.break_even_growth_pct) }} за год.</small>{% endif %}
+  {% if result.future_purchase_surplus is not none and result.future_purchase_surplus is defined %}<small>{% if result.future_purchase_surplus >= 0 %}После такой же покупки через год останется {{ money(result.future_purchase_surplus) }}.{% else %}Для такой же покупки через год не хватит {{ money(-result.future_purchase_surplus) }}.{% endif %}</small>{% endif %}
+</div>
+{% endmacro %}
+{% block content %}
+{% set cmp = comparison or {} %}
+{% set form = form_values or {} %}
+{% set bank_data = deposits or {} %}
+{% set bank_list = (bank_data.banks or [])|selectattr('eligible')|list %}
+<div class="mc-page">
+  <section class="mc-hero" aria-labelledby="mc-title">
+    <div>
+      <p class="mc-eyebrow">Астана · выбор с понятной ценой</p>
+      <h1 id="mc-title">Первичка, вторичка.<br><span>Или пока вклад?</span></h1>
+      <p class="mc-lead">Сначала сравните квартиры рядом. Затем проверьте, что останется через год: если купить сейчас или оставить ту же сумму в банке.</p>
+      <p class="mc-hero-note"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="m4 10 4 4 8-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg> Открыто для всех. Ваши расчёты не требуют регистрации.</p>
+    </div>
+    <aside class="mc-intro-card" aria-label="От одного участка до города">
+      <svg viewBox="0 0 200 146" fill="none" aria-hidden="true"><g stroke="currentColor" stroke-width="1.1" opacity=".25"><polygon points="141.6,49 162.4,61 162.4,85 141.6,97 120.8,85 120.8,61"/><polygon points="120.8,13 141.6,25 141.6,49 120.8,61 100,49 100,25"/><polygon points="79.2,13 100,25 100,49 79.2,61 58.4,49 58.4,25"/><polygon points="58.4,49 79.2,61 79.2,85 58.4,97 37.6,85 37.6,61"/><polygon points="79.2,85 100,97 100,121 79.2,133 58.4,121 58.4,97"/><polygon points="120.8,85 141.6,97 141.6,121 120.8,133 100,121 100,97"/></g><polygon points="100,49 120.8,61 120.8,85 100,97 79.2,85 79.2,61" fill="currentColor" fill-opacity=".12" stroke="currentColor" stroke-width="1.4"/><path d="m91 70 9-7 9 7v13H94V70m4 13v-7h6v7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div><strong>От вашего двора до всего города</strong><p>Один участок → участок и 6 соседних → более широкий район → вся Астана.</p></div>
+    </aside>
+  </section>
+  <nav class="mc-stepnav" aria-label="Шаги сравнения"><a href="#market"><span>1</span> Рынок вокруг</a><a href="#investment"><span>2</span> Деньги через год</a><a href="#comparison-method">Как считаем →</a></nav>
+
+  <section class="mc-section" id="market" aria-labelledby="mc-market-title">
+    <div class="mc-heading"><div><p class="mc-eyebrow">Шаг 1 · сравним соседей</p><h2 id="mc-market-title">Где выгоднее искать квартиру?</h2></div><p>Сравниваем одинаковое количество комнат и близкую площадь. Начните с небольшого участка и расширяйте поиск.</p></div>
+    <form class="mc-selector" action="/compare" method="get">
+      <div class="mc-field"><label for="mc-location">Место в Астане</label><select name="hex" id="mc-location">{% set location_ids = (cmp.locations or [])|map(attribute='hex_id')|list %}{% if cmp.selected_hex and cmp.selected_hex not in location_ids %}<option value="{{ cmp.selected_hex }}" selected>{{ cmp.selected_label or cmp.selected_hex }}</option>{% elif not cmp.locations %}<option value="">Весь город</option>{% endif %}{% for location in cmp.locations or [] %}<option value="{{ location.hex_id }}" {% if location.hex_id == cmp.selected_hex %}selected{% endif %}>{{ location.name }}</option>{% endfor %}</select></div>
+      <div class="mc-field"><label for="mc-rooms">Комнат</label><select name="rooms" id="mc-rooms">{% for rooms in cmp.room_options or [1,2,3,4,5,6] %}<option value="{{ rooms }}" {% if rooms == cmp.rooms %}selected{% endif %}>{{ rooms }}</option>{% endfor %}</select></div>
+      <div class="mc-field"><label for="mc-area">Площадь, м²</label><input id="mc-area" name="area" type="number" min="20" max="300" step="0.1" required value="{{ cmp.area or 60 }}" inputmode="decimal"></div>
+      <input type="hidden" name="scope" value="{{ cmp.scope or 'hex' }}">
+      <button class="mc-button" type="submit">Сравнить <span aria-hidden="true">→</span></button>
+    </form>
+    {% if cmp.tiers %}
+    <nav class="mc-scope-nav" aria-label="Расширить область сравнения">{% for tier in cmp.tiers %}<a href="{{ tier.href }}#market" {% if tier.key == cmp.scope %}aria-current="true"{% endif %}>{{ tier.label }}</a>{% endfor %}</nav>
+    {% endif %}
+    <div class="mc-selection-note"><p><strong>{{ cmp.selected_label or 'Астана' }} · {{ cmp.scope_label or 'Весь город' }}</strong>{% if cmp.area_min and cmp.area_max %}<br>{{ cmp.rooms or 2 }} комнаты · {{ cmp.area_min|fmt_num(1)|replace(',0', '') }}–{{ cmp.area_max|fmt_num(1)|replace(',0', '') }} м²{% endif %}{% if cmp.updated_at and cmp.updated_at_label %}<br>Данные рынка: {{ cmp.updated_at_label }}{% endif %}</p><a href="/map">Посмотреть на карте ↗</a></div>
+    {% if cmp.comparable and cmp.delta_pct is not none %}<div class="mc-conclusion mc-market-summary"><span aria-hidden="true">↘</span><div><strong>{% if cmp.delta_pct > 0 %}Базовая цена первички ниже на {{ pct(cmp.delta_pct) }}{% elif cmp.delta_pct < 0 %}Базовая цена первички выше на {{ pct(-cmp.delta_pct) }}{% else %}Медианы заявленных цен равны{% endif %}</strong><p>По цене за м² относительно вторички в выбранной группе. Сравните ремонт, срок до заселения и условия оплаты перед выводом о полной стоимости.</p></div></div>{% endif %}
+    {% if cmp.stats and not cmp.stale and (cmp.stats.primary.count or cmp.stats.secondary.count) %}
+    <div class="mc-market-grid">
+      {% for key, label, type_label in [('primary', 'Первичка', 'От застройщика'),('secondary', 'Вторичка', 'От собственника / агента')] %}
+      {% set group = cmp.stats[key] %}
+      {% if not cmp.stale and group.count %}
+      <article class="mc-market-card">
+        <div class="mc-card-heading"><h3>{{ label }}</h3><span class="mc-type-label">{{ type_label }}</span></div>
+        <p>{% if key == 'primary' %}Квартиры в проектах застройщиков. Готовность и отделка зависят от конкретного корпуса.{% else %}Квартиры на вторичном рынке. Состояние и документы проверяются по каждому объекту.{% endif %}</p>
+        {% if group.count >= 5 and group.median_per_m2 %}<div class="mc-stat"><strong class="mc-stat-value">{{ group.median_per_m2|fmt_num }} <small>₸ / м²</small></strong><span class="mc-stat-label">Медиана заявленных цен</span></div>{% endif %}
+        <dl class="mc-stat-facts"><div><dt>Подходящих предложений</dt><dd>{{ group.count }}</dd></div>{% if group.complex_count is not none and group.complex_count is defined %}<div><dt>ЖК в каталоге</dt><dd>{{ group.complex_count }}</dd></div>{% endif %}{% if group.count >= 5 and group.p25_per_m2 and group.p75_per_m2 %}<div><dt>Средняя половина цен, ₸ / м²</dt><dd>{{ group.p25_per_m2|fmt_num }}–{{ group.p75_per_m2|fmt_num }}</dd></div>{% endif %}{% if group.count >= 5 and group.median_total %}<div><dt>Медиана полной цены</dt><dd>{{ money(group.median_total) }}</dd></div>{% endif %}</dl>
+        {% if group.advantages %}<div class="mc-reasons"><h4>Чем может быть удобнее</h4><ul>{% for reason in group.advantages %}<li>{{ reason }}</li>{% endfor %}</ul></div>{% endif %}
+        {% if group.cautions %}<div class="mc-reasons mc-cautions"><h4>Что учесть</h4><ul>{% for caution in group.cautions %}<li>{{ caution }}</li>{% endfor %}</ul></div>{% endif %}
+      </article>
+      {% endif %}
+      {% endfor %}
+    </div>
+    <p class="mc-coordinate-note">Границы помогают сравнить соседние предложения. Координаты объявления и точка ЖК могут быть приблизительными; расположение корпуса уточняйте отдельно.</p>
+    {% endif %}
+    {% if cmp.tiers and not cmp.stale and ((cmp.tiers|sum(attribute='primary_count')) or (cmp.tiers|sum(attribute='secondary_count'))) %}
+    <div class="mc-expansion"><h3>Что меняется, если искать шире?</h3><p>Рядом могут оказаться единичные предложения. Расширение области показывает, сохраняется ли разница в цене.</p><div class="mc-table-wrap" tabindex="0" role="region" aria-label="Сравнение по размеру области"><table class="mc-table"><thead><tr><th scope="col">Область</th><th scope="col">Первичка</th><th scope="col">Вторичка</th><th scope="col">Разница</th></tr></thead><tbody>{% for tier in cmp.tiers %}{% if tier.primary_count or tier.secondary_count %}<tr {% if tier.key == cmp.scope %}aria-current="true"{% endif %}><td><a href="{{ tier.href }}#market"><strong>{{ tier.label }}</strong></a><small>{{ tier.cells_count }} гексагонов{% if tier.key == 'city' %} с наблюдениями{% endif %}</small></td><td>{{ tier.primary_count }} предложений{% if tier.primary_median_per_m2 %}<small>{{ money(tier.primary_median_per_m2, '₸ / м²') }}</small>{% endif %}</td><td>{{ tier.secondary_count }} предложений{% if tier.secondary_median_per_m2 %}<small>{{ money(tier.secondary_median_per_m2, '₸ / м²') }}</small>{% endif %}</td><td>{% if tier.comparable and tier.delta_pct is not none %}<strong>{% if tier.delta_pct > 0 %}Первичка дешевле на {{ pct(tier.delta_pct) }}{% elif tier.delta_pct < 0 %}Первичка дороже на {{ pct(-tier.delta_pct) }}{% else %}Медианы равны{% endif %}</strong><small>{{ tier.confidence_reason }}</small>{% endif %}</td></tr>{% endif %}{% endfor %}</tbody></table></div></div>
+    {% endif %}
+    {% if local_offer_choices %}
+    <div class="mc-apartments"><h3>Квартиры в выбранной области</h3><div class="mc-offer-grid">
+      {% for offer in local_offer_choices[:6] %}
+      <article class="mc-offer" {% if form.listing|string == offer.id|string %}aria-current="true"{% endif %}>
+        <p class="mc-offer-label">{% if offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %}{% if offer.finish_label %} · {{ offer.finish_label }}{% endif %}</p>
+        <h4>{{ offer.title or offer.complex_name or 'Квартира в Астане' }}</h4>
+        {% if offer.complex_name and offer.complex_name != offer.title %}<p class="mc-offer-complex">{{ offer.complex_name }}</p>{% endif %}
+        <p>{{ offer.rooms }} комнаты · {{ offer.area|fmt_num(1)|replace(',0', '') }} м²{% if offer.build_status_label %}<br>{{ offer.build_status_label }}{% endif %}</p>
+        {{ offer_address(offer) }}
+        <strong>{{ money(offer.price) }}</strong>
+        {{ offer_reasons(offer) }}
+        {{ offer_price_history(offer) }}
+        <div class="mc-offer-actions"><a href="{{ offer.href }}">Сравнить со вкладом →</a>{% if offer.url %}<a href="{{ offer.url }}" target="_blank" rel="noopener noreferrer nofollow" aria-label="Открыть источник предложения: {{ offer.title or offer.complex_name }}">Источник ↗</a>{% endif %}</div>
+      </article>
+      {% endfor %}
+    </div></div>
+    {% endif %}
+  </section>
+
+  <section class="mc-section" id="investment" aria-labelledby="mc-investment-title">
+    <div class="mc-heading"><div><p class="mc-eyebrow">Шаг 2 · одинаковая стартовая сумма</p><h2 id="mc-investment-title">Купить сейчас или подождать год?</h2></div><p>Результат зависит от роста цены, ремонта и аренды. Измените их и посмотрите, при каких условиях квартира обгонит вклад.</p></div>
+    {% if offer_choices %}<form class="mc-offer-selector" action="/compare#investment" method="get"><div class="mc-field"><label for="mc-offer-choice">Выберите квартиру или введите свою цену ниже</label><select name="listing" id="mc-offer-choice"><option value="" {% if not selected_offer %}selected{% endif %}>Своя цена · ручной сценарий</option>{% for offer in offer_choices %}<option value="{{ offer.id }}" {% if form.listing|string == offer.id|string %}selected{% endif %}>{% if offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %} · {{ offer.title or offer.complex_name }}{% if offer.address %} · {{ offer.address }}{% endif %}{% if offer.building %} · корпус {{ offer.building }}{% endif %} · {{ money(offer.price) }}{% if offer.price_history and offer.price_history.events %} · изменение {{ offer.price_history.events[-1].date_label }}{% endif %}</option>{% endfor %}</select><small>Доступные предложения по Астане. Выбор квартиры не меняет область сравнения выше.</small></div><input type="hidden" name="hex" value="{{ cmp.selected_hex or '' }}"><input type="hidden" name="rooms" value="{{ cmp.rooms or 2 }}"><input type="hidden" name="area" value="{{ cmp.area or 60 }}"><input type="hidden" name="scope" value="{{ cmp.scope or 'hex' }}"><button class="mc-button" type="submit">Выбрать →</button></form>{% endif %}
+    {% if selected_offer %}{% with price_forecast=selected_offer.price_forecast, forecast_compact=true %}{% include '_price_forecast.html' %}{% endwith %}{% endif %}
+    {% if selected_offer and selected_offer.rental_estimate %}
+    {% set rental_estimate = selected_offer.rental_estimate %}
+    {% set benchmark = bank_data.benchmark or {} %}
+    {% set guide_bank_ready = benchmark.coverage_complete and benchmark.effective_pct is number and benchmark.effective_pct > 0 and benchmark.bank and benchmark.product and benchmark.term_months and benchmark.source_url %}
+    <aside class="mc-rental-guide{% if not guide_bank_ready %} mc-rental-guide-single{% endif %}" aria-labelledby="mc-rental-guide-title">
+      <div class="mc-rental-guide-estimate"><p class="mc-eyebrow">Доход от квартиры</p><h3 id="mc-rental-guide-title">Если покупаете для сдачи</h3>
+      <p class="mc-rental-guide-value">{{ money(rental_estimate.monthly_low) }}–{{ money(rental_estimate.monthly_high) }} <span>в месяц</span></p><p>Диапазон цен аренды похожих квартир в этом ЖК. Это цены объявлений; фактическую ставку и срок поиска арендатора нужно уточнить.{% if rental_estimate.date_label %} Данные: {{ rental_estimate.date_label }}.{% endif %}</p></div>
+      {% if guide_bank_ready %}<div class="mc-rental-guide-bank"><p class="mc-eyebrow">Ориентир по вкладам</p>
+      <p class="mc-rental-guide-value">{{ rate(benchmark.effective_pct) }} <span>ГЭСВ · {{ benchmark.term_months }} мес.</span></p><h4>{{ benchmark.bank }} · {{ benchmark.product }}</h4><p>{{ benchmark.comparison_note }}</p><p>Самая высокая подтверждённая ГЭСВ среди отслеживаемых программ Freedom, Forte, Bereke и Home Credit.</p>{% if benchmark.checked_at_label %}<p>Проверено: {{ benchmark.checked_at_label }}</p>{% endif %}<a href="{{ benchmark.source_url }}" target="_blank" rel="noopener noreferrer">Условия банка ↗</a></div>{% endif %}
+    </aside>
+    {% endif %}
+    <div class="mc-calculator-layout">
+      <form class="mc-form" action="/compare/calculate#investment" method="post" data-mc-calculator>
+        <div class="mc-form-header"><h3>{% if selected_offer %}{{ selected_offer.title or selected_offer.complex_name or 'Выбранная квартира' }}{% else %}Ваш сценарий покупки{% endif %}</h3>{% if selected_offer %}<p>{% if selected_offer.complex_name %}{{ selected_offer.complex_name }} · {% endif %}{% if selected_offer.market_type == 'primary' %}Первичка{% else %}Вторичка{% endif %}{% if selected_offer.observed_at_label %}<br>Цена наблюдалась: {{ selected_offer.observed_at_label }}{% endif %}{% if selected_offer.cautions %}<br>{{ selected_offer.cautions|join(' ') }}{% endif %}</p>{{ offer_address(selected_offer) }}{{ offer_reasons(selected_offer) }}{{ offer_price_history(selected_offer) }}{% endif %}<p>Срок сравнения — 12 месяцев. Цена + ремонт + расходы на покупку = сумма, которую сравниваем со вкладом.</p>{% if manual_price_example %}<p class="mc-form-example">В поле цены — пример суммы. Замените её фактической ценой своей квартиры.</p>{% endif %}{% if selected_offer and selected_offer.url %}<a href="{{ selected_offer.url }}" target="_blank" rel="noopener noreferrer nofollow">Проверить цену в источнике ↗</a>{% endif %}</div>
+        <p class="mc-error" role="alert" {% if not calculation_error %}hidden{% endif %} data-mc-error>{{ calculation_error or '' }}</p>
+        <input type="hidden" name="listing" value="{{ form.listing or '' }}">
+        <input type="hidden" name="hex" value="{{ cmp.selected_hex or '' }}"><input type="hidden" name="rooms" value="{{ cmp.rooms or 2 }}"><input type="hidden" name="area" value="{{ cmp.area or 60 }}"><input type="hidden" name="scope" value="{{ cmp.scope or 'hex' }}">
+        <div class="mc-fields">
+          <div class="mc-field mc-field-full"><label for="mc-mode">Для чего покупаете?</label><select name="mode" id="mc-mode"><option value="live" {% if form.mode != 'rent_out' %}selected{% endif %}>Для жизни</option><option value="rent_out" {% if form.mode == 'rent_out' %}selected{% endif %}>Для сдачи в аренду</option></select></div>
+          <div class="mc-field mc-field-full"><label for="mc-price">Цена квартиры</label><div class="mc-input-suffix"><input type="number" name="price" id="mc-price" min="5000000" max="600000000" step="1" inputmode="numeric" required value="{{ form.price or '' }}"><span>₸</span></div></div>
+          <div class="mc-field"><label for="mc-repair">Ремонт и обустройство</label><div class="mc-input-suffix"><input type="number" name="repair_cost" id="mc-repair" min="0" max="200000000" step="1" inputmode="numeric" required value="{{ form.repair_cost|default(0) }}"><span>₸</span></div><small>Введите свой бюджет. Отделка не считается бесплатной.</small></div>
+          <div class="mc-field"><label for="mc-buy-cost">Расходы при покупке</label><div class="mc-input-suffix"><input type="number" name="buy_cost" id="mc-buy-cost" min="0" max="100000000" step="1" inputmode="numeric" required value="{{ form.buy_cost|default(0) }}"><span>₸</span></div><small>Комиссии, оформление и другие известные расходы.</small></div>
+          <div class="mc-field"><label for="mc-rent" data-mc-rent-label>{% if form.mode == 'rent_out' %}Арендный доход в месяц{% else %}Аренда жилья в месяц{% endif %}</label><div class="mc-input-suffix"><input type="number" name="monthly_rent" id="mc-rent" min="0" max="10000000" step="1" inputmode="numeric" required value="{{ form.monthly_rent|default(0) }}"><span>₸</span></div><small data-mc-rent-help>{% if form.mode == 'rent_out' %}До вычета расходов и месяцев без арендатора.{% else %}Сколько платите за жильё, пока ждёте покупки.{% endif %}</small></div>
+          <div class="mc-field"><label for="mc-growth">Рост цены за год</label><div class="mc-input-suffix"><input type="number" name="annual_growth_pct" id="mc-growth" min="-50" max="100" step="0.1" inputmode="decimal" required value="{{ form.annual_growth_pct|default(0) }}"><span>%</span></div><small>Ваше предположение. 0% — цена не изменилась.</small></div>
+        </div>
+        <details {% if form.wait_months or form.annual_owner_cost or form.vacancy_months or form.sell_cost_pct %}open{% endif %}><summary>Срок ожидания и дополнительные расходы</summary><div class="mc-fields">
+          <div class="mc-field"><label for="mc-wait">До готовности к заселению</label><input type="number" name="wait_months" id="mc-wait" min="0" max="60" step="1" inputmode="numeric" required value="{{ form.wait_months|default(0) }}"><small>Месяцы стройки и ремонта после покупки.</small></div>
+          <div class="mc-field"><label for="mc-owner-cost">Расходы владельца за год</label><div class="mc-input-suffix"><input type="number" name="annual_owner_cost" id="mc-owner-cost" min="0" max="100000000" step="1" inputmode="numeric" required value="{{ form.annual_owner_cost|default(0) }}"><span>₸</span></div><small>Содержание, налоги, страхование, обслуживание.</small></div>
+          <div class="mc-field" data-mc-vacancy-field><label for="mc-vacancy">Без арендатора после готовности</label><input type="number" name="vacancy_months" id="mc-vacancy" min="0" max="12" step="1" inputmode="numeric" required value="{{ form.vacancy_months|default(0) }}"><small>Для сдачи: дополнительные месяцы без дохода.</small></div>
+          <div class="mc-field"><label for="mc-sell-cost">Расходы при продаже</label><div class="mc-input-suffix"><input type="number" name="sell_cost_pct" id="mc-sell-cost" min="0" max="30" step="0.1" inputmode="decimal" required value="{{ form.sell_cost_pct|default(0) }}"><span>%</span></div><small>Доля будущей цены: комиссия, налоги и другие расходы.</small></div>
+        </div></details>
+        <button class="mc-button" type="submit" data-mc-submit>Сравнить на год <span aria-hidden="true">→</span></button><p class="mc-help">Нулевые расходы означают, что вы их не включили. Расчёт относится к покупке за собственные деньги; ипотеку нужно учитывать отдельно.</p>
+      </form>
+      <aside class="mc-result" aria-label="Результат сравнения на год" {% if not calculation %}hidden{% endif %} data-mc-result>
+        {% if calculation %}
+        {% set valid_bank_results = (calculation.banks or [])|selectattr('eligible')|list %}
+        <dl class="mc-capital"><dt>Одинаковая стартовая сумма</dt><dd>{{ money(calculation.initial_capital) }}</dd></dl>
+        <p class="mc-eyebrow">Через 12 месяцев · ваш сценарий</p><h3>Сколько останется после расходов</h3>
+        <p class="mc-result-intro">Стоимость квартиры показана с учётом ваших расходов и {% if calculation.assumptions.mode == 'rent_out' %}арендного дохода{% else %}аренды до готовности{% endif %}.{% if valid_bank_results %} Вклад — после {% if calculation.assumptions.mode == 'live' %}аренды жилья на время ожидания{% else %}12 месяцев{% endif %}.{% endif %}</p>
+        <div class="mc-balance-row" data-kind="property"><div class="mc-balance-caption"><span>Квартира</span><strong>{{ money(calculation.property.wealth) }}</strong></div><div class="mc-balance-bar" aria-hidden="true"><span data-mc-balance="{{ calculation.property.wealth }}"></span></div><small>Стоимость жилья {% if calculation.assumptions.mode == 'rent_out' %}+ доход от аренды{% endif %} − расходы</small></div>
+        {% for bank in valid_bank_results %}{{ scenario_bank(bank) }}{% endfor %}
+        {% if valid_bank_results|length == 4 %}{% set strongest = (valid_bank_results|sort(attribute='deposit_cash_after_rent', reverse=true))|first %}{% set difference = calculation.property.wealth - strongest.deposit_cash_after_rent %}<div class="mc-scenario-verdict"><strong>{% if difference == 0 %}Квартира и самый доходный подходящий вклад на 12 месяцев равны в этом сценарии.{% elif difference > 0 %}Квартира выше на {{ money(difference) }} в этом сценарии.{% else %}Самый доходный подходящий вклад на 12 месяцев выше на {{ money(-difference) }}.{% endif %}</strong><p>Сравнение с самым доходным подходящим вкладом на 12 месяцев: {{ strongest.bank }} · {{ strongest.product }}.{% if strongest.break_even_growth_pct is not none and strongest.break_even_growth_pct is defined %} Для равного результата квартире нужен рост цены {{ pct(strongest.break_even_growth_pct) }} за год.{% endif %} Измените рост, ремонт или аренду и проверьте другой сценарий.</p></div>{% endif %}
+        {{ rental_benchmark(calculation) }}
+        {% if calculation.warnings %}<details class="mc-result-details"><summary>Что учтено в сценарии</summary><ul>{% for warning in calculation.warnings %}<li>{{ warning }}</li>{% endfor %}</ul></details>{% endif %}
+        {% endif %}
+      </aside>
+    </div>
+    {% if bank_list %}<section class="mc-bank-section" aria-labelledby="mc-banks-title"><div class="mc-bank-section-heading"><h3 id="mc-banks-title">Вклады, с которыми сравниваем</h3><p>{% if bank_data.updated_at and bank_data.updated_at_label %}Проверка источников: {{ bank_data.updated_at_label }}. {% endif %}Берём условия конкретного продукта и срока. Ставка «до» для другого срока не становится доходностью на год.</p></div>
+      <div class="mc-bank-grid">{% for bank in bank_list %}<article class="mc-bank" data-mc-bank="{{ bank.key or bank.bank }}"><h4 class="mc-bank-name">{{ bank.bank }}</h4>{% if bank.product %}<p class="mc-bank-product">{{ bank.product }}</p>{% endif %}<p class="mc-bank-rate">{{ rate(bank.effective_pct) }}<span>ГЭСВ · {{ bank.term_months }} месяцев</span></p>{% if bank.status_label %}<p class="mc-bank-status">{{ bank.status_label }}</p>{% endif %}<p class="mc-bank-meta">{% if bank.nominal_pct is not none and bank.nominal_pct is defined %}Номинальная ставка: <strong>{{ rate(bank.nominal_pct) }}</strong><br>{% endif %}{% if bank.checked_at_label %}Проверено: {{ bank.checked_at_label }}<br>{% endif %}{% if bank.min_amount %}Минимум: {{ money(bank.min_amount) }}<br>{% endif %}{% if bank.guarantee_cap %}Лимит гарантии в одном банке: {{ money(bank.guarantee_cap) }}<br>{% endif %}{% if bank.conditions %}{% if bank.conditions is string %}{{ bank.conditions }}{% else %}{{ bank.conditions|join(' ') }}{% endif %}{% endif %}</p>{% for warning in bank.warnings or [] %}<p class="mc-bank-meta">{{ warning }}</p>{% endfor %}{% if bank.source_url %}<a href="{{ bank.source_url }}" target="_blank" rel="noopener noreferrer">Условия банка ↗</a>{% endif %}<p class="mc-bank-outcome" hidden data-mc-bank-outcome></p></article>{% endfor %}</div>
+      <details class="mc-monitor"><summary>Что отслеживаем автоматически</summary><div><p>Каждые 6 часов проверяем страницы выбранных программ и каталоги Freedom, Forte, Bereke и Home Credit. Ставки обновляются по официальным таблицам; новые ссылки и изменения сохраняются в истории.</p><p>Если меняется документ или другое условие программы, её доход временно исключается из расчёта до проверки. Новая программа появляется в расчёте после подключения её условий. Подтверждение старше 48 часов тоже не используется.</p>{% if deposit_changes %}<ul>{% for change in deposit_changes %}<li><strong>{{ change.title }}</strong> · {{ change.date_label }}<br>{{ change.label }}</li>{% endfor %}</ul>{% endif %}</div></details>
+    </section>
+    {% endif %}
+  </section>
+
+  <section id="comparison-method" class="mc-section mc-method" aria-labelledby="mc-method-title"><div class="mc-method-intro"><p class="mc-eyebrow">Как устроено сравнение</p><h2 id="mc-method-title">Числа, которым видно основание.</h2><p>Разница между соседними объявлениями помогает сузить поиск. Финансовый сценарий показывает, какой рост цены нужен квартире, чтобы оправдать ремонт, расходы и ожидание.</p></div><div>
+    <details><summary>Как сравниваем первичку и вторичку <span aria-hidden="true">+</span></summary><div><p>Используем одну сетку сканера Hatuli. Сначала один гексагон, затем он и шесть соседей, потом 19, 61 и 217 гексагонов, наконец весь город. Ребро гексагона: {{ cmp.edge_m or 'по настройке сканера' }}{% if cmp.edge_m %} м{% endif %}.</p><p>Отбираем одинаковое число комнат и площадь в пределах ±15% от выбранной. Сравниваем медианы цен предложений. Для численного вывода нужно минимум пять подходящих наблюдений с каждой стороны.</p><p>Отделка, срок сдачи, этаж и условия оплаты могут объяснять разницу. Пока эти характеристики неизвестны, низкая цена не означает, что покупка окажется дешевле целиком.</p>{% if cmp.notices %}<ul>{% for notice in cmp.notices %}<li>{{ notice }}</li>{% endfor %}</ul>{% endif %}</div></details>
+    <details><summary>Что входит в сравнение со вкладом <span aria-hidden="true">+</span></summary><div><p>У обоих вариантов одинаковый начальный капитал: цена квартиры, ремонт и расходы на покупку. У квартиры учитываем сценарную цену через год, расходы владельца, срок до заселения, арендный доход и расходы при продаже.</p><p>Если покупаете для жизни, вычитаем аренду на время ожидания. Если для сдачи — доход появляется после готовности и месяцев без арендатора. Ремонт не прибавляется к рыночной цене автоматически.</p><p>Вклад считаем только по подтверждённым условиям на 12 месяцев. Досрочное снятие, выплата процентов, лимиты гарантии и право на продукт могут изменить результат — смотрите условия рядом с банком.</p></div></details>
+    <details><summary>Можно ли по расчёту решить, что покупать? <span aria-hidden="true">+</span></summary><div><p>Результат отвечает на вопрос «что будет при этих цифрах». У квартиры есть риск цены, срок продажи и расходы; у вклада — условия доступа к деньгам и лимит гарантии. Удобство жизни и качество конкретного дома остаются частью вашего решения.</p><p>Перед покупкой отдельно проверьте документы, долги, договор застройщика и фактическое состояние квартиры.</p><a href="/guides/check-apartment-before-deposit">Чеклист перед задатком →</a></div></details>
+  </div></section>
+</div>
+{% if calculation %}<script type="application/json" id="mc-initial-calculation">{{ calculation|tojson }}</script>{% endif %}
+{% endblock %}

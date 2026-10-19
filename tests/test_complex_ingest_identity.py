@@ -19,10 +19,10 @@ SOURCE = PFX + "source"
 @pytest_asyncio.fixture
 async def db(monkeypatch):
     from bot.db.pg import init_pool, close_pool, execute
-    dsn = os.getenv("DATABASE_URL")
-    if not dsn:
+    from tests.db_test_guard import require_test_database_url
+    if not (os.getenv("HATULI_TEST_DATABASE_URL") or os.getenv("DATABASE_URL")):
         pytest.skip("Set DATABASE_URL to an isolated test database")
-    await init_pool(dsn)
+    await init_pool(require_test_database_url())
     await _cleanup(execute)
 
     async def no_geocode(*args):
@@ -315,19 +315,38 @@ async def test_catalog_ambiguous_exact_name_is_skipped_without_mutation(db):
 
 
 @pytest.mark.asyncio
-async def test_catalog_verified_alias_and_concurrent_source_sections(db):
+async def test_catalog_verified_alias_and_concurrent_source_sections(db, monkeypatch):
     import json
+    import bot.core.complex_ingest_identity as identity
     from bot.db.pg import execute, fetchval
     cid = await _complex("canonical-catalog")
     alias_name = PFX + "reviewed-catalog-spelling"
     await record_complex_observations(cid, SOURCE, "reviewed", alias_name, None)
     await execute("UPDATE complex_aliases SET status='verified' WHERE complex_id=$1", cid)
-    stats = await asyncio.gather(
-        save_enrichment({"one": {"name": alias_name, "url": "https://example.com/one"}}, SOURCE + "a"),
+    # Both transactions must hold the observation/source-link FK locks before
+    # either merges source_info. Different verified spellings use different
+    # advisory locks, so this deterministically exercises the row-lock upgrade.
+    observations_done = asyncio.Event()
+    observers = 0
+    original_observations = identity.record_complex_observations
+
+    async def concurrent_observations(*args, **kwargs):
+        nonlocal observers
+        await original_observations(*args, **kwargs)
+        observers += 1
+        if observers == 2:
+            observations_done.set()
+        await asyncio.wait_for(observations_done.wait(), timeout=10)
+
+    monkeypatch.setattr(identity, "record_complex_observations", concurrent_observations)
+    stats = await asyncio.wait_for(asyncio.gather(
+        save_enrichment({"one": {"name": alias_name, "url": "https://example.com/one",
+                                 "housing_class": "business"}}, SOURCE + "a", set_housing_class=True),
         save_enrichment({"two": {"name": PFX + "canonical-catalog", "url": "https://example.com/two"}}, SOURCE + "b"),
-    )
+    ), timeout=20)
     assert all(item["matched"] == 1 and item["created"] == 0 for item in stats)
     value = await fetchval("SELECT source_info FROM complexes WHERE id=$1", cid)
     stored = json.loads(value) if isinstance(value, str) else value
     assert set(stored) == {SOURCE + "a", SOURCE + "b"}
+    assert await fetchval("SELECT housing_class FROM complexes WHERE id=$1", cid) == "business"
     assert await fetchval("SELECT count(*) FROM complexes WHERE name LIKE $1", PFX + "%") == 1

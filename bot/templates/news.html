@@ -6,7 +6,7 @@
   из открытых источников (Google News RSS по СМИ: Kazinform, Zakon.kz, Liter.kz, inform.kz и др.).
 </div>
 
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;">
+<div class="hatuli-news-grid">
 {% for n in news %}
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;">
     {% if n.image_url %}

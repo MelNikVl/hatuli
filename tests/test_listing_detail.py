@@ -117,7 +117,7 @@ async def test_missing_ceiling_and_kitchen_area_stay_none_not_zero(db):
 
 
 @pytest.mark.asyncio
-async def test_price_history_empty_starts_from_first_seen(db):
+async def test_price_history_empty_does_not_backdate_current_price(db):
     from bot.core.listing_detail import build_price_history
     lid = "__test_ph_empty__"
     await _insert_listing(lid, price=25_000_000)
@@ -125,8 +125,8 @@ async def test_price_history_empty_starts_from_first_seen(db):
         result = await build_price_history(lid)
         assert result["changes"] == 0
         assert result["current"] == 25_000_000
-        assert len(result["points"]) == 1
-        assert result["points"][0]["price"] == 25_000_000
+        assert result["points"] == []
+        assert result["integrity_status"] == "no_changes_recorded"
     finally:
         await _cleanup(lid)
 

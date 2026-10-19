@@ -135,10 +135,12 @@ def price_history_lines(history: dict) -> list[str]:
         return ['История цены временно недоступна.']
     events = history.get('events') or []
     if not events:
-        return []
+        return [history['history_warning']] if history.get('history_warning') else []
     arrow = '📉' if events[-1]['new_price'] < events[-1]['old_price'] else '📈'
     lines = [arrow + ' ' + price_event_text(events[-1])]
-    if len(events) > 1:
+    if history.get('history_warning'):
+        lines.append(history['history_warning'])
+    if len(events) > 1 and history.get('net_change') is not None:
         net = history['net_change']
         signed = ('−' if net < 0 else '+') + exact_money(abs(net)) if net else 'без итогового изменения'
         lines.append(f"Всего изменений: {len(events)}; за записанную историю: {signed}.")
@@ -146,10 +148,13 @@ def price_history_lines(history: dict) -> list[str]:
 
 
 def render_history(result: dict, page: int) -> tuple[str, InlineKeyboardMarkup]:
-    events = list(reversed(result.get('price_history', {}).get('events', [])))
+    history = result.get('price_history', {})
+    events = list(reversed(history.get('events', [])))
     pages = max(1, (len(events) + 7) // 8)
     page = max(0, min(page, pages - 1))
     lines = [f'История цены · {page+1}/{pages}', 'Последние изменения сверху.']
+    if history.get('history_warning'):
+        lines.append(history['history_warning'])
     lines += [price_event_text(e) for e in events[page*8:(page+1)*8]]
     lid = str(result['listing']['id'])
     buttons = []
@@ -190,6 +195,10 @@ def render_summary(result: dict) -> str:
     lines += ['', f'Вариантов рядом: {n}. Откройте карту или сравните списком кнопками ниже.' if n else 'В радиусе 2 км пока нет проверенных вариантов, подходящих под ваши параметры.']
     if result['confidence'] == 'limited':
         lines.append('Вывод предварительный: данные неполные.')
+    economics = result['listing'].get('rental_economics')
+    if economics:
+        from bot.core.buyer_alerts import rental_summary_lines
+        lines += ['', *rental_summary_lines(economics)]
     lid = str(result['listing']['id'])
     if lid.isdigit():
         lines += ['', f'<a href="https://hatuli.ai-groundtruth.com/listing/{lid}">Посмотреть подробнее</a>']
@@ -265,6 +274,38 @@ async def menu_command(message: Message, state: FSMContext) -> None:
 async def check_command(message: Message, state: FSMContext) -> None:
     await reset_profile_state(state)
     await message.answer('Пришлите ссылку на квартиру с Krisha.kz. Я проверю её и подберу варианты рядом.', reply_markup=main_menu())
+
+
+@router.message(Command('yield'))
+async def yield_subscription_command(message: Message, state: FSMContext) -> None:
+    from bot.core.buyer_store import get_profile
+    from bot.core.buyer_alerts import parse_yield_command, save_subscription
+    await reset_profile_state(state)
+    try:
+        params = parse_yield_command(message.text, await get_profile(message.from_user.id))
+        await save_subscription(message.from_user.id, 'yield', params)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    except Exception:
+        await message.answer('Не удалось сохранить подписку. Попробуйте позже.')
+        return
+    from bot.db import settings
+    cap = max(1, min(20, settings.get_int('BUYER_ALERT_DAILY_CAP', 5)))
+    await message.answer(f"Подписка сохранена: сценарная чистая доходность от {params['net_yield_min']:g}% в год. "
+        'Только свежие расчёты по ЖК или району с той же комнатностью; учитываем подтверждённую квартиру, чтобы не повторять перевыставления. '
+        f'До {cap} уведомлений в день. Отключить: /alerts_off. Ставки объявлений не равны доходу по договору.')
+
+
+@router.message(Command('alerts_off'))
+async def stop_typed_alerts_command(message: Message) -> None:
+    from bot.core.buyer_alerts import disable_subscription
+    try:
+        await disable_subscription(message.from_user.id)
+    except Exception:
+        await message.answer('Не удалось отключить уведомления. Попробуйте ещё раз.')
+        return
+    await message.answer('Уведомления по доходности и сценариям субаренды отключены.')
 
 
 @router.message(Command('nearby'))

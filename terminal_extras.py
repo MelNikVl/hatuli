@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, File, Form, Request, UploadFile
@@ -33,6 +34,8 @@ from bot.db import settings as app_settings
 from bot.db.pg import fetch
 from bot.core.complex_metrics import IDENTITY_CTES
 from bot.core.complex_membership import listing_complex_column_match_sql, rental_complex_match_sql, unit_complex_match_sql
+from bot.core.web_pages import not_found_page
+from bot.core.rental_data_quality import rental_clean_sql, rental_live_sql, rental_confirmed_archive_sql, rental_consumer_health
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,11 @@ SLIDER_SETTINGS = {
     "MORTGAGE_YEARS":    ("Срок ипотеки", 5, 30, 1, "лет", "💰 Финансовые допущения"),
     "MORTGAGE_DOWN_PCT": ("Первоначальный взнос", 10, 50, 5, "%", "💰 Финансовые допущения"),
     "REALTOR_FEE_PCT":   ("Комиссия риелтора", 0, 5, 0.5, "%", "💰 Финансовые допущения"),
+    "RENT_MIN_SAMPLE_COMPLEX": ("Минимум аналогов аренды в ЖК", 5, 50, 1, "шт.", "Аренда: качество данных"),
+    "RENT_MIN_SAMPLE_AREA": ("Минимум аналогов в районе / городе", 10, 100, 1, "шт.", "Аренда: качество данных"),
+    "NET_YIELD_VACANCY": ("Доля года с арендой: сценарий", 0, 1, .01, "доля", "Аренда: допущения доходности"),
+    "NET_YIELD_OPEX_SHARE": ("Расходы от годовой аренды: сценарий", 0, 1, .01, "доля", "Аренда: допущения доходности"),
+    "NET_YIELD_PURCHASE_COST": ("Множитель затрат на покупку: сценарий", 1, 2, .01, "×", "Аренда: допущения доходности"),
     "ALERT_THRESHOLD":   ("Порог скора для алертов", 50, 90, 1, "баллов", "🎯 Скоринг"),
     "POPUP_WIDTH_PX":    ("Ширина превью объявления на карте", 280, 600, 10, "px", "👁 Настройки вида"),
     "HEX_EDGE_M":        ("Гексагон-сетка: ребро (м)", 30, 200, 10, "м", "⬡ Гексагоны"),
@@ -216,14 +224,14 @@ async def hex_price_cells(lat0: float, lon0: float, rooms: int | None = None) ->
         SELECT lat, lon, price, area FROM rental_listings
         WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
           AND price > 0 AND area > 0
-          AND is_active IS NOT FALSE AND last_seen > now() - interval '30 days'
+          AND {rental_live_sql()}
           {rental_room_cond}
     """, *rental_params)
     nearby_rental_archived = await fetch(f"""
         SELECT lat, lon, price, area FROM rental_listings
         WHERE lat BETWEEN $1 AND $2 AND lon BETWEEN $3 AND $4
           AND price > 0 AND area > 0
-          AND is_active = FALSE AND archived_at > now() - interval '30 days'
+          AND {rental_confirmed_archive_sql()} AND archived_at > now() - interval '30 days'
           {rental_room_cond}
     """, *rental_params)
     return (_build(nearby_sale, archive_rows=nearby_sale_archived),
@@ -271,6 +279,7 @@ os.makedirs(_PHOTO_CACHE_DIR, exist_ok=True)
 # в открытый прокси для произвольных URL (SSRF).
 _PHOTO_ALLOWED_HOSTS = (
     "kcdn.online", "krisha.kz",          # Крыша (фото объявлений)
+    "astps-photos-kr.kcdn.kz",            # Current Krisha photo CDN, observed in browser
     "homeportal.kz",                     # api.homeportal.kz — фото ЖК (реестр КЖК)
     "bazis.kz",                          # admin.sales.bazis.kz / admin.shablon.bazis.kz / bazis-online.kz
     "orda-invest.kz",                    # new.orda-invest.kz — фото новостроек ORDA
@@ -599,7 +608,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.db.pg import fetch, fetchrow
         bank = await fetchrow("SELECT * FROM banks WHERE slug = $1", slug)
         if not bank:
-            return HTMLResponse("Банк не найден", status_code=404)
+            return not_found_page(templates, request, 'Банк не найден', '/banks', 'К банкам')
         programs = await fetch("SELECT * FROM mortgage_programs WHERE bank_id = $1 ORDER BY id", bank["id"])
         return templates.TemplateResponse("bank_detail.html", {"request": request, "bank": bank, "programs": programs})
 
@@ -625,7 +634,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.db.pg import fetchrow
         n = await fetchrow("SELECT * FROM news WHERE id = $1", nid)
         if not n:
-            return HTMLResponse("Новость не найдена", status_code=404)
+            return not_found_page(templates, request, 'Новость не найдена', '/news', 'К новостям')
         return templates.TemplateResponse("news_detail.html", {"request": request, "n": dict(n)})
 
     # Admin IA cleanup (2026-08-30, этап 1): удалён недостижимый дубль этого
@@ -1230,7 +1239,8 @@ def make_extras_router(templates) -> APIRouter:
             return JSONResponse(content=content, headers={"Access-Control-Allow-Origin": "*"})
 
         table = "rental_listings" if type == "rental" else "apartment_listings"
-        active_sql = "AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE" if type != "rental" else ""
+        active_sql = ("AND is_active IS NOT FALSE AND COALESCE(is_duplicate, FALSE) = FALSE" if type != "rental"
+                      else "AND " + rental_live_sql())
         rows_db = await pg_fetch(f"""
             SELECT lat, lon, price, rooms FROM {table}
             WHERE lat IS NOT NULL AND lon IS NOT NULL AND price IS NOT NULL
@@ -1290,7 +1300,7 @@ def make_extras_router(templates) -> APIRouter:
             SELECT id, lat, lon, price, area, rooms, district
             FROM rental_listings
             WHERE lat IS NOT NULL AND lon IS NOT NULL AND price IS NOT NULL
-              {bbox_sql}
+              AND {rental_live_sql()} {bbox_sql}
             ORDER BY id""", *params)
         feats = []
         for r in rows:
@@ -1574,28 +1584,29 @@ def make_extras_router(templates) -> APIRouter:
     @router.post("/api/auth/start")
     async def api_auth_start(request: Request):
         from bot.core.site_auth import create_login_token
+        from bot.site_auth_routes import AUTH_HEADERS
         token = await create_login_token()
         bot_username = os.getenv("SITE_BOT_USERNAME", "nik_us_bot")
         return JSONResponse({
             "token": token,
             "deep_link": f"https://t.me/{bot_username}?start={token}",
-        })
+        }, headers=AUTH_HEADERS)
 
     @router.get("/api/auth/poll")
     async def api_auth_poll(request: Request, token: str):
-        from bot.core.site_auth import get_token_status, consume_login_token
+        from bot.core.site_auth import get_token_status, consume_login_token, set_site_session_cookie
+        from bot.site_auth_routes import AUTH_HEADERS
         status = await get_token_status(token)
         if not status:
-            return JSONResponse({"status": "not_found"})
+            return JSONResponse({"status": "not_found"}, headers=AUTH_HEADERS)
         if status["status"] == "verified":
             session_id = await consume_login_token(token)
             if not session_id:
-                return JSONResponse({"status": "expired"})
-            resp = JSONResponse({"status": "verified"})
-            resp.set_cookie("site_session", session_id, httponly=True, max_age=180 * 86400,
-                            secure=request.url.scheme == "https", samesite="lax")
+                return JSONResponse({"status": "expired"}, headers=AUTH_HEADERS)
+            resp = JSONResponse({"status": "verified"}, headers=AUTH_HEADERS)
+            set_site_session_cookie(resp, request, session_id)
             return resp
-        return JSONResponse({"status": status["status"]})
+        return JSONResponse({"status": status["status"]}, headers=AUTH_HEADERS)
 
     @router.post("/api/auth/logout")
     async def api_auth_logout(request: Request):
@@ -2127,20 +2138,52 @@ def make_extras_router(templates) -> APIRouter:
         await reject_candidate(candidate_id, rejected_by="admin")
         return JSONResponse({"ok": True})
 
-    # Дубли-кандидаты (задача гейта 2, п.5 — review-UX для
-    # complex_duplicate_candidates, чтобы 137 пар не были "полдня грайнда"
-    # руками через psql). approve реально мерджит (bot.core.entity_
-    # resolution.merge_complex_pair — та же реализация, что massовый
-    # merge_translit_dups.py, не вторая копия логики).
+    # Reviewed redirects preserve source identities and require a fresh preview.
+    @router.get("/admin/api/entity-ids/duplicates/{candidate_id}/preview")
+    async def entity_ids_dup_preview(request: Request, candidate_id: int):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        from bot.core.complex_identity_review import preview_duplicate_candidate, ComplexIdentityReviewError
+        try:
+            result = await preview_duplicate_candidate(candidate_id)
+        except ComplexIdentityReviewError as exc:
+            return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=404 if exc.code == "not_found" else 409)
+        return JSONResponse(jsonable_encoder(result), headers={"Cache-Control": "no-store"})
+
     @router.post("/admin/api/entity-ids/duplicates/{candidate_id}/approve")
     async def entity_ids_dup_approve(request: Request, candidate_id: int):
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
-        from bot.core.entity_resolution import approve_duplicate_candidate
-        r = await approve_duplicate_candidate(candidate_id, approved_by="admin")
-        if r is None:
-            return JSONResponse({"error": "not_found"}, status_code=404)
-        return JSONResponse({"ok": True, **r})
+        if len(await request.body()) > 12000:
+            return JSONResponse({"error": "request_too_large"}, status_code=413)
+        if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+            return JSONResponse({"error": "json_required"}, status_code=415)
+        from bot.core.complex_identity_review import apply_duplicate_candidate, ComplexIdentityReviewError
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("Неверный запрос")
+            result = await apply_duplicate_candidate(candidate_id, expected_fingerprint=body.get("fingerprint", ""),
+                review_note=body.get("review_note", ""), source_urls=body.get("source_urls", []), reviewed_by=admin_username(request) or "admin")
+        except ComplexIdentityReviewError as exc:
+            code = 404 if exc.code == "not_found" else 422 if exc.code == "evidence_required" else 409
+            return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=code)
+        except (ValueError, TypeError):
+            return JSONResponse({"error": "invalid_request"}, status_code=422)
+        return JSONResponse(jsonable_encoder({"ok": True, **result}), headers={"Cache-Control": "no-store"})
+
+    @router.post("/admin/api/entity-ids/duplicate-reviews/{review_id}/rollback")
+    async def entity_ids_dup_rollback(request: Request, review_id: str):
+        if not is_authed(request):
+            return JSONResponse({"error": "auth"}, status_code=401)
+        if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+            return JSONResponse({"error": "json_required"}, status_code=415)
+        from bot.core.complex_identity_review import rollback_duplicate_review, ComplexIdentityReviewError
+        try:
+            result = await rollback_duplicate_review(review_id, reviewed_by=admin_username(request) or "admin")
+        except ComplexIdentityReviewError as exc:
+            return JSONResponse({"error": exc.code, "message": str(exc)}, status_code=404 if exc.code == "not_found" else 409)
+        return JSONResponse(jsonable_encoder({"ok": True, **result}), headers={"Cache-Control": "no-store"})
 
     @router.post("/admin/api/entity-ids/duplicates/{candidate_id}/reject")
     async def entity_ids_dup_reject(request: Request, candidate_id: int):
@@ -2154,20 +2197,8 @@ def make_extras_router(templates) -> APIRouter:
     async def entity_ids_dup_bulk_approve(request: Request):
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
-        from bot.core.entity_resolution import approve_duplicate_candidate
-        body = await request.json()
-        ids = body.get("ids") or []
-        results, errors = [], []
-        for cid in ids:
-            try:
-                r = await approve_duplicate_candidate(int(cid), approved_by="admin")
-                if r is not None:
-                    results.append({"id": cid, **r})
-                else:
-                    errors.append({"id": cid, "error": "not_found"})
-            except Exception as e:
-                errors.append({"id": cid, "error": str(e)[:200]})
-        return JSONResponse({"ok": True, "merged": len(results), "errors": errors})
+        return JSONResponse({"error": "individual_review_required",
+            "message": "Каждой паре нужны свежий просмотр изменений и подтверждённые источники."}, status_code=409)
 
     # Фаза 2 (юниты) — review-действия для unit_duplicate_candidates
     # (задача 2026-08-13). approve/reject/skip — bot.core.entity_
@@ -4275,6 +4306,7 @@ def make_extras_router(templates) -> APIRouter:
         /admin/api/listing/{id} у вторички, см. openDetailModal в
         dashboard.html: ветка по префиксу id 'nb-')."""
         from bot.db.pg import fetchrow as pg_fetchrow
+        from bot.core.price_forecast_runtime import forecast_for_offer
         import json as _json_nbu
         u = await pg_fetchrow("""
             SELECT u.*, c.name AS complex_name, c.district, c.address,
@@ -4304,6 +4336,7 @@ def make_extras_router(templates) -> APIRouter:
             "floor": u["floor"], "floors_total": u["floors_total"],
             "building": u["building"], "section": u["section"],
             "price": u["price"],
+            "price_forecast": forecast_for_offer(f"newbuild:{u['id']}", u["price"], active=u.get("status") == "available"),
             "price_per_m2": float(u["price_per_m2"]) if u["price_per_m2"] is not None else None,
             "photo": u["layout_photo_url"], "status": u["status"],
             "complex_id": u["complex_id"], "complex_name": u["complex_name"],
@@ -4395,6 +4428,11 @@ def make_extras_router(templates) -> APIRouter:
                 WHERE lat IS NOT NULL AND lon IS NOT NULL
                   AND last_seen > now() - interval '14 days'
                   AND COALESCE(is_duplicate, FALSE) = FALSE
+                  AND is_active IS TRUE AND archived_at IS NULL
+                  AND prop_type = 'apartment' AND city = 'astana'
+                  AND rent_period = 'monthly' AND NOT COALESCE(rent_period_conflict, FALSE)
+                  AND COALESCE(dup_needs_review, FALSE) = FALSE
+                  AND NULLIF(btrim(duplicate_of), '') IS NULL
                 LIMIT 20000
             """)
             return JSONResponse({"points": [[float(r["lat"]), float(r["lon"])] for r in rows]})
@@ -4453,6 +4491,7 @@ def make_extras_router(templates) -> APIRouter:
                          min_score: int = 0, seller: str = "", market: str = "",
                          price_change: str = "", finish: str = "", cheapest_only: bool = False,
                          has_floorplan: bool = False,
+                         net_yield_min: float = 0, rent_confidence: str = "", sort: str = "", high_yield: bool = False,
                          offset: int = 0, limit: int = 15000,
                          min_lat: float = 0, max_lat: float = 0,
                          min_lon: float = 0, max_lon: float = 0):
@@ -4465,9 +4504,14 @@ def make_extras_router(templates) -> APIRouter:
             # тепловые карты, топ-10 по комнатности и новостройки — всё это
             # про продажу; у аренды нет своего "топ-10 по скору", в таблице
             # нет score-колонки вовсе).
-            return JSONResponse({"points": [], "mode": "rental", "count": 0, "no_geo": 0})
+            return JSONResponse({"points": [], "mode": "rental", "count": 0, "no_geo": 0,
+                "batch_rows": 0, "total_matching": 0, "offset": max(0, offset),
+                "limit": max(1, min(limit, 1000)), "next_offset": None, "has_more": False,
+                "geo_scope": "city", "market_coverage": "unknown"}, headers={"Cache-Control": "no-store"})
 
         if type == "rental":
+            limit = max(1, min(limit, 1000))
+            offset = max(0, offset)
             # У аренды нет своих координат — привязываем к центроиду ЖК
             # (по объявлениям продажи того же ЖК). Позиция приблизительная.
             conds, params, i = ["1=1"], [], 1
@@ -4483,6 +4527,12 @@ def make_extras_router(templates) -> APIRouter:
                 conds.append(f"r.area <= ${i}"); params.append(area_max); i += 1
             if price_max > 0:
                 conds.append(f"r.price <= ${i}"); params.append(int(price_max)); i += 1
+            rental_where = f"{' AND '.join(conds)} AND {rental_live_sql('r')}"
+            total_rows = await pg_fetch(f"""
+                SELECT COUNT(*) AS total_matching FROM rental_listings AS r
+                WHERE {rental_where}
+            """, *params)
+            total_matching = (total_rows[0].get("total_matching") if total_rows else None)
             # Раньше центроид ЖК считался LATERAL-подзапросом по apartment_listings
             # НА КАЖДУЮ строку аренды (до 1000 корреляционных сканов самой большой
             # таблицы) — это и было причиной долгой загрузки. Вместо этого считаем
@@ -4496,7 +4546,7 @@ def make_extras_router(templates) -> APIRouter:
             rows = await pg_fetch(f"""
                 SELECT r.id, r.url, r.price, r.rooms, r.complex_name, r.district, r.found_at,
                        r.lat AS own_lat, r.lon AS own_lon, r.area, r.floor, r.floors_total,
-                       r.address, r.photos, complex_name_key(r.complex_name) AS complex_key,
+                       r.address, r.photos, r.photo_url, complex_name_key(r.complex_name) AS complex_key,
                        ph.old_price AS prev_price, ph.changed_at AS price_changed_at
                 FROM rental_listings r
                 LEFT JOIN LATERAL (
@@ -4507,14 +4557,12 @@ def make_extras_router(templates) -> APIRouter:
                     FROM rental_price_history h
                     WHERE h.listing_id = r.id
                 ) ph ON TRUE
-                WHERE {' AND '.join(conds)}
-                  AND (
-                    (r.is_active IS NOT FALSE AND r.last_seen > now() - interval '30 days')
-                    OR (r.is_active = FALSE AND r.archived_at > now() - interval '30 days')
-                  )
-                  AND COALESCE(r.is_duplicate, FALSE) = FALSE
-                ORDER BY r.found_at DESC LIMIT 1000
-            """, *params)
+                WHERE {rental_where}
+                ORDER BY r.found_at DESC, r.id DESC LIMIT ${i} OFFSET ${i+1}
+            """, *params, limit + 1, offset)
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            batch_rows = len(rows)
             # Каскад привязки: ЖК -> центроид района -> без привязки.
             district_geo = {r2["district"]: (float(r2["lat"]), float(r2["lon"]))
                             for r2 in await pg_fetch("""
@@ -4526,18 +4574,22 @@ def make_extras_router(templates) -> APIRouter:
             import random as _rnd
             import json as _json_rental
 
-            def _rental_photos(v):
+            def _rental_photos(v, cover):
                 if isinstance(v, str):
                     try:
                         v = _json_rental.loads(v)
                     except ValueError:
                         v = []
-                return (v or [])[:5]
+                from bot.core.rental_parser import _rental_card_photo_url
+                urls = list(v) if isinstance(v, list) else []
+                if not urls and cover:
+                    urls = [cover]
+                return [safe for raw in urls[:5] if (safe := _rental_card_photo_url(raw))]
 
             for r in rows:
                 d = dict(r)
                 cx_geo = complex_geo.get(d["complex_key"])
-                if d.get("own_lat") is not None:
+                if d.get("own_lat") is not None and d.get("own_lon") is not None:
                     # свои координаты с детальной страницы — самая точная привязка
                     lat, lon, binding, jit = float(d["own_lat"]), float(d["own_lon"]), "точно", 0.0
                 elif cx_geo is not None:
@@ -4562,10 +4614,16 @@ def make_extras_router(templates) -> APIRouter:
                     "area": float(d["area"]) if d.get("area") else None,
                     "floor": d.get("floor"), "floors_total": d.get("floors_total"),
                     "address": d.get("address") or "",
-                    "photos": _rental_photos(d.get("photos")),
+                    "photos": _rental_photos(d.get("photos"), d.get("photo_url")),
                 })
             return JSONResponse({"points": pts, "mode": "rental",
-                                 "count": len(pts), "no_geo": no_geo})
+                                 "count": len(pts), "no_geo": no_geo,
+                                 "scope": "Астана · активные квартиры месячной аренды, замеченные за 72 часа",
+                                 "limited_to": limit, "limit": limit, "offset": offset,
+                                 "batch_rows": batch_rows, "total_matching": total_matching,
+                                 "has_more": has_more, "next_offset": offset + batch_rows if has_more else None,
+                                 "geo_scope": "city", "market_coverage": "unknown"},
+                                headers={"Cache-Control": "no-store"})
 
         # Статистика по всей базе не зависит от offset/limit батча — считаем
         # только на первом запросе страницы, чтобы не дублировать тяжёлые COUNT(*)
@@ -4649,7 +4707,14 @@ def make_extras_router(templates) -> APIRouter:
         else:
             limit = max(1, min(limit, 15000))
             offset = max(0, offset)
-        order_by = "a.price ASC" if cheapest_only else "eff_score DESC"
+        from bot.core.rental_economics_filters import append_rental_filters
+        try:
+            rental_order = append_rental_filters(conds, params, net_yield_min=net_yield_min,
+                rent_confidence=rent_confidence, sort=sort, high_yield=high_yield)
+        except (ValueError, TypeError, OverflowError):
+            return JSONResponse({"error": "invalid_rental_filter"}, status_code=422)
+        i = len(params)+1
+        order_by = rental_order or ("a.price ASC" if cheapest_only else "eff_score DESC")
         limit_idx, offset_idx = i, i + 1
         params.append(limit); params.append(offset)
         rows = await pg_fetch(IDENTITY_CTES + f"""
@@ -4661,12 +4726,20 @@ def make_extras_router(templates) -> APIRouter:
                    a.score_yield, a.score_price_market, a.score_location,
                    a.score_apt_type, a.score_floor, a.score_complex, a.score_supply,
                    a.hex_deal_index, a.deal_confidence, a.yield_pct,
+                   a.rental_economics,a.complex_id,a.complex_resolution,a.resolved_house_id,a.house_attribution,
+                   a.last_seen,a.is_active,a.archived_at,a.is_duplicate,a.dup_needs_review,a.duplicate_of,a.district,
                    EXTRACT(EPOCH FROM (now() - a.first_seen))/86400 AS age_days,
                    a.effective_score AS eff_score,
                    ph.old_price AS prev_price,
                    ph.changed_at AS price_changed_at,
                    dv.id AS developer_id, dv.name AS developer_name, dv.logo AS developer_logo,
-                   cx.photos AS complex_photos
+                   cx.photos AS complex_photos,
+                   CASE WHEN a.complex_resolution IS DISTINCT FROM 'geo' AND a.complex_resolution IS DISTINCT FROM 'unbound'
+                     AND a.house_attribution IS DISTINCT FROM 'geo' AND a.house_attribution IS DISTINCT FROM 'address_geo'
+                     THEN (SELECT hc.housing_class FROM complexes hc WHERE hc.id=coalesce(a.resolved_house_id,a.complex_id)
+                       AND NOT coalesce(hc.is_garbage,false) AND NOT coalesce(hc.is_street,false)
+                       AND NOT coalesce(hc.is_umbrella,false) AND hc.canonical_reason IS DISTINCT FROM 'junk_unmatched')
+                   END AS rental_housing_class
             FROM listings a
             LEFT JOIN LATERAL (
                 -- Исторический максимум, а не последнее изменение — просили
@@ -4773,8 +4846,26 @@ def make_extras_router(templates) -> APIRouter:
             "underpriced_pct": (round((r["hex_deal_index"] - 1) * 100)
                                  if r["hex_deal_index"] and (r["deal_confidence"] or 0) >= 50
                                  and (r["hex_deal_index"] - 1) * 100 >= 28.8 else None),
-            "high_yield": bool(r["yield_pct"] and r["yield_pct"] >= 13.9),
+            "high_yield": False,
         } for idx, r in enumerate(rows)]
+        from bot.core.rental_economics import cached_rental_economics, attach_benchmark
+        from bot.core.rental_yield import NetYieldParams
+        from bot.db import settings as rental_settings
+        try:
+            rental_params = NetYieldParams.from_settings(rental_settings.get)
+        except (ValueError, TypeError, OverflowError):
+            rental_params = None
+        rental_now = datetime.now(timezone.utc)
+        benchmark_rows = []
+        if rental_params and any(r.get("rental_economics") for r in rows):
+            benchmark_rows = [dict(row) for row in await pg_fetch("SELECT * FROM rental_yield_benchmarks WHERE computed_at BETWEEN now()-interval '26 hours' AND now()")]
+        for point, row in zip(pts, rows):
+            economics = cached_rental_economics(dict(row), now=rental_now, params=rental_params) if rental_params else None
+            economics = attach_benchmark(economics, dict(row), benchmark_rows, rental_params, rental_now) if economics else None
+            point.update(net_yield_pct=economics["net_yield_pct"] if economics else None,
+                         yield_pct=economics["net_yield_pct"] if economics else None,
+                         rent_confidence=economics["confidence"] if economics else None,
+                         high_yield=bool(economics and economics["high_yield"]))
         resp = {"points": pts, "count": len(pts), "offset": offset, "limit": limit,
                 "has_more": (len(pts) == limit) and not cheapest_only}
         if is_authed(request) and offset == 0:
@@ -4871,11 +4962,10 @@ def make_extras_router(templates) -> APIRouter:
         if denied is not None:
             return denied
         from bot.db.pg import fetch as pg_fetch
-        rows = await pg_fetch("""
+        rows = await pg_fetch(f"""
             SELECT id, lat, lon, price, rooms
             FROM rental_listings
-            WHERE is_active = FALSE AND archived_at IS NOT NULL
-              AND COALESCE(is_duplicate, FALSE) = FALSE
+            WHERE {rental_confirmed_archive_sql()}
               AND lat IS NOT NULL AND lon IS NOT NULL
               AND price > 0
               AND archived_at > now() - interval '30 days'
@@ -5302,7 +5392,7 @@ def make_extras_router(templates) -> APIRouter:
             WHERE c.id = $1
         """, complex_id)
         if not cx:
-            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'ЖК не найден', '/complexes', 'К каталогу ЖК')
         if cx.get("canonical_id") is not None:
             prefix = "/admin" if request.url.path.startswith("/admin/") else ""
             target = f"{prefix}/complex/{cx['canonical_id']}"
@@ -5310,9 +5400,9 @@ def make_extras_router(templates) -> APIRouter:
                 target += f"?{request.url.query}"
             return RedirectResponse(url=target, status_code=302)
         if cx.get("canonical_reason") == "junk_unmatched":
-            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'ЖК не найден', '/complexes', 'К каталогу ЖК')
         if cx.get("is_garbage") is True:
-            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'ЖК не найден', '/complexes', 'К каталогу ЖК')
         if cx.get("is_street") is True:
             # Задача "ЖК улицы вообще удалить" (2026-08-12): страница больше
             # не рендерится — раньше показывала баннер "Это улица, а не ЖК"
@@ -5320,7 +5410,7 @@ def make_extras_router(templates) -> APIRouter:
             # удаляется (аудит-трейл, см. bot/core/complex_audit.py —
             # чтобы повторный аудит не переоткрывал уже разобранные случаи),
             # просто страница для неё больше недоступна, как у is_garbage.
-            return HTMLResponse("<h2>ЖК не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'ЖК не найден', '/complexes', 'К каталогу ЖК')
         cx = dict(cx)
         # photos — JSONB, asyncpg отдаёт как строку; без парсинга шаблон
         # итерировался бы по символам строки, а не по элементам массива
@@ -5485,7 +5575,7 @@ def make_extras_router(templates) -> APIRouter:
         rentals = await fetch(f"""
             SELECT rooms, price, area, found_at
             FROM rental_listings
-            WHERE {_rental_id_match} AND price > 0
+            WHERE {_rental_id_match} AND price > 0 AND {rental_live_sql()}
             ORDER BY found_at DESC LIMIT 30
         """, complex_id)
 
@@ -5544,18 +5634,21 @@ def make_extras_router(templates) -> APIRouter:
               AND COALESCE(is_duplicate, FALSE) = FALSE
         """, complex_id) if include_children else None
 
-        # Аренда: скорость ухода. "Ушло" = не видели парсером > 3 дней.
+        # Только явно подтверждённые архивы; сбой обхода не означает сдачу.
         rental_stats = await fetch(f"""
             SELECT rooms,
-                   COUNT(*) AS cnt,
-                   percentile_cont(0.5) WITHIN GROUP (ORDER BY price) AS median_rent,
-                   COUNT(*) FILTER (WHERE COALESCE(last_seen, found_at) < now() - interval '3 days') AS gone_cnt,
-                   AVG(EXTRACT(EPOCH FROM (COALESCE(last_seen, found_at) - found_at))/86400)
-                       FILTER (WHERE COALESCE(last_seen, found_at) < now() - interval '3 days'
-                               AND last_seen IS NOT NULL AND last_seen > found_at)
+                   COUNT(*) FILTER (WHERE {rental_live_sql()}) AS cnt,
+                   percentile_cont(0.5) WITHIN GROUP (ORDER BY price)
+                       FILTER (WHERE {rental_live_sql()}) AS median_rent,
+                   COUNT(*) FILTER (WHERE is_active IS FALSE AND archived_at IS NOT NULL
+                       AND archive_reason IN ('archived_badge', 'confirmed_gone')) AS gone_cnt,
+                   AVG(EXTRACT(EPOCH FROM (archived_at - found_at))/86400)
+                       FILTER (WHERE is_active IS FALSE AND archived_at IS NOT NULL
+                               AND archive_reason IN ('archived_badge', 'confirmed_gone')
+                               AND archived_at >= found_at)
                        AS avg_days_listed
             FROM rental_listings
-            WHERE {_rental_id_match} AND price > 0
+            WHERE {_rental_id_match} AND price > 0 AND {rental_clean_sql()}
             GROUP BY rooms ORDER BY rooms
         """, complex_id)
 
@@ -6155,7 +6248,7 @@ def make_extras_router(templates) -> APIRouter:
         cx, sale_match, rental_match = context
         if kind == "rental":
             table, time_col = "rental_listings", "found_at"
-            membership = rental_match
+            membership = f"{rental_match} AND {rental_clean_sql()}"
         else:
             table, time_col = "apartment_listings", "first_seen"
             membership = f"{sale_match} AND COALESCE(is_duplicate, FALSE) = FALSE"
@@ -6187,7 +6280,11 @@ def make_extras_router(templates) -> APIRouter:
                 "median_price": float(r["median_price"]),
                 "n": r["n"],
             })
-        return JSONResponse({"data": by_rooms})
+        result = {"data": by_rooms}
+        if kind == "rental":
+            result["data_quality"] = await rental_consumer_health()
+            result["series_note"] = "Текущие цены объявлений по дате первого наблюдения. Историческая цена рынка по этим данным неизвестна."
+        return JSONResponse(result)
 
     @router.get("/admin/api/complex/{complex_id}/turnover-dynamics")
     async def complex_turnover_dynamics(request: Request, complex_id: int,
@@ -6215,18 +6312,17 @@ def make_extras_router(templates) -> APIRouter:
             room_cond = "AND rooms = $3"
             params.append(int(rooms))
         if kind == "rental":
-            # "Ушло" = не видели парсером > 3 дня (см. rental_stats в
-            # complex_detail выше) — тот же критерий, теперь по неделям.
+            # Дата подтверждения архива; прекращение обновлений само по себе
+            # не доказывает уход и тем более фактическую сдачу квартиры.
             rows = await pg_fetch(f"""
-                SELECT date_trunc('week', COALESCE(last_seen, found_at))::date AS d, rooms,
-                       AVG(EXTRACT(EPOCH FROM (COALESCE(last_seen, found_at) - found_at))/86400) AS avg_days,
+                SELECT date_trunc('week', archived_at)::date AS d, rooms,
+                       AVG(EXTRACT(EPOCH FROM (archived_at - found_at))/86400) AS avg_days,
                        COUNT(*) AS n
                 FROM rental_listings
-                WHERE {rental_match} AND price > 0
+                WHERE {rental_match} AND price > 0 AND {rental_confirmed_archive_sql()}
                   AND rooms IS NOT NULL
-                  AND COALESCE(last_seen, found_at) < now() - interval '3 days'
-                  AND last_seen IS NOT NULL AND last_seen > found_at
-                  AND COALESCE(last_seen, found_at) >= now() - ($2 || ' days')::interval
+                  AND archived_at >= found_at
+                  AND archived_at >= now() - ($2 || ' days')::interval
                   {room_cond}
                 GROUP BY 1, 2
                 ORDER BY 1, 2
@@ -6255,7 +6351,10 @@ def make_extras_router(templates) -> APIRouter:
                 "avg_days": round(float(r["avg_days"]), 1),
                 "n": r["n"],
             })
-        return JSONResponse({"data": by_rooms})
+        result = {"data": by_rooms}
+        if kind == "rental":
+            result["data_quality"] = await rental_consumer_health()
+        return JSONResponse(result)
 
     # "Создать ЖК" (задача 2026-08-13, кнопка рядом с "Добавить дом к ЖК") —
     # ручное создание ЖК с нуля: название + адрес + минимум 3 фото. До этого
@@ -6558,7 +6657,7 @@ def make_extras_router(templates) -> APIRouter:
         from bot.db.pg import fetch, fetchrow
         dev = await fetchrow("SELECT * FROM developers WHERE id = $1", dev_id)
         if not dev:
-            return HTMLResponse("<h2>Застройщик не найден</h2>", status_code=404)
+            return not_found_page(templates, request, 'Застройщик не найден', '/developers', 'К застройщикам')
         _developer_listing_match = listing_complex_column_match_sql('c.id', 'al', include_children=True)
         complexes = await fetch(f"""
             SELECT c.id, c.name, c.district, c.year_built, c.housing_class,
@@ -6680,6 +6779,21 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse(jsonable_encoder(payload))
 
     # ── История цены объявления ───────────────────────────────────────────
+
+    @router.get("/admin/api/buyer-journey/{listing_id}")
+    async def api_buyer_journey(request: Request, listing_id: str):
+        denied = await private_data_denied(request)
+        if denied is not None:
+            return denied
+        import re as _journey_re
+        if not _journey_re.fullmatch(r"\d{5,20}", listing_id):
+            return JSONResponse({"error": "invalid_listing_id"}, status_code=422)
+        from bot.core.buyer_journey import build_buyer_journey
+        try:
+            payload = await asyncio.wait_for(build_buyer_journey(listing_id), timeout=30)
+        except asyncio.TimeoutError:
+            return JSONResponse({"found": False, "message": "Разбор не успел загрузиться. Попробуйте ещё раз."}, status_code=503)
+        return JSONResponse(jsonable_encoder(payload), headers={"Cache-Control": "no-store"})
 
     @router.get("/admin/api/price-history/{listing_id}")
     async def api_price_history(request: Request, listing_id: str):
@@ -7005,11 +7119,9 @@ def make_extras_router(templates) -> APIRouter:
         фактического снятия объявления с Крыши — это дата, когда МЫ это
         заметили при следующей проверке.
 
-        Плюс отдельная серия "аренда": у rental_listings нет явного
-        archived_at (нет детального парсера, который бы проверял страницу на
-        пометку "В архиве") — как и в карточке ЖК ("скорость ухода аренды"),
-        считаем объявление ушедшим, если его не видели 3+ дня подряд после
-        last_seen, и датой ухода — last_seen + 3 дня."""
+        Серия аренды использует явный подтверждённый архив (archived_at),
+        а не пропуск обновлений сканером. Это дата обнаружения снятия
+        объявления; факт сдачи и дата договора неизвестны."""
         if not is_authed(request):
             return JSONResponse({"error": "auth"}, status_code=401)
         from bot.db.pg import fetch as pg_fetch
@@ -7022,13 +7134,13 @@ def make_extras_router(templates) -> APIRouter:
             GROUP BY 1, 2
             ORDER BY 1
         """, str(days))
-        rental_rows = await pg_fetch("""
-            SELECT (last_seen::date + interval '3 days')::date AS d,
+        rental_rows = await pg_fetch(f"""
+            SELECT archived_at::date AS d,
                    CASE WHEN rooms >= 3 THEN 3 ELSE COALESCE(rooms, 0) END AS room_bucket,
                    COUNT(*) AS cnt
             FROM rental_listings
-            WHERE last_seen < now() - interval '3 days'
-              AND last_seen::date + interval '3 days' > now() - ($1 || ' days')::interval
+            WHERE {rental_confirmed_archive_sql()}
+              AND archived_at > now() - ($1 || ' days')::interval
             GROUP BY 1, 2
             ORDER BY 1
         """, str(days))
@@ -7047,6 +7159,7 @@ def make_extras_router(templates) -> APIRouter:
         return JSONResponse({
             "days": [d.strftime("%d.%m") for d in days_set],
             "series": series,
+            "rental_data_quality": await rental_consumer_health(),
         })
 
     @router.get("/admin/api/archived-hex-points")
@@ -7072,10 +7185,11 @@ def make_extras_router(templates) -> APIRouter:
         if type == "rental":
             rows = await pg_fetch(f"""
                 SELECT lat, lon, price, rooms,
-                       EXTRACT(EPOCH FROM (last_seen - found_at)) / 86400.0 AS days
+                       EXTRACT(EPOCH FROM (archived_at - found_at)) / 86400.0 AS days
                 FROM rental_listings
-                WHERE last_seen < now() - interval '3 days'
-                  AND last_seen > now() - ($1 || ' days')::interval
+                WHERE {rental_confirmed_archive_sql()}
+                  AND archived_at >= found_at
+                  AND archived_at > now() - ($1 || ' days')::interval
                   AND lat IS NOT NULL AND lon IS NOT NULL
                   AND price > 0
                   {room_cond}

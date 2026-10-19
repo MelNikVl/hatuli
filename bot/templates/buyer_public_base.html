@@ -7,29 +7,32 @@
   <meta name="description" content="{% block description %}История заявленной цены, похожие предложения и признаки повторной публикации. Реальный пример разбора квартиры в Астане и ручной запрос своего разбора.{% endblock %}">
   <meta property="og:site_name" content="Hatuli">
   <meta property="og:type" content="website">
+  <meta property="og:locale" content="ru_KZ">
+  <meta property="og:title" content="{{ self.title()|striptags|trim }}">
+  <meta property="og:description" content="{{ self.description()|striptags|trim }}">
+  <meta property="og:url" content="https://hatuli.ai-groundtruth.com{{ request.url.path }}">
+  {% include "_hatuli_social_image.html" %}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ self.title()|striptags|trim }}">
+  <meta name="twitter:description" content="{{ self.description()|striptags|trim }}">
+  <meta name="twitter:image" content="https://hatuli.ai-groundtruth.com/static/branding/hatuli-share.png">
+  <meta name="twitter:image:alt" content="Hatuli: история цены, похожие предложения и вопросы продавцу">
   <link rel="canonical" href="https://hatuli.ai-groundtruth.com{{ request.url.path }}">
   <link rel="icon" type="image/svg+xml" href="/static/branding/hatuli.svg">
-  <link rel="stylesheet" href="/static/hatuli-public.css?v=20261009">
+  <link rel="stylesheet" href="/static/hatuli-public.css?v=20261013">
+  {% include "_hatuli_theme.html" %}
+  <link rel="stylesheet" href="/static/hatuli-design.css?v=20261016-zillow-2">
+  <link rel="stylesheet" href="/static/hatuli-media.css?v=20261012-2">
+  <script src="/static/hatuli-ui.js?v=20261012" defer></script>
   {% block head %}{% endblock %}
 </head>
-<body>
-  <a class="hp-skip" href="#main-content">К содержанию</a>
-  <header class="hp-header">
-    <div class="hp-shell hp-header-row">
-      <a class="hp-brand" href="/" aria-label="Hatuli — главная"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M4 15 16 5l12 10v12H7V15" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="m12 19 3 3 7-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Hatuli</a>
-      <nav class="hp-nav" aria-label="Основная навигация">
-        <a href="/example" {% if request.url.path == '/example' %}aria-current="page"{% endif %}>Пример разбора</a>
-        <a href="/map">ЖК и карта</a>
-        <a href="/how-it-works" {% if request.url.path == '/how-it-works' %}aria-current="page"{% endif %}>Как считаем</a>
-        <a class="hp-login" href="/cabinet">Войти</a>
-      </nav>
-    </div>
-  </header>
+<body class="hatuli-site hatuli-public">
+  {% include "_hatuli_header.html" %}
   <main id="main-content" class="hp-shell">{% block content %}{% endblock %}</main>
   <footer class="hp-footer">
     <div class="hp-shell hp-footer-row">
-      <p>Hatuli · Астана. Цены в объявлениях — предложения продавцов, не цены сделок. Разбор помогает подготовить вопросы перед покупкой.</p>
-      {% if is_admin(request) %}<a href="/admin/analysis-requests">Заявки на разбор</a>{% else %}<a href="/request-analysis">Запросить свой разбор</a>{% endif %}
+      <p>{% block footer_note %}Hatuli · Астана. Цены в объявлениях — предложения продавцов, не цены сделок. Разбор помогает подготовить вопросы перед покупкой.{% endblock %}</p>
+      <div class="hp-footer-links"><a href="/guides/check-apartment-before-deposit">Чеклист перед задатком</a>{% if is_admin(request) %}<a href="/admin/analysis-requests">Заявки на разбор</a>{% else %}<a href="/request-analysis">Запросить свой разбор</a>{% endif %}</div>
     </div>
   </footer>
 </body>

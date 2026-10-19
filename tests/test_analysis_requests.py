@@ -1,6 +1,5 @@
 """Private manual request queue, CSRF, bounded inputs and atomic duplicate/rate guards."""
 import asyncio
-import os
 from pathlib import Path
 import re
 import time
@@ -11,6 +10,7 @@ import pytest_asyncio
 
 from bot.core import analysis_requests as core
 from bot.web import analysis_requests as web
+from tests.db_test_guard import init_test_pool
 
 
 @pytest.mark.parametrize('url,contact', [
@@ -66,14 +66,11 @@ async def queue_client(tmp_path):
     from fastapi import FastAPI
     from fastapi.templating import Jinja2Templates
     from jinja2 import ChoiceLoader, DictLoader
-    from bot.db.pg import init_pool, close_pool, execute, fetchval
-    from bot.core.admin_sessions import AdminSessionMiddleware
+    from bot.db.pg import close_pool, execute, fetchval
+    from bot.core.admin_sessions import AdminSessionMiddleware, is_admin
     from bot.core.auth_users import hash_password
 
-    dsn = os.getenv('DATABASE_URL')
-    if not dsn:
-        pytest.skip('Set DATABASE_URL to an isolated test database')
-    await init_pool(dsn)
+    await init_test_pool()
     marker = uuid4().hex
     secret = 'analysis-fixture-' + marker
     client_host = 'analysis-client-' + marker
@@ -86,6 +83,7 @@ async def queue_client(tmp_path):
     app.state.analysis_form_secret = secret
     app.add_middleware(AdminSessionMiddleware)
     templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / 'bot' / 'templates'))
+    templates.env.globals['is_admin'] = is_admin
     # Exercise backend independently of the concurrently authored public page;
     # the private queue uses its real template and verified auth middleware.
     templates.env.loader = ChoiceLoader([DictLoader({'request_analysis.html': '''
