@@ -11,7 +11,7 @@ import pytest
 from bot.admin_web import create_admin_app
 from bot.core import analytics_articles as articles
 from bot.core.sitemap import (COMPLEX_SITEMAP_SQL, CRAWLER_USER_AGENTS, PUBLIC_ORIGIN,
-                              PUBLIC_RENDER_PATHS, article_sitemap_entry)
+                              PUBLIC_COMPLEX_RENDER_TAILS, PUBLIC_RENDER_PATHS, article_sitemap_entry)
 from tests.test_analytics_articles import NOW, brief_digest, brief_draft, edition
 
 
@@ -80,6 +80,7 @@ async def test_robots_keeps_every_existing_crawler_public_but_private_exclusions
         response = await browser.get("/robots.txt")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/plain")
+    assert response.headers["cache-control"] == "public, max-age=300"
     document = response.text
     assert [line.split(":", 1)[1].strip() for line in document.splitlines() if line.startswith("User-agent:")] == list(CRAWLER_USER_AGENTS)
     assert document.count("Sitemap:") == 1
@@ -88,13 +89,14 @@ async def test_robots_keeps_every_existing_crawler_public_but_private_exclusions
     for agent in (*CRAWLER_USER_AGENTS[1:], "Googlebot", "Googlebot-Image", "Bingbot", "UnknownCrawler"):
         for path in ("/", "/analytics", "/analytics/2026-10-16-market", "/analytics/2026-10-16-rent-local",
                      "/analytics?category=rent&topic=banks", "/compare", "/best-apartments", "/best-rentals",
-                     "/map", "/complexes", "/complex/123", "/developers", "/static/public.css",
+                     "/map", "/complexes", "/complex/123", "/developers", "/mortgage-calculator",
+                     "/rental/daily", "/rental/scanner", "/api/rental/segment?rooms=2", "/static/public.css",
                      "/static/branding/hatuli-share.png", "/sitemap.xml"):
             assert crawl_allowed(document, agent, PUBLIC_ORIGIN + path), (agent, path)
         for path in ("/admin/login", "/admin/settings", "/admin-panel", "/admin/api/rental-health",
                      "/api/auth/poll?token=PRIVATE", "/api/favorites/ids", "/api/listing/123/rental-economics",
                      "/auth/telegram", "/cabinet", "/favorites", "/request-analysis",
-                     "/buyer/map/api/session?nonce=PRIVATE", "/rental/daily", "/rental/scanner"):
+                     "/buyer/map/api/session?nonce=PRIVATE", "/api/rental/scanner?rooms=2", "/api/rental/scanner.csv"):
             assert not crawl_allowed(document, agent, PUBLIC_ORIGIN + path), (agent, path)
 
 
@@ -109,6 +111,26 @@ async def test_only_exact_public_map_render_resources_override_admin_crawl_exclu
             assert not crawl_allowed(document, "Googlebot", PUBLIC_ORIGIN + path + suffix)
     for path in ("/admin/api/map-points?type=rental", "/admin/api/listing/123", "/admin/api/complex/create"):
         assert not crawl_allowed(document, "Googlebot", PUBLIC_ORIGIN + path)
+
+
+@pytest.mark.asyncio
+async def test_public_complex_render_tails_are_allowed_without_opening_operator_neighbors():
+    async with client() as browser:
+        document = (await browser.get("/robots.txt")).text
+    assert "Allow: /admin/api/complex/*\n" not in document
+    assert "Disallow: /api/\n" not in document
+    for agent in ("Googlebot", "OAI-SearchBot", "Yandex", "UnknownCrawler"):
+        for complex_id in (1, 123, 10000):
+            for tail in PUBLIC_COMPLEX_RENDER_TAILS:
+                path = f"/admin/api/complex/{complex_id}/{tail}"
+                for suffix in ("", "?kind=sale&days=90&rooms=2"):
+                    assert crawl_allowed(document, agent, PUBLIC_ORIGIN + path + suffix), (agent, path, suffix)
+                for suffix in ("-private", "/delete", "/sessions"):
+                    assert not crawl_allowed(document, agent, PUBLIC_ORIGIN + path + suffix), (agent, path, suffix)
+            for tail in ("contacts", "tech-specs", "photos", "photos/delete", "rename", "delete", "review-settings"):
+                assert not crawl_allowed(document, agent, PUBLIC_ORIGIN + f"/admin/api/complex/{complex_id}/{tail}")
+        for path in ("/api/me", "/api/favorite-zones/ids", "/api/analysis-requests", "/admin/api/complex/create"):
+            assert not crawl_allowed(document, agent, PUBLIC_ORIGIN + path)
 
 
 @pytest.mark.parametrize("url", ["/admin/login", "https://evil.test/analytics/2026-10-16-market",
@@ -180,3 +202,5 @@ async def test_robots_does_not_replace_private_route_authentication():
         api = await browser.get("/admin/api/rental-health")
         assert api.status_code == 403
         assert api.headers["cache-control"] == "no-store"
+        reviews = await browser.post("/admin/api/complex/123/reviews", json={"text": "No authorization"})
+        assert reviews.status_code == 401

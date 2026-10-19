@@ -18,19 +18,25 @@ _ARTICLE_URL = re.compile(r"/analytics/(?P<day>\d{4}-\d{2}-\d{2})-(?:market|rent
 CRAWLER_USER_AGENTS = ("*", "GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot",
                       "Claude-SearchBot", "Claude-User", "PerplexityBot",
                       "Google-Extended", "Applebot-Extended", "Yandex")
-PRIVATE_CRAWL_PATHS = ("/admin", "/api/", "/auth/", "/cabinet", "/favorites",
-                       "/request-analysis", "/buyer/map/api/", "/rental/daily", "/rental/scanner")
+PRIVATE_CRAWL_PATHS = ("/admin", "/auth/", "/cabinet", "/favorites", "/request-analysis",
+                       "/api/auth/", "/api/me", "/api/favorites", "/api/favorite-complexes",
+                       "/api/favorite-zones", "/api/analysis-requests", "/api/listing/",
+                       "/api/rental/scanner", "/buyer/map/api/")
 # Existing anonymous GET resources used to render the public newbuild map and
 # the catalogue map. Endpoint authorization and source gates are unchanged.
 # Exact-end/query pairs avoid allowing similarly prefixed operator endpoints.
 PUBLIC_RENDER_PATHS = ("/admin/api/newbuild-map-points", "/admin/api/newbuild-developers",
-                       "/admin/api/complexes-map", "/admin/api/complexes-layer")
+                       "/admin/api/complexes-map", "/admin/api/complexes-layer", "/admin/api/mortgage-banks")
+PUBLIC_COMPLEX_RENDER_TAILS = ("location-detail", "location-score", "price-dynamics",
+                               "turnover-dynamics", "reviews")
 
 
 def robots_document() -> str:
     """Crawl instructions only; route authorization remains the access control."""
     lines = [f"User-agent: {agent}" for agent in CRAWLER_USER_AGENTS]
-    for path in PUBLIC_RENDER_PATHS:
+    paths = (*PUBLIC_RENDER_PATHS,
+             *(f"/admin/api/complex/*/{tail}" for tail in PUBLIC_COMPLEX_RENDER_TAILS))
+    for path in paths:
         lines.extend((f"Allow: {path}$", f"Allow: {path}?"))
     lines.extend((*(f"Disallow: {path}" for path in PRIVATE_CRAWL_PATHS),
                   "Allow: /", "", f"Sitemap: {PUBLIC_ORIGIN}/sitemap.xml", ""))

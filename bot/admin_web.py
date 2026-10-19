@@ -89,7 +89,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     @app.get("/robots.txt", response_class=PlainTextResponse)
     async def robots_txt():
         from bot.core.sitemap import robots_document
-        return PlainTextResponse(robots_document())
+        return PlainTextResponse(robots_document(), headers={"Cache-Control": "public, max-age=300"})
 
     @app.get("/llms.txt", response_class=PlainTextResponse)
     async def llms_txt():
