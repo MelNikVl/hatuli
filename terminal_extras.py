@@ -1504,11 +1504,11 @@ def make_extras_router(templates) -> APIRouter:
         user = await get_user_by_session(_site_session_cookie(request))
         favorites = await list_favorites(user["user_id"]) if user and await get_user_tier(request) != "public" else []
         favorite_complexes = await list_favorite_complexes(user["user_id"]) if user else []
-        return templates.TemplateResponse("cabinet.html", {
-            "request": request, "user": user, "favorites": favorites,
+        return templates.TemplateResponse(request=request, name="cabinet.html", context={
+            "request": request, "user": user, "site_user": user, "favorites": favorites,
             "favorite_complexes": favorite_complexes,
             "bot_username": os.getenv("SITE_BOT_USERNAME", "nik_us_bot"),
-        })
+        }, headers={"Cache-Control": "no-store"})
 
     @router.get("/favorites", response_class=HTMLResponse)
     async def favorites_page(request: Request):
@@ -1518,10 +1518,10 @@ def make_extras_router(templates) -> APIRouter:
         user = await get_user_by_session(_site_session_cookie(request))
         favorites = await list_favorites(user["user_id"]) if user and await get_user_tier(request) != "public" else []
         favorite_complexes = await list_favorite_complexes(user["user_id"]) if user else []
-        return templates.TemplateResponse("favorites.html", {
-            "request": request, "user": user, "favorites": favorites,
+        return templates.TemplateResponse(request=request, name="favorites.html", context={
+            "request": request, "user": user, "site_user": user, "favorites": favorites,
             "favorite_complexes": favorite_complexes,
-        })
+        }, headers={"Cache-Control": "no-store"})
 
     # ── Избранные ЖК — те же ручки, что у избранных квартир, но по complex_id ──
     @router.get("/api/favorite-complexes/ids")

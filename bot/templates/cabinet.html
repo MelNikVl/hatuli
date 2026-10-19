@@ -14,25 +14,10 @@
 {% if not user %}
 <div class="cab-card">
   <p style="margin-bottom:14px;">Вход только через Telegram — без паролей.</p>
-  <button id="login-btn" class="btn-big btn-save" style="border:none;border-radius:10px;padding:14px 24px;font-size:15px;font-weight:700;cursor:pointer;background:#2563eb;color:#fff;">Войти через Telegram</button>
-  <div id="login-status" style="margin-top:14px;font-size:13.5px;color:#888;"></div>
+  <button id="login-btn" type="button" class="btn-big btn-save" style="border:none;border-radius:10px;padding:14px 24px;font-size:15px;font-weight:700;cursor:pointer;background:#2563eb;color:#fff;">Войти через Telegram</button>
+  <div id="login-status" role="status" aria-live="polite" style="margin-top:14px;font-size:13.5px;color:#888;"></div>
 </div>
-<script>
-document.getElementById('login-btn').onclick = async function() {
-  const btn = this;
-  btn.disabled = true;
-  const r = await fetch('/api/auth/start', {method: 'POST'}).then(r => r.json());
-  const status = document.getElementById('login-status');
-  status.innerHTML = `Открой <a href="${r.deep_link}" target="_blank">этот диалог в Telegram</a> и нажми Start — окно обновится само.`;
-  window.open(r.deep_link, '_blank');
-  const poll = setInterval(async () => {
-    const p = await fetch('/api/auth/poll?token=' + r.token).then(x => x.json());
-    if (p.status === 'verified') { clearInterval(poll); location.reload(); }
-    else if (p.status === 'not_subscribed') { status.textContent = 'Нужно подписаться на канал t.me/hatuliapp и нажать Start ещё раз в боте.'; }
-    else if (p.status === 'expired' || p.status === 'not_found') { clearInterval(poll); status.textContent = 'Ссылка устарела, нажми кнопку ещё раз.'; btn.disabled = false; }
-  }, 2000);
-};
-</script>
+<script src="/static/hatuli-cabinet-login.js?v=20261019.1" defer></script>
 {% else %}
 <div class="cab-card">
   <h3 style="margin-bottom:14px;">Профиль</h3>
