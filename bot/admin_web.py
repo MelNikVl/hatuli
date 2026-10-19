@@ -24,6 +24,7 @@ from bot.core.daily_picks import load_daily_picks
 from bot.core.daily_picks_display import prepare_daily_picks
 from bot.core.price_history_chart import price_history_chart
 from bot.public_comparison_routes import register_public_comparison_routes
+from bot.core.public_analytics import metrika_context
 from bot.site_auth_routes import register_site_auth_routes
 
 _TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
@@ -42,6 +43,7 @@ def create_admin_app(db: BotDB, admin_password: str, bot_version: str, db_path: 
     app.state.analysis_form_secret = os.getenv("HATULI_FORM_SECRET") or admin_password
     app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
     templates = Jinja2Templates(directory=_TEMPLATES_DIR)
+    templates.env.globals["metrika_context"] = metrika_context
     register_public_comparison_routes(app, templates)
     register_site_auth_routes(app, templates)
 

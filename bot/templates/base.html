@@ -259,6 +259,7 @@
   {% block head %}{% endblock %}
 </head>
 <body class="hatuli-site">
+{% include "_hatuli_metrika.html" %}
 
 {% set admin = is_admin(request) %}
 {% set panel_family = ('analytics' in request.url.path or 'parser' in request.url.path
@@ -275,7 +276,7 @@
 {% include "_hatuli_header.html" %}
 {% endif %}
 
-<main id="main-content" class="main{% if not panel_family %} narrow{% endif %}">
+<main id="main-content" class="main{% if not panel_family %} narrow{% endif %}{% if request.url.path == '/mortgage-calculator' %} ym-hide-content{% endif %}">
 {% block content %}{% endblock %}
 </main>
 <script>

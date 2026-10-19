@@ -4782,6 +4782,7 @@ function ensureModalRoot() {
   if (root) return root;
   root = document.createElement('div');
   root.id = 'detail-modal-overlay';
+  root.classList.add('ym-hide-content', 'ym-disable-keys', 'ym-disable-clickmap', 'ym-disable-tracklink');
   // Попап растянут на всю высоту вьюпорта (100vh, от самого верха до
   // самого низа страницы) — раньше был 90vh с отступами сверху/снизу,
   // просили убрать отступы и занять всю высоту экрана. align-items:
@@ -4986,6 +4987,7 @@ function ensureRentalDetailRoot() {
   if (root) return root;
   root = document.createElement('div');
   root.id = 'rental-detail-overlay';
+  root.classList.add('ym-hide-content', 'ym-disable-keys', 'ym-disable-clickmap', 'ym-disable-tracklink');
   root.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:10000;display:none;align-items:center;justify-content:center;padding:12px;';
   root.innerHTML = `<section role="dialog" aria-modal="true" aria-labelledby="rental-detail-title" style="position:relative;width:min(100%,900px);max-height:calc(100vh - 24px);overflow-y:auto;background:var(--surface);color:var(--text);border-radius:14px;padding:22px;">
     <button type="button" id="rental-detail-close" onclick="closeRentalDetailModal()" aria-label="Закрыть объявление аренды" style="position:absolute;right:12px;top:12px;border:1px solid var(--border);background:var(--surface2);color:var(--text);border-radius:8px;padding:5px 12px;font-size:20px;">×</button>

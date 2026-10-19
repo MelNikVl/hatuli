@@ -1,0 +1,45 @@
+{% set metrika = metrika_context(request, admin=is_admin(request), site_tier=site_tier|default(none), access_locked=access_locked|default(none)) if metrika_context is defined else none %}
+{% if metrika %}
+<!-- Yandex.Metrika: anonymous public pages only. No user-input events. -->
+<script>
+(function () {
+  "use strict";
+  if (window.location.hostname !== "hatuli.ai-groundtruth.com") return;
+  // A fragment is never visible to the server; refuse login tokens or other
+  // unreviewed fragment payloads before loading the third-party library.
+  if (window.location.hash && !/^#(?:strategies|investment|market|comparison-method|apartments|rentals|main-content|rent-calculator|rental-request|seller-form|sublease-form|section-\d+|chart-[a-z0-9-]+)$/.test(window.location.hash)) return;
+  if (window.__hatuliMetrika111603221) return;
+  window.__hatuliMetrika111603221 = true;
+  function safeReferrer(raw) {
+    try {
+      if (!raw) return "";
+      var ref = new URL(raw);
+      if (ref.protocol !== "https:" && ref.protocol !== "http:") return "";
+      if (ref.origin !== window.location.origin) return ref.origin + "/";
+      var publicPath = /^(?:\/(?:example|how-it-works|best-apartments|best-rentals|analytics|compare|map|complexes|developers|banks|mortgage-calculator|news|info|rent|improve-listing)?|\/guides\/check-apartment-before-deposit|\/rental\/(?:daily|scanner)|\/analytics\/\d{4}-\d{2}-\d{2}-(?:market|rent)(?:-local)?|\/(?:complex|developer|news)\/[1-9]\d{0,18}|\/banks\/[a-z][a-z0-9-]{0,63})$/;
+      return publicPath.test(ref.pathname) ? ref.origin + ref.pathname : "";
+    } catch (_) { return ""; }
+  }
+  function startCounter() {
+    // Official Webvisor classes are applied before tag.js can execute.
+    document.querySelectorAll("input,textarea,select").forEach(function (field) { field.classList.add("ym-disable-keys"); });
+    document.querySelectorAll("form").forEach(function (form) { form.classList.add("ym-hide-content", "ym-disable-submit"); });
+    (function(m,e,t,r,i,k,a){
+      m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+      m[i].l=1*new Date();
+      for (var j=0;j<document.scripts.length;j++) {if (document.scripts[j].src===r) {return;}}
+      k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a);
+    })(window,document,"script","https://mc.yandex.ru/metrika/tag.js?id=111603221","ym");
+    window.ym(111603221,"init",{
+      ssr:true, webvisor:true, clickmap:true, ecommerce:"dataLayer",
+      referrer:safeReferrer(document.referrer), url:{{ metrika.url|tojson }},
+      accurateTrackBounce:true, trackLinks:true
+    });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startCounter, {once:true});
+  else startCounter();
+})();
+</script>
+<noscript><div><img src="https://mc.yandex.ru/watch/111603221" style="position:absolute;left:-9999px" alt="" referrerpolicy="no-referrer"></div></noscript>
+<!-- /Yandex.Metrika -->
+{% endif %}
