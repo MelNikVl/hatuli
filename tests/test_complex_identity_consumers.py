@@ -213,3 +213,54 @@ async def test_quarantined_unique_name_cannot_reenter_cards_or_current_metrics(c
     assert await fetchval("SELECT listings_count FROM complexes WHERE id=$1", identity["child"]) == 0
     page = await client.get(f"/complex/{identity['child']}")
     assert page.status_code == 200 and f"/listing/{lid}" not in page.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('include_children', [False, True])
+async def test_page_rental_id_set_preserves_source_gates_and_all_statuses(client, identity, include_children):
+    from bot.db.pg import execute, fetch
+    from bot.core.complex_membership import rental_complex_match_sql, rental_complex_page_match_sql
+    p = identity['prefix']
+    child_url = f"https://krisha.kz/complex/show/astana/child-{identity['child']}"
+    root_url = f"https://krisha.kz/complex/show/astana/root-{identity['root']}"
+    other_url = f"https://krisha.kz/complex/show/astana/other-{identity['other']}"
+    for key, url in [('child', child_url), ('root', root_url), ('other', other_url)]:
+        await execute('UPDATE complexes SET krisha_url=$2 WHERE id=$1', identity[key], url)
+    reviewed, unverified, shared = p+'reviewed', p+'candidate', p+'shared'
+    await _alias(identity['child'], reviewed)
+    await _alias(identity['child'], unverified, 'observed')
+    await _alias(identity['child'], shared)
+    await _alias(identity['other'], shared)
+    cases = [
+        ('fk_child', identity['child'], 'wrong', child_url, True, False),
+        ('fk_alias', identity['alias'], 'wrong', child_url, True, False),
+        ('parent_source_child', identity['child'], 'wrong', root_url, True, False),
+        ('legacy_child', None, reviewed, child_url, True, False),
+        ('legacy_cannot_guess_child', None, reviewed, root_url, True, False),
+        ('foreign_fk', identity['other'], reviewed, child_url, True, False),
+        ('missing_source', identity['child'], reviewed, None, True, False),
+        ('bad_url', identity['child'], reviewed, child_url+'?x=1', True, False),
+        ('candidate_alias', None, unverified, child_url, True, False),
+        ('ambiguous_alias', None, shared, child_url, True, False),
+        ('archived', identity['child'], 'wrong', child_url, False, False),
+        ('duplicate', identity['child'], 'wrong', child_url, True, True),
+        ('other_fk', identity['other'], reviewed, other_url, True, False),
+    ]
+    for suffix, cid, name, url, active, duplicate in cases:
+        await execute('INSERT INTO rental_listings(id,complex_id,complex_name,complex_url,is_active,is_duplicate) '
+                      'VALUES($1,$2,$3,$4,$5,$6)', p+suffix, cid, name, url, active, duplicate)
+    for conflicting_source in (False, True):
+        if conflicting_source:
+            await execute('UPDATE complexes SET krisha_url=$2 WHERE id=$1', identity['other'], child_url)
+        for key in ('root', 'child', 'alias', 'other'):
+            results = []
+            for fn in (rental_complex_match_sql, rental_complex_page_match_sql):
+                predicate = fn(include_children=include_children)
+                rows = await fetch('SELECT id FROM rental_listings WHERE id LIKE $2 AND '+predicate,
+                                   identity[key], p+'%')
+                results.append({row['id'] for row in rows})
+            assert results[0] == results[1]
+            if not conflicting_source and key == 'child':
+                assert {p+'archived', p+'duplicate', p+'parent_source_child'} <= results[1]
+                assert not {p+'foreign_fk', p+'legacy_cannot_guess_child', p+'ambiguous_alias',
+                            p+'candidate_alias', p+'bad_url', p+'missing_source'} & results[1]
