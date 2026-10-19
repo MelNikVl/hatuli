@@ -201,6 +201,7 @@ async def _record_cycle_period(app_settings) -> None:
 async def _collect_sale_catalog(app_settings, analyze, *, now=None):
     """Return source receipts; durable advancement happens AFTER DB saves."""
     from bot.core.sale_sweep import SaleSweep, STATE_KEY, COMPLETED_KEY, plan_batch, utc
+    from bot.core.sale_detail_persistence import analyze_with_attempt_capture
     now = now or datetime.now(timezone.utc)
     state = SaleSweep.loads(app_settings.get(STATE_KEY))
     current_journal_unreadable = bool(app_settings.get(STATE_KEY)) and state is None
@@ -227,9 +228,9 @@ async def _collect_sale_catalog(app_settings, analyze, *, now=None):
         log.warning("Sale catalog paused until %s after source block", state.blocked_until)
         return [], state, [], {"blocked": True, "paused": True}, {}
 
-    head_stats = {}
+    head_stats = {"_detail_budget_remaining": max(0, app_settings.get_int("DETAIL_FETCH_BATCH", 15))}
     head_pages = max(0, min(app_settings.get_int("PARSER_MAX_PAGES", 5), 20))
-    results = await analyze("astana", max_pages=head_pages, stats=head_stats) if head_pages else []
+    results = await analyze_with_attempt_capture(analyze, "astana", max_pages=head_pages, stats=head_stats) if head_pages else []
     reports = list(head_stats.get("page_reports", []))
     provisional = SaleSweep.loads(state.dumps())
     provisional.account(reports, {i for p in reports for i in p.get("accepted_ids", [])}, now=now)
@@ -253,14 +254,15 @@ async def _collect_sale_catalog(app_settings, analyze, *, now=None):
         reference_batch=app_settings.get_int("DEEP_SWEEP_LAST_BATCH", 40),
         page_seconds=app_settings.get_float("DEEP_SWEEP_PAGE_SECONDS", 5),
     )
-    deep_stats = {}
+    deep_stats = {"_detail_budget_remaining": head_stats["_detail_budget_remaining"]}
     if plan["batch"] and not provisional.closed and not head_stats.get("pages_failed"):
         # Sparse DB-save retries must not re-request hundreds of pages
         # already acknowledged after the gap. The next cycle resumes at
         # the following gap/new page; a bounded repair costs one cycle.
         following_done = [int(n) for n in provisional.pages if int(n) > cursor]
         batch = min(plan["batch"], min(following_done) - cursor) if following_done else plan["batch"]
-        deep_results = await analyze("astana", max_pages=batch, start_page=cursor, stats=deep_stats)
+        deep_results = await analyze_with_attempt_capture(analyze, "astana", max_pages=batch, start_page=cursor,
+                                                         stats=deep_stats, prior_results=results)
         results.extend(deep_results or [])
         reports.extend(deep_stats.get("page_reports", []))
     elapsed = head_stats.get("page_elapsed_sec", 0) + deep_stats.get("page_elapsed_sec", 0)
@@ -354,8 +356,10 @@ async def run_cycle():
 
     new_cnt = upd_cnt = 0
     saved_ids = set()
+    from bot.core.sale_detail_persistence import catalog_only_row, save_source_details, persist_actual_attempts
 
-    for r in results:
+    for source_row in results:
+        r = catalog_only_row(source_row)
         sd = r.get("score_data", {})
         bd = sd.get("breakdown", {})
         bargain = extract_bargain(r)
@@ -450,12 +454,13 @@ async def run_cycle():
                     UPDATE apartment_listings SET
                         price=$2, est_rent=$3, yield_pct=$4, payback_years=$5,
                         reasons=$6,
-                        floor=$7, floors_total=$8, year_built=$9,
-                        complex_name=$10, seller_type=$11, is_owner=$12,
+                        floor=COALESCE($7, floor), floors_total=COALESCE($8, floors_total), year_built=COALESCE($9, year_built),
+                        complex_name=COALESCE(NULLIF($10,''), complex_name), seller_type=COALESCE($11, seller_type), is_owner=COALESCE($12, is_owner),
                         rent_source=$13, bargain_target=$14,
                         bargain_discount_pct=$15, bargain_rec=$16,
-                        details_fetched=$17, ceiling_height=COALESCE($18, ceiling_height),
-                        title=$19, rooms=$20, area=$21, address=$22, district=$23,
+                        details_fetched=CASE WHEN $17::boolean THEN TRUE ELSE details_fetched END, ceiling_height=COALESCE($18, ceiling_height),
+                        title=COALESCE(NULLIF($19,''),title), rooms=COALESCE($20,rooms), area=COALESCE($21,area),
+                        address=COALESCE(NULLIF($22,''),address), district=COALESCE(NULLIF($23,''),district),
                         net_yield_pct=$24, kitchen_area=COALESCE($25, kitchen_area),
                         photo_url=COALESCE(photo_url, $26), trust_score=$27,
                         comparables_cnt=$28, bargain_method=$29,
@@ -481,16 +486,15 @@ async def run_cycle():
 
             if write_result not in ("INSERT 0 1", "UPDATE 1"):
                 log.warning("Sale row %s not acknowledged (%s); page remains queued", r["id"], write_result)
+                await persist_actual_attempts({r['id']: source_row.get('_source_details_attempted_at')}, execute=pg_exec)
                 continue
+            # Detail attributes and the success timestamp are one atomic
+            # write; feed placeholders cannot overwrite the previous detail.
+            await save_source_details(source_row, execute=pg_exec)
             saved_ids.add(str(r["id"]))
-            if r.get("views_count"):
-                # COALESCE — не затираем уже сохранённое число NULL'ом на
-                # циклах без свежего detail-fetch (views_count там просто нет).
-                await pg_exec(
-                    "UPDATE apartment_listings SET views_count=$2 WHERE id=$1",
-                    r["id"], r["views_count"])
         except Exception as e:
             log.warning("DB error %s: %s", r["id"], e)
+            await persist_actual_attempts({r['id']: source_row.get('_source_details_attempted_at')}, execute=pg_exec)
 
     log.info("DB: +%d new, ~%d updated", new_cnt, upd_cnt)
 

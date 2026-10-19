@@ -49,6 +49,8 @@ PAUSE_BETWEEN = 20  # сек между батчами
 async def upsert(r: dict) -> str:
     """Вставка/обновление одного объявления (те же поля, что в service_apartments)."""
     from bot.db.pg import execute as pg_exec, fetchrow as pg_get
+    from bot.core.sale_detail_persistence import catalog_only_row, save_source_details
+    source_row, r = r, catalog_only_row(r)
 
     sd = r.get("score_data", {})
     bd = sd.get("breakdown", {})
@@ -93,6 +95,7 @@ async def upsert(r: dict) -> str:
         )
         if result != "INSERT 0 1":
             raise RuntimeError("Sale insert not acknowledged; retry the page")
+        await save_source_details(source_row, execute=pg_exec)
         return "new"
 
     # уже есть — обновляем цену/скор/last_seen (лёгкий апдейт)
@@ -106,12 +109,17 @@ async def upsert(r: dict) -> str:
     # score_total не трогаем — считается отдельно в deal_score.apply_deal_scores()
     result = await pg_exec("""
         UPDATE apartment_listings SET
-            price=$2, est_rent=$3, yield_pct=$4, last_seen=NOW()
+            price=$2, est_rent=$3, yield_pct=$4, last_seen=NOW(),
+            title=COALESCE(NULLIF($5,''),title), rooms=COALESCE($6,rooms), area=COALESCE($7,area),
+            address=COALESCE(NULLIF($8,''),address), district=COALESCE(NULLIF($9,''),district),
+            floor=COALESCE($10,floor), floors_total=COALESCE($11,floors_total)
         WHERE id=$1
     """, r["id"], r.get("price"), r.get("est_rent", 0),
-         r.get("yield_pct", 0))
+         r.get("yield_pct", 0), r.get('title'), r.get('rooms'), r.get('area'),
+         r.get('address'), r.get('district'), r.get('floor'), r.get('floors_total'))
     if result != "UPDATE 1":
         raise RuntimeError("Sale update not acknowledged; retry the page")
+    await save_source_details(source_row, execute=pg_exec)
     return "upd"
 
 
@@ -119,6 +127,8 @@ async def main():
     from bot.db.pg import init_pool
     from bot.db import settings as app_settings
     from bot.core.apartment_parser import analyze_apartments
+    from bot.core.sale_detail_persistence import analyze_with_attempt_capture
+    from bot.core.sale_detail_persistence import persist_actual_attempts
 
     await init_pool(DATABASE_URL)
     await app_settings.load()
@@ -134,7 +144,7 @@ async def main():
     while True:
         stats: dict = {}
         try:
-            results = await analyze_apartments(
+            results = await analyze_with_attempt_capture(analyze_apartments,
                 "astana", max_pages=BATCH, start_page=page,
                 max_price=0,  # БЕЗ потолка — вся выдача
                 stats=stats)
@@ -157,6 +167,7 @@ async def main():
                 saved_ids.add(str(r["id"]))
             except Exception as e:
                 log.warning("DB error %s: %s", r.get("id"), e)
+                await persist_actual_attempts({r['id']: r.get('_source_details_attempted_at')})
 
         log.info("Страницы %d-%d: %d объявлений (ok=%d, fail=%d) | всего +%d новых, ~%d обновлено",
                  page, page + BATCH - 1, len(results), pages_ok, pages_failed,
