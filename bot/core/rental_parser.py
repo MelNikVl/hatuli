@@ -83,6 +83,9 @@ class RentalListing:
     rent_period: str = "unknown"
     complex_id: int | None = None
     rent_period_conflict: bool = False
+    # Transient provenance: a named structural complex link in this card,
+    # never a regex match in its title or a stored/catalog-filled spelling.
+    complex_source_observed: bool = False
 
 
 def _extract_int(text: str) -> int | None:
@@ -238,6 +241,7 @@ def _parse_card(card, prop_type: str, *, verified_catalog_period: str = "unknown
             address=address, district=district, complex_name=complex_name,
             city="astana", prop_type=prop_type, published_at=published_at,
             complex_url=complex_url,
+            complex_source_observed=complex_url is not None,
             photo_url=photo_url,
             rent_period=classify_rental_period(price_text, title, verified_catalog_period=verified_catalog_period),
             rent_period_conflict=rental_period_conflict(price_text, title, verified_catalog_period=verified_catalog_period),
@@ -613,8 +617,18 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
     unique = {listing.id: listing for listing in listings}
     for listing in unique.values():
         try:
-            cid = await resolve_rental_complex(complex_url=listing.complex_url, complex_name=listing.complex_name,
-                                               address=listing.address, title=listing.title)
+            incoming_url = source_complex_url(listing.complex_url)
+            source_observed = bool(listing.complex_source_observed and incoming_url
+                and isinstance(listing.complex_name, str) and listing.complex_name.strip())
+            cid = None
+            if source_observed:
+                decision = await resolve_rental_complex(complex_url=incoming_url, complex_name=listing.complex_name,
+                    address=listing.address, title=listing.title, return_decision=True)
+                if not isinstance(decision, dict) or decision.get('status') not in ('resolved','unresolved','conflict'):
+                    raise RuntimeError('Rental source identity decision is unavailable')
+                cid = decision.get('complex_id') if decision['status'] == 'resolved' else None
+                if decision['status'] == 'resolved' and (type(cid) is not int or cid <= 0):
+                    raise RuntimeError('Resolved rental source identity has no complex ID')
             outcome = await fetchrow(
                 """
                 WITH previous AS MATERIALIZED (
@@ -635,11 +649,10 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                     ON CONFLICT (id) DO UPDATE SET
                         price = EXCLUDED.price,
                         last_seen = EXCLUDED.last_seen,
-                        complex_name = CASE WHEN EXCLUDED.complex_url IS NOT NULL
-                            THEN NULLIF(btrim(EXCLUDED.complex_name), '')
-                            ELSE COALESCE(NULLIF(btrim(rental_listings.complex_name), ''),
-                                          NULLIF(btrim(EXCLUDED.complex_name), '')) END,
-                        complex_url = COALESCE(EXCLUDED.complex_url, rental_listings.complex_url),
+                        complex_name = CASE WHEN $21::boolean
+                            THEN NULLIF(btrim(EXCLUDED.complex_name), '') ELSE rental_listings.complex_name END,
+                        complex_url = CASE WHEN $21::boolean
+                            THEN EXCLUDED.complex_url ELSE rental_listings.complex_url END,
                         photo_url = COALESCE(EXCLUDED.photo_url, rental_listings.photo_url),
                         rent_period = CASE WHEN rental_listings.rent_period_conflict OR EXCLUDED.rent_period_conflict
                             OR (rental_listings.rent_period IN ('daily','monthly')
@@ -650,7 +663,8 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                             OR (rental_listings.rent_period IN ('daily','monthly')
                             AND EXCLUDED.rent_period IN ('daily','monthly')
                             AND rental_listings.rent_period <> EXCLUDED.rent_period),
-                        complex_id = COALESCE(rental_listings.complex_id, EXCLUDED.complex_id),
+                        complex_id = CASE WHEN $21::boolean
+                            THEN EXCLUDED.complex_id ELSE rental_listings.complex_id END,
                         rental_episode_started_at = CASE
                             WHEN rental_listings.rent_period_conflict OR EXCLUDED.rent_period_conflict
                               OR EXCLUDED.rent_period NOT IN ('monthly','daily')
@@ -717,8 +731,8 @@ async def save_rental_listings(listings: list[RentalListing]) -> int:
                 listing.area, listing.rooms, listing.floor, listing.floors_total,
                 listing.address, listing.district, listing.complex_name,
                 listing.city, listing.prop_type, listing.published_at,
-                datetime.now(timezone.utc), listing.complex_url, listing.photo_url,
-                listing.rent_period, cid, listing.rent_period_conflict,
+                datetime.now(timezone.utc), incoming_url if source_observed else None, listing.photo_url,
+                listing.rent_period, cid, listing.rent_period_conflict, source_observed,
             )
             if outcome is None:
                 raise RuntimeError("Rental upsert returned no outcome")

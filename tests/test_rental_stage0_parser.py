@@ -106,12 +106,14 @@ async def test_daily_and_monthly_progress_remain_separate_in_real_collector(monk
 async def test_upsert_writes_period_and_id_and_gates_history_on_equal_known_period(monkeypatch):
     write = AsyncMock(return_value={"is_new": True, "reactivated": False})
     monkeypatch.setattr(pg, "fetchrow", write)
-    resolver = AsyncMock(return_value=10)
+    resolver = AsyncMock(return_value={"status":"resolved","complex_id":10})
     monkeypatch.setattr(parser, "resolve_rental_complex", resolver)
-    listing = parser._parse_card(card("20 000 ₸ за сутки"), "apartment")
+    source_card = card("20 000 ₸ за сутки")
+    source_card.append(BeautifulSoup('<a href="/complex/show/10">ЖК Пример</a>',"html.parser").a)
+    listing = parser._parse_card(source_card, "apartment")
     assert await parser.save_rental_listings([listing]) == 1
     sql, *values = write.await_args.args
-    assert values[-3:] == ["daily", 10, False]
+    assert values[-4:] == ["daily", 10, False, True]
     assert "rent_period, complex_id, hex_id, hex_edge_m" in sql
     assert "rental_listings.rent_period <> EXCLUDED.rent_period) THEN 'unknown'" in sql
     assert "rental_listings.rent_period_conflict OR EXCLUDED.rent_period_conflict" in sql
