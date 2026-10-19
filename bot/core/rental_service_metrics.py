@@ -41,6 +41,7 @@ class RentalCyclePlan:
     archive_batch: int = 3
     db_every: int = 5
     allow_geo_complex_guess: bool = False
+    index_refresh_seconds: float = 300.0
 
     @classmethod
     def from_settings(cls, get: Callable[[str, str], Any]) -> "RentalCyclePlan":
@@ -54,6 +55,8 @@ class RentalCyclePlan:
             db_every=int(bounded_number(
                 get("RENTAL_DB_MAINTENANCE_EVERY", "5"), 5, 1, 30)),
             allow_geo_complex_guess=str(get("RENTAL_ALLOW_GEO_COMPLEX_GUESS", "0")).strip() == "1",
+            index_refresh_seconds=bounded_number(
+                get("RENTAL_INDEX_REFRESH_SEC", "300"), 300, 60, 1800),
         )
 
 
