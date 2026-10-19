@@ -37,6 +37,8 @@ STAT_FIELDS = (
     "new_24h", "updated_24h", "confirmed_archives_24h", "status_mismatches",
     "with_complex_source_link", "with_address", "with_area", "with_rooms", "with_floor",
     "with_coordinates", "with_photos", "with_gallery", "catalog_fresh_72h", "catalog_fresh_1h",
+    "detail_fresh_24h", "detail_fresh_72h", "detail_missing", "detail_stale_72h",
+    "detail_attempted_24h",
 )
 
 _CLEAN = ("COALESCE(is_duplicate, FALSE) = FALSE AND COALESCE(dup_needs_review, FALSE) = FALSE "
@@ -47,7 +49,8 @@ AGGREGATE_SQL = f"""
     WITH scoped AS (
         SELECT prop_type, is_active, archived_at, is_duplicate, dup_needs_review,
             duplicate_of, last_seen, found_at, archive_reason, complex_name, complex_url,
-            address, area, rooms, floor, lat, lon, photo_url, photos, rental_episode_last_seen_at, CASE
+            address, area, rooms, floor, lat, lon, photo_url, photos, rental_episode_last_seen_at,
+            description_checked_at, coord_fetch_attempted_at, CASE
             WHEN prop_type = 'apartment' AND COALESCE(rent_period_conflict, FALSE) THEN 'conflict'
             WHEN prop_type = 'apartment' AND rent_period IN ('monthly', 'daily') THEN rent_period
             ELSE 'unknown' END AS scope_period
@@ -84,6 +87,17 @@ AGGREGATE_SQL = f"""
                          AND rental_episode_last_seen_at BETWEEN now() - interval '72 hours' AND now()) AS catalog_fresh_72h,
         count(*) FILTER (WHERE {_LIVE} AND scope_period IN ('monthly', 'daily')
                          AND rental_episode_last_seen_at BETWEEN now() - interval '1 hour' AND now()) AS catalog_fresh_1h,
+        count(*) FILTER (WHERE {_LIVE} AND description_checked_at
+                         BETWEEN now() - interval '24 hours' AND now()) AS detail_fresh_24h,
+        count(*) FILTER (WHERE {_LIVE} AND description_checked_at
+                         BETWEEN now() - interval '72 hours' AND now()) AS detail_fresh_72h,
+        count(*) FILTER (WHERE {_LIVE} AND description_checked_at IS NULL) AS detail_missing,
+        count(*) FILTER (WHERE {_LIVE} AND (description_checked_at IS NULL
+                         OR description_checked_at < now() - interval '72 hours'
+                         OR description_checked_at > now())) AS detail_stale_72h,
+        count(*) FILTER (WHERE {_LIVE} AND coord_fetch_attempted_at
+                         BETWEEN now() - interval '24 hours' AND now()) AS detail_attempted_24h,
+        max(description_checked_at) FILTER (WHERE {_LIVE} AND description_checked_at <= now()) AS last_detail_success_at,
         max(rental_episode_last_seen_at) FILTER (WHERE {_LIVE} AND scope_period IN ('monthly', 'daily')
                          AND rental_episode_last_seen_at <= now()) AS last_catalog_observed_at,
         max(last_seen) FILTER (WHERE {_LIVE} AND last_seen <= now()) AS last_observed_at
@@ -177,6 +191,23 @@ def _safe_cycle(value) -> dict | None:
             if isinstance(stage, dict):
                 output["stages"][key] = {"seconds": _number(stage.get("seconds")),
                     "status": stage.get("status") if isinstance(stage.get("status"), str) and stage.get("status") in statuses else "unknown"}
+    detail = raw.get("detail")
+    if isinstance(detail, dict):
+        allowed_statuses = ("ok", "success", "idle", "cooldown", "blocked", "error", "timeout",
+                            "budget_exhausted", "cycle_stopped", "partial", "no_candidates")
+        scopes = {catalog_cursor_key(item[0], item[3]).removeprefix("RENTAL_CRAWL_V1_").lower(): item[2]
+                  for item in CATALOGS}
+        scope = detail.get("queue_scope")
+        status = detail.get("status")
+        output["detail"] = {
+            "scope_label": scopes.get(scope) if isinstance(scope, str) else None,
+            "status": status if isinstance(status, str) and status in allowed_statuses else "unknown",
+        }
+        for key in ("selected", "checked", "success", "detail_attempts", "requests", "blocked", "errors"):
+            output["detail"][key] = _number(detail.get(key), integer=True)
+        for key in ("cooldown_remaining_seconds", "oldest_due_age_hours"):
+            output["detail"][key] = _number(detail.get(key))
+        output["detail"]["budget_exhausted"] = detail.get("budget_exhausted") is True
     return output
 
 
@@ -226,13 +257,22 @@ def project_rental_health(rows, settings: dict, *, now: datetime | None = None) 
                 "aborted_at": _iso(settings.get(prefix + "_ABORTED_AT")),
                 "incomplete_completed_at": _iso(settings.get(prefix + "_INCOMPLETE_COMPLETED_AT"))}
         item.update({key: _number(row.get(key, 0), integer=True) or 0 for key in STAT_FIELDS})
+        item["last_detail_success_at"] = _iso(row.get("last_detail_success_at"))
+        item["detail_fresh_share_pct"] = round(item["detail_fresh_72h"] / item["clean_active_rows"] * 100, 2) if item["clean_active_rows"] else None
+        # A busy cursor or optimistic ETA is not proof that a complete day met
+        # the user's 24-hour target. A verified completed round is required.
+        item["target_circle_hours"] = 24
+        item["last_round_within_target"] = bool(verified and completed
+            and timedelta(0) <= now-completed <= timedelta(hours=24) and duration <= 24*3600)
+        item["estimated_target_missed"] = bool(item["estimated_circle_hours"] is not None
+                                              and item["estimated_circle_hours"] > 24)
         types.append(item)
     periods = []
     for period, label in PERIOD_LABELS.items():
         row = by_period.get(("apartment", period), {})
         periods.append({"rent_period": period, "label": label, **{
             key: _number(row.get(key, 0), integer=True) or 0
-            for key in ("clean_active_rows", "fresh_72h", "catalog_fresh_72h")}})
+            for key in ("clean_active_rows", "fresh_72h", "catalog_fresh_72h", "detail_fresh_72h", "detail_stale_72h")}})
     day = now.astimezone(timezone(timedelta(hours=5))).date()
     daily = []
     for offset in range(3):
@@ -251,6 +291,8 @@ def project_rental_health(rows, settings: dict, *, now: datetime | None = None) 
                 "Архив означает подтверждённое снятие объявления, а не подтверждённую сдачу квартиры.",
                 "Свежий чистый пул: активные объявления без дублей/спорных дублей с last_seen за 72 часа. Эта отметка сама по себе не подтверждает повторный обход проверенной категории срока аренды; для квартир отдельно считаем подтверждения по rental_episode_last_seen_at. Ссылка на ЖК — сохранённый сигнал источника; она сама по себе не доказывает точную привязку к корпусу. Привязку по близости на карте не считаем подтверждением.",
                 "Наличие фото включает обложку из списка. Сохранённая галерея и параметры из деталей показываются отдельно; содержимое фотографий автоматически здесь не проверяется.",
+                "Свежесть полной страницы считается по description_checked_at отдельно от выдачи. Ошибка, блокировка и локальный пересчёт не обновляют эту дату. Отметка попытки не доказывает успешное обновление характеристик.",
+                "Суточная цель — подтверждённый обход каталога за 24 часа, а не расчётная скорость курсора. При блокировке источника цель может не выполняться; прежние даты и пропуски сохраняются.",
                 "Счётчики сервиса считают наблюдения при сборе; обновления одной квартиры могут повторяться. Статистика БД за 24 часа считает строки, а не запросы.",
             ], "types": types, "apartment_periods": periods, "daily": daily,
             "latest_cycle": _safe_cycle(settings.get("RENTAL_SERVICE_CYCLE_LAST")),

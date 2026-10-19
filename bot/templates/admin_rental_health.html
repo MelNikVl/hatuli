@@ -43,10 +43,11 @@
     <h2>Проверка срока аренды квартир</h2>
     <p class="rh-muted">Активные объявления без дублей и спорных дублей. Неизвестный и противоречивый срок не участвует в индексах и расчётах дохода.</p>
     <div class="rh-scroll"><table class="rh-table">
-      <thead><tr><th>Срок</th><th>Активных</th><th>Строка обновлена за 72 ч</th><th>Подтверждены каталогом за 72 ч</th></tr></thead>
+      <thead><tr><th>Срок</th><th>Активных</th><th>Строка обновлена за 72 ч</th><th>Подтверждены каталогом за 72 ч</th><th>Полная страница проверена за 72 ч</th></tr></thead>
       <tbody>{% for period in health.apartment_periods %}<tr data-rental-period="{{ period.rent_period }}">
         <td>{{ period.label }}</td><td>{{ period.clean_active_rows|fmt_num }}</td><td>{{ period.fresh_72h|fmt_num }}</td>
         <td>{% if period.rent_period in ('monthly', 'daily') %}{{ period.catalog_fresh_72h|fmt_num }}{% else %}—{% endif %}</td>
+        <td>{{ period.detail_fresh_72h|fmt_num }}</td>
       </tr>{% endfor %}</tbody>
     </table></div>
   </section>
@@ -75,6 +76,7 @@
       </dl>
       <div class="rh-sub">
         <h3 style="font-size:14px;">Полный обход списка</h3>
+        <p class="rh-muted">Цель: не более {{ item.target_circle_hours }} часов. {% if item.last_round_within_target %}<strong>Последний подтверждённый круг уложился в сутки.</strong>{% else %}Подтверждённого выполнения суточной цели пока нет.{% endif %}</p>
         <p class="rh-muted">Следующая страница: {{ item.cursor.next_page if item.cursor.next_page is not none else '—' }}{% if item.cursor.expected_last_page %} из {{ item.cursor.expected_last_page }}{% endif %}</p>
         <p class="rh-muted">Успешных страниц в текущем круге: {{ item.cursor.pages_seen if item.cursor.pages_seen is not none else '—' }} · уникальных ID: {{ item.cursor.unique_seen if item.cursor.unique_seen is not none else '—' }}</p>
         {% if item.last_completion_verified %}
@@ -86,9 +88,22 @@
         {% endif %}
         {% if item.estimated_circle_hours is not none %}
         <p class="rh-muted">Оценка следующего полного круга: около {{ item.estimated_circle_hours }} ч. Основана на интервале успешных страниц; замеров интервала: {{ item.page_interval_samples or 0 }}.</p>
+        {% if item.estimated_target_missed %}<p class="rh-note">Текущий темп не укладывается в суточную цель.</p>{% endif %}
         {% endif %}
         {% if item.aborted_at %}<p class="rh-muted">Старый курсор вышел за подтверждённую границу выдачи; круг сброшен {{ item.aborted_at }}.</p>{% endif %}
         <p class="rh-muted">Последняя успешная страница: {{ item.last_success_at or 'нет отметки' }}</p>
+      </div>
+      <div class="rh-sub">
+        <h3 style="font-size:14px;">Свежие характеристики</h3>
+        <p class="rh-muted">Успешная проверка полной страницы среди активных объявлений без дублей. Наличие цены в выдаче не обновляет эту отметку.</p>
+        <dl>
+          <dt>Полная страница проверена за 24 часа</dt><dd>{{ item.detail_fresh_24h|fmt_num }}</dd>
+          <dt>Полная страница проверена за 72 часа</dt><dd>{{ item.detail_fresh_72h|fmt_num }} / {{ item.clean_active_rows|fmt_num }}</dd>
+          <dt>Нет подтверждения полной страницы</dt><dd>{{ item.detail_missing|fmt_num }}</dd>
+          <dt>Требуется обновить полную страницу</dt><dd>{{ item.detail_stale_72h|fmt_num }}</dd>
+          <dt>Сохранена отметка попытки за сутки</dt><dd>{{ item.detail_attempted_24h|fmt_num }}</dd>
+        </dl>
+        <p class="rh-muted">Последняя успешная проверка: {{ item.last_detail_success_at or 'нет отметки' }}. Это дата одной последней проверки, а не свежесть всего каталога.</p>
       </div>
       <div class="rh-sub">
         <h3 style="font-size:14px;">Заполнение обновлённых строк</h3>
@@ -129,6 +144,15 @@
     <p class="rh-muted">{{ cycle.at or 'Дата неизвестна' }} · {{ cycle.scope_label or cycle.type or 'Каталог неизвестен' }} · список: {{ cycle.list_status or 'неизвестно' }}</p>
     <p>Список: <strong>{{ cycle.list_seconds if cycle.list_seconds is not none else '—' }} с</strong> · обогащение: <strong>{{ cycle.maintenance_seconds if cycle.maintenance_seconds is not none else '—' }} с</strong> · пауза: {{ cycle.sleep_seconds if cycle.sleep_seconds is not none else '—' }} с</p>
     <p class="rh-muted">Привязка к ЖК только по близости на карте: {% if cycle.geo_complex_guess_enabled %}включена — результат требует проверки{% else %}отключена{% endif %}.</p>
+    {% if cycle.detail %}{% set detail = cycle.detail %}
+    <div class="rh-sub">
+      <h3 style="font-size:14px;">Обновление подробностей</h3>
+      <p>{{ detail.scope_label or 'Категория неизвестна' }} · {{ {'ok':'Этап завершён','success':'Есть успешные проверки','idle':'Нет работы','no_candidates':'Нет кандидатов','cooldown':'Пауза после ограничения источника','blocked':'Источник ограничил доступ','timeout':'Запрос не завершён','error':'Ошибка','budget_exhausted':'Недостаточно времени в цикле','cycle_stopped':'Цикл остановлен','partial':'Часть работы выполнена'}.get(detail.status,'Нет подтверждённого результата') }}.</p>
+      <p class="rh-muted">Выбрано: {{ detail.selected if detail.selected is not none else '—' }} · начато запросов: {{ detail.detail_attempts if detail.detail_attempts is not none else '—' }} · успешно: {{ detail.success if detail.success is not none else '—' }}.</p>
+      {% if detail.cooldown_remaining_seconds %}<p class="rh-note">Ограничение источника: повтор не раньше чем через {{ detail.cooldown_remaining_seconds }} с. Даты характеристик не обновлены.</p>{% endif %}
+      {% if detail.budget_exhausted %}<p class="rh-muted">Бюджет этапа закончился; оставшаяся очередь сохранена.</p>{% endif %}
+    </div>
+    {% endif %}
     {% if cycle.index %}
     <div class="rh-sub">
       <h3 style="font-size:14px;">Свежесть арендного индекса</h3>
