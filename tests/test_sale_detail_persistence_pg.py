@@ -40,6 +40,7 @@ async def detail_db():
         assert all(r['is_nullable'] == 'YES' and r['column_default'] is None for r in columns)
         await connection.execute('CREATE TEMP TABLE apartment_listings (LIKE public.apartment_listings INCLUDING DEFAULTS) ON COMMIT DROP')
         await connection.execute('SET LOCAL search_path=pg_temp,public')
+        await connection.execute('ALTER TABLE apartment_listings ADD PRIMARY KEY(id)')
         await connection.execute("INSERT INTO apartment_listings(id,price,floor,floors_total,year_built,description,renovation,furniture,details_fetched) "
                                  "VALUES ('123456789',30000000,5,10,2000,'old','old','true',TRUE)")
         yield connection
