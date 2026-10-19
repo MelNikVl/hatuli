@@ -214,7 +214,7 @@ def best_apartment_factors(offer: dict, now=None) -> list[dict]:
         factors.append({"key": "owner", "text": "В источнике продавец указан как хозяин."})
     floor, floors = _number(offer.get("floor")), _number(offer.get("floors_total"))
     if floor is not None and floors is not None and floor.is_integer() and floors.is_integer() and 1 < floor < floors <= 60:
-        factors.append({"key": "floor", "text": f"{int(floor)}-й этаж из {int(floors)} — между первым и последним."})
+        factors.append({"key": "floor", "text": f"{int(floor)} этаж из {int(floors)}."})
     return factors
 
 
