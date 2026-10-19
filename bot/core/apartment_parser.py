@@ -344,7 +344,8 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
         try:
             from bot.db.pg import fetch as _pg_fetch
             known_rows = await _pg_fetch(
-                'SELECT id,price,lat,complex_id,complex_resolution,house_attribution '
+                'SELECT id,price,lat,complex_id,complex_resolution,house_attribution,found_at, '
+                'source_details_checked_at,source_details_attempted_at '
                 'FROM apartment_listings WHERE id=ANY($1::text[])', ids_on_page)
             known_sales = {row['id']: dict(row) for row in known_rows}
         except Exception:
@@ -484,58 +485,34 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
     from bot.db import settings as _app_settings
     detail_batch = _app_settings.get_int("DETAIL_FETCH_BATCH", 15)
 
-    # ОПТИМИЗАЦИЯ (см. задачу "оптимизация работы парсеров"): раньше сюда
-    # попадала top_half+random_half выборка из ВСЕХ объявлений на странице
-    # выдачи каждый цикл — включая те, что мы уже детально обошли вчера и
-    # позавчера и у которых с тех пор ничего не изменилось. detail_fetch
-    # (координаты/фото/описание) — самая дорогая и медленная операция
-    # (8-15с пауза на объявление, отдельный HTTP-запрос на страницу деталей).
-    # Цена/ID/адрес мы и так получаем бесплатно одним запросом на страницу
-    # выдачи (20-30 объявлений за раз) — этого достаточно, чтобы понять,
-    # НУЖНО ли вообще лезть в детали. Правило: лезем только если
-    #   1) объявления совсем нет в базе (новое) — нужны координаты/фото, или
-    #   2) цена изменилась с прошлого раза — стоит перепроверить и обновить
-    #      историю цены, или
-    #   3) объявление уже есть, но координат так и не появилось (прошлый
-    #      detail-fetch не удался/не был сделан) — досмотреть его ещё раз.
-    # Иначе (цена та же, координаты уже есть) — пропускаем, объявление и так
-    # видно на карте с прошлого раза. По прикидке из задачи — это должно
-    # сократить число detail-запросов в десятки раз на устоявшемся ядре базы.
-    known_by_id = {identifier: (row['price'], row['lat']) for identifier, row in known_sales.items()}
-
-    def _needs_detail_fetch(r: dict) -> bool:
-        if r.get("details_fetched"):
-            return False
-        known = known_by_id.get(r["id"])
-        if known is None:
-            return True  # новое объявление — не встречалось в базе вовсе
-        known_price, known_lat = known
-        if known_price != r.get("price"):
-            return True  # цена изменилась с прошлого обхода
-        if known_lat is None:
-            return True  # уже видели, но детали так и не подъехали — досмотрим ещё раз
-        return False  # без изменений, координаты уже есть — пропускаем
-
+    # Price/coordinates alone cannot establish source freshness. Refresh
+    # unchanged details after 72h, oldest actual check/attempt first. An
+    # unsuccessful attempt rotates the queue without claiming success.
+    from bot.core.sale_detail_refresh import detail_candidates, observed_detail_values
+    detail_now = datetime.now(timezone.utc)
     all_candidates = [r for r in results if not r.get("details_fetched")]
-    candidates = [r for r in all_candidates if _needs_detail_fetch(r)]
+    candidates = detail_candidates(all_candidates, known_sales, now=detail_now)
     skipped = len(all_candidates) - len(candidates)
     logger.info("apt_parser: %d объявлений на странице, %d требуют detail-fetch "
-                "(новые/цена изменилась/нет координат), %d пропущено без изменений",
+                "(возраст/новые/цена/координаты, FIFO), %d пока не требуют проверки",
                 len(all_candidates), len(candidates), skipped)
     DETAIL_FETCH_STATS['total_seen'] += len(all_candidates)
     DETAIL_FETCH_STATS['needs_fetch'] += len(candidates)
     DETAIL_FETCH_STATS['skipped'] += skipped
 
-    half = max(1, detail_batch // 2)
-    top_half = candidates[:half]
-    rest = candidates[half:]
-    random_half = random.sample(rest, min(half, len(rest))) if rest else []
-    to_fetch = top_half + random_half
+    budget = max(0, detail_batch)
+    if stats is not None and type(stats.get("_detail_budget_remaining")) is int:
+        budget = min(budget, max(0, stats["_detail_budget_remaining"]))
+    if stats is not None:
+        stats["_detail_budget_remaining"] = budget
+    to_fetch = candidates[:budget]
 
     from bot.core.apartment_details import (
-        fetch_apartment_details, detail_fetch_cooldown_remaining,
+        fetch_apartment_details, detail_fetch_cooldown_remaining, REQUEST_COUNTS as detail_requests,
     )
     for r in to_fetch:
+        if budget <= 0:
+            break
         cooldown = detail_fetch_cooldown_remaining()
         if cooldown:
             logger.info("apt_parser: detail-fetch batch paused for %.0f min after "
@@ -545,10 +522,37 @@ async def analyze_apartments(city="astana", max_pages=5, start_page=1,
         if url:
             logger.info("fetching details for %s (prelim_rank=%.2f)", r["id"], r["_prelim_rank"])
             await asyncio.sleep(random.uniform(8.0, 15.0))  # пауза чтобы не блокировали
-            details = await fetch_apartment_details(url)
-            if details:
+            before = detail_requests["detail"]
+            cancelled = None
+            actual_request = False
+            try:
+                details = await fetch_apartment_details(url)
+            except asyncio.CancelledError as exc:
+                cancelled = exc
+                details = None
+            except Exception as exc:
+                logger.warning("apt_parser: details failed for %s (%s)", r["id"], type(exc).__name__)
+                details = None
+            finally:
+                if detail_requests["detail"] > before:
+                    actual_request = True
+                    r["_source_details_attempted_at"] = datetime.now(timezone.utc).isoformat()
+                    budget = max(0, budget - (detail_requests["detail"] - before))
+                    if stats is not None:
+                        stats["_detail_budget_remaining"] = budget
+            if cancelled is not None:
+                # The caller must persist attempts-only before propagating
+                # cancellation; no catalog/save/success receipt is implied.
+                cancelled.sale_detail_attempts = {
+                    item["id"]: item["_source_details_attempted_at"]
+                    for item in results if item.get("_source_details_attempted_at")}
+                raise cancelled
+            if (actual_request and details and details.get("source_detail_valid") is True
+                    and not details.get("is_archived")):
                 r.update(details)
                 r["details_fetched"] = True
+                r["_source_details_checked_at"] = datetime.now(timezone.utc).isoformat()
+                r["_source_detail_values"] = observed_detail_values(details)
                 # Настоящий скор посчитается в следующем проходе
                 # deal_score.apply_deal_scores() — теперь, когда есть координаты.
 
