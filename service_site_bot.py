@@ -27,7 +27,7 @@ load_dotenv()
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("site_bot")
@@ -39,7 +39,7 @@ HATULI_CHANNEL = os.getenv("HATULI_CHANNEL", "@hatuliapp")
 dp = Dispatcher()
 
 
-async def _check_subscribed(bot: Bot, telegram_id: int) -> bool:
+async def _check_subscribed(bot: Bot, telegram_id: int) -> bool | None:
     """True/False — реально известный статус. None — Telegram не дал
     проверить (бот не админ канала: 'member list is inaccessible' — типичная
     ошибка ИМЕННО для каналов, Bot API требует прав администратора канала,
@@ -53,14 +53,12 @@ async def _check_subscribed(bot: Bot, telegram_id: int) -> bool:
     except TelegramBadRequest as e:
         if "inaccessible" in str(e).lower() or "not enough rights" in str(e).lower():
             log.warning(
-                "get_chat_member недоступен для %s (%s) — бот, вероятно, НЕ "
-                "администратор канала %s. Добавь бота в администраторы "
-                "канала, чтобы проверка подписки реально работала. "
-                "Пока считаем подписку неизвестной и НЕ блокируем вход.",
-                telegram_id, e, HATULI_CHANNEL)
+                "site_login phase=membership_unavailable policy=allow_unknown; проверьте права бота в канале. "
+                "По действующей политике статус подписки неизвестен и не блокирует вход.")
             return None
-        log.warning("get_chat_member failed for %s: %s", telegram_id, e)
-        return False
+        # An API error is not evidence that this person left the channel.
+        # cmd_start reports a retry without binding or consuming the login.
+        raise
 
 
 @dp.message(CommandStart())
@@ -78,9 +76,11 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     parts = (message.text or "").split(maxsplit=1)
     token = parts[1].strip() if len(parts) > 1 else ""
     if not token:
+        log.info("site_login phase=start_without_token")
         await message.answer(
             "Привет! Это бот входа в личный кабинет Hatuli.\n"
-            "Открой сайт и нажми «Войти через Telegram» — оттуда придёт ссылка сюда.",
+            "Для входа открой сайт, нажми «Войти через Telegram», "
+            "перейди по новой ссылке и нажми Start. Простая команда /start без ссылки не выполняет вход.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="Открыть Hatuli", url=site_origin() + "/cabinet"),
             ]]),
@@ -90,6 +90,10 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     status = await get_token_status(token)
     if (not status or status.get("status") not in ("pending", "not_subscribed")
             or status.get("telegram_id") not in (None, message.from_user.id)):
+        phase = ("token_not_found" if not status else "expired" if status.get("status") == "expired"
+                 else "token_unavailable" if status.get("status") not in ("pending", "not_subscribed")
+                 else "owner_mismatch")
+        log.info("site_login phase=%s", phase)
         await message.answer("Ссылка для входа устарела — открой сайт и попробуй снова.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="Войти ещё раз", url=site_origin() + "/cabinet"),
@@ -97,7 +101,21 @@ async def cmd_start(message: Message, bot: Bot) -> None:
         return
 
     telegram_id = message.from_user.id
-    subscribed = await _check_subscribed(bot, telegram_id)
+    try:
+        subscribed = await _check_subscribed(bot, telegram_id)
+    except (TelegramAPIError, TimeoutError) as exc:
+        # Only the error class is useful here: Telegram messages can contain
+        # personal IDs, request URLs and credentials. Do not log the exception.
+        log.warning("site_login phase=membership_unavailable policy=retry error_type=%s", type(exc).__name__)
+        await message.answer(
+            "Telegram временно не дал проверить вход. Открой исходную ссылку с сайта "
+            "ещё раз и нажми Start. Ссылка действует 10 минут; если время вышло, "
+            "получи новую на сайте.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="Войти ещё раз на сайте", url=site_origin() + "/cabinet"),
+            ]]),
+        )
+        return
 
     await execute("""
         INSERT INTO users (user_id, username, full_name, channel_subscribed, created_at, updated_at)
@@ -110,6 +128,7 @@ async def cmd_start(message: Message, bot: Bot) -> None:
     """, telegram_id, message.from_user.username or "", message.from_user.full_name or "", subscribed)
 
     if subscribed is False:
+        log.info("site_login phase=not_subscribed")
         # Точно НЕ подписан (Telegram подтвердил статус left/kicked) — блокируем.
         await mark_login_not_subscribed(token, telegram_id)
         await message.answer(
@@ -124,11 +143,13 @@ async def cmd_start(message: Message, bot: Bot) -> None:
 
     return_token = await verify_login_and_create_return_token(token, telegram_id)
     if not return_token:
+        log.info("site_login phase=token_unavailable")
         await message.answer("Ссылка для входа устарела или доступ закрыт — открой сайт и попробуй снова.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="Войти ещё раз", url=site_origin() + "/cabinet"),
             ]]))
         return
+    log.info("site_login phase=return_issued")
     await message.answer(
         "Готово! ✅ Нажми «Открыть Hatuli» — сайт откроется с выполненным входом.\n"
         "Ссылка действует 10 минут и используется один раз.",
@@ -322,7 +343,8 @@ async def main() -> None:
     await init_pool(DATABASE_URL)
 
     bot = Bot(SITE_BOT_TOKEN)
-    log.info("=== Site bot started ===")
+    from bot.git_info import git_hash
+    log.info("=== Site bot started (git=%s) ===", git_hash())
     asyncio.create_task(_digest_loop(bot))
     await dp.start_polling(bot)
 
