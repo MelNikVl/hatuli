@@ -189,7 +189,14 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
     title_el = soup.select_one("h1") or soup.select_one(".offer__title")
     title = title_el.get_text(" ", strip=True) if title_el else ""
     result["title_full"] = title
-    result["source_detail_valid"] = bool(title and soup.select_one(".offer__price, .offer__info"))
+    requested_id = re.search(r"/a/show/(\d+)(?:[/?#]|$)", url)
+    response_id = re.search(r"/a/show/(\d+)(?:[/?#]|$)", str(getattr(resp, "url", url)))
+    canonical = soup.select_one('link[rel="canonical"]')
+    canonical_id = re.search(r"/a/show/(\d+)(?:[/?#]|$)", canonical.get("href", "")) if canonical else None
+    result["source_detail_valid"] = bool(
+        title and soup.select_one(".offer__price, .offer__info") and requested_id and response_id
+        and requested_id[1] == response_id[1]
+        and (canonical_id is None or canonical_id[1] == requested_id[1]))
 
     price_el = soup.select_one(".offer__price")
     price_text = price_el.get_text(" ", strip=True) if price_el else ""

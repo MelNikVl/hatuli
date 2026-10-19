@@ -153,6 +153,31 @@ async def test_200_challenge_is_a_durable_block_not_a_success(monkeypatch):
     assert details.REQUEST_COUNTS["detail"] == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("canonical", ["123456","123457"])
+async def test_recognized_offer_requires_same_source_identity(monkeypatch,canonical):
+    constructor = httpx.AsyncClient
+    html = ('<h1>2-комнатная квартира</h1><div class="offer__price">200 000</div>'
+        f'<link rel="canonical" href="https://krisha.kz/a/show/{canonical}">')
+    monkeypatch.setattr(details.httpx,"AsyncClient",lambda **kwargs:constructor(
+        transport=httpx.MockTransport(lambda request:httpx.Response(200,text=html)),**kwargs))
+    result = await details.fetch_apartment_details("https://krisha.kz/a/show/123456",raise_on_error=True)
+    assert result["source_detail_valid"] is (canonical == "123456")
+
+
+@pytest.mark.asyncio
+async def test_redirect_to_other_listing_cannot_be_a_fresh_detail_success(monkeypatch):
+    constructor = httpx.AsyncClient
+    def serve(request):
+        if request.url.path.endswith("123456"):
+            return httpx.Response(302,headers={"location":"https://krisha.kz/a/show/123457"})
+        return httpx.Response(200,text='<h1>Другая квартира</h1><div class="offer__price">200000</div>')
+    monkeypatch.setattr(details.httpx,"AsyncClient",lambda **kwargs:constructor(
+        transport=httpx.MockTransport(serve),**kwargs))
+    result = await details.fetch_apartment_details("https://krisha.kz/a/show/123456",raise_on_error=True)
+    assert result["source_detail_valid"] is False
+
+
 @pytest.fixture
 def queue(monkeypatch):
     row = {"id":"123456", "url":"https://krisha.kz/a/show/123456", "title":"2-комнатная",
