@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from bot.core.analytics_comparisons import TOPICS
+from bot.core.article_seo import article_seo
 
 
 PAGE_SIZE = 12
@@ -179,11 +180,12 @@ def make_analytics_articles_router(templates):
         if not article:
             raise HTTPException(status_code=404, detail="Статья не найдена")
         article = _display_article(article)
+        seo = article_seo(article)
         schema = {
             "@context": "https://schema.org",
             "@type": "Article",
             "headline": article["title"],
-            "description": article["summary"],
+            "description": seo["description"],
             "datePublished": article.get("published_at", article["edition_date"]),
             "dateModified": article.get("date_modified", article.get("published_at", article["edition_date"])),
             "inLanguage": "ru-KZ",
@@ -195,7 +197,7 @@ def make_analytics_articles_router(templates):
         return templates.TemplateResponse(
             request=request,
             name="analytics_article.html",
-            context={"request": request, "article": article, "article_schema": schema},
+            context={"request": request, "article": article, "article_schema": schema, "article_seo": seo},
             headers=headers,
         )
 
