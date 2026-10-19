@@ -7,10 +7,18 @@ const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '..', 'static', 'hatuli-telegram-login.js'), 'utf8');
 const validToken = 'confirmed_telegram-login_credential';
 
-function client({ hash = '#token=' + validToken, response, fetchError, jsonError } = {}) {
+function client({ hash = '#token=' + validToken, response, fetchError, jsonError, pending, pendingJSON } = {}) {
   const events = [];
   const requests = [];
   const redirects = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  function waitingForAbort(signal) {
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) {reject(new Error('aborted')); return;}
+      signal.addEventListener('abort', () => reject(new Error('aborted')), {once:true});
+    });
+  }
   const elements = {
     'telegram-login-title': { textContent: 'Входим в Hatuli' },
     'telegram-login-status': { textContent: 'Подтверждаем вход через Telegram…' },
@@ -44,18 +52,24 @@ function client({ hash = '#token=' + validToken, response, fetchError, jsonError
     assert.equal(location.search, '', 'Navigation arguments must not survive in page history');
     requests.push({ url, options });
     if (fetchError) throw fetchError;
+    if (pending) return waitingForAbort(options.signal);
     const result = response || { ok: true, status: 200, body: { status: 'verified' } };
     return {
       ok: result.ok, status: result.status,
       async json() {
         events.push('json');
         if (jsonError) throw jsonError;
+        if (pendingJSON) return waitingForAbort(options.signal);
         return result.body;
       }
     };
   };
-  const done = vm.runInNewContext(source, { window, document, fetch, URLSearchParams });
-  return { done, events, requests, redirects, elements, location };
+  const done = vm.runInNewContext(source, { window, document, fetch, URLSearchParams, AbortController,
+    setTimeout(callback, delay) { assert.equal(delay, 12000); const id=++nextTimer; timers.set(id, callback); return id; },
+    clearTimeout(id) {timers.delete(id);}
+  });
+  return { done, events, requests, redirects, elements, location, timers,
+    triggerTimeout() {for (const callback of timers.values()) callback();} };
 }
 
 function assertVisibleRetry(state, expectedMessage) {
@@ -147,3 +161,18 @@ test('invalid server JSON shows a visible retry and cannot navigate as authentic
   assert.equal(state.requests.length, 1);
   assertVisibleRetry(state, /Не удалось связаться.*начни вход ещё раз/);
 });
+
+for (const pendingStage of ['pending', 'pendingJSON']) {
+  test(`a stalled ${pendingStage} request aborts and offers a fresh login`, async () => {
+    const state = client({[pendingStage]: true});
+    await new Promise(setImmediate);
+    if (pendingStage === 'pendingJSON') assert.ok(state.events.includes('json'));
+    assert.equal(state.timers.size, 1);
+    state.triggerTimeout();
+    await state.done;
+    assert.equal(state.requests.length, 1);
+    assert.equal(state.requests[0].options.signal.aborted, true);
+    assert.equal(state.timers.size, 0);
+    assertVisibleRetry(state, /Не удалось связаться.*начни вход ещё раз/);
+  });
+}

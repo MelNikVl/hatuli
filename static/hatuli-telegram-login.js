@@ -15,10 +15,13 @@
     failed('Открой свежую ссылку из бота. Ссылка для входа действует 10 минут и используется один раз.');
     return;
   }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
   try {
     const response = await fetch('/api/auth/complete', {
       method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
       referrerPolicy: 'no-referrer',
+      signal: controller.signal,
       headers: {'Content-Type': 'application/json', 'X-Hatuli-Login': 'telegram'},
       body: JSON.stringify({token})
     });
@@ -33,5 +36,7 @@
       : 'Не удалось подтвердить вход. Попробуй ещё раз.');
   } catch (_) {
     failed('Не удалось связаться с Hatuli. Проверь соединение и начни вход ещё раз.');
+  } finally {
+    clearTimeout(timeout);
   }
 })();
