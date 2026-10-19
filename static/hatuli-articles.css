@@ -1,0 +1,122 @@
+/* Editorial pages share the site's white/blue palette and support both themes. */
+.ha-archive { max-width: 1120px; margin: 0 auto; padding: 42px 0 64px; }
+.ha-eyebrow { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin: 0 0 12px; }
+.ha-archive-header { max-width: 800px; }
+.ha-archive h1 { color: var(--heading); font-size: clamp(30px,3.3vw,44px); line-height: 1.16; letter-spacing: -1.35px; margin: 0 0 16px; }
+.ha-archive-lead { max-width: 730px; color: var(--muted); font-size: 17px; line-height: 1.7; margin: 0; }
+.ha-filters { display: flex; gap: 8px; flex-wrap: wrap; margin: 30px 0 24px; }
+.ha-filters a { color: var(--text); background: var(--surface); border: 1px solid var(--border); padding: 10px 17px; min-height: 44px; border-radius: 7px; font-size: 14px; font-weight: 600; text-decoration: none; }
+.ha-filters a:hover { background: var(--surface2); }
+.ha-filters a[aria-current="page"] { color: #fff; background: var(--accent-fill); border-color: var(--accent-fill); }
+.ha-editions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; }
+.ha-story-card { display: flex; flex-direction: column; min-width: 0; padding: 26px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow-wrap: anywhere; }
+.ha-story-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; color: var(--muted); font-size: 12px; }
+.ha-category { display: inline-flex; align-items: center; min-height: 27px; padding: 4px 8px; border-radius: 5px; color: var(--accent); background: var(--surface2); font-size: 11px; font-weight: 750; }
+.ha-category-rent { border: 1px solid var(--border); }
+.ha-story-card h2 { font-size: clamp(21px,2vw,26px); line-height: 1.3; letter-spacing: -.55px; margin: 17px 0 12px; }
+.ha-story-card h2 a { color: var(--heading); text-decoration: none; }
+.ha-story-card h2 a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 4px; }
+.ha-story-summary { color: var(--muted); font-size: 14px; line-height: 1.7; margin: 0 0 20px; }
+.ha-story-preview { margin: 0 0 22px; }
+.ha-story-points { font-size: 14px; padding-left: 18px; line-height: 1.65; }
+.ha-story-points li { margin-bottom: 8px; }
+.ha-story-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: auto; padding-top: 17px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.ha-story-bottom a { color: var(--accent); font-size: 14px; font-weight: 700; text-decoration: none; display: inline-flex; align-items: center; gap: 13px; min-height: 32px; }
+.ha-story-bottom a:hover { text-decoration: underline; }
+.ha-pagination { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 24px; margin: 30px 0; font-size: 14px; }
+.ha-pagination a { color: var(--accent); padding: 12px 0; }
+.ha-archive-footnote { margin-top: 36px; padding: 26px 0 0; border-top: 1px solid var(--border); }
+.ha-archive-footnote h2 { font-size: 21px; letter-spacing: -.4px; margin: 0 0 9px; color: var(--heading); }
+.ha-archive-footnote p { color: var(--muted); font-size: 14px; margin: 0 0 14px; }
+.ha-archive-footnote div { display: flex; flex-wrap: wrap; gap: 12px 28px; }
+.ha-archive-footnote a { font-size: 14px; color: var(--accent); text-decoration: none; }
+.ha-article { max-width: 800px; margin: 0 auto; padding: 30px 0 56px; overflow-wrap: anywhere; }
+.ha-breadcrumb { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 12px; margin-bottom: 30px; }
+.ha-breadcrumb a { color: var(--muted); text-decoration: none; }
+.ha-breadcrumb a:hover { color: var(--accent); }
+.ha-article-header h1 { color: var(--heading); font-size: clamp(31px,3.6vw,44px); line-height: 1.18; letter-spacing: -1.25px; margin: 18px 0; }
+.ha-article-lead { color: var(--text); font-size: 19px; line-height: 1.75; margin: 0 0 20px; }
+.ha-published { color: var(--muted); font-size: 12px; padding-bottom: 26px; margin: 0; border-bottom: 1px solid var(--border); }
+.ha-takeaways { margin: 28px 0; padding: 23px 26px; background: var(--surface2); border-left: 3px solid var(--accent-fill); border-radius: 0 8px 8px 0; }
+.ha-takeaways h2 { color: var(--heading); font-size: 17px; margin: 0 0 13px; letter-spacing: -.25px; }
+.ha-takeaways ul { display: grid; gap: 11px; padding-left: 18px; margin: 0; color: var(--text); font-size: 15px; line-height: 1.65; }
+.ha-takeaways li::marker { color: var(--accent); }
+.ha-contents { display: flex; flex-wrap: wrap; gap: 8px 20px; padding-bottom: 24px; margin-bottom: 28px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.ha-contents > span { width: 100%; color: var(--muted); font-weight: 700; margin-bottom: 3px; }
+.ha-contents a { color: var(--accent); text-decoration: none; }
+.ha-contents a:hover { text-decoration: underline; }
+.ha-article-section { margin: 0 0 34px; scroll-margin-top: 110px; }
+.ha-article-section > h2 { color: var(--heading); font-size: 26px; line-height: 1.35; letter-spacing: -.55px; margin: 0 0 15px; }
+.ha-article-section > p { color: var(--text); font-size: 16px; line-height: 1.85; margin: 0 0 17px; }
+.ha-chart { min-width: 0; margin: 25px 0; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; scroll-margin-top: 110px; }
+.ha-chart figcaption h3 { color: var(--heading); font-size: 17px; line-height: 1.4; letter-spacing: -.2px; margin: 0 0 6px; }
+.ha-chart figcaption p { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 0 0 18px; }
+.ha-chart-unit { font-size: 11px; font-weight: 600; color: var(--muted); margin: 16px 0 12px; }
+.ha-chart-rows { display: grid; gap: 18px; list-style: none; margin: 0; padding: 0; }
+.ha-chart-label { display: flex; justify-content: space-between; align-items: baseline; gap: 15px; color: var(--text); font-size: 13px; margin-bottom: 7px; }
+.ha-chart-label strong { color: var(--heading); font-size: 14px; font-weight: 750; font-variant-numeric: tabular-nums; text-align: right; flex-shrink: 0; }
+.ha-chart-track { height: 13px; width: 100%; border-left: 1px solid var(--muted); background: var(--surface2); }
+.ha-chart-track > span { display: block; height: 100%; background: var(--accent-fill); border-radius: 0 3px 3px 0; }
+.ha-chart-signed .ha-chart-track { position: relative; border-left: 0; }
+.ha-chart-signed .ha-chart-track::before { content: ""; position: absolute; top: -2px; bottom: -2px; left: 50%; border-left: 1px solid var(--muted); }
+.ha-chart-signed .ha-chart-track > span { position: absolute; left: 50%; }
+.ha-chart-signed .ha-chart-track > .ha-chart-negative { left: auto; right: 50%; background: var(--red-fill); border-radius: 3px 0 0 3px; }
+.ha-chart-sample { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+.ha-chart-axis { display: flex; justify-content: space-between; gap: 14px; color: var(--muted); font-size: 10px; line-height: 1.5; margin: 10px 0 0; }
+.ha-chart-axis span:last-child { text-align: right; }
+.ha-chart-data { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 12px; }
+.ha-chart-data summary { color: var(--accent); font-size: 12px; cursor: pointer; padding: 4px 0; }
+.ha-chart-table-wrap { overflow-x: auto; margin-top: 10px; }
+.ha-chart table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+.ha-chart caption { text-align: left; color: var(--muted); padding-bottom: 10px; font-size: 11px; }
+.ha-chart :is(th,td) { border-bottom: 1px solid var(--border); padding: 9px 10px 9px 0; vertical-align: top; }
+.ha-chart thead th { color: var(--muted); font-weight: 600; }
+.ha-chart tbody th { font-weight: 500; }
+.ha-chart td { font-variant-numeric: tabular-nums; }
+.ha-chart-compact { border: 0; border-radius: 7px; background: var(--bg); padding: 16px; margin: 0; }
+.ha-chart-compact figcaption h3 { font-size: 12px; margin: 0; }
+.ha-chart-compact .ha-chart-unit { font-size: 10px; margin: 10px 0; }
+.ha-chart-compact .ha-chart-rows { gap: 8px; }
+.ha-chart-compact .ha-chart-label { font-size: 11px; margin-bottom: 4px; gap: 10px; }
+.ha-chart-compact .ha-chart-label strong { font-size: 12px; }
+.ha-chart-compact .ha-chart-track { height: 7px; }
+.ha-chart-compact .ha-chart-axis { font-size: 9px; }
+.ha-article-evidence { border-top: 1px solid var(--border); padding-top: 24px; margin-top: 36px; }
+.ha-article-evidence h2 { color: var(--heading); font-size: 18px; margin: 0 0 14px; }
+.ha-sources { padding: 0; margin: 0; list-style: none; display: grid; gap: 13px; }
+.ha-sources li { font-size: 12px; }
+.ha-sources a { color: var(--accent); text-decoration: none; line-height: 1.6; }
+.ha-sources a:hover { text-decoration: underline; }
+.ha-sources li > span { display: block; color: var(--muted); font-size: 11px; margin-top: 3px; }
+.ha-methodology { border-top: 1px solid var(--border); padding-top: 18px; margin-top: 22px; }
+.ha-methodology summary { color: var(--text); font-size: 13px; font-weight: 650; cursor: pointer; }
+.ha-methodology ul { padding-left: 18px; font-size: 12px; line-height: 1.8; color: var(--muted); }
+.ha-methodology li { margin-bottom: 9px; }
+.ha-article-next { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 15px; padding-top: 25px; margin-top: 30px; border-top: 1px solid var(--border); }
+.ha-article-next a { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; color: var(--accent); font-size: 14px; font-weight: 650; text-decoration: none; }
+.ha-article-next a:hover { text-decoration: underline; }
+@media (max-width: 700px) {
+  .ha-archive { padding-top: 28px; }
+  .ha-archive h1 { font-size: 32px; letter-spacing: -.9px; }
+  .ha-archive-lead { font-size: 15px; }
+  .ha-filters { gap: 6px; margin: 23px 0 19px; }
+  .ha-filters a { font-size: 12px; padding: 11px 12px; }
+  .ha-editions { grid-template-columns: minmax(0,1fr); gap: 18px; }
+  .ha-story-card { padding: 21px; }
+  .ha-story-card h2 { font-size: 23px; }
+  .ha-story-summary { font-size: 14px; }
+  .ha-article { padding-top: 23px; }
+  .ha-breadcrumb { margin-bottom: 22px; }
+  .ha-article-header h1 { font-size: 32px; letter-spacing: -.9px; }
+  .ha-article-lead { font-size: 17px; line-height: 1.75; }
+  .ha-takeaways { padding: 20px 18px; }
+  .ha-takeaways ul { font-size: 14px; }
+  .ha-contents { gap: 9px 16px; }
+  .ha-article-section > h2 { font-size: 23px; }
+  .ha-article-section > p { font-size: 15px; }
+  .ha-chart { padding: 18px; margin: 23px 0; }
+  .ha-chart-compact { margin: 0; padding: 14px; }
+  .ha-chart-label { gap: 10px; font-size: 12px; }
+  .ha-chart-label strong { font-size: 13px; }
+  .ha-article-next { gap: 8px; }
+}
