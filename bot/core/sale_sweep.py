@@ -54,6 +54,11 @@ class SaleSweep:
     failed_attempts: int = 0
     recent_unsaved: dict = field(default_factory=dict)
     presence_overflow: bool = False
+    # A lost current journal may have contained unsaved visible IDs. Keep
+    # archival paused across restarts until a new complete source traversal
+    # supplies replacement evidence; unlike overflow this is recoverable.
+    archive_hold_reason: str | None = None
+    archive_hold_started_at: str | None = None
 
     @classmethod
     def new(cls, now):
@@ -101,6 +106,12 @@ class SaleSweep:
             if (not isinstance(result.recent_unsaved, dict) or len(result.recent_unsaved) > MAX_PRESENCE_IDS
                     or type(result.presence_overflow) is not bool or any(
                         not key.isdigit() or utc(value) is None for key, value in result.recent_unsaved.items())):
+                return None
+            if result.archive_hold_reason not in (None, "current_journal_unreadable"):
+                return None
+            if ((result.archive_hold_reason is None) != (result.archive_hold_started_at is None)
+                    or (result.archive_hold_started_at is not None and utc(result.archive_hold_started_at) is None)
+                    or (result.completed_at is not None and result.archive_hold_reason is not None)):
                 return None
             if any(value is not None and utc(value) is None
                    for value in (result.completed_at, result.blocked_until)):
@@ -250,6 +261,7 @@ class SaleSweep:
                     self.total_start = self.total_latest = 0
         if self.closed:
             self.completed_at = now.isoformat()
+            self.archive_hold_reason = self.archive_hold_started_at = None
 
 
 def completed_evidence(settings):

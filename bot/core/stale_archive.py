@@ -64,6 +64,10 @@ def sweep_health(settings: dict[str, str], now: datetime) -> SweepHealth:
     if proof is None:
         return SweepHealth(False, 'нет подтверждённого журнала страниц завершённого круга')
     current = SaleSweep.loads(settings.get(STATE_KEY))
+    if settings.get(STATE_KEY) and current is None:
+        return SweepHealth(False, 'текущий журнал страниц повреждён; архивирование остановлено')
+    if current and current.archive_hold_reason is not None:
+        return SweepHealth(False, 'текущий журнал был утрачен; требуется новый подтверждённый полный круг')
     if proof.presence_overflow or (current and current.presence_overflow):
         return SweepHealth(False, 'журнал недавних наблюдений переполнен; архивирование остановлено')
     completed = utc(proof.completed_at)

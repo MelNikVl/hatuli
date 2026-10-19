@@ -203,6 +203,7 @@ async def _collect_sale_catalog(app_settings, analyze, *, now=None):
     from bot.core.sale_sweep import SaleSweep, STATE_KEY, COMPLETED_KEY, plan_batch, utc
     now = now or datetime.now(timezone.utc)
     state = SaleSweep.loads(app_settings.get(STATE_KEY))
+    current_journal_unreadable = bool(app_settings.get(STATE_KEY)) and state is None
     previous = state or SaleSweep.loads(app_settings.get(COMPLETED_KEY))
     if state and state.completed_at:
         # Recover a crash between the atomic current journal and its last
@@ -215,6 +216,9 @@ async def _collect_sale_catalog(app_settings, analyze, *, now=None):
             state.recent_unsaved = {i: checked for i, checked in previous.recent_unsaved.items()
                                     if utc(checked) >= now - timedelta(days=7)}
             state.presence_overflow = previous.presence_overflow
+        if current_journal_unreadable:
+            state.archive_hold_reason = "current_journal_unreadable"
+            state.archive_hold_started_at = now.isoformat()
         await app_settings.set(STATE_KEY, state.dumps())
         await app_settings.set("DEEP_SWEEP_CIRCLE_STARTED_AT", state.started_at)
         log.info("Deep sweep: new evidence journal from page 1 (legacy cursor is not proof)")
