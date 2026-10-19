@@ -40,9 +40,10 @@ MAX_DISCOUNT = .30
 MAX_PREMIUM = .05
 NEARBY_RADIUS_M = 800
 PHOTO_HOST = "krisha-photos.kcdn.online"
-# The second hostname and full.webp derivative were observed in the normal
-# source gallery on 2026-10-16. No wildcard CDN or guessed URL is permitted.
-PHOTO_HOSTS = frozenset({PHOTO_HOST, "astps-photos-kr.kcdn.kz"})
+# The astps, alaps and kzala2 CDNs were observed in normal source galleries
+# on 2026-10-16, 2026-10-17 and 2026-10-19. No wildcard or guessed URL is permitted.
+PHOTO_HOSTS = frozenset({PHOTO_HOST, "astps-photos-kr.kcdn.kz", "alaps-photos-kr.kcdn.kz",
+                         "kzala2-photos-kr.kcdn.kz"})
 _ID = re.compile(r"[0-9]{5,20}\Z")
 _PHOTO_PATH = re.compile(
     r"/(?:webp/)?[0-9a-f]{2}/(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/"
@@ -105,7 +106,7 @@ def photo_asset_key(value) -> tuple[str, str] | None:
     """Identity of an allowlisted source image; never construct a derivative.
 
     JPEG and WebP gallery derivatives can identify the same image across the
-    two observed CDNs. UUID and frame index must both agree. The caller still
+    observed CDNs. UUID and frame index must both agree. The caller still
     needs a fresh, offer-linked visual receipt before trusting a new URL.
     """
     if safe_photo_url(value) is None:
