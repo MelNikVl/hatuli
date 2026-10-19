@@ -18,6 +18,8 @@ log = logging.getLogger(__name__)
 COUNTERS = (
     "cycles", "pages", "head_pages", "saved_observations", "raw_cards", "accepted_cards", "unpriced_cards",
     "list_requests", "detail_requests", "archive_requests",
+    "detail_checked", "detail_success", "detail_errors", "detail_blocked",
+    "detail_cooldown_cycles", "detail_budget_exhausted_cycles",
     "new", "updated", "reactivated", "archived", "blocked", "http_468",
     "errors", "timeouts", "list_ms", "maintenance_ms", "sleep_ms",
 )
@@ -42,6 +44,8 @@ class RentalCyclePlan:
     db_every: int = 5
     allow_geo_complex_guess: bool = False
     index_refresh_seconds: float = 300.0
+    list_batch_pages: int = 8
+    head_refresh_seconds: float = 2700.0
 
     @classmethod
     def from_settings(cls, get: Callable[[str, str], Any]) -> "RentalCyclePlan":
@@ -57,6 +61,10 @@ class RentalCyclePlan:
             allow_geo_complex_guess=str(get("RENTAL_ALLOW_GEO_COMPLEX_GUESS", "0")).strip() == "1",
             index_refresh_seconds=bounded_number(
                 get("RENTAL_INDEX_REFRESH_SEC", "300"), 300, 60, 1800),
+            list_batch_pages=int(bounded_number(
+                get("RENTAL_LIST_BATCH_PAGES", "8"), 8, 1, 8)),
+            head_refresh_seconds=bounded_number(
+                get("RENTAL_HEAD_REFRESH_SEC", "2700"), 2700, 1800, 2700),
         )
 
 

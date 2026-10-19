@@ -293,14 +293,14 @@ async def test_description_reuses_single_budgeted_detail_response(monkeypatch):
     monkeypatch.setattr(pg,'fetch',AsyncMock(return_value=[row]))
     write=AsyncMock()
     monkeypatch.setattr(pg,'execute',write)
-    monkeypatch.setattr(parser,'resolve_rental_complex',AsyncMock(return_value=10))
+    monkeypatch.setattr(parser,'resolve_rental_complex',AsyncMock(return_value={'complex_id':10,'status':'resolved','reason':'verified'}))
     monkeypatch.setattr(parser.asyncio,'sleep',AsyncMock())
     monkeypatch.setattr(complex_audit,'street_names',AsyncMock(return_value=set()))
     monkeypatch.setattr(apartment_details,'detail_fetch_cooldown_remaining',lambda:0)
     monkeypatch.setattr(apartment_details,'REQUEST_COUNTS',{'detail':0})
     async def details(*args,**kwargs):
         apartment_details.REQUEST_COUNTS['detail']+=1
-        return {'description':'Полностью меблирована','complex_source':'official_map_block',
+        return {'source_detail_valid':True,'description':'Полностью меблирована','complex_source':'official_map_block',
                 'complex_name':'Пример','complex_url':'https://krisha.kz/complex/show/10'}
     fetch=AsyncMock(side_effect=details)
     monkeypatch.setattr(apartment_details,'fetch_apartment_details',fetch)
@@ -308,7 +308,7 @@ async def test_description_reuses_single_budgeted_detail_response(monkeypatch):
     assert fetch.await_count==1 and result['requests']==1 and result['checked']==1
     sql,*params=write.await_args.args
     assert 'description_checked_at=now()' in sql and 'Полностью меблирована' in params and 'full' in params
-    assert 'complex_id=COALESCE(complex_id,' in sql
+    assert 'complex_id=' in sql and 'complex_id=COALESCE' not in sql
     assert 'last_seen=' not in sql  # enrichment cannot pretend a fresh catalog observation
 
 

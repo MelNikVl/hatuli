@@ -24,15 +24,34 @@ _BLOCKED_MAX_SECONDS = 6 * 60 * 60
 
 def detail_fetch_cooldown_remaining() -> float:
     """Seconds until detail requests may resume, or zero when not blocked."""
+    global _BLOCKED_UNTIL, _BLOCKED_STREAK
+    from bot.core.detail_cooldown import read_cooldown
+    try:
+        durable, streak = read_cooldown()
+        _BLOCKED_STREAK = max(_BLOCKED_STREAK, streak)
+        if durable > 0:
+            _BLOCKED_UNTIL = max(_BLOCKED_UNTIL, time.monotonic() + durable)
+    except (OSError, ValueError, KeyError, TypeError):
+        logger.error("Detail cooldown state unavailable; requests fail closed")
+        _BLOCKED_UNTIL = max(_BLOCKED_UNTIL, time.monotonic() + _BLOCKED_MAX_SECONDS)
     return max(0.0, _BLOCKED_UNTIL - time.monotonic())
 
 
 def _record_detail_block(status_code: int, url: str) -> float:
     global _BLOCKED_UNTIL, _BLOCKED_STREAK
-    _BLOCKED_STREAK += 1
-    delay = min(_BLOCKED_BASE_SECONDS * (2 ** (_BLOCKED_STREAK - 1)),
+    _BLOCKED_STREAK = min(64, _BLOCKED_STREAK + 1)
+    delay = min(_BLOCKED_BASE_SECONDS * (2 ** min(_BLOCKED_STREAK - 1, 10)),
                 _BLOCKED_MAX_SECONDS)
     _BLOCKED_UNTIL = time.monotonic() + delay
+    from bot.core.detail_cooldown import record_block
+    try:
+        durable, streak = record_block(minimum_streak=_BLOCKED_STREAK)
+        _BLOCKED_STREAK = max(_BLOCKED_STREAK, streak)
+        _BLOCKED_UNTIL = max(_BLOCKED_UNTIL, time.monotonic() + durable)
+    except (OSError, ValueError, KeyError, TypeError):
+        # Do not turn a persistence failure into permission to resume traffic.
+        _BLOCKED_UNTIL = max(_BLOCKED_UNTIL, time.monotonic() + _BLOCKED_MAX_SECONDS)
+        logger.error("Cannot persist detail cooldown; requests fail closed")
     logger.warning(
         "Krisha detail requests paused for %d min after HTTP %d: %s (streak=%d)",
         delay // 60, status_code, url, _BLOCKED_STREAK,
@@ -51,10 +70,14 @@ class ListingBlockedError(Exception):
     coord_backfill.py, rental_parser.py) продолжают получать {} как раньше."""
 
 
-async def fetch_apartment_details(url: str, *, raise_on_error: bool = False) -> dict:
+async def fetch_apartment_details(url: str, *, raise_on_error: bool = False,
+                                  request_timeout_seconds: float = 30.0) -> dict:
     """
     Fetch full listing details from krisha.kz listing page.
     Returns rich dict with all extractable signals.
+
+    request_timeout_seconds bounds the transport wall time (default 30s),
+    excluding the unchanged 3–6s source pacing. Budgeted callers reserve both.
 
     raise_on_error — задача 2026-08-17: по умолчанию False (родное
     поведение НЕ меняется ни для одного существующего вызова — 403/429 и
@@ -65,7 +88,8 @@ async def fetch_apartment_details(url: str, *, raise_on_error: bool = False) -> 
     ListingBlockedError на 403/429/468, исходное исключение (timeout/DNS/...)
     пробрасывается как есть на прочих сетевых ошибках.
     """
-    return await _fetch_apartment_details_impl(url, raise_on_error=raise_on_error)
+    return await _fetch_apartment_details_impl(url, raise_on_error=raise_on_error,
+        request_timeout_seconds=request_timeout_seconds)
 
 
 HEADERS = {
@@ -118,7 +142,8 @@ UTILITY_PATTERNS = [
 ]
 
 
-async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = False) -> dict:
+async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = False,
+                                        request_timeout_seconds: float = 30.0) -> dict:
     cooldown = detail_fetch_cooldown_remaining()
     if cooldown:
         if raise_on_error:
@@ -126,19 +151,29 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
         return {}
 
     await asyncio.sleep(random.uniform(3.0, 6.0))
+    # A different worker may have observed a block while this one was pacing.
+    if detail_fetch_cooldown_remaining():
+        if raise_on_error:
+            raise ListingBlockedError("detail requests paused during pacing")
+        return {}
 
-    async with httpx.AsyncClient(headers=HEADERS, timeout=30.0, follow_redirects=True) as c:
+    timeout = max(0.5, min(30.0, float(request_timeout_seconds)))
+    async with httpx.AsyncClient(headers=HEADERS, timeout=timeout, follow_redirects=True) as c:
         try:
-            resp = await c.get(url)
             REQUEST_COUNTS["detail"] += 1
+            resp = await asyncio.wait_for(c.get(url), timeout=timeout)
             if resp.status_code in (403, 429, 468):
                 _record_detail_block(resp.status_code, url)
                 if raise_on_error:
                     raise ListingBlockedError(f"{resp.status_code} {url}")
                 return {}
             resp.raise_for_status()
-            global _BLOCKED_STREAK
-            _BLOCKED_STREAK = 0
+            # A challenge with HTTP 200 is still a block, never fresh detail.
+            if re.search(r"подтвердите[^<]{0,80}(?:не робот|робот)|captcha|access denied", resp.text[:20000], re.I) and not re.search(r'class=["\'][^"\']*offer__', resp.text):
+                _record_detail_block(200, url)
+                if raise_on_error:
+                    raise ListingBlockedError(f"200 challenge {url}")
+                return {}
         except ListingBlockedError:
             raise
         except Exception as exc:
@@ -154,6 +189,7 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
     title_el = soup.select_one("h1") or soup.select_one(".offer__title")
     title = title_el.get_text(" ", strip=True) if title_el else ""
     result["title_full"] = title
+    result["source_detail_valid"] = bool(title and soup.select_one(".offer__price, .offer__info"))
 
     price_el = soup.select_one(".offer__price")
     price_text = price_el.get_text(" ", strip=True) if price_el else ""
@@ -622,4 +658,9 @@ async def _fetch_apartment_details_impl(url: str, *, raise_on_error: bool = Fals
 
     logger.info("fetch_apartment_details: extracted %d fields from %s",
                 len(result), url)
+    if result["source_detail_valid"]:
+        global _BLOCKED_STREAK
+        from bot.core.detail_cooldown import record_success
+        record_success()
+        _BLOCKED_STREAK = 0
     return result

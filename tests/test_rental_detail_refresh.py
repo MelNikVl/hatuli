@@ -51,7 +51,7 @@ def arrange(monkeypatch,row, response=None, error=None):
         return response
     fetch=AsyncMock(side_effect=details)
     monkeypatch.setattr(apartment_details,"fetch_apartment_details",fetch)
-    monkeypatch.setattr(parser,"resolve_rental_complex",AsyncMock(return_value=10))
+    monkeypatch.setattr(parser,"resolve_rental_complex",AsyncMock(return_value={"complex_id":10,"status":"resolved","reason":"verified"}))
     return read,write,fetch
 
 
@@ -73,9 +73,11 @@ def test_invalid_description_timestamp_is_not_fresh(value):
     {"description_checked_at":NOW+timedelta(seconds=1)}])
 async def test_stale_description_fetches_even_when_catalog_filled_or_locally_reprojected(monkeypatch,changes):
     old=source(**changes)
-    read,write,fetch=arrange(monkeypatch,old,response={"description":"Без мебели"})
+    read,write,fetch=arrange(monkeypatch,old,response={"source_detail_valid":True,"description":"Без мебели"})
     result=await parser.backfill_rental_details(1,budget_seconds=30)
-    fetch.assert_awaited_once_with(old["url"],raise_on_error=True)
+    assert fetch.await_count == 1 and fetch.await_args.args == (old["url"],)
+    assert fetch.await_args.kwargs["raise_on_error"] is True
+    assert 0 < fetch.await_args.kwargs["request_timeout_seconds"] <= 23
     assert result["checked"]==result["detail_attempts"]==result["requests"]==1
     successful=[c for c in write.await_args_list if "description_checked_at=now()" in c.args[0]]
     assert len(successful)==1 and "Без мебели" in successful[0].args and "none" in successful[0].args
@@ -114,13 +116,13 @@ async def test_failed_or_empty_fetch_never_refreshes_old_description_timestamp(m
 
 
 @pytest.mark.asyncio
-async def test_468_stops_at_first_stale_record_without_any_freshening_or_attempt_mark(monkeypatch):
+async def test_468_stops_and_marks_only_real_attempt_without_freshening(monkeypatch):
     _,write,fetch=arrange(monkeypatch,source(),error=apartment_details.ListingBlockedError("468 blocked"))
     pg.fetch.return_value=[source(),source(id="123457")]
     result=await parser.backfill_rental_details(2,budget_seconds=30)
     assert result["blocked"]==result["http_468"]==result["requests"]==1
     assert result["checked"]==0 and fetch.await_count==1
-    write.assert_not_awaited()
+    write.assert_awaited_once_with("UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1", "123456")
 
 
 @pytest.mark.asyncio
@@ -130,7 +132,7 @@ async def test_stale_fetch_timeout_preserves_description_and_remaining_candidate
     result=await parser.backfill_rental_details(2,budget_seconds=30)
     assert result["budget_exhausted"] is True and result["errors"]==1
     assert result["checked"]==0 and result["requests"]==1 and fetch.await_count==1
-    write.assert_not_awaited()
+    write.assert_awaited_once_with("UPDATE rental_listings SET coord_fetch_attempted_at=now() WHERE id=$1", "123456")
 
 
 @pytest.mark.asyncio
