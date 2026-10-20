@@ -44,7 +44,9 @@ async def test_observed_source_complex_name_and_url_defer_to_atomic_fresh_mask()
     sql, _, encoded, _, _ = execute.call_args.args
     assert json.loads(encoded) == values and execute.await_count == 1
     assert "AND $2::jsonb ? 'complex_name'" in sql and "AND $2::jsonb ? 'complex_url'" in sql
-    assert 'complex_id=' not in sql and 'resolved_house_id=' not in sql
+    # This writer can invalidate a derived binding, never assign a new ID.
+    assert 'THEN NULL ELSE a.complex_id' in sql
+    assert 'THEN NULL ELSE a.resolved_house_id' in sql
 
 
 @pytest.mark.asyncio
