@@ -24,7 +24,8 @@
       {% if site_user or header_admin %}<a href="/favorites" class="pub-fav-icon" aria-label="Избранное" title="Избранное">♡</a>{% endif %}
       {% if header_admin %}<a href="/admin/logout" class="pub-login-btn">Выйти</a>
       {% elif site_user %}<a href="/cabinet" class="pub-user-chip">Кабинет</a>
-      {% else %}<a href="/cabinet" class="pub-login-btn" {% if header_path == '/cabinet' %}aria-current="page"{% endif %}>Войти</a>{% endif %}
+      {% else %}<a href="/cabinet" class="pub-login-btn" data-hatuli-session-link {% if header_path == '/cabinet' %}aria-current="page"{% endif %}>Войти</a>{% endif %}
     </div>
   </div>
 </header>
+{% if not site_user and not header_admin %}<script src="/static/hatuli-session-nav.js?v=20261019-1" defer></script>{% endif %}

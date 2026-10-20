@@ -98,8 +98,10 @@ async def mark_login_not_subscribed(token: str, user_id: int) -> None:
 
 
 def set_site_session_cookie(response, request: Request, session_id: str) -> None:
+    from bot.core.site_login_link import login_request_origin
     response.set_cookie("site_session", session_id, httponly=True, max_age=180 * 86400,
-                        secure=request.url.scheme == "https", samesite="lax", path="/")
+                        secure=login_request_origin(request).startswith("https://"),
+                        samesite="lax", path="/")
 
 
 async def get_token_status(token: str) -> dict | None:
