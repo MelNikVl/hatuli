@@ -54,21 +54,60 @@ def catalog_only_row(row):
 
 
 _FRESH = "($3::timestamptz IS NOT NULL AND (a.source_details_checked_at IS NULL OR a.source_details_checked_at <= $3::timestamptz))"
+_IDENTITY_INPUTS = ('complex_name', 'complex_url', 'address', 'description', 'lat', 'lon')
+
+
+def _changed(fields):
+    # A missing field is not a new observation. JSON null is an observed clear.
+    return '(' + ' OR '.join(
+        f"($2::jsonb ? '{field}' AND a.{field} IS DISTINCT FROM (incoming.detail).{field})"
+        for field in fields) + ')'
+
+
+_HOUSE_RESET = f"({_FRESH} AND {_changed(_IDENTITY_INPUTS)})"
+_COMPLEX_RESET = f"({_FRESH} AND ({_changed(('complex_name', 'complex_url'))} OR " \
+    f"(a.complex_resolution IN ('house','geo') AND {_changed(_IDENTITY_INPUTS)})))"
+
 DETAIL_UPDATE_SQL = """WITH incoming AS (
     SELECT jsonb_populate_record(NULL::apartment_listings, $2::jsonb) AS detail
+), previous AS MATERIALIZED (
+    SELECT * FROM apartment_listings WHERE id=$1 FOR UPDATE
+), invalidation_log AS (
+    INSERT INTO listing_complex_resolution_log
+        (listing_id,complex_id,resolution_method,confidence_tier,resolved_at,
+         complex_name_at_resolution,evidence,resolver_version,
+         previous_complex_id,previous_resolution_method)
+    SELECT a.id,CASE WHEN """ + _COMPLEX_RESET + """ THEN NULL ELSE a.complex_id END,
+           CASE WHEN """ + _COMPLEX_RESET + """ THEN 'unbound' ELSE coalesce(a.complex_resolution,'unbound') END,
+           CASE WHEN """ + _COMPLEX_RESET + """ OR a.complex_id IS NULL THEN 'C'
+                WHEN a.complex_resolution='geo' THEN 'B' ELSE 'A' END,now(),
+           CASE WHEN $2::jsonb ? 'complex_name' THEN (incoming.detail).complex_name ELSE a.complex_name END,
+           jsonb_build_object('reason','source_identity_evidence_changed',
+               'source_observed_at',$3::timestamptz,'previous_house_id',a.resolved_house_id,
+               'previous_house_attribution',a.house_attribution),
+           'sale_detail_invalidation_v1',a.complex_id,a.complex_resolution
+    FROM previous a CROSS JOIN incoming
+    WHERE (a.complex_id IS NOT NULL AND """ + _COMPLEX_RESET + """)
+       OR (a.resolved_house_id IS NOT NULL AND """ + _HOUSE_RESET + """)
+    RETURNING log_id
 )
 UPDATE apartment_listings AS a SET
 """ + ',\n'.join(
     f"    {field}=CASE WHEN {_FRESH} AND $2::jsonb ? '{field}' THEN (incoming.detail).{field} ELSE a.{field} END"
     for field in DETAIL_FIELDS
 ) + f""",
+    resolved_house_id=CASE WHEN {_HOUSE_RESET} THEN NULL ELSE a.resolved_house_id END,
+    house_attribution=CASE WHEN {_HOUSE_RESET} THEN NULL ELSE a.house_attribution END,
+    house_attribution_detail=CASE WHEN {_HOUSE_RESET} THEN NULL ELSE a.house_attribution_detail END,
+    complex_id=CASE WHEN {_COMPLEX_RESET} THEN NULL ELSE a.complex_id END,
+    complex_resolution=CASE WHEN {_COMPLEX_RESET} THEN 'unbound' ELSE a.complex_resolution END,
     geo_source=CASE WHEN {_FRESH} AND $2::jsonb ? 'lat' AND $2::jsonb ? 'lon'
         AND (incoming.detail).lat IS NOT NULL AND (incoming.detail).lon IS NOT NULL
         THEN 'krisha' ELSE a.geo_source END,
     source_details_checked_at=GREATEST(a.source_details_checked_at, $3::timestamptz),
     source_details_attempted_at=GREATEST(a.source_details_attempted_at, $4::timestamptz),
     details_fetched=CASE WHEN {_FRESH} THEN TRUE ELSE a.details_fetched END
-FROM incoming WHERE a.id=$1"""
+FROM incoming, previous WHERE a.id=previous.id"""
 
 
 async def save_source_details(row, *, execute=None, now=None):
