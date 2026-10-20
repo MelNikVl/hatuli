@@ -356,9 +356,10 @@ def _safe_photo_list(value) -> list[str]:
 def photo_evidence_rows(rows: list[dict], checks: dict[str, dict] | None, now: datetime, *, review_preview: bool = False) -> list[dict]:
     """Raw photos are discovery only; publication requires human visual proof.
 
-    Existing fingerprint-approved photos stay usable. Additional interiors
-    require an owner-created receipt tied to the same fresh source visit and
-    actual URLs seen in the current listing. A known CDN/format derivative
+    Every publication photo requires an owner-created receipt tied to the
+    same fresh source visit and actual URLs seen in the current listing.
+    Cached fingerprint approvals are discovery hints, not today's visual
+    inspection. A known CDN/format derivative
     must match the same stored UUID and frame index; no URL is constructed.
     Nothing is written back to PostgreSQL.
     """
@@ -372,6 +373,9 @@ def photo_evidence_rows(rows: list[dict], checks: dict[str, dict] | None, now: d
         if review_preview:
             approved.extend(url for url in current if url not in approved)
         else:
+            # Keep the row in the comparable population, but never let an old
+            # fingerprint approval substitute for this visit's visual proof.
+            approved = []
             record = (checks or {}).get(str(row.get("id")))
             if isinstance(record, dict) and (record.get("interior_photo_urls") is not None or record.get("photo_review") is not None):
                 receipt, interiors = record.get("photo_review"), record.get("interior_photo_urls")

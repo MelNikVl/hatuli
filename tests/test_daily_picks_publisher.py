@@ -22,7 +22,8 @@ def candidate_rows():
         is_active=True, market_type="secondary", price=24_000_000 if index < 60 else 30_000_000,
         area=60, rooms=2, last_seen=NOW, complex_id=1, complex_resolution="name",
         canonical_complex_name="Тестовый ЖК", floor=5, floors_total=12,
-        approved_photo_urls=[PHOTO_ROOT + "1-full.jpg"], finish_level="finished", ceiling_height=3.0, kitchen_area=14,
+        candidate_photo_urls=[PHOTO_ROOT + "1-full.jpg"], approved_photo_urls=[PHOTO_ROOT + "1-full.jpg"],
+        finish_level="finished", ceiling_height=3.0, kitchen_area=14,
         identity_checked=True, identity_complex_id=1, identity_complex_name="Тестовый ЖК",
         identity_complex_valid=True, identity_complex_is_umbrella=False, identity_complex_parent_id=None,
         resolved_house_id=None, identity_house_id=None, identity_house_name=None,
@@ -36,6 +37,8 @@ def browser_checks(rows):
     return {row['id']: {'id': row['id'], 'source_url': row['url'], 'status': 'active',
             'checked_at': NOW.isoformat(), 'sale_astana': True,
             'source_complex_name': row['canonical_complex_name'],
+            'interior_photo_urls': [PHOTO_ROOT + '1-full.jpg'],
+            'photo_review': {'method': 'normal_browser_visual', 'photo_type': 'interior', 'checked_at': NOW.isoformat()},
             **{k: row[k] for k in ('price','rooms','area','floor','floors_total')}} for row in rows[:60]}
 
 

@@ -465,6 +465,7 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
                  identity_complex_review_pending=False, identity_property_match_pending=False,
                  identity_name_ambiguous=False, identity_source_name_conflict=False,
                  identity_source_name_keys=["тестовый жк"],
+                 candidate_photo_urls=["https://krisha-photos.kcdn.online/webp/c7/c70532b0-9310-4f48-bc2d-e59a83f9f345/1-full.jpg"],
                  approved_photo_urls=["https://krisha-photos.kcdn.online/webp/c7/c70532b0-9310-4f48-bc2d-e59a83f9f345/1-full.jpg"])
             for index, row in enumerate(item(i, price=30_000_000 if i <= 30 else 36_000_000)
                                         for i in range(1, 91))]
@@ -476,7 +477,10 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
         return snapshot, len(snapshot["items"])
     path = tmp_path / "checks.json"
     worker.atomic_private_json(path, {"method": "normal_browser", "items": [
-        worker.source_record(item(i), observation(item(i), source_complex_name=rows[0]["identity_complex_name"]), now) for i in range(1, 31)]})
+        {**worker.source_record(item(i), observation(item(i), source_complex_name=rows[0]["identity_complex_name"]), now),
+         "interior_photo_urls": rows[0]["candidate_photo_urls"],
+         "photo_review": {"method": "normal_browser_visual", "photo_type": "interior", "checked_at": now.isoformat()}}
+        for i in range(1, 31)]})
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused:unused@127.0.0.1:1/hatuli_test_daily_picks")
     monkeypatch.setattr("dotenv.load_dotenv", lambda *args: False)
     monkeypatch.setattr(worker.publisher, "read_candidates", read)

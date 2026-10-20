@@ -419,9 +419,11 @@ async def test_source_facts_survive_real_generation_and_its_final_rebuild(tmp_pa
                 "checked_at": now.isoformat(), "sale_astana": True, "price": item["price"],
                 "rooms": item["rooms"], "area": item["area"], "floor": item["floor"],
                 "floors_total": item["floors_total"], "is_pledged": item["id"] == pledge_id,
-                "source_complex_name": "Тестовый ЖК"}
+                "source_complex_name": "Тестовый ЖК", "interior_photo_urls": item["photo_urls"],
+                "photo_review": {"method": "normal_browser_visual", "photo_type": "interior", "checked_at": now.isoformat()}}
                for item in confirmed["items"]]
     for source_row in rows:
+        source_row["candidate_photo_urls"] = source_row["approved_photo_urls"].copy()
         if source_row["id"] == pledge_id:
             source_row.update(kitchen_area=None, ceiling_height=None)
     for record in records:
