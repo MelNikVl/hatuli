@@ -1,6 +1,7 @@
 """Explicit quality editions use full evidence and never weaken the default quota."""
 import copy
 import json
+from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -419,9 +420,11 @@ async def test_source_facts_survive_real_generation_and_its_final_rebuild(tmp_pa
                 "checked_at": now.isoformat(), "sale_astana": True, "price": item["price"],
                 "rooms": item["rooms"], "area": item["area"], "floor": item["floor"],
                 "floors_total": item["floors_total"], "is_pledged": item["id"] == pledge_id,
-                "source_complex_name": "Тестовый ЖК"}
+                "source_complex_name": "Тестовый ЖК", "interior_photo_urls": item["photo_urls"],
+                "photo_review": {"method": "normal_browser_visual", "photo_type": "interior", "checked_at": now.isoformat()}}
                for item in confirmed["items"]]
     for source_row in rows:
+        source_row["candidate_photo_urls"] = source_row["approved_photo_urls"].copy()
         if source_row["id"] == pledge_id:
             source_row.update(kitchen_area=None, ceiling_height=None)
     for record in records:
@@ -466,7 +469,11 @@ async def test_browser_pipeline_can_use_only_explicit_policy_for_a_short_verifie
     monkeypatch.setattr(publisher, "publisher_lock", lock)
     monkeypatch.setattr(browser, "check_sources", check)
     args = SimpleNamespace(budget_seconds=60, check_limit=90, profile_path=tmp_path / "profile",
-                           headed=False, dry_run=False, force=True, quality_policy="discounted_four_factors")
+                           headed=False, dry_run=False, force=True, quality_policy="discounted_four_factors",
+                           source_checks=str(tmp_path / "local-browser-checks.json"))
+    browser.atomic_private_json(Path(args.source_checks), {"method": "normal_browser", "items": [
+        {"id": item["id"], "source_url": item["source_url"], "status": "active", "checked_at": snapshot["generated_at"]}
+        for item in snapshot["items"]]})
     public = tmp_path / "public.json"
     result = await browser.pipeline(args, tmp_path, {}, public)
     assert result["published"] is True and result["count"] == 10

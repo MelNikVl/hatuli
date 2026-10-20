@@ -384,19 +384,14 @@ def pipeline_args(tmp_path, **changes):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_requires_evidence_and_30_then_uses_atomic_existing_publisher(tmp_path, monkeypatch):
+async def test_pipeline_handoff_uses_atomic_existing_publisher_without_export_or_server_browser(tmp_path, monkeypatch):
     from tests.test_daily_picks_quality_policy import edition
     verified = edition(30)
     calls = []
     async def export(path, now):
-        calls.append("prepare")
-        return {"kind": "unverified_review_candidates", "input_count": 900,
-                "items": [item(i) for i in range(1, 31)]}
+        raise AssertionError("Receipt handoff must not export database candidates")
     async def check(items, path, deadline, profile, **options):
-        calls.append("check")
-        evidence = {"method": "normal_browser", "items": [worker.source_record(row, observation(row), NOW) for row in items]}
-        worker.atomic_private_json(path, evidence)
-        return evidence
+        raise AssertionError("Receipt handoff must not open a server browser")
     async def generate(args, now):
         calls.append("generate")
         assert args.skip_photo_check is False and args.source_checks == str(tmp_path / "source-checks.json")
@@ -410,8 +405,11 @@ async def test_pipeline_requires_evidence_and_30_then_uses_atomic_existing_publi
     monkeypatch.setattr(worker.publisher, "generate", generate)
     monkeypatch.setattr(worker.publisher, "publisher_lock", lock)
     monkeypatch.setattr(worker.publisher, "publish_snapshot", lambda snapshot, path: calls.append("publish"))
-    result = await worker.pipeline(pipeline_args(tmp_path), tmp_path, {}, tmp_path / "public.json")
-    assert calls == ["prepare", "check", "publication_lock", "generate", "publish"]
+    evidence_path = tmp_path / "source-checks.json"
+    worker.atomic_private_json(evidence_path, {"method": "normal_browser", "items": [
+        worker.source_record(row, observation(row), worker.utc_now()) for row in [item(i) for i in range(1, 31)]]})
+    result = await worker.pipeline(pipeline_args(tmp_path, source_checks=str(evidence_path)), tmp_path, {}, tmp_path / "public.json")
+    assert calls == ["publication_lock", "generate", "publish"]
     assert result["status"] == "published" and result["count"] == 30 and result["source_gets"] == 0
 
 
@@ -440,6 +438,10 @@ async def test_partial_cards_and_dry_run_never_replace_snapshot(tmp_path, monkey
     monkeypatch.setattr(worker.publisher, "publish_snapshot", reject_publish)
     args = pipeline_args(tmp_path)
     args.dry_run = dry_run
+    if not dry_run:
+        args.source_checks = str(tmp_path / "source-checks.json")
+        worker.atomic_private_json(Path(args.source_checks), {"method": "normal_browser", "items": [
+            worker.source_record(item(), observation(), worker.utc_now())]})
     if dry_run:
         assert (await worker.pipeline(args, tmp_path, {}, public))["status"] == "dry_run"
         assert calls == []
@@ -465,6 +467,7 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
                  identity_complex_review_pending=False, identity_property_match_pending=False,
                  identity_name_ambiguous=False, identity_source_name_conflict=False,
                  identity_source_name_keys=["тестовый жк"],
+                 candidate_photo_urls=["https://krisha-photos.kcdn.online/webp/c7/c70532b0-9310-4f48-bc2d-e59a83f9f345/1-full.jpg"],
                  approved_photo_urls=["https://krisha-photos.kcdn.online/webp/c7/c70532b0-9310-4f48-bc2d-e59a83f9f345/1-full.jpg"])
             for index, row in enumerate(item(i, price=30_000_000 if i <= 30 else 36_000_000)
                                         for i in range(1, 91))]
@@ -476,7 +479,10 @@ async def test_actual_publisher_uses_browser_evidence_without_source_get_fallbac
         return snapshot, len(snapshot["items"])
     path = tmp_path / "checks.json"
     worker.atomic_private_json(path, {"method": "normal_browser", "items": [
-        worker.source_record(item(i), observation(item(i), source_complex_name=rows[0]["identity_complex_name"]), now) for i in range(1, 31)]})
+        {**worker.source_record(item(i), observation(item(i), source_complex_name=rows[0]["identity_complex_name"]), now),
+         "interior_photo_urls": rows[0]["candidate_photo_urls"],
+         "photo_review": {"method": "normal_browser_visual", "photo_type": "interior", "checked_at": now.isoformat()}}
+        for i in range(1, 31)]})
     monkeypatch.setenv("DATABASE_URL", "postgresql://unused:unused@127.0.0.1:1/hatuli_test_daily_picks")
     monkeypatch.setattr("dotenv.load_dotenv", lambda *args: False)
     monkeypatch.setattr(worker.publisher, "read_candidates", read)
@@ -538,7 +544,7 @@ def test_main_failure_retains_publication_and_records_safe_counts(tmp_path, monk
     monkeypatch.setattr(worker, "worker_lock", lock)
     monkeypatch.setattr(worker, "already_published", lambda *args: False)
     monkeypatch.setattr(worker, "pipeline", blocked)
-    assert worker.main([]) == 1
+    assert worker.main(["--source-checks", "private-checks.json"]) == 1
     assert public.read_bytes() == b"last verified snapshot"
     status = json.loads((tmp_path / "daily-picks-browser" / "last-run.json").read_text())
     assert status["status"] == "failed" and status["blocked_http_status"] == 468
@@ -569,7 +575,7 @@ def test_failure_report_is_written_while_outer_lock_is_owned(tmp_path, monkeypat
     monkeypatch.setattr(worker, "already_published", lambda *args: False)
     monkeypatch.setattr(worker, "pipeline", blocked)
     monkeypatch.setattr(worker, "atomic_private_json", write)
-    assert worker.main([]) == 1
+    assert worker.main(["--source-checks", "private-checks.json"]) == 1
     assert state == {"held": False, "failure_report": True}
 
 
@@ -590,7 +596,7 @@ def test_real_pipeline_503_captcha_retains_previous_public_snapshot(tmp_path, mo
     monkeypatch.setattr(worker, "worker_lock", lock)
     monkeypatch.setattr(worker.publisher, "export_candidate_pool", export)
     monkeypatch.setattr(worker.publisher, "generate", reject_generate)
-    assert worker.main(["--force"]) == 1
+    assert worker.main(["--dry-run"]) == 1
     assert public.read_bytes() == b"previous verified snapshot" and len(context.page.urls) == 1
     evidence_path = next((tmp_path / "daily-picks-browser").glob("*/source-checks.json"))
     assert json.loads(evidence_path.read_text())["completed"] is False
@@ -614,7 +620,7 @@ def test_diagnostics_failure_after_publication_never_claims_old_snapshot_retaine
     monkeypatch.setattr(worker, "already_published", lambda *args: False)
     monkeypatch.setattr(worker, "pipeline", published)
     monkeypatch.setattr(worker, "atomic_private_json", broken_diagnostics)
-    assert worker.main([]) == 1
+    assert worker.main(["--source-checks", "private-checks.json"]) == 1
     assert public.read_bytes() == b"new verified snapshot"
     report = json.loads(capsys.readouterr().err)
     assert report["status"] == "published_with_diagnostics_error" and report["published"] is True
@@ -685,7 +691,7 @@ def test_valid_todays_30_skip_candidate_export_and_browser(tmp_path, monkeypatch
     monkeypatch.setattr(worker, "worker_lock", lock)
     monkeypatch.setattr(worker, "already_published", lambda *args: True)
     monkeypatch.setattr(worker, "pipeline", reject_pipeline)
-    assert worker.main([]) == 0
+    assert worker.main(["--source-checks", "private-checks.json"]) == 0
     status = json.loads((tmp_path / "daily-picks-browser" / "last-run.json").read_text())
     assert status["status"] == "already_published" and status["published"] is False
 
