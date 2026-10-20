@@ -1,6 +1,7 @@
 """Explicit quality editions use full evidence and never weaken the default quota."""
 import copy
 import json
+from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -468,7 +469,11 @@ async def test_browser_pipeline_can_use_only_explicit_policy_for_a_short_verifie
     monkeypatch.setattr(publisher, "publisher_lock", lock)
     monkeypatch.setattr(browser, "check_sources", check)
     args = SimpleNamespace(budget_seconds=60, check_limit=90, profile_path=tmp_path / "profile",
-                           headed=False, dry_run=False, force=True, quality_policy="discounted_four_factors")
+                           headed=False, dry_run=False, force=True, quality_policy="discounted_four_factors",
+                           source_checks=str(tmp_path / "local-browser-checks.json"))
+    browser.atomic_private_json(Path(args.source_checks), {"method": "normal_browser", "items": [
+        {"id": item["id"], "source_url": item["source_url"], "status": "active", "checked_at": snapshot["generated_at"]}
+        for item in snapshot["items"]]})
     public = tmp_path / "public.json"
     result = await browser.pipeline(args, tmp_path, {}, public)
     assert result["published"] is True and result["count"] == 10
