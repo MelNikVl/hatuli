@@ -63,6 +63,21 @@ class PublicAvailabilityTests(unittest.TestCase):
     def test_oversized_body_cannot_pass_content_validation(self):
         self.assertEqual(checker.classify('/analytics', 200, b'x'*(checker.MAX_BYTES+1)), 'unexpected_content')
 
+    def test_unknown_xml_encoding_is_a_content_failure_not_a_lost_receipt(self):
+        self.assertEqual(checker.classify('/sitemap.xml',200,
+            b'<?xml version="1.0" encoding="notreal"?><urlset/>'),'unexpected_content')
+        def fetch(path, **kwargs):
+            body = b'<?xml version="1.0" encoding="notreal"?><urlset/>' if path=='/sitemap.xml' else page(path)
+            return {'path':path,'http_status':200,'outcome':checker.classify(path,200,body),'duration_ms':1}
+        with patch.object(checker,'probe',side_effect=fetch), redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(checker.main([]),1)
+        receipt=json.loads(out.getvalue())
+        self.assertEqual(len(receipt['checks']),4)
+        self.assertEqual(receipt['checks'][-1]['outcome'],'unexpected_content')
+
+    def test_malformed_html_declaration_is_a_content_failure(self):
+        self.assertEqual(checker.classify('/analytics',200,b'<![bad]>'),'unexpected_content')
+
     def test_probe_is_bounded_and_does_not_follow_redirects_or_save_raw_receipt(self):
         paths = []
         def run(args, **kwargs):

@@ -72,7 +72,7 @@ def classify(path, status, body):
             namespace = '{http://www.sitemaps.org/schemas/sitemap/0.9}'
             locations = [item.text for item in root.findall(f'{namespace}url/{namespace}loc')]
             return 'ok' if root.tag == namespace + 'urlset' and PUBLIC_BASE + '/analytics' in locations else 'unexpected_content'
-        except ET.ParseError:
+        except (ET.ParseError, LookupError):
             return 'unexpected_content'
     page = PageShape()
     page.feed(text)
