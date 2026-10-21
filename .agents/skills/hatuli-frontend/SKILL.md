@@ -10,3 +10,5 @@ Check public routes without authentication and inspect affected desktop/mobile l
 The sitemap uses the bulk identity helper in bot/core/complex_membership.py, including child membership for umbrella pages. Do not reintroduce name-only joins or count restored URLs as indexed pages/users. The active count is only an inclusion/ranking signal and does not prove that a physical house has been independently verified.
 
 When accepting page-performance fixes, measure complete anonymous HTTP responses as well as query time. Record first request separately from repeated samples, percentile method and sample size; verify canonical URLs and private-data gates. A bounded sequential sample is not a load test or evidence of increased daily users.
+
+Public availability smoke checks verify the current route headings and Hatuli branding, plus a namespaced sitemap with canonical analytics URL. Update that contract when intentionally changing these headings; a login/challenge page with HTTP 200 must not pass. Access-blocked probes require a separate ordinary-browser check and do not prove that the origin is down. The checker is not a freshness or visual-layout test.

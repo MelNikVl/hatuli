@@ -1,0 +1,31 @@
+name: Public availability (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-availability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check public routes without origin access
+        run: python scripts/check_public_availability.py > availability.json
+      - name: Preserve compact receipt even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-availability
+          path: availability.json
+          retention-days: 7
+      - name: Display compact receipt
+        if: always()
+        run: if test -f availability.json; then cat availability.json; fi
