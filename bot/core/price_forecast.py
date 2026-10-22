@@ -362,13 +362,42 @@ def evaluation_metrics(outcomes: list[dict], *, bootstrap_samples: int = 400) ->
 
 
 def passes_gate(metrics: dict, folds: int) -> bool:
-    return bool(metrics and folds >= MIN_FOLDS and metrics.get("independent_properties", 0) >= MIN_TEST_GROUPS
-                and metrics.get("changed_properties", 0) >= MIN_CHANGED_TEST_GROUPS
-                and metrics.get("rms_log_improvement_pct", 0) >= 5
-                and metrics.get("mse_improvement_ci95", [0])[0] > 0
-                and metrics.get("coverage_pct", 0) >= 75
-                and metrics.get("median_interval_width_pct", 100) <= 40
-                and metrics.get("mape_pct", 100) <= metrics.get("baseline_mape_pct", 0) * 1.05)
+    """Validate the evidence, including arithmetic, before accepting readiness."""
+    def number(value):
+        try:
+            return type(value) in (int, float) and math.isfinite(value)
+        except OverflowError:
+            return False
+
+    keys = ("sample_size", "independent_properties", "changed_properties",
+            "rms_log_error", "baseline_rms_log_error", "rms_log_improvement_pct",
+            "mape_pct", "baseline_mape_pct", "coverage_pct",
+            "median_interval_width_pct", "interval_nominal_coverage_pct")
+    if (not isinstance(metrics, dict) or not number(folds)
+            or not float(folds).is_integer() or folds < MIN_FOLDS
+            or not all(number(metrics.get(key)) for key in keys)):
+        return False
+    sample, independent, changed = (metrics[key] for key in keys[:3])
+    if (not all(float(value).is_integer() for value in (sample, independent, changed))
+            or not sample >= independent >= changed >= MIN_CHANGED_TEST_GROUPS
+            or independent < MIN_TEST_GROUPS):
+        return False
+    ci = metrics.get("mse_improvement_ci95")
+    if (not isinstance(ci, (list, tuple)) or len(ci) != 2
+            or not all(number(value) for value in ci) or not 0 < ci[0] <= ci[1]):
+        return False
+    rms, baseline = metrics["rms_log_error"], metrics["baseline_rms_log_error"]
+    improvement = metrics["rms_log_improvement_pct"]
+    if not 0 <= rms < baseline:
+        return False
+    measured_improvement = (1 - rms / baseline) * 100
+    return (5 <= improvement <= 100 and measured_improvement >= 5
+            and math.isclose(improvement, measured_improvement, rel_tol=0, abs_tol=.1)
+            and 75 <= metrics["coverage_pct"] <= 100
+            and 0 < metrics["median_interval_width_pct"] <= 40
+            and metrics["interval_nominal_coverage_pct"] == INTERVAL_COVERAGE * 100
+            and 0 <= metrics["mape_pct"] <= metrics["baseline_mape_pct"] * 1.05
+            and 0 <= metrics["baseline_mape_pct"] <= 200)
 
 
 def train_horizon(records: list[dict], horizon_days: int, as_of: datetime) -> dict:

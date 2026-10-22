@@ -35,7 +35,9 @@ def record(group="group-1", count=59, **overrides):
 def ready_metrics(**changes):
     return {"independent_properties": 400, "changed_properties": 100, "rms_log_improvement_pct": 10,
             "mse_improvement_ci95": [.001, .003], "coverage_pct": 82, "median_interval_width_pct": 10,
-            "mape_pct": 1.9, "baseline_mape_pct": 2.0, "sample_size": 600, **changes}
+            "mape_pct": 1.9, "baseline_mape_pct": 2.0, "sample_size": 600,
+            "rms_log_error": .018, "baseline_rms_log_error": .02,
+            "interval_nominal_coverage_pct": 80, **changes}
 
 
 def ready_artifact(**changes):
@@ -201,6 +203,37 @@ def test_predeclared_gate_cannot_pass_on_static_price_accuracy_alone(changes):
 def test_gate_needs_multiple_future_periods():
     assert not pf.passes_gate(ready_metrics(), 1)
     assert pf.passes_gate(ready_metrics(), 2)
+
+
+@pytest.mark.parametrize("changes", [
+    {"rms_log_error": .03},  # worse than persistence, despite claimed improvement
+    {"rms_log_error": .02},
+    {"rms_log_improvement_pct": 50},  # measured gain is only 10%
+    {"rms_log_error": .01901, "rms_log_improvement_pct": 5},  # rounding cannot cross the gate
+    {"baseline_rms_log_error": 0},
+    {"rms_log_error": -.01},
+    {"rms_log_error": float("nan")},
+    {"baseline_rms_log_error": float("inf")},
+    {"sample_size": 399}, {"changed_properties": 401},
+    {"independent_properties": 400.5}, {"changed_properties": True},
+    {"coverage_pct": 101}, {"median_interval_width_pct": 0},
+    {"interval_nominal_coverage_pct": 95},
+    {"mse_improvement_ci95": [.003, .001]},
+    {"mse_improvement_ci95": [float("nan"), .003]},
+    {"mse_improvement_ci95": []}, {"mse_improvement_ci95": None},
+])
+def test_inconsistent_validation_evidence_never_passes_gate(changes):
+    assert not pf.passes_gate(ready_metrics(**changes), 2)
+
+
+@pytest.mark.parametrize("folds", [2.5, True, "2", float("inf"), None])
+def test_invalid_fold_count_abstains(folds):
+    assert not pf.passes_gate(ready_metrics(), folds)
+
+
+def test_gain_allows_small_rounding_but_not_another_result():
+    assert pf.passes_gate(ready_metrics(rms_log_improvement_pct=10.04), 2)
+    assert not pf.passes_gate(ready_metrics(rms_log_improvement_pct=10.2), 2)
 
 
 def test_no_phantom_bootstrap_gain_when_persistence_is_perfect():
