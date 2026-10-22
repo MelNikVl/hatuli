@@ -73,6 +73,20 @@ def test_current_price_change_and_unknown_offer_cannot_reuse_projection(tmp_path
     assert_no_numbers(forecast_for_offer("NOT-PUBLISHED", PRICE, now=NOW, path=path))
 
 
+@pytest.mark.parametrize("changes", [
+    {"rms_log_error": .03}, {"rms_log_error": .02},
+    {"rms_log_improvement_pct": 60}, {"baseline_rms_log_error": 0},
+    {"median_interval_width_pct": 0},
+])
+def test_ready_flag_cannot_publish_prices_with_contradictory_errors(tmp_path, changes):
+    data = valid_file()
+    data["reports"][0]["validation"].update(changes)
+    result = forecast_for_offer(IDENTIFIER, PRICE, now=NOW,
+                                path=write(tmp_path / "public.json", data))
+    assert_no_numbers(result)
+    assert first(result)["status"] == "quality_gate_failed"
+
+
 def test_inactive_offer_always_abstains_even_with_matching_valid_projection(tmp_path):
     result = forecast_for_offer(IDENTIFIER, PRICE, now=NOW, path=write(tmp_path / "public.json", valid_file()), active=False)
     assert_no_numbers(result)
