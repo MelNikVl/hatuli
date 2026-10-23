@@ -278,6 +278,64 @@ def test_changed_current_price_requires_new_source_observation_before_forecast()
     assert result["forecasts"][0]["estimate"] is None
 
 
+@pytest.mark.parametrize("changes", [
+    {"changed_properties": 2}, {"rms_log_error": .03},
+    {"rms_log_improvement_pct": 50}, {"coverage_pct": 74},
+    {"mape_pct": {"private_training_ids": ["PRIVATE"]}},
+])
+def test_direct_projection_rechecks_metrics_before_using_model(monkeypatch, changes):
+    artifact = ready_artifact()
+    artifact["horizons"][0]["validation"].update(changes)
+    def reject(*args):
+        pytest.fail("Invalid evidence must be rejected before model inference")
+    monkeypatch.setattr(pf, "predict_change", reject)
+    result = pf.forecast_listing(record(price=30_000_000), artifact, now=NOW)
+    first = result["forecasts"][0]
+    assert first["status"] == "quality_gate_failed"
+    assert first["estimate"] is first["low"] is first["high"] is None
+    assert first["validation"] == {}
+    assert "PRIVATE" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("validation", [None, [], "ready", {}])
+def test_direct_projection_abstains_with_missing_validation(validation):
+    artifact = ready_artifact()
+    artifact["horizons"][0]["validation"] = validation
+    result = pf.forecast_listing(record(price=30_000_000), artifact, now=NOW)
+    assert result["forecasts"][0]["status"] == "quality_gate_failed"
+    assert result["forecasts"][0]["estimate"] is None
+
+
+@pytest.mark.parametrize("folds", [None, "12", {"a": 1, "b": 2}, [], [{}]])
+def test_direct_projection_requires_real_fold_list(folds):
+    artifact = ready_artifact()
+    artifact["horizons"][0]["folds"] = folds
+    result = pf.forecast_listing(record(price=30_000_000), artifact, now=NOW)
+    assert result["forecasts"][0]["status"] == "quality_gate_failed"
+    assert result["forecasts"][0]["estimate"] is None
+
+
+@pytest.mark.parametrize("changes", [
+    {"schema_version": 999}, {"method_version": "other"}, {"target": "sale_price"},
+])
+def test_direct_projection_rejects_incompatible_model_contract(changes):
+    result = pf.forecast_listing(record(price=30_000_000), ready_artifact(**changes), now=NOW)
+    assert result["forecasts"][0]["status"] == "quality_gate_failed"
+    assert result["forecasts"][0]["estimate"] is None
+
+
+def test_invalid_horizon_does_not_remove_a_valid_other_horizon():
+    artifact = ready_artifact()
+    bad = deepcopy(artifact["horizons"][0])
+    bad.update(horizon_days=14, validation={})
+    artifact["horizons"].append(bad)
+    result = pf.forecast_listing(record(price=30_000_000), artifact, now=NOW)
+    assert result["forecasts"][0]["status"] == "ready"
+    assert result["forecasts"][0]["estimate"] is not None
+    assert result["forecasts"][1]["status"] == "quality_gate_failed"
+    assert result["forecasts"][1]["estimate"] is None
+
+
 def test_stale_model_abstains_even_if_validation_previously_passed():
     result = pf.forecast_listing(record(price=30_000_000), ready_artifact(), now=NOW + timedelta(days=10))
     assert result["forecasts"][0]["status"] == "stale_model"

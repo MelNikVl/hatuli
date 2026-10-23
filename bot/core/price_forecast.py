@@ -522,6 +522,15 @@ def forecast_listing(listing: dict, artifact: dict | None, *, now: datetime | No
             status = "missing_source_history"
         if status == "ready" and (trained is None or not trained <= now <= trained + MAX_MODEL_AGE):
             status = "stale_model"
+        if status == "ready":
+            # Callers may pass an in-memory artifact without load_artifact().
+            folds = report.get("folds")
+            if ((artifact or {}).get("schema_version") != SCHEMA_VERSION
+                    or (artifact or {}).get("method_version") != METHOD_VERSION
+                    or (artifact or {}).get("target") != "future_asking_price_conditional_on_remaining_listed"
+                    or not isinstance(folds, list)
+                    or not passes_gate(report.get("validation"), len(folds))):
+                status = "quality_gate_failed"
         if status == "ready" and (not query or not latest_day or (now.date() - latest_day).days > 2):
             status = "missing_location_history" if listing_audit.get("missing_location_history") else "insufficient_listing_history"
         p, count = None, 0
@@ -535,6 +544,8 @@ def forecast_listing(listing: dict, artifact: dict | None, *, now: datetime | No
             estimate = round(query["price"] * math.exp(p))
             low, high = round(query["price"] * math.exp(p - radius)), round(query["price"] * math.exp(p + radius))
         validation = report.get("validation", {})
+        if status == "quality_gate_failed" or not isinstance(validation, dict):
+            validation = {}
         # Values are empirical reports, no invented confidence score.
         forecasts.append({"status": status, "horizon_days": horizon, "estimate": estimate,
                           "low": low, "high": high, "historical_analog_count": count,
