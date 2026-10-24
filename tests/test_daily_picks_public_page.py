@@ -150,7 +150,12 @@ async def test_missing_or_stale_snapshot_is_explicit_and_does_not_fail_page(monk
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/best-apartments")
     assert response.status_code == 200
-    assert "Готовим хорошие варианты" in response.text if missing else "Показываем последний выпуск" in response.text
+    if missing:
+        assert "Готовим хорошие варианты" in response.text
+    else:
+        assert "Свежая подборка временно недоступна" in response.text
+        assert "data-picks-card" not in response.text
+        assert "krisha.kz/a/show/" not in response.text
     assert "на сегодня" not in response.text
 
 
