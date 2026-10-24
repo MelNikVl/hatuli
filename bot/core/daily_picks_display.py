@@ -40,6 +40,18 @@ def prepare_daily_picks(snapshot: dict | None, now: datetime | None = None) -> d
         message = "Следующий выпуск — сегодня в 08:00 по времени Астаны. Пока доступна предыдущая подборка."
     else:
         message = "Новый выпуск — каждый день после 08:00 по времени Астаны. В каждой карточке указано время проверки объявления."
+    # A stale edition may contain withdrawn or repriced listings. Keep its
+    # publication date/status visible, but never present old offers as live.
+    if status["is_stale"]:
+        return {
+            **snapshot,
+            "date_label": _day_label(selection_date),
+            "generated_at_label": _time_label(snapshot["generated_at"]),
+            "as_of_label": _time_label(snapshot["source_observed_at"]),
+            "is_stale": True, "is_today": is_today,
+            "status_message": message,
+            "items": [],
+        }
     market = load_market_snapshot()
     details = {row["id"]: {**row, "current_price": row["price"]}
                for row in market.get("offers", []) if row["market_type"] == "secondary"}

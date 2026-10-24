@@ -55,6 +55,17 @@ def test_legacy_unvalidated_expensive_card_is_hidden_and_ranks_are_dense():
     assert result["items"][0]["rank"] == 1
 
 
+def test_stale_edition_keeps_status_but_never_exposes_old_listing_cards(monkeypatch):
+    data = snapshot()
+    now = NOW + timedelta(days=4)
+    monkeypatch.setattr(display, "load_market_snapshot", lambda: (_ for _ in ()).throw(
+        AssertionError("stale edition must not enrich or display old offers")))
+    result = display.prepare_daily_picks(data, now)
+    assert result["is_stale"] is True
+    assert result["items"] == []
+    assert "не опубликован" in result["status_message"]
+
+
 def test_card_is_hidden_when_later_scanner_price_exceeds_budget(monkeypatch):
     details = market_detail(current_price=100_000_001)
     monkeypatch.setattr(display, "load_market_snapshot", lambda: {"offers": [], "listing_details": [details]})
