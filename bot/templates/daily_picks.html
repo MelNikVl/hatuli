@@ -22,7 +22,7 @@
   </section>
 
   {% if snapshot and snapshot.is_stale %}
-  <aside class="picks-status picks-status-stale" role="status"><strong>Показываем последний выпуск — {{ snapshot.date_label }}.</strong><span>{{ snapshot.status_message or 'Свежая подборка ещё не опубликована. Цену и доступность уточняйте в исходном объявлении.' }}</span></aside>
+  <aside class="picks-status picks-status-stale" role="status"><strong>Свежая подборка временно недоступна.</strong><span>{{ snapshot.status_message or 'Новый выпуск ещё не опубликован.' }}</span></aside>
   {% elif snapshot and snapshot.status_message %}
   <p class="picks-status" role="status">{{ snapshot.status_message }}</p>
   {% endif %}
